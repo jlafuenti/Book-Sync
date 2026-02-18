@@ -41,7 +41,7 @@ function PairsPage() {
     }
 
     const handleDeletePair = async (pairId) => {
-        if (!confirm('Delete this book pair? This will also remove its sync map.')) return
+        if (!confirm('Delete this book pair? This will remove the sync map but keeps the ebook and audiobook files.')) return
         try {
             await deletePair(pairId)
             await loadData()
