@@ -10,8 +10,12 @@ from models.user import User
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 DEFAULT_SETTINGS = {
-    "filename_patterns": [
-        # Default patterns
+    "ebook_filename_patterns": [
+        "<Author> - [<Series> <Book Number>] - <Title>",
+        "[<Series> <Book Number>] <Title>",
+        "<Title>"
+    ],
+    "audiobook_filename_patterns": [
         "<Author> - [<Series> <Book Number>] - <Title>",
         "[<Series> <Book Number>] <Title>",
         "<Title>"
@@ -26,10 +30,8 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
     
     settings_dict = {}
     for s in settings_list:
-        # Simple JSON deserialization if needed, or just strings for now
-        # For MVP, we'll store patterns as a newline-separated string
-        if s.key == "filename_patterns":
-            settings_dict[s.key] = s.value.split("\n") if s.value else []
+        if s.key in ["ebook_filename_patterns", "audiobook_filename_patterns", "filename_patterns"]:
+             settings_dict[s.key] = s.value.split("\n") if s.value else []
         else:
             settings_dict[s.key] = s.value
             
@@ -49,7 +51,7 @@ async def update_settings(
     """Update system settings."""
     for key, value in new_settings.items():
         # Serialize before saving
-        if key == "filename_patterns" and isinstance(value, list):
+        if key in ["ebook_filename_patterns", "audiobook_filename_patterns"] and isinstance(value, list):
             value = "\n".join(value)
         else:
             value = str(value)

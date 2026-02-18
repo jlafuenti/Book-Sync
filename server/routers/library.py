@@ -74,14 +74,51 @@ def regex_from_pattern(pattern: str) -> re.Pattern:
     return re.compile("".join(regex_parts))
 
 
-async def get_filename_patterns(db: AsyncSession) -> List[str]:
-    """Fetch filename patterns from settings or return defaults."""
-    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "filename_patterns"))
+async def get_filename_patterns(db: AsyncSession, pattern_type: str = "ebook") -> List[str]:
+    """
+    Fetch filename patterns from settings. 
+    pattern_type: 'ebook' or 'audiobook'
+    """
+    key = "ebook_filename_patterns" if pattern_type == "ebook" else "audiobook_filename_patterns"
+    
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
     setting = result.scalar_one_or_none()
     
     if setting and setting.value:
         return setting.value.split("\n")
-    return DEFAULT_SETTINGS["filename_patterns"]
+        
+    # Fallback to old key if new ones missing (backward compat)
+    if not setting:
+         result = await db.execute(select(SystemSetting).where(SystemSetting.key == "filename_patterns"))
+         setting = result.scalar_one_or_none()
+         if setting and setting.value:
+             return setting.value.split("\n")
+             
+    return DEFAULT_SETTINGS.get(key, DEFAULT_SETTINGS["ebook_filename_patterns"])
+
+
+def normalize_author(author: str) -> str:
+    """
+    Normalize 'Last, First' to 'First Last'.
+    """
+    if not author: return None
+    if "," in author:
+        parts = author.split(",", 1)
+        return f"{parts[1].strip()} {parts[0].strip()}"
+    return author.strip()
+
+
+def normalize_series(series: str) -> str:
+    """
+    Normalize series name.
+    1. Remove leading 'The ' for consistency.
+    """
+    if not series: return None
+    clean = series.strip()
+    if clean.lower().startswith("the "):
+        return clean[4:].strip()
+    return clean
+
 
 
 def compute_file_hash(filepath: str) -> str:
@@ -106,7 +143,7 @@ def extract_title_from_filename(filename: str) -> str:
     return name.strip()
 
 
-async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession, parent_dir_name: str = None) -> Dict[str, Any]:
+async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession, parent_dir_name: str = None, file_type: str = "ebook") -> Dict[str, Any]:
     """
     Attempt to extract metadata using configured patterns.
     """
@@ -118,7 +155,7 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
         "series_index": None
     }
     
-    patterns = await get_filename_patterns(db)
+    patterns = await get_filename_patterns(db, file_type)
     
     for pattern_str in patterns:
         try:
@@ -127,8 +164,8 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
             if match:
                 groups = match.groupdict()
                 
-                if "author" in groups: meta["author"] = groups["author"].strip()
-                if "series" in groups: meta["series"] = groups["series"].strip()
+                if "author" in groups: meta["author"] = normalize_author(groups["author"])
+                if "series" in groups: meta["series"] = normalize_series(groups["series"])
                 if "title" in groups: meta["title"] = groups["title"].strip()
                 if "series_index" in groups:
                     try:
@@ -140,7 +177,7 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
                 if meta["title"]:
                     # Fallbacks from context if missing in pattern
                     if not meta["author"] and parent_dir_name:
-                         meta["author"] = parent_dir_name
+                         meta["author"] = normalize_author(parent_dir_name)
                     
                     return meta
         except Exception:
@@ -149,7 +186,7 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
     # Fallback to simple filename cleaning
     meta["title"] = extract_title_from_filename(filename)
     if parent_dir_name:
-        meta["author"] = parent_dir_name
+        meta["author"] = normalize_author(parent_dir_name)
         
     return meta
 
@@ -165,7 +202,7 @@ async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> D
     parent_dir = os.path.basename(os.path.dirname(filepath))
     
     # 1. Filename metadata (Regex/Settings) - Default priority as requested:
-    filename_meta = await parse_filename_metadata_with_settings(filename, db, parent_dir)
+    filename_meta = await parse_filename_metadata_with_settings(filename, db, parent_dir, file_type)
     
     # 2. Try embedded metadata
     file_meta = {}
@@ -179,13 +216,11 @@ async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> D
             
             # Author
             c = book.get_metadata('DC', 'creator')
-            if c: file_meta["author"] = c[0][0]
+            if c: file_meta["author"] = normalize_author(c[0][0])
             
             # Series (calibre specific usually)
             # Calibre stores series in <meta name="calibre:series" content="Series Name"/>
-            # ebooklib handling, messy but possible. 
-            # For MVP, we stick to standard DC metadata, or filename regex if better.
-            
+        
         elif file_type == "audiobook":
             audio = mutagen.File(filepath)
             if audio:
@@ -194,12 +229,12 @@ async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> D
                 elif 'title' in audio: file_meta["title"] = str(audio['title'][0])
                 
                 # Author
-                if 'TPE1' in audio: file_meta["author"] = str(audio['TPE1'])
-                elif 'artist' in audio: file_meta["author"] = str(audio['artist'][0])
+                if 'TPE1' in audio: file_meta["author"] = normalize_author(str(audio['TPE1']))
+                elif 'artist' in audio: file_meta["author"] = normalize_author(str(audio['artist'][0]))
                 
                 # Album/Series?
-                if 'TALB' in audio: file_meta["series"] = str(audio['TALB'])
-                elif 'album' in audio: file_meta["series"] = str(audio['album'][0])
+                if 'TALB' in audio: file_meta["series"] = normalize_series(str(audio['TALB']))
+                elif 'album' in audio: file_meta["series"] = normalize_series(str(audio['album'][0]))
                 
                 # Track number as series index? Only if single file per book?
                 # Probably unsafe for now unless user explicitly wants it.

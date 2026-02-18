@@ -126,7 +126,8 @@ function SystemPage() {
 }
 
 function SettingsSection() {
-    const [patterns, setPatterns] = useState('')
+    const [ebookPatterns, setEbookPatterns] = useState('')
+    const [audiobookPatterns, setAudiobookPatterns] = useState('')
     const [loading, setLoading] = useState(false)
     const [msg, setMsg] = useState(null)
 
@@ -137,8 +138,11 @@ function SettingsSection() {
     const loadSettings = async () => {
         try {
             const settings = await getSettings()
-            if (settings.filename_patterns) {
-                setPatterns(settings.filename_patterns.join('\n'))
+            if (settings.ebook_filename_patterns) {
+                setEbookPatterns(settings.ebook_filename_patterns.join('\n'))
+            }
+            if (settings.audiobook_filename_patterns) {
+                setAudiobookPatterns(settings.audiobook_filename_patterns.join('\n'))
             }
         } catch (err) {
             console.error(err)
@@ -149,8 +153,13 @@ function SettingsSection() {
         setLoading(true)
         setMsg(null)
         try {
-            const patternList = patterns.split('\n').filter(p => p.trim() !== '')
-            await updateSettings({ filename_patterns: patternList })
+            const ebList = ebookPatterns.split('\n').filter(p => p.trim() !== '')
+            const abList = audiobookPatterns.split('\n').filter(p => p.trim() !== '')
+
+            await updateSettings({
+                ebook_filename_patterns: ebList,
+                audiobook_filename_patterns: abList
+            })
             setMsg({ type: 'success', text: 'Settings saved successfully' })
         } catch (err) {
             console.error(err)
@@ -166,20 +175,35 @@ function SettingsSection() {
                 <h3>Library Settings</h3>
             </div>
             <div style={{ padding: '16px' }}>
-                <div style={{ marginBottom: '16px' }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Enter one pattern per line. Tokens: <code>&lt;Author&gt;</code>, <code>&lt;Series&gt;</code>, <code>&lt;Book Number&gt;</code>, <code>&lt;Title&gt;</code>.
+                </p>
+
+                <div style={{ marginBottom: '24px' }}>
                     <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>
-                        Filename Parsing Patterns
+                        EBook Filename Patterns
                     </label>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                        Enter one pattern per line. Tokens: <code>&lt;Author&gt;</code>, <code>&lt;Series&gt;</code>, <code>&lt;Book Number&gt;</code>, <code>&lt;Title&gt;</code>.
-                    </p>
                     <textarea
                         className="input"
                         rows={5}
-                        value={patterns}
-                        onChange={e => setPatterns(e.target.value)}
+                        value={ebookPatterns}
+                        onChange={e => setEbookPatterns(e.target.value)}
                         placeholder="<Author> - [<Series> <Book Number>] - <Title>"
-                        style={{ fontFamily: 'monospace' }}
+                        style={{ fontFamily: 'monospace', width: '100%' }}
+                    />
+                </div>
+
+                <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>
+                        Audiobook Filename Patterns
+                    </label>
+                    <textarea
+                        className="input"
+                        rows={5}
+                        value={audiobookPatterns}
+                        onChange={e => setAudiobookPatterns(e.target.value)}
+                        placeholder="<Author> - [<Series> <Book Number>] - <Title>"
+                        style={{ fontFamily: 'monospace', width: '100%' }}
                     />
                 </div>
 

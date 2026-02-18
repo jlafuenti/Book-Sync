@@ -5,19 +5,38 @@ FastAPI entry point that ties together all routers and initializes
 the database on startup.
 """
 
+import os
 import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
+from config import settings
 from routers import auth, library, sync, files, transcription, stats
 
 # Configure logging
+# Ensure log directory exists
+log_dir = os.path.join(settings.app_data_dir, "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, "server.log")
+
+# Setup handlers
+file_handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5)
+# Set formatter
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+file_handler.setFormatter(formatter)
+
+# Configure basicConfig with both handlers
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        file_handler
+    ]
 )
 logger = logging.getLogger(__name__)
 
