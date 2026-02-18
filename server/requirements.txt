@@ -12,6 +12,7 @@ openai-whisper==20240930
 torch>=2.0.0
 ebooklib==0.18
 beautifulsoup4==4.12.3
+mutagen==1.47.0
 nltk==3.9.1
 rapidfuzz==3.10.0
 pydantic[email]==2.9.0

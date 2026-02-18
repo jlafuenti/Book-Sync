@@ -4,7 +4,7 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, BigInteger, Enum, ForeignKey
+from sqlalchemy import String, DateTime, Integer, BigInteger, Enum, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -36,6 +36,8 @@ class EBook(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+    series: Mapped[str] = mapped_column(String(500), nullable=True)
+    series_index: Mapped[float] = mapped_column(Float, nullable=True)
 
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
@@ -58,6 +60,8 @@ class AudioBook(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=True)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=True)
     format: Mapped[str] = mapped_column(String(10), default="mp3")
+    series: Mapped[str] = mapped_column(String(500), nullable=True)
+    series_index: Mapped[float] = mapped_column(Float, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

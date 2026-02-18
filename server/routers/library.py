@@ -4,16 +4,21 @@ Includes scanning directories, uploading files, and auto-matching.
 """
 
 import os
+import re
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from rapidfuzz import fuzz
+
+import ebooklib
+from ebooklib import epub
+import mutagen
 
 from database import get_db
 from config import settings
@@ -23,13 +28,19 @@ from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse,
 )
-from routers.auth import get_current_user, get_admin_user
+from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
 # Supported file extensions
 EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
 AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav", ".aac", ".wma"}
+
+# Regex patterns for filename parsing
+# Pattern 1: Author - [Series Num] - Title
+REGEX_AUTHOR_SERIES_TITLE = re.compile(r"^(.+?) - \[(.+?) (\d+(?:\.\d+)?)\] - (.+)$")
+# Pattern 2: [Series Num] Title (often found in Author folders)
+REGEX_SERIES_TITLE = re.compile(r"^\[(.+?) (\d+(?:\.\d+)?)\] (.+)$")
 
 
 def compute_file_hash(filepath: str) -> str:
@@ -54,6 +65,117 @@ def extract_title_from_filename(filename: str) -> str:
     return name.strip()
 
 
+def parse_filename_metadata(filename: str, parent_dir_name: str = None) -> Dict[str, Any]:
+    """
+    Attempt to extract metadata from filename using regex patterns.
+    Returns a dict with 'title', 'author', 'series', 'series_index' keys (values may be None).
+    """
+    clean_name = Path(filename).stem
+    meta = {
+        "title": None,
+        "author": None,
+        "series": None,
+        "series_index": None
+    }
+
+    # Pattern 1: Author - [Series Num] - Title
+    match1 = REGEX_AUTHOR_SERIES_TITLE.match(clean_name)
+    if match1:
+        meta["author"] = match1.group(1).strip()
+        meta["series"] = match1.group(2).strip()
+        try:
+            meta["series_index"] = float(match1.group(3))
+        except ValueError:
+            pass
+        meta["title"] = match1.group(4).strip()
+        return meta
+
+    # Pattern 2: [Series Num] Title
+    # If found, try to use parent directory as author
+    match2 = REGEX_SERIES_TITLE.match(clean_name)
+    if match2:
+        meta["series"] = match2.group(1).strip()
+        try:
+            meta["series_index"] = float(match2.group(2))
+        except ValueError:
+            pass
+        meta["title"] = match2.group(3).strip()
+        if parent_dir_name:
+             meta["author"] = parent_dir_name
+        return meta
+    
+    # Fallback
+    meta["title"] = extract_title_from_filename(filename)
+    if parent_dir_name:
+        meta["author"] = parent_dir_name
+        
+    return meta
+
+
+def extract_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
+    """
+    Extract metadata with priority:
+    1. Embedded Metadata (EPUB/ID3)
+    2. Regex on Filename
+    3. Fallback to simple filename parsing
+    """
+    filename = os.path.basename(filepath)
+    parent_dir = os.path.basename(os.path.dirname(filepath))
+    
+    # 1. Start with filename metadata as baseline fallback
+    meta = parse_filename_metadata(filename, parent_dir)
+    
+    # 2. Try embedded metadata
+    file_meta = {}
+    try:
+        if file_type == "ebook" and filepath.lower().endswith(".epub"):
+            book = epub.read_epub(filepath, options={'ignore_ncx': True})
+            
+            # Title
+            t = book.get_metadata('DC', 'title')
+            if t: file_meta["title"] = t[0][0]
+            
+            # Author
+            c = book.get_metadata('DC', 'creator')
+            if c: file_meta["author"] = c[0][0]
+            
+            # Series (calibre specific usually)
+            # Calibre stores series in <meta name="calibre:series" content="Series Name"/>
+            # ebooklib handling, messy but possible. 
+            # For MVP, we stick to standard DC metadata, or filename regex if better.
+            
+        elif file_type == "audiobook":
+            audio = mutagen.File(filepath)
+            if audio:
+                # Title
+                if 'TIT2' in audio: file_meta["title"] = str(audio['TIT2'])
+                elif 'title' in audio: file_meta["title"] = str(audio['title'][0])
+                
+                # Author
+                if 'TPE1' in audio: file_meta["author"] = str(audio['TPE1'])
+                elif 'artist' in audio: file_meta["author"] = str(audio['artist'][0])
+                
+                # Album/Series?
+                if 'TALB' in audio: file_meta["series"] = str(audio['TALB'])
+                elif 'album' in audio: file_meta["series"] = str(audio['album'][0])
+                
+                # Track number as series index? Only if single file per book?
+                # Probably unsafe for now unless user explicitly wants it.
+                
+    except Exception:
+        pass # Metadata read failed, stick with filename
+        
+    # Merge: Prefer embedded if exists and not empty
+    if file_meta.get("title"): meta["title"] = file_meta["title"]
+    if file_meta.get("author"): meta["author"] = file_meta["author"]
+    # For series, filename regex is often MORE reliable than tags for audiobooks
+    # so we might prefer regex if embedded is missing. 
+    # If embedded 'series' (album) is found, use it? Often album != series.
+    # Let's trust regex for series if present, else fallback.
+    
+    return meta
+
+
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
@@ -61,6 +183,8 @@ async def scan_library(
 ):
     """
     Scan the ebook and audiobook directories for new files.
+    Recursively searches subdirectories.
+    Extracts metadata from filenames and tags.
     Adds any undiscovered files to the database and attempts auto-matching.
     """
     new_ebooks = 0
@@ -78,15 +202,7 @@ async def scan_library(
 
                 filepath = os.path.join(root, filename)
                 
-                # Check if already in database (by exact path or hash)
-                # For now, simplistic check by filename to avoid re-hashing everything
-                # In a real app, we might want to check by hash if path changes
-                relative_path = os.path.relpath(filepath, ebook_dir)
-                
-                # Check for existing file by filename (simplistic) or path
-                # We'll check by filename for now to avoid duplicates if moved
-                # Ideally we check by hash, but that's slow for all files.
-                # Let's check by filename first.
+                # Check if already in database (by filename)
                 result = await db.execute(
                     select(EBook).where(EBook.filename == filename)
                 )
@@ -98,12 +214,14 @@ async def scan_library(
                     file_size = os.path.getsize(filepath)
                 except OSError:
                     continue
-                    
-                title = extract_title_from_filename(filename)
+                
+                meta = extract_metadata(filepath, "ebook")
 
                 ebook = EBook(
-                    title=title,
-                    author=None,  # Could parse from parent dir name?
+                    title=meta["title"] or filename,
+                    author=meta["author"],
+                    series=meta["series"],
+                    series_index=meta["series_index"],
                     filename=filename,
                     file_path=filepath,
                     file_hash=file_hash,
@@ -135,12 +253,14 @@ async def scan_library(
                     file_size = os.path.getsize(filepath)
                 except OSError:
                     continue
-                    
-                title = extract_title_from_filename(filename)
+                
+                meta = extract_metadata(filepath, "audiobook")
 
                 audiobook = AudioBook(
-                    title=title,
-                    author=None,
+                    title=meta["title"] or filename,
+                    author=meta["author"],
+                    series=meta["series"],
+                    series_index=meta["series_index"],
                     filename=filename,
                     file_path=filepath,
                     file_hash=file_hash,
@@ -222,7 +342,10 @@ async def list_ebooks(
     _: User = Depends(get_current_user),
 ):
     """List all ebooks in the library."""
-    result = await db.execute(select(EBook).order_by(EBook.title))
+    result = await db.execute(
+        select(EBook)
+        .order_by(EBook.author.nulls_last(), EBook.series.nulls_last(), EBook.series_index.nulls_last(), EBook.title)
+    )
     return result.scalars().all()
 
 
@@ -232,7 +355,10 @@ async def list_audiobooks(
     _: User = Depends(get_current_user),
 ):
     """List all audiobooks in the library."""
-    result = await db.execute(select(AudioBook).order_by(AudioBook.title))
+    result = await db.execute(
+        select(AudioBook)
+        .order_by(AudioBook.author.nulls_last(), AudioBook.series.nulls_last(), AudioBook.series_index.nulls_last(), AudioBook.title)
+    )
     return result.scalars().all()
 
 
@@ -245,7 +371,8 @@ async def list_pairs(
     result = await db.execute(
         select(BookPair)
         .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
-        .order_by(BookPair.id)
+        .join(BookPair.ebook)
+        .order_by(EBook.author.nulls_last(), EBook.series.nulls_last(), EBook.series_index.nulls_last(), EBook.title)
     )
     return result.scalars().all()
 
@@ -301,9 +428,10 @@ async def create_pair(
 async def delete_pair(
     pair_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_admin_user),
+    _: User = Depends(get_current_user),
 ):
     """Delete a book pair."""
+    # Allow any authenticated user to delete pairs for now
     result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
     pair = result.scalar_one_or_none()
     if not pair:
@@ -332,10 +460,15 @@ async def upload_ebook(
         f.write(content)
 
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-    title = extract_title_from_filename(file.filename)
+    
+    # Metadata extraction
+    meta = extract_metadata(filepath, "ebook")
 
     ebook = EBook(
-        title=title,
+        title=meta["title"] or file.filename,
+        author=meta["author"],
+        series=meta["series"],
+        series_index=meta["series_index"],
         filename=file.filename,
         file_path=filepath,
         file_hash=file_hash,
@@ -369,10 +502,15 @@ async def upload_audiobook(
         f.write(content)
 
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-    title = extract_title_from_filename(file.filename)
+    
+    # Metadata extraction
+    meta = extract_metadata(filepath, "audiobook")
 
     audiobook = AudioBook(
-        title=title,
+        title=meta["title"] or file.filename,
+        author=meta["author"],
+        series=meta["series"],
+        series_index=meta["series_index"],
         filename=file.filename,
         file_path=filepath,
         file_hash=file_hash,

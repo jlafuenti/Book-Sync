@@ -57,6 +57,8 @@ class EBookResponse(BaseModel):
     filename: str
     file_size: Optional[int]
     format: str
+    series: Optional[str] = None
+    series_index: Optional[float] = None
     uploaded_at: datetime
 
     class Config:
@@ -71,6 +73,8 @@ class AudioBookResponse(BaseModel):
     file_size: Optional[int]
     duration_seconds: Optional[int]
     format: str
+    series: Optional[str] = None
+    series_index: Optional[float] = None
     uploaded_at: datetime
 
     class Config:

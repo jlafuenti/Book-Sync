@@ -48,3 +48,22 @@ async def init_db():
     async with engine.begin() as conn:
         from models import user, book, sync_map, bookmark  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
+
+        # Manual migration for series fields (since we don't have Alembic setup yet)
+        # Check if 'series' column exists in 'ebooks' table
+        from sqlalchemy import text
+        
+        # Ebooks migration
+        try:
+            await conn.execute(text("ALTER TABLE ebooks ADD COLUMN series VARCHAR(500)"))
+            await conn.execute(text("ALTER TABLE ebooks ADD COLUMN series_index FLOAT"))
+        except Exception:
+            # Columns likely exist
+            pass
+
+        # Audiobooks migration
+        try:
+            await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN series VARCHAR(500)"))
+            await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN series_index FLOAT"))
+        except Exception:
+            pass
