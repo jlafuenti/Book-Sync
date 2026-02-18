@@ -175,6 +175,14 @@ export async function getTranscriptionStatus(pairId) {
     return resp.json();
 }
 
+export async function cancelTranscription(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/cancel`, {
+        method: 'POST',
+    });
+    if (!resp.ok) throw new Error('Failed to cancel transcription');
+    return resp.json();
+}
+
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {
