@@ -202,13 +202,13 @@ export async function getDiskUsage() {
 // ============ Settings ============
 
 export async function getSettings() {
-    const resp = await fetchWithAuth(`${API_BASE}/settings`);
+    const resp = await fetchWithAuth(`${API_BASE}/settings/`);
     if (!resp.ok) throw new Error('Failed to fetch settings');
     return resp.json();
 }
 
 export async function updateSettings(settings) {
-    const resp = await fetchWithAuth(`${API_BASE}/settings`, {
+    const resp = await fetchWithAuth(`${API_BASE}/settings/`, {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json',
