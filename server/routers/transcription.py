@@ -115,7 +115,7 @@ async def _run_transcription(pair_id: int):
     """
     try:
         _transcription_jobs[pair_id]["message"] = "Loading audiobook for transcription..."
-        _transcription_jobs[pair_id]["progress"] = 0.05
+        _transcription_jobs[pair_id]["progress"] = 0.02
 
         async with async_session() as db:
             # Load book pair with related data
@@ -128,16 +128,40 @@ async def _run_transcription(pair_id: int):
             if not pair:
                 raise Exception(f"Book pair {pair_id} not found")
 
-            # Step 1: Transcribe audiobook
-            _transcription_jobs[pair_id]["message"] = "Transcribing audiobook with Whisper..."
-            _transcription_jobs[pair_id]["progress"] = 0.1
+            # Step 1: Transcribe audiobook with real-time progress
+            _transcription_jobs[pair_id]["message"] = "Loading Whisper model..."
+            _transcription_jobs[pair_id]["progress"] = 0.03
 
-            from services.transcription import transcribe_audiobook
+            from services.transcription import transcribe_audiobook, _format_duration
+
+            def on_whisper_progress(fraction: float, total_duration_sec: float):
+                """Called by Whisper progress tracker with real-time progress."""
+                # Map whisper's 0-100% onto our 5-50% range
+                mapped_progress = 0.05 + (fraction * 0.45)
+                _transcription_jobs[pair_id]["progress"] = round(mapped_progress, 3)
+                
+                # Build a descriptive message with time info
+                if total_duration_sec and total_duration_sec > 0:
+                    elapsed_sec = fraction * total_duration_sec
+                    elapsed_str = _format_duration(elapsed_sec)
+                    total_str = _format_duration(total_duration_sec)
+                    pct = int(fraction * 100)
+                    _transcription_jobs[pair_id]["message"] = (
+                        f"Transcribing: {elapsed_str} / {total_str} ({pct}%)"
+                    )
+                else:
+                    pct = int(fraction * 100)
+                    _transcription_jobs[pair_id]["message"] = (
+                        f"Transcribing audiobook... ({pct}%)"
+                    )
+
             whisper_sentences = await asyncio.to_thread(
-                transcribe_audiobook, pair.audiobook.file_path
+                transcribe_audiobook,
+                pair.audiobook.file_path,
+                progress_callback=on_whisper_progress,
             )
 
-            _transcription_jobs[pair_id]["progress"] = 0.5
+            _transcription_jobs[pair_id]["progress"] = 0.50
             _transcription_jobs[pair_id]["message"] = (
                 f"Transcription complete ({len(whisper_sentences)} sentences). "
                 "Extracting EPUB text..."

@@ -132,26 +132,28 @@ function TranscriptionPage() {
 
         return (
             <div style={{ marginTop: '12px' }}>
+                {message && (
+                    <div style={{
+                        fontSize: '0.85rem',
+                        color: currentStatus === 'error' ? 'var(--error)' : 'var(--text-secondary)',
+                        fontStyle: currentStatus === 'error' ? 'italic' : 'normal',
+                        fontWeight: currentStatus === 'transcribing' ? 500 : 400,
+                        marginBottom: progress != null ? '8px' : '0'
+                    }}>
+                        {currentStatus === 'error' ? '❌ ' : ''}{message}
+                    </div>
+                )}
                 {progress != null && currentStatus === 'transcribing' && (
-                    <div style={{ marginBottom: '8px' }}>
+                    <div>
                         <div className="progress-bar">
                             <div
                                 className="progress-fill"
-                                style={{ width: `${(progress * 100).toFixed(0)}%` }}
+                                style={{ width: `${(progress * 100).toFixed(1)}%`, transition: 'width 0.5s ease' }}
                             ></div>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                            {(progress * 100).toFixed(0)}%
+                            {(progress * 100).toFixed(1)}% overall
                         </div>
-                    </div>
-                )}
-                {message && (
-                    <div style={{
-                        fontSize: '0.8rem',
-                        color: currentStatus === 'error' ? 'var(--error)' : 'var(--text-secondary)',
-                        fontStyle: 'italic'
-                    }}>
-                        {message}
                     </div>
                 )}
             </div>
