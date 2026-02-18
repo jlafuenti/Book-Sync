@@ -4,13 +4,13 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /path/to/your/ebooks:/data/ebooks              # ← REPLACE with your ebook folder
-      - /path/to/your/audiobooks:/data/audiobooks        # ← REPLACE with your audiobook folder
+      - /path/to/your/ebooks:/data/ebooks # ← REPLACE with your ebook folder
+      - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
       - booksync_data:/data/app
     environment:
       - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
       - JWT_SECRET_KEY=change-me-to-a-random-secret-key
-      - WHISPER_MODEL=medium
+      - WHISPER_MODEL=small
       - WHISPER_DEVICE=auto
       - EBOOK_DIR=/data/ebooks
       - AUDIOBOOK_DIR=/data/audiobooks
@@ -34,7 +34,7 @@ services:
     volumes:
       - booksync_db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U booksync"]
+      test: [ "CMD-SHELL", "pg_isready -U booksync" ]
       interval: 5s
       timeout: 5s
       retries: 5

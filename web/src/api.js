@@ -182,3 +182,11 @@ export async function getSyncMap(pairId) {
     if (!resp.ok) throw new Error('Failed to get sync map');
     return resp.json();
 }
+
+// ============ Stats ============
+
+export async function getDiskUsage() {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/disk_usage`);
+    if (!resp.ok) throw new Error('Failed to fetch disk usage');
+    return resp.json();
+}
