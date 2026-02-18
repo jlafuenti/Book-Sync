@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
