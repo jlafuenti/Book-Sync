@@ -46,7 +46,9 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """Create all database tables on startup."""
     async with engine.begin() as conn:
-        from models import user, book, sync_map, bookmark, settings  # noqa: F401
+        from models import user, book, sync_map, bookmark
+        from models.settings import SystemSetting # Explicit import
+        
         await conn.run_sync(Base.metadata.create_all)
 
         # Manual migration for series fields (since we don't have Alembic setup yet)
@@ -67,3 +69,4 @@ async def init_db():
             await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN series_index FLOAT"))
         except Exception:
             pass
+

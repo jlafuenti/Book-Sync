@@ -6,7 +6,7 @@ services:
     volumes:
       - /path/to/your/ebooks:/data/ebooks # ← REPLACE with your ebook folder
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
-      - booksync_data:/data/app
+      - ./data:/data/app
     environment:
       - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
       - JWT_SECRET_KEY=change-me-to-a-random-secret-key
