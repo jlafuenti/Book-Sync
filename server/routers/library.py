@@ -107,24 +107,49 @@ async def get_filename_patterns(db: AsyncSession, pattern_type: str = "ebook") -
 
 def normalize_author(author: str) -> str:
     """
-    Normalize 'Last, First' to 'First Last'.
+    Normalize author name to 'First Last' format.
+    Handles:
+    - 'Last, First' -> 'First Last'
+    - 'Jim Butcher' -> 'Jim Butcher' (no change)
+    - 'Butcher, Jim' -> 'Jim Butcher'
+    - Extra whitespace is stripped.
     """
     if not author: return None
+    author = author.strip()
+    if not author: return None
+    
     if "," in author:
         parts = author.split(",", 1)
-        return f"{parts[1].strip()} {parts[0].strip()}"
-    return author.strip()
+        first = parts[1].strip()
+        last = parts[0].strip()
+        if first and last:
+            return f"{first} {last}"
+        return last or first
+    return author
 
 
 def normalize_series(series: str) -> str:
     """
     Normalize series name.
-    1. Remove leading 'The ' for consistency.
+    - 'Dresden Files, The' -> 'The Dresden Files'
+    - 'The Dresden Files' -> 'The Dresden Files' (preserved)
+    - 'Dresden Files' -> 'Dresden Files' (no change, don't guess)
+    - Trailing articles (A, An, The) are moved to the front.
     """
     if not series: return None
     clean = series.strip()
-    if clean.lower().startswith("the "):
-        return clean[4:].strip()
+    if not clean: return None
+    
+    # Handle trailing article: 'Series Name, The' -> 'The Series Name'
+    trailing_articles = [', The', ', A', ', An']
+    for article in trailing_articles:
+        if clean.endswith(article) or clean.lower().endswith(article.lower()):
+            # Extract the article text (e.g., 'The', 'A', 'An')
+            art = clean[-(len(article) - 2):].strip()  # skip the ', '
+            base = clean[:-(len(article))].strip()
+            # Capitalize the article properly
+            return f"{art} {base}"
+    
     return clean
 
 
@@ -508,6 +533,18 @@ async def auto_match_books(db: AsyncSession) -> int:
     Uses fuzzy string matching on the extracted titles.
     Returns the number of new pairs created.
     """
+    def _normalize_for_comparison(text: str) -> str:
+        """Normalize text for fuzzy comparison: strip articles, lowercase."""
+        if not text:
+            return ""
+        t = text.lower().strip()
+        # Strip leading articles for comparison
+        for article in ['the ', 'a ', 'an ']:
+            if t.startswith(article):
+                t = t[len(article):]
+                break
+        return t
+
     # Get all ebooks that aren't already paired
     paired_ebook_ids = select(BookPair.ebook_id)
     result = await db.execute(
@@ -528,13 +565,24 @@ async def auto_match_books(db: AsyncSession) -> int:
     for ebook in unpaired_ebooks:
         best_match = None
         best_score = 0
+        eb_title = _normalize_for_comparison(ebook.title)
+        eb_author = _normalize_for_comparison(ebook.author)
 
         for audiobook in unpaired_audiobooks:
             if audiobook.id in matched_audiobook_ids:
                 continue
 
-            # Compare titles using fuzzy matching (token sort handles word order differences)
-            score = fuzz.token_sort_ratio(ebook.title.lower(), audiobook.title.lower())
+            ab_title = _normalize_for_comparison(audiobook.title)
+
+            # Compare titles using fuzzy matching (token sort handles word order)
+            score = fuzz.token_sort_ratio(eb_title, ab_title)
+            
+            # Boost score if authors also match
+            if eb_author and audiobook.author:
+                ab_author = _normalize_for_comparison(audiobook.author)
+                author_score = fuzz.token_sort_ratio(eb_author, ab_author)
+                if author_score >= 80:
+                    score = min(100, score + 10)
 
             if score > best_score and score >= 75:  # 75% similarity threshold
                 best_score = score
@@ -745,6 +793,123 @@ class MetadataUpdate(BaseModel):
     series: Optional[str] = None
     series_index: Optional[float] = None
 
+
+def _write_ebook_metadata(filepath: str, book) -> None:
+    """
+    Write metadata back to an EPUB file.
+    Modifies Dublin Core fields and Calibre series metadata in-place.
+    """
+    if not filepath.lower().endswith(".epub"):
+        logger.info(f"[write-back] Skipping non-EPUB file: {filepath}")
+        return
+    
+    if not os.path.exists(filepath):
+        logger.warning(f"[write-back] File not found: {filepath}")
+        return
+    
+    logger.info(f"[write-back] Writing EPUB metadata to: {filepath}")
+    
+    try:
+        epub_book = epub.read_epub(filepath, options={'ignore_ncx': True})
+        
+        # Update title
+        if book.title:
+            # Clear existing titles and set new one
+            epub_book.set_unique_metadata('DC', 'title', book.title)
+        
+        # Update author
+        if book.author:
+            epub_book.set_unique_metadata('DC', 'creator', book.author)
+        
+        # Update series (Calibre-style metadata)
+        if book.series is not None:
+            # Remove existing calibre:series meta
+            existing_meta = epub_book.get_metadata('OPF', 'meta') or []
+            for m in list(existing_meta):
+                attrs = m[1] if len(m) > 1 else {}
+                if attrs.get('name') in ('calibre:series', 'calibre:series_index'):
+                    try:
+                        epub_book.metadata.get('http://www.idpf.org/2007/opf', []).remove(m)
+                    except (ValueError, KeyError):
+                        pass
+            
+            # Add new series metadata
+            epub_book.add_metadata('OPF', 'meta', '', {
+                'name': 'calibre:series',
+                'content': book.series or ''
+            })
+            if book.series_index is not None:
+                epub_book.add_metadata('OPF', 'meta', '', {
+                    'name': 'calibre:series_index',
+                    'content': str(book.series_index)
+                })
+        
+        epub.write_epub(filepath, epub_book)
+        logger.info(f"[write-back] EPUB metadata written successfully")
+        
+    except Exception as e:
+        logger.error(f"[write-back] Failed to write EPUB metadata: {e}")
+        raise
+
+
+def _write_audiobook_metadata(filepath: str, book) -> None:
+    """
+    Write metadata back to an audiobook file.
+    Supports M4B/M4A (iTunes atoms), MP3 (ID3), FLAC, and Ogg.
+    """
+    if not os.path.exists(filepath):
+        logger.warning(f"[write-back] File not found: {filepath}")
+        return
+    
+    logger.info(f"[write-back] Writing audio metadata to: {filepath}")
+    
+    try:
+        audio = mutagen.File(filepath)
+        if not audio:
+            logger.warning(f"[write-back] Mutagen could not open: {filepath}")
+            return
+        
+        audio_type = type(audio).__name__
+        logger.info(f"[write-back] Audio type: {audio_type}")
+        
+        if audio_type in ('MP4', 'M4A'):
+            # iTunes-style atoms for M4B/M4A
+            if book.title: audio['\xa9nam'] = [book.title]
+            if book.author: audio['\xa9ART'] = [book.author]
+            if book.series: audio['\xa9alb'] = [book.series]
+            if book.series_index is not None:
+                audio['trkn'] = [(int(book.series_index), 0)]
+                
+        elif audio_type == 'MP3':
+            from mutagen.id3 import TIT2, TPE1, TALB, TRCK
+            
+            if audio.tags is None:
+                audio.add_tags()
+            
+            if book.title: audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
+            if book.author: audio.tags['TPE1'] = TPE1(encoding=3, text=book.author)
+            if book.series: audio.tags['TALB'] = TALB(encoding=3, text=book.series)
+            if book.series_index is not None:
+                audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
+                
+        elif audio_type in ('FLAC', 'OggVorbis', 'OggOpus'):
+            # Vorbis comments
+            if book.title: audio['title'] = [book.title]
+            if book.author: audio['artist'] = [book.author]
+            if book.series: audio['album'] = [book.series]
+            if book.series_index is not None:
+                audio['tracknumber'] = [str(int(book.series_index))]
+        else:
+            logger.warning(f"[write-back] Unsupported audio type for write-back: {audio_type}")
+            return
+        
+        audio.save()
+        logger.info(f"[write-back] Audio metadata written successfully")
+        
+    except Exception as e:
+        logger.error(f"[write-back] Failed to write audio metadata: {e}")
+        raise
+
 @router.patch("/ebooks/{book_id}", response_model=EBookResponse)
 async def update_ebook_metadata(
     book_id: int,
@@ -752,7 +917,7 @@ async def update_ebook_metadata(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Manually update ebook metadata."""
+    """Manually update ebook metadata and write changes back to the file."""
     result = await db.execute(select(EBook).where(EBook.id == book_id))
     book = result.scalar_one_or_none()
     if not book:
@@ -762,6 +927,12 @@ async def update_ebook_metadata(
     if meta.author is not None: book.author = meta.author
     if meta.series is not None: book.series = meta.series
     if meta.series_index is not None: book.series_index = meta.series_index
+    
+    # Write metadata back to the file
+    try:
+        _write_ebook_metadata(book.file_path, book)
+    except Exception as e:
+        logger.warning(f"Failed to write metadata to ebook file: {e}")
     
     await db.commit()
     await db.refresh(book)
@@ -774,7 +945,7 @@ async def update_audiobook_metadata(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Manually update audiobook metadata."""
+    """Manually update audiobook metadata and write changes back to the file."""
     result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
     book = result.scalar_one_or_none()
     if not book:
@@ -784,6 +955,12 @@ async def update_audiobook_metadata(
     if meta.author is not None: book.author = meta.author
     if meta.series is not None: book.series = meta.series
     if meta.series_index is not None: book.series_index = meta.series_index
+    
+    # Write metadata back to the file
+    try:
+        _write_audiobook_metadata(book.file_path, book)
+    except Exception as e:
+        logger.warning(f"Failed to write metadata to audiobook file: {e}")
     
     await db.commit()
     await db.refresh(book)
