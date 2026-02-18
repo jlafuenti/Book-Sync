@@ -22,7 +22,9 @@ import mutagen
 
 from database import get_db
 from config import settings
+from models.settings import SystemSetting
 from models.user import User
+from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
@@ -41,6 +43,44 @@ AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav", ".aac",
 REGEX_AUTHOR_SERIES_TITLE = re.compile(r"^(.+?) - \[(.+?) (\d+(?:\.\d+)?)\] - (.+)$")
 # Pattern 2: [Series Num] Title (often found in Author folders)
 REGEX_SERIES_TITLE = re.compile(r"^\[(.+?) (\d+(?:\.\d+)?)\] (.+)$")
+
+
+def regex_from_pattern(pattern: str) -> re.Pattern:
+    """
+    Convert a user-friendly pattern to a regex.
+    Tags: <Author>, <Series>, <Book Number>, <Title>, <Series Index>
+    """
+    # Escape special regex chars in the pattern (except < > which we use for tags)
+    parts = re.split(r'(<[^>]+>)', pattern)
+    regex_parts = ["^"]
+    
+    tag_map = {
+        "<Author>": r"(?P<author>.+?)",
+        "<Series>": r"(?P<series>.+?)",
+        "<Book Number>": r"(?P<series_index>\d+(?:\.\d+)?)",
+        "<Series Index>": r"(?P<series_index>\d+(?:\.\d+)?)",
+        "<Title>": r"(?P<title>.+?)",
+        "<Book Title>": r"(?P<title>.+?)",
+    }
+    
+    for part in parts:
+        if part in tag_map:
+            regex_parts.append(tag_map[part])
+        else:
+            regex_parts.append(re.escape(part))
+            
+    regex_parts.append("$")
+    return re.compile("".join(regex_parts))
+
+
+async def get_filename_patterns(db: AsyncSession) -> List[str]:
+    """Fetch filename patterns from settings or return defaults."""
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "filename_patterns"))
+    setting = result.scalar_one_or_none()
+    
+    if setting and setting.value:
+        return setting.value.split("\n")
+    return DEFAULT_SETTINGS["filename_patterns"]
 
 
 def compute_file_hash(filepath: str) -> str:
@@ -65,10 +105,9 @@ def extract_title_from_filename(filename: str) -> str:
     return name.strip()
 
 
-def parse_filename_metadata(filename: str, parent_dir_name: str = None) -> Dict[str, Any]:
+async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession, parent_dir_name: str = None) -> Dict[str, Any]:
     """
-    Attempt to extract metadata from filename using regex patterns.
-    Returns a dict with 'title', 'author', 'series', 'series_index' keys (values may be None).
+    Attempt to extract metadata using configured patterns.
     """
     clean_name = Path(filename).stem
     meta = {
@@ -77,34 +116,36 @@ def parse_filename_metadata(filename: str, parent_dir_name: str = None) -> Dict[
         "series": None,
         "series_index": None
     }
-
-    # Pattern 1: Author - [Series Num] - Title
-    match1 = REGEX_AUTHOR_SERIES_TITLE.match(clean_name)
-    if match1:
-        meta["author"] = match1.group(1).strip()
-        meta["series"] = match1.group(2).strip()
-        try:
-            meta["series_index"] = float(match1.group(3))
-        except ValueError:
-            pass
-        meta["title"] = match1.group(4).strip()
-        return meta
-
-    # Pattern 2: [Series Num] Title
-    # If found, try to use parent directory as author
-    match2 = REGEX_SERIES_TITLE.match(clean_name)
-    if match2:
-        meta["series"] = match2.group(1).strip()
-        try:
-            meta["series_index"] = float(match2.group(2))
-        except ValueError:
-            pass
-        meta["title"] = match2.group(3).strip()
-        if parent_dir_name:
-             meta["author"] = parent_dir_name
-        return meta
     
-    # Fallback
+    patterns = await get_filename_patterns(db)
+    
+    for pattern_str in patterns:
+        try:
+            regex = regex_from_pattern(pattern_str)
+            match = regex.match(clean_name)
+            if match:
+                groups = match.groupdict()
+                
+                if "author" in groups: meta["author"] = groups["author"].strip()
+                if "series" in groups: meta["series"] = groups["series"].strip()
+                if "title" in groups: meta["title"] = groups["title"].strip()
+                if "series_index" in groups:
+                    try:
+                        meta["series_index"] = float(groups["series_index"])
+                    except ValueError:
+                        pass
+                
+                # If we have at least a title, we consider it a match
+                if meta["title"]:
+                    # Fallbacks from context if missing in pattern
+                    if not meta["author"] and parent_dir_name:
+                         meta["author"] = parent_dir_name
+                    
+                    return meta
+        except Exception:
+             continue # Skip invalid patterns
+
+    # Fallback to simple filename cleaning
     meta["title"] = extract_title_from_filename(filename)
     if parent_dir_name:
         meta["author"] = parent_dir_name
@@ -112,7 +153,7 @@ def parse_filename_metadata(filename: str, parent_dir_name: str = None) -> Dict[
     return meta
 
 
-def extract_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
+async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> Dict[str, Any]:
     """
     Extract metadata with priority:
     1. Embedded Metadata (EPUB/ID3)
@@ -122,8 +163,8 @@ def extract_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
     filename = os.path.basename(filepath)
     parent_dir = os.path.basename(os.path.dirname(filepath))
     
-    # 1. Start with filename metadata as baseline fallback
-    meta = parse_filename_metadata(filename, parent_dir)
+    # 1. Filename metadata (Regex/Settings) - Default priority as requested:
+    filename_meta = await parse_filename_metadata_with_settings(filename, db, parent_dir)
     
     # 2. Try embedded metadata
     file_meta = {}
@@ -165,13 +206,13 @@ def extract_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
     except Exception:
         pass # Metadata read failed, stick with filename
         
-    # Merge: Prefer embedded if exists and not empty
+    # Merge: Prefer embedded if exists
+    meta = filename_meta.copy()
+
     if file_meta.get("title"): meta["title"] = file_meta["title"]
     if file_meta.get("author"): meta["author"] = file_meta["author"]
-    # For series, filename regex is often MORE reliable than tags for audiobooks
-    # so we might prefer regex if embedded is missing. 
-    # If embedded 'series' (album) is found, use it? Often album != series.
-    # Let's trust regex for series if present, else fallback.
+    
+    if file_meta.get("series"): meta["series"] = file_meta["series"]
     
     return meta
 
@@ -211,7 +252,8 @@ async def scan_library(
                 if existing_ebook:
                     # If exists but missing series info, try to update metadata
                     if existing_ebook.series is None:
-                         meta = extract_metadata(filepath, "ebook")
+                         # Pass db session and await
+                         meta = await extract_metadata(filepath, "ebook", db)
                          if meta["series"] or meta["series_index"] is not None:
                              existing_ebook.series = meta["series"]
                              existing_ebook.series_index = meta["series_index"]
@@ -226,7 +268,7 @@ async def scan_library(
                 except OSError:
                     continue
                 
-                meta = extract_metadata(filepath, "ebook")
+                meta = await extract_metadata(filepath, "ebook", db)
 
                 ebook = EBook(
                     title=meta["title"] or filename,
@@ -261,7 +303,7 @@ async def scan_library(
                 if existing_audiobook:
                     # Update metadata if missing
                     if existing_audiobook.series is None:
-                         meta = extract_metadata(filepath, "audiobook")
+                         meta = await extract_metadata(filepath, "audiobook", db)
                          if meta["series"] or meta["series_index"] is not None:
                              existing_audiobook.series = meta["series"]
                              existing_audiobook.series_index = meta["series_index"]
@@ -276,7 +318,7 @@ async def scan_library(
                 except OSError:
                     continue
                 
-                meta = extract_metadata(filepath, "audiobook")
+                meta = await extract_metadata(filepath, "audiobook", db)
 
                 audiobook = AudioBook(
                     title=meta["title"] or filename,
@@ -542,4 +584,53 @@ async def upload_audiobook(
     db.add(audiobook)
     await db.flush()
     await db.refresh(audiobook)
-    return audiobook
+
+class MetadataUpdate(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    series: Optional[str] = None
+    series_index: Optional[float] = None
+
+@router.patch("/ebooks/{book_id}", response_model=EBookResponse)
+async def update_ebook_metadata(
+    book_id: int,
+    meta: MetadataUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Manually update ebook metadata."""
+    result = await db.execute(select(EBook).where(EBook.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+        
+    if meta.title is not None: book.title = meta.title
+    if meta.author is not None: book.author = meta.author
+    if meta.series is not None: book.series = meta.series
+    if meta.series_index is not None: book.series_index = meta.series_index
+    
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+@router.patch("/audiobooks/{book_id}", response_model=AudioBookResponse)
+async def update_audiobook_metadata(
+    book_id: int,
+    meta: MetadataUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Manually update audiobook metadata."""
+    result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+        
+    if meta.title is not None: book.title = meta.title
+    if meta.author is not None: book.author = meta.author
+    if meta.series is not None: book.series = meta.series
+    if meta.series_index is not None: book.series_index = meta.series_index
+    
+    await db.commit()
+    await db.refresh(book)
+    return book

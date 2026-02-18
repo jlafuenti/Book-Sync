@@ -198,3 +198,48 @@ export async function getDiskUsage() {
     if (!resp.ok) throw new Error('Failed to fetch disk usage');
     return resp.json();
 }
+
+// ============ Settings ============
+
+export async function getSettings() {
+    const resp = await fetchWithAuth(`${API_BASE}/settings`);
+    if (!resp.ok) throw new Error('Failed to fetch settings');
+    return resp.json();
+}
+
+export async function updateSettings(settings) {
+    const resp = await fetchWithAuth(`${API_BASE}/settings`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(settings),
+    });
+    if (!resp.ok) throw new Error('Failed to update settings');
+    return resp.json();
+}
+
+export async function updateEbookMetadata(bookId, meta) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${bookId}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(meta),
+    });
+    if (!resp.ok) throw new Error('Failed to update ebook metadata');
+    return resp.json();
+}
+
+export async function updateAudiobookMetadata(bookId, meta) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${bookId}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(meta),
+    });
+    if (!resp.ok) throw new Error('Failed to update audiobook metadata');
+    return resp.json();
+}
+

@@ -46,7 +46,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """Create all database tables on startup."""
     async with engine.begin() as conn:
-        from models import user, book, sync_map, bookmark  # noqa: F401
+        from models import user, book, sync_map, bookmark, settings  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
         # Manual migration for series fields (since we don't have Alembic setup yet)

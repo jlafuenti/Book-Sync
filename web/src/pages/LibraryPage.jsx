@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary } from '../api'
+import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 
 function LibraryPage() {
     const [ebooks, setEbooks] = useState([])
@@ -10,6 +10,10 @@ function LibraryPage() {
     const [error, setError] = useState('')
     const [uploadingEbook, setUploadingEbook] = useState(false)
     const [uploadingAudiobook, setUploadingAudiobook] = useState(false)
+
+    // Edit state
+    const [editingBook, setEditingBook] = useState(null) // { ...book }
+    const [editingType, setEditingType] = useState(null) // 'ebook' | 'audiobook'
 
     // Filtering state
     const [searchTerm, setSearchTerm] = useState('')
@@ -99,6 +103,27 @@ function LibraryPage() {
         } finally {
             setUploadingAudiobook(false)
             audiobookFileRef.current.value = ''
+        }
+    }
+
+    const handleSaveMetadata = async (bookId, meta) => {
+        try {
+            if (editingType === 'ebook') {
+                await updateEbookMetadata(bookId, meta)
+            } else {
+                await updateAudiobookMetadata(bookId, meta)
+            }
+            // Refresh local state without full reload
+            if (editingType === 'ebook') {
+                setEbooks(prev => prev.map(b => b.id === bookId ? { ...b, ...meta } : b))
+            } else {
+                setAudiobooks(prev => prev.map(b => b.id === bookId ? { ...b, ...meta } : b))
+            }
+            setEditingBook(null)
+            setEditingType(null)
+        } catch (err) {
+            console.error(err)
+            alert('Failed to update metadata: ' + err.message)
         }
     }
 
@@ -303,6 +328,102 @@ function LibraryPage() {
                         </table>
                     </div>
                 )}
+            </div>
+
+            {editingBook && (
+                <MetadataEditModal
+                    book={editingBook}
+                    type={editingType}
+                    onClose={() => {
+                        setEditingBook(null)
+                        setEditingType(null)
+                    }}
+                    onSave={handleSaveMetadata}
+                />
+            )}
+        </div>
+    )
+}
+
+function MetadataEditModal({ book, type, onClose, onSave }) {
+    const [title, setTitle] = useState(book.title || '')
+    const [author, setAuthor] = useState(book.author || '')
+    const [series, setSeries] = useState(book.series || '')
+    const [seriesIndex, setSeriesIndex] = useState(book.series_index || '')
+    const [saving, setSaving] = useState(false)
+
+    const handleSubmit = async (e) => {
+        e.preventDefault()
+        setSaving(true)
+        try {
+            await onSave(book.id, {
+                title,
+                author,
+                series: series || null,
+                series_index: seriesIndex ? parseFloat(seriesIndex) : null
+            })
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <div className="modal-overlay">
+            <div className="modal">
+                <div className="modal-header">
+                    <h3>Edit {type === 'ebook' ? 'EBook' : 'Audiobook'} Metadata</h3>
+                    <button className="btn-close" onClick={onClose}>&times;</button>
+                </div>
+                <form onSubmit={handleSubmit} style={{ padding: '20px' }}>
+                    <div className="form-group">
+                        <label>Title</label>
+                        <input
+                            required
+                            className="form-input"
+                            value={title}
+                            onChange={e => setTitle(e.target.value)}
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label>Author</label>
+                        <input
+                            className="form-input"
+                            value={author}
+                            onChange={e => setAuthor(e.target.value)}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <div className="form-group" style={{ flex: 2 }}>
+                            <label>Series</label>
+                            <input
+                                className="form-input"
+                                value={series}
+                                onChange={e => setSeries(e.target.value)}
+                                placeholder="Series Name"
+                            />
+                        </div>
+                        <div className="form-group" style={{ flex: 1 }}>
+                            <label>Index</label>
+                            <input
+                                className="form-input"
+                                type="number"
+                                step="0.1"
+                                value={seriesIndex}
+                                onChange={e => setSeriesIndex(e.target.value)}
+                                placeholder="#"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="modal-actions">
+                        <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
+                            Cancel
+                        </button>
+                        <button type="submit" className="btn btn-primary" disabled={saving}>
+                            {saving ? 'Saving...' : 'Save Changes'}
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     )
