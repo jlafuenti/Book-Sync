@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.settings import SystemSetting
 from database import get_db
-from routers.auth import get_admin_user
+from routers.auth import get_current_user
 from models.user import User
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -28,7 +28,7 @@ DEFAULT_SETTINGS = {
 }
 
 @router.get("/", response_model=Dict[str, Any])
-async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)):
+async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     """Get all system settings."""
     result = await db.execute(select(SystemSetting))
     settings_list = result.scalars().all()
@@ -51,7 +51,7 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
 async def update_settings(
     new_settings: Dict[str, Any], 
     db: AsyncSession = Depends(get_db), 
-    _: User = Depends(get_admin_user)
+    _: User = Depends(get_current_user)
 ):
     """Update system settings."""
     for key, value in new_settings.items():
