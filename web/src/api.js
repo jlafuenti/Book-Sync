@@ -103,6 +103,12 @@ export async function scanLibrary() {
     return resp.json();
 }
 
+export async function normalizeLibrary() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/normalize`, { method: 'POST' });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Normalize failed');
+    return resp.json();
+}
+
 export async function getEbooks() {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks`);
     if (!resp.ok) throw new Error('Failed to fetch ebooks');

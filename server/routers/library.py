@@ -395,6 +395,70 @@ async def extract_metadata(
     return meta
 
 
+@router.post("/normalize")
+async def normalize_library_metadata(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Re-normalize all author and series fields in the database.
+    Fixes entries like 'Butcher, Jim' → 'Jim Butcher' and
+    'Dresden Files, The' → 'The Dresden Files'.
+    Returns counts of updated records.
+    """
+    updated_ebooks = 0
+    updated_audiobooks = 0
+    
+    # Normalize ebooks
+    result = await db.execute(select(EBook))
+    for book in result.scalars().all():
+        changed = False
+        if book.author:
+            new_author = normalize_author(book.author)
+            if new_author != book.author:
+                logger.info(f"[normalize] Ebook '{book.title}': author '{book.author}' → '{new_author}'")
+                book.author = new_author
+                changed = True
+        if book.series:
+            new_series = normalize_series(book.series)
+            if new_series != book.series:
+                logger.info(f"[normalize] Ebook '{book.title}': series '{book.series}' → '{new_series}'")
+                book.series = new_series
+                changed = True
+        if changed:
+            db.add(book)
+            updated_ebooks += 1
+    
+    # Normalize audiobooks
+    result = await db.execute(select(AudioBook))
+    for book in result.scalars().all():
+        changed = False
+        if book.author:
+            new_author = normalize_author(book.author)
+            if new_author != book.author:
+                logger.info(f"[normalize] Audiobook '{book.title}': author '{book.author}' → '{new_author}'")
+                book.author = new_author
+                changed = True
+        if book.series:
+            new_series = normalize_series(book.series)
+            if new_series != book.series:
+                logger.info(f"[normalize] Audiobook '{book.title}': series '{book.series}' → '{new_series}'")
+                book.series = new_series
+                changed = True
+        if changed:
+            db.add(book)
+            updated_audiobooks += 1
+    
+    await db.commit()
+    
+    total = updated_ebooks + updated_audiobooks
+    return {
+        "message": f"Normalized {total} records ({updated_ebooks} ebooks, {updated_audiobooks} audiobooks)",
+        "updated_ebooks": updated_ebooks,
+        "updated_audiobooks": updated_audiobooks,
+    }
+
+
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),

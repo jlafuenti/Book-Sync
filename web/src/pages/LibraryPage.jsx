@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 
 function LibraryPage() {
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
     const [loading, setLoading] = useState(true)
     const [scanning, setScanning] = useState(false)
+    const [normalizing, setNormalizing] = useState(false)
     const [scanResult, setScanResult] = useState(null)
     const [error, setError] = useState('')
+
     const [uploadingEbook, setUploadingEbook] = useState(false)
     const [uploadingAudiobook, setUploadingAudiobook] = useState(false)
 
@@ -74,6 +76,21 @@ function LibraryPage() {
         }
     }
 
+    const handleNormalize = async () => {
+        setNormalizing(true)
+        setScanResult(null)
+        setError('')
+        try {
+            const result = await normalizeLibrary()
+            setScanResult(result)
+            await loadData()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setNormalizing(false)
+        }
+    }
+
     const handleEbookUpload = async (e) => {
         const file = e.target.files[0]
         if (!file) return
@@ -127,6 +144,11 @@ function LibraryPage() {
         }
     }
 
+    const openEdit = (book, type) => {
+        setEditingBook({ ...book })
+        setEditingType(type)
+    }
+
     const formatSize = (bytes) => {
         if (!bytes) return '—'
         if (bytes < 1024) return `${bytes} B`
@@ -172,8 +194,16 @@ function LibraryPage() {
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-                <button className="btn btn-primary" onClick={handleScan} disabled={scanning}>
+                <button className="btn btn-primary" onClick={handleScan} disabled={scanning || normalizing}>
                     {scanning ? <><div className="spinner"></div> Scanning...</> : '🔍 Scan Directories'}
+                </button>
+                <button
+                    className="btn btn-secondary"
+                    onClick={handleNormalize}
+                    disabled={scanning || normalizing}
+                    title="Fix author names like 'Butcher, Jim' → 'Jim Butcher' and series like 'Dresden Files, The' → 'The Dresden Files'"
+                >
+                    {normalizing ? <><div className="spinner"></div> Normalizing...</> : '🔄 Normalize Metadata'}
                 </button>
                 <button className="btn btn-secondary" onClick={() => ebookFileRef.current?.click()} disabled={uploadingEbook}>
                     {uploadingEbook ? <><div className="spinner"></div> Uploading...</> : '📄 Upload EBook'}
@@ -266,6 +296,7 @@ function LibraryPage() {
                                     <th>Format</th>
                                     <th>Size</th>
                                     <th>Added</th>
+                                    <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -274,11 +305,21 @@ function LibraryPage() {
                                         <td style={{ fontWeight: 500 }}>{book.title}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>
-                                            {book.series ? `${book.series} #${book.series_index}` : '—'}
+                                            {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
                                         </td>
                                         <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                         <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                         <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
+                                        <td>
+                                            <button
+                                                className="btn btn-sm btn-secondary"
+                                                onClick={() => openEdit(book, 'ebook')}
+                                                title="Edit metadata"
+                                                style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                            >
+                                                ✏️
+                                            </button>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -309,6 +350,7 @@ function LibraryPage() {
                                     <th>Format</th>
                                     <th>Size</th>
                                     <th>Added</th>
+                                    <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -317,11 +359,21 @@ function LibraryPage() {
                                         <td style={{ fontWeight: 500 }}>{book.title}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>
-                                            {book.series ? `${book.series} #${book.series_index}` : '—'}
+                                            {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
                                         </td>
                                         <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                         <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                         <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
+                                        <td>
+                                            <button
+                                                className="btn btn-sm btn-secondary"
+                                                onClick={() => openEdit(book, 'audiobook')}
+                                                title="Edit metadata"
+                                                style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                            >
+                                                ✏️
+                                            </button>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -413,6 +465,18 @@ function MetadataEditModal({ book, type, onClose, onSave }) {
                                 placeholder="#"
                             />
                         </div>
+                    </div>
+
+                    <div style={{
+                        fontSize: '0.8rem',
+                        color: 'var(--text-muted)',
+                        marginBottom: '16px',
+                        padding: '10px',
+                        background: 'var(--bg-input)',
+                        borderRadius: '6px'
+                    }}>
+                        💾 Changes will be saved to the database <strong>and</strong> written back to the file's
+                        embedded metadata (EPUB/M4B/MP3 tags).
                     </div>
 
                     <div className="modal-actions">
