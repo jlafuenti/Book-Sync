@@ -13,11 +13,16 @@ DEFAULT_SETTINGS = {
     "ebook_filename_patterns": [
         "<Author> - [<Series> <Book Number>] - <Title>",
         "[<Series> <Book Number>] <Title>",
+        "<Author>/<Series>/<Book Number> - <Title>",
+        "<Author>/<Title>",
         "<Title>"
     ],
     "audiobook_filename_patterns": [
         "<Author> - [<Series> <Book Number>] - <Title>",
         "[<Series> <Book Number>] <Title>",
+        "<Author>/<Series>/<Book Number> - <Title>",
+        "<Author>/<Series>/<Title>",
+        "<Author>/<Title>",
         "<Title>"
     ]
 }

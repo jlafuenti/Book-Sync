@@ -6,6 +6,7 @@ Includes scanning directories, uploading files, and auto-matching.
 import os
 import re
 import hashlib
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -33,6 +34,7 @@ from schemas import (
 )
 from routers.auth import get_current_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/library", tags=["library"])
 
 # Supported file extensions
@@ -50,18 +52,19 @@ def regex_from_pattern(pattern: str) -> re.Pattern:
     """
     Convert a user-friendly pattern to a regex.
     Tags: <Author>, <Series>, <Book Number>, <Title>, <Series Index>
+    Supports '/' in patterns to match against directory paths.
     """
     # Escape special regex chars in the pattern (except < > which we use for tags)
     parts = re.split(r'(<[^>]+>)', pattern)
     regex_parts = ["^"]
     
     tag_map = {
-        "<Author>": r"(?P<author>.+?)",
-        "<Series>": r"(?P<series>.+?)",
+        "<Author>": r"(?P<author>[^/]+?)",
+        "<Series>": r"(?P<series>[^/]+?)",
         "<Book Number>": r"(?P<series_index>\d+(?:\.\d+)?)",
         "<Series Index>": r"(?P<series_index>\d+(?:\.\d+)?)",
-        "<Title>": r"(?P<title>.+?)",
-        "<Book Title>": r"(?P<title>.+?)",
+        "<Title>": r"(?P<title>[^/]+?)",
+        "<Book Title>": r"(?P<title>[^/]+?)",
     }
     
     for part in parts:
@@ -72,6 +75,11 @@ def regex_from_pattern(pattern: str) -> re.Pattern:
             
     regex_parts.append("$")
     return re.compile("".join(regex_parts))
+
+
+def is_path_pattern(pattern: str) -> bool:
+    """Check whether a pattern contains '/' indicating it matches directory structure."""
+    return "/" in pattern
 
 
 async def get_filename_patterns(db: AsyncSession, pattern_type: str = "ebook") -> List[str]:
@@ -143,11 +151,31 @@ def extract_title_from_filename(filename: str) -> str:
     return name.strip()
 
 
-async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession, parent_dir_name: str = None, file_type: str = "ebook") -> Dict[str, Any]:
+async def parse_filename_metadata_with_settings(
+    filename: str, db: AsyncSession, parent_dir_name: str = None,
+    file_type: str = "ebook", relative_path: str = None
+) -> Dict[str, Any]:
     """
     Attempt to extract metadata using configured patterns.
+    Supports both filename-only and directory-path patterns.
+    
+    Args:
+        filename: Just the filename (e.g. 'Battle Ground.m4b')
+        db: Database session for loading settings
+        parent_dir_name: The immediate parent directory name
+        file_type: 'ebook' or 'audiobook'
+        relative_path: Full path relative to the library root
+                       (e.g. 'Jim Butcher/Battle Ground/Battle Ground.m4b')
     """
     clean_name = Path(filename).stem
+    # Build a clean relative path without extension for path-based matching
+    if relative_path:
+        rel_path_stem = str(Path(relative_path).with_suffix(''))
+        # Normalize to forward slashes
+        rel_path_stem = rel_path_stem.replace('\\', '/')
+    else:
+        rel_path_stem = clean_name
+    
     meta = {
         "title": None,
         "author": None,
@@ -157,12 +185,25 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
     
     patterns = await get_filename_patterns(db, file_type)
     
+    logger.info(f"[metadata] Parsing '{filename}' (type={file_type})")
+    logger.info(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
+    
     for pattern_str in patterns:
         try:
             regex = regex_from_pattern(pattern_str)
-            match = regex.match(clean_name)
+            
+            # Decide what to match against based on whether pattern uses directories
+            if is_path_pattern(pattern_str):
+                match_target = rel_path_stem
+            else:
+                match_target = clean_name
+            
+            match = regex.match(match_target)
+            logger.debug(f"[metadata]   Pattern '{pattern_str}' vs '{match_target}' -> {'MATCH' if match else 'no match'}")
+            
             if match:
                 groups = match.groupdict()
+                logger.info(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
                 
                 if "author" in groups: meta["author"] = normalize_author(groups["author"])
                 if "series" in groups: meta["series"] = normalize_series(groups["series"])
@@ -179,30 +220,56 @@ async def parse_filename_metadata_with_settings(filename: str, db: AsyncSession,
                     if not meta["author"] and parent_dir_name:
                          meta["author"] = normalize_author(parent_dir_name)
                     
+                    logger.info(f"[metadata]   Final (pattern): {meta}")
                     return meta
-        except Exception:
+        except Exception as e:
+             logger.warning(f"[metadata]   Pattern '{pattern_str}' threw error: {e}")
              continue # Skip invalid patterns
 
     # Fallback to simple filename cleaning
     meta["title"] = extract_title_from_filename(filename)
     if parent_dir_name:
         meta["author"] = normalize_author(parent_dir_name)
-        
+    
+    logger.info(f"[metadata]   Final (fallback): {meta}")
     return meta
 
 
-async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> Dict[str, Any]:
+async def extract_metadata(
+    filepath: str, file_type: str, db: AsyncSession,
+    library_root: str = None
+) -> Dict[str, Any]:
     """
     Extract metadata with priority:
-    1. Embedded Metadata (EPUB/ID3)
-    2. Regex on Filename
+    1. Embedded Metadata (EPUB/ID3/M4B tags)
+    2. Regex on Filename (including directory-path patterns)
     3. Fallback to simple filename parsing
+    
+    Args:
+        filepath: Absolute path to the file
+        file_type: 'ebook' or 'audiobook'
+        db: Database session
+        library_root: Root directory of the library for computing relative paths
     """
     filename = os.path.basename(filepath)
     parent_dir = os.path.basename(os.path.dirname(filepath))
     
-    # 1. Filename metadata (Regex/Settings) - Default priority as requested:
-    filename_meta = await parse_filename_metadata_with_settings(filename, db, parent_dir, file_type)
+    # Compute relative path from the library root for directory-based patterns
+    relative_path = None
+    if library_root:
+        try:
+            relative_path = os.path.relpath(filepath, library_root)
+            relative_path = relative_path.replace('\\', '/')
+        except ValueError:
+            pass  # Different drives on Windows, etc.
+    
+    logger.info(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
+    logger.info(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
+    
+    # 1. Filename/path metadata (Regex/Settings) - Default priority as requested:
+    filename_meta = await parse_filename_metadata_with_settings(
+        filename, db, parent_dir, file_type, relative_path=relative_path
+    )
     
     # 2. Try embedded metadata
     file_meta = {}
@@ -218,38 +285,88 @@ async def extract_metadata(filepath: str, file_type: str, db: AsyncSession) -> D
             c = book.get_metadata('DC', 'creator')
             if c: file_meta["author"] = normalize_author(c[0][0])
             
-            # Series (calibre specific usually)
-            # Calibre stores series in <meta name="calibre:series" content="Series Name"/>
+            # Series (Calibre stores in <meta name="calibre:series" content="..."/>)
+            all_meta = book.get_metadata('OPF', 'meta')
+            if all_meta:
+                for m in all_meta:
+                    attrs = m[1] if len(m) > 1 else {}
+                    if attrs.get('name') == 'calibre:series':
+                        file_meta["series"] = normalize_series(attrs.get('content', ''))
+                    elif attrs.get('name') == 'calibre:series_index':
+                        try:
+                            file_meta["series_index"] = float(attrs.get('content', '0'))
+                        except ValueError:
+                            pass
+            
+            logger.info(f"[extract_metadata]   EPUB embedded: {file_meta}")
         
         elif file_type == "audiobook":
             audio = mutagen.File(filepath)
             if audio:
-                # Title
-                if 'TIT2' in audio: file_meta["title"] = str(audio['TIT2'])
-                elif 'title' in audio: file_meta["title"] = str(audio['title'][0])
+                logger.info(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
+                logger.info(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
                 
-                # Author
-                if 'TPE1' in audio: file_meta["author"] = normalize_author(str(audio['TPE1']))
-                elif 'artist' in audio: file_meta["author"] = normalize_author(str(audio['artist'][0]))
+                # MP4/M4B/M4A files (mutagen.mp4.MP4)
+                if hasattr(audio, 'tags') and hasattr(audio, 'info'):
+                    audio_type = type(audio).__name__
+                    
+                    if audio_type in ('MP4', 'M4A'):
+                        # MP4/M4B uses iTunes-style atoms
+                        if '\xa9nam' in audio: file_meta["title"] = str(audio['\xa9nam'][0])
+                        if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
+                        if '\xa9alb' in audio: file_meta["series"] = normalize_series(str(audio['\xa9alb'][0]))
+                        # Track number as series index
+                        if 'trkn' in audio:
+                            try:
+                                track_info = audio['trkn'][0]  # Tuple: (track_number, total_tracks)
+                                if isinstance(track_info, tuple):
+                                    file_meta["series_index"] = float(track_info[0])
+                                else:
+                                    file_meta["series_index"] = float(track_info)
+                            except (ValueError, TypeError, IndexError):
+                                pass
+                    elif audio_type in ('MP3', 'FLAC', 'OggVorbis', 'OggOpus'):
+                        # ID3 tags (MP3)
+                        if 'TIT2' in audio: file_meta["title"] = str(audio['TIT2'])
+                        elif 'title' in audio: file_meta["title"] = str(audio['title'][0])
+                        
+                        if 'TPE1' in audio: file_meta["author"] = normalize_author(str(audio['TPE1']))
+                        elif 'artist' in audio: file_meta["author"] = normalize_author(str(audio['artist'][0]))
+                        
+                        if 'TALB' in audio: file_meta["series"] = normalize_series(str(audio['TALB']))
+                        elif 'album' in audio: file_meta["series"] = normalize_series(str(audio['album'][0]))
+                    else:
+                        # Generic fallback — try common keys
+                        for title_key in ['\xa9nam', 'TIT2', 'title', 'TITLE']:
+                            if title_key in audio:
+                                val = audio[title_key]
+                                file_meta["title"] = str(val[0]) if isinstance(val, list) else str(val)
+                                break
+                        for author_key in ['\xa9ART', 'TPE1', 'artist', 'ARTIST']:
+                            if author_key in audio:
+                                val = audio[author_key]
+                                file_meta["author"] = normalize_author(str(val[0]) if isinstance(val, list) else str(val))
+                                break
+                        for album_key in ['\xa9alb', 'TALB', 'album', 'ALBUM']:
+                            if album_key in audio:
+                                val = audio[album_key]
+                                file_meta["series"] = normalize_series(str(val[0]) if isinstance(val, list) else str(val))
+                                break
                 
-                # Album/Series?
-                if 'TALB' in audio: file_meta["series"] = normalize_series(str(audio['TALB']))
-                elif 'album' in audio: file_meta["series"] = normalize_series(str(audio['album'][0]))
+                logger.info(f"[extract_metadata]   Audio embedded: {file_meta}")
                 
-                # Track number as series index? Only if single file per book?
-                # Probably unsafe for now unless user explicitly wants it.
-                
-    except Exception:
-        pass # Metadata read failed, stick with filename
+    except Exception as e:
+        logger.warning(f"[extract_metadata]   Embedded metadata read failed: {e}")
         
-    # Merge: Prefer embedded if exists
+    # Merge: Prefer embedded if exists, but keep filename/path data as fallback
     meta = filename_meta.copy()
 
     if file_meta.get("title"): meta["title"] = file_meta["title"]
     if file_meta.get("author"): meta["author"] = file_meta["author"]
-    
     if file_meta.get("series"): meta["series"] = file_meta["series"]
+    if file_meta.get("series_index") is not None: meta["series_index"] = file_meta["series_index"]
     
+    logger.info(f"[extract_metadata]   Merged result: {meta}")
     return meta
 
 
@@ -278,10 +395,11 @@ async def scan_library(
                     continue
 
                 filepath = os.path.join(root, filename)
+                rel_path = os.path.relpath(filepath, ebook_dir)
                 
-                # Check if already in database (by filename)
+                # Check if already in database (by file_path or filename)
                 result = await db.execute(
-                    select(EBook).where(EBook.filename == filename)
+                    select(EBook).where(EBook.file_path == filepath)
                 )
                 existing_ebook = result.scalar_one_or_none()
                 
@@ -289,7 +407,7 @@ async def scan_library(
                     # If exists but missing series info, try to update metadata
                     if existing_ebook.series is None:
                          # Pass db session and await
-                         meta = await extract_metadata(filepath, "ebook", db)
+                         meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
                          if meta["series"] or meta["series_index"] is not None:
                              existing_ebook.series = meta["series"]
                              existing_ebook.series_index = meta["series_index"]
@@ -304,7 +422,7 @@ async def scan_library(
                 except OSError:
                     continue
                 
-                meta = await extract_metadata(filepath, "ebook", db)
+                meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
 
                 ebook = EBook(
                     title=meta["title"] or filename,
@@ -332,14 +450,14 @@ async def scan_library(
                 filepath = os.path.join(root, filename)
                 
                 result = await db.execute(
-                    select(AudioBook).where(AudioBook.filename == filename)
+                    select(AudioBook).where(AudioBook.file_path == filepath)
                 )
                 existing_audiobook = result.scalar_one_or_none()
                 
                 if existing_audiobook:
                     # Update metadata if missing
                     if existing_audiobook.series is None:
-                         meta = await extract_metadata(filepath, "audiobook", db)
+                         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
                          if meta["series"] or meta["series_index"] is not None:
                              existing_audiobook.series = meta["series"]
                              existing_audiobook.series_index = meta["series_index"]
@@ -354,7 +472,7 @@ async def scan_library(
                 except OSError:
                     continue
                 
-                meta = await extract_metadata(filepath, "audiobook", db)
+                meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
 
                 audiobook = AudioBook(
                     title=meta["title"] or filename,
@@ -670,3 +788,115 @@ async def update_audiobook_metadata(
     await db.commit()
     await db.refresh(book)
     return book
+
+
+@router.get("/debug-metadata/{book_type}/{book_id}")
+async def debug_metadata(
+    book_type: str,
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Debug endpoint: re-extract metadata from a book's file and return all
+    the intermediate data (pattern matches, embedded tags, merged result)
+    without modifying the database.
+    """
+    import mutagen as mutagen_lib
+    
+    if book_type == "ebook":
+        result = await db.execute(select(EBook).where(EBook.id == book_id))
+        book = result.scalar_one_or_none()
+        library_root = settings.ebook_dir
+    elif book_type == "audiobook":
+        result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
+        book = result.scalar_one_or_none()
+        library_root = settings.audiobook_dir
+    else:
+        raise HTTPException(status_code=400, detail="book_type must be 'ebook' or 'audiobook'")
+    
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    filepath = book.file_path
+    filename = os.path.basename(filepath)
+    parent_dir = os.path.basename(os.path.dirname(filepath))
+    
+    relative_path = None
+    try:
+        relative_path = os.path.relpath(filepath, library_root)
+        relative_path = relative_path.replace('\\', '/')
+    except ValueError:
+        pass
+    
+    debug_info = {
+        "file_path": filepath,
+        "filename": filename,
+        "parent_dir": parent_dir,
+        "library_root": library_root,
+        "relative_path": relative_path,
+        "file_exists": os.path.exists(filepath),
+        "current_db_metadata": {
+            "title": book.title,
+            "author": book.author,
+            "series": getattr(book, 'series', None),
+            "series_index": getattr(book, 'series_index', None),
+        },
+        "patterns_used": await get_filename_patterns(db, book_type),
+        "filename_parse_result": None,
+        "embedded_tags": {},
+        "mutagen_type": None,
+        "all_tag_keys": [],
+        "merged_result": None,
+    }
+    
+    # Filename/path parse
+    fn_meta = await parse_filename_metadata_with_settings(
+        filename, db, parent_dir, book_type, relative_path=relative_path
+    )
+    debug_info["filename_parse_result"] = fn_meta
+    
+    # Embedded metadata
+    if debug_info["file_exists"]:
+        try:
+            if book_type == "audiobook":
+                audio = mutagen_lib.File(filepath)
+                if audio:
+                    debug_info["mutagen_type"] = type(audio).__name__
+                    debug_info["all_tag_keys"] = list(audio.keys())
+                    # Dump all tag values (convert to strings for JSON)
+                    for key in audio.keys():
+                        try:
+                            val = audio[key]
+                            if isinstance(val, list):
+                                debug_info["embedded_tags"][key] = [str(v) for v in val]
+                            else:
+                                debug_info["embedded_tags"][key] = str(val)
+                        except Exception:
+                            debug_info["embedded_tags"][key] = "<unreadable>"
+            elif book_type == "ebook" and filepath.lower().endswith(".epub"):
+                try:
+                    epub_book = epub.read_epub(filepath, options={'ignore_ncx': True})
+                    t = epub_book.get_metadata('DC', 'title')
+                    if t: debug_info["embedded_tags"]["DC:title"] = str(t[0][0])
+                    c = epub_book.get_metadata('DC', 'creator')
+                    if c: debug_info["embedded_tags"]["DC:creator"] = str(c[0][0])
+                    # Calibre series
+                    all_meta = epub_book.get_metadata('OPF', 'meta')
+                    if all_meta:
+                        for m in all_meta:
+                            attrs = m[1] if len(m) > 1 else {}
+                            name = attrs.get('name', '')
+                            if 'series' in name.lower():
+                                debug_info["embedded_tags"][name] = attrs.get('content', '')
+                except Exception as e:
+                    debug_info["embedded_tags"]["error"] = str(e)
+        except Exception as e:
+            debug_info["embedded_tags"]["error"] = str(e)
+    
+    # Full merged result
+    if debug_info["file_exists"]:
+        merged = await extract_metadata(filepath, book_type, db, library_root=library_root)
+        debug_info["merged_result"] = merged
+    
+    return debug_info

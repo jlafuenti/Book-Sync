@@ -177,6 +177,7 @@ function SettingsSection() {
             <div style={{ padding: '16px' }}>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
                     Enter one pattern per line. Tokens: <code>&lt;Author&gt;</code>, <code>&lt;Series&gt;</code>, <code>&lt;Book Number&gt;</code>, <code>&lt;Title&gt;</code>.
+                    <br />Use <code>/</code> to match directory structure (e.g. <code>&lt;Author&gt;/&lt;Series&gt;/&lt;Title&gt;</code> matches <code>Jim Butcher/Battle Ground/Battle Ground.m4b</code>).
                 </p>
 
                 <div style={{ marginBottom: '24px' }}>
