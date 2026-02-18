@@ -52,21 +52,15 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
         # Manual migration for series fields (since we don't have Alembic setup yet)
-        # Check if 'series' column exists in 'ebooks' table
+        # Use IF NOT EXISTS to avoid errors that abort the transaction
+        # (which would roll back table creation from create_all above)
         from sqlalchemy import text
         
         # Ebooks migration
-        try:
-            await conn.execute(text("ALTER TABLE ebooks ADD COLUMN series VARCHAR(500)"))
-            await conn.execute(text("ALTER TABLE ebooks ADD COLUMN series_index FLOAT"))
-        except Exception:
-            # Columns likely exist
-            pass
+        await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS series VARCHAR(500)"))
+        await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS series_index FLOAT"))
 
         # Audiobooks migration
-        try:
-            await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN series VARCHAR(500)"))
-            await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN series_index FLOAT"))
-        except Exception:
-            pass
+        await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS series VARCHAR(500)"))
+        await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS series_index FLOAT"))
 
