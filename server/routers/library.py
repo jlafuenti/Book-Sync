@@ -70,72 +70,85 @@ async def scan_library(
     # Scan ebook directory
     ebook_dir = settings.ebook_dir
     if os.path.isdir(ebook_dir):
-        for filename in os.listdir(ebook_dir):
-            ext = Path(filename).suffix.lower()
-            if ext not in EBOOK_EXTENSIONS:
-                continue
+        for root, _, files in os.walk(ebook_dir):
+            for filename in files:
+                ext = Path(filename).suffix.lower()
+                if ext not in EBOOK_EXTENSIONS:
+                    continue
 
-            filepath = os.path.join(ebook_dir, filename)
-            if not os.path.isfile(filepath):
-                continue
+                filepath = os.path.join(root, filename)
+                
+                # Check if already in database (by exact path or hash)
+                # For now, simplistic check by filename to avoid re-hashing everything
+                # In a real app, we might want to check by hash if path changes
+                relative_path = os.path.relpath(filepath, ebook_dir)
+                
+                # Check for existing file by filename (simplistic) or path
+                # We'll check by filename for now to avoid duplicates if moved
+                # Ideally we check by hash, but that's slow for all files.
+                # Let's check by filename first.
+                result = await db.execute(
+                    select(EBook).where(EBook.filename == filename)
+                )
+                if result.scalar_one_or_none():
+                    continue
 
-            # Check if already in database
-            result = await db.execute(
-                select(EBook).where(EBook.filename == filename)
-            )
-            if result.scalar_one_or_none():
-                continue
+                try:
+                    file_hash = compute_file_hash(filepath)
+                    file_size = os.path.getsize(filepath)
+                except OSError:
+                    continue
+                    
+                title = extract_title_from_filename(filename)
 
-            file_hash = compute_file_hash(filepath)
-            file_size = os.path.getsize(filepath)
-            title = extract_title_from_filename(filename)
-
-            ebook = EBook(
-                title=title,
-                author=None,  # Could parse from EPUB metadata later
-                filename=filename,
-                file_path=filepath,
-                file_hash=file_hash,
-                file_size=file_size,
-                format=ext.lstrip("."),
-            )
-            db.add(ebook)
-            new_ebooks += 1
+                ebook = EBook(
+                    title=title,
+                    author=None,  # Could parse from parent dir name?
+                    filename=filename,
+                    file_path=filepath,
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    format=ext.lstrip("."),
+                )
+                db.add(ebook)
+                new_ebooks += 1
 
     # Scan audiobook directory
     audiobook_dir = settings.audiobook_dir
     if os.path.isdir(audiobook_dir):
-        for filename in os.listdir(audiobook_dir):
-            ext = Path(filename).suffix.lower()
-            if ext not in AUDIOBOOK_EXTENSIONS:
-                continue
+        for root, _, files in os.walk(audiobook_dir):
+            for filename in files:
+                ext = Path(filename).suffix.lower()
+                if ext not in AUDIOBOOK_EXTENSIONS:
+                    continue
 
-            filepath = os.path.join(audiobook_dir, filename)
-            if not os.path.isfile(filepath):
-                continue
+                filepath = os.path.join(root, filename)
+                
+                result = await db.execute(
+                    select(AudioBook).where(AudioBook.filename == filename)
+                )
+                if result.scalar_one_or_none():
+                    continue
 
-            # Check if already in database
-            result = await db.execute(
-                select(AudioBook).where(AudioBook.filename == filename)
-            )
-            if result.scalar_one_or_none():
-                continue
+                try:
+                    file_hash = compute_file_hash(filepath)
+                    file_size = os.path.getsize(filepath)
+                except OSError:
+                    continue
+                    
+                title = extract_title_from_filename(filename)
 
-            file_hash = compute_file_hash(filepath)
-            file_size = os.path.getsize(filepath)
-            title = extract_title_from_filename(filename)
-
-            audiobook = AudioBook(
-                title=title,
-                author=None,
-                filename=filename,
-                file_path=filepath,
-                file_hash=file_hash,
-                file_size=file_size,
-                format=ext.lstrip("."),
-            )
-            db.add(audiobook)
-            new_audiobooks += 1
+                audiobook = AudioBook(
+                    title=title,
+                    author=None,
+                    filename=filename,
+                    file_path=filepath,
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    format=ext.lstrip("."),
+                )
+                db.add(audiobook)
+                new_audiobooks += 1
 
     await db.flush()
 
