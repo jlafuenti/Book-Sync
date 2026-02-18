@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { getPairs, startTranscription, getTranscriptionStatus } from '../api'
+import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription } from '../api'
 
 function TranscriptionPage() {
     const [pairs, setPairs] = useState([])
@@ -29,6 +29,14 @@ function TranscriptionPage() {
             const statusMap = {}
             results.forEach(([id, status]) => { if (status) statusMap[id] = status })
             setStatuses(statusMap)
+
+            // Resume polling for existing transcriptions
+            p.filter(pair => pair.status === 'transcribing').forEach(pair => {
+                if (!pollingRef.current[pair.id]) {
+                    startPolling(pair.id)
+                }
+            })
+
         } catch (err) {
             setError(err.message)
         } finally {
@@ -44,57 +52,106 @@ function TranscriptionPage() {
         }
     }, [])
 
+    const startPolling = (pairId) => {
+        if (pollingRef.current[pairId]) return
+
+        pollingRef.current[pairId] = setInterval(async () => {
+            try {
+                const s = await getTranscriptionStatus(pairId)
+                setStatuses(prev => ({ ...prev, [pairId]: s }))
+
+                if (s.status === 'synced' || s.status === 'error') {
+                    stopPolling(pairId)
+                    // Refresh main list to update status badges
+                    const p = await getPairs()
+                    setPairs(p)
+                }
+            } catch (err) {
+                console.error('Polling error:', err)
+            }
+        }, 3000)
+    }
+
+    const stopPolling = (pairId) => {
+        if (pollingRef.current[pairId]) {
+            clearInterval(pollingRef.current[pairId])
+            delete pollingRef.current[pairId]
+        }
+    }
+
     const handleStart = async (pairId) => {
         setError('')
         try {
             const status = await startTranscription(pairId)
             setStatuses(prev => ({ ...prev, [pairId]: status }))
 
-            // Start polling for progress
-            pollingRef.current[pairId] = setInterval(async () => {
-                try {
-                    const s = await getTranscriptionStatus(pairId)
-                    setStatuses(prev => ({ ...prev, [pairId]: s }))
-                    if (s.status === 'synced' || s.status === 'error') {
-                        clearInterval(pollingRef.current[pairId])
-                        delete pollingRef.current[pairId]
-                        loadData()  // Reload to update pair status
-                    }
-                } catch (err) {
-                    console.error('Polling error:', err)
+            // Optimistically update local pair status
+            setPairs(prev => prev.map(p =>
+                p.id === pairId ? { ...p, status: 'transcribing' } : p
+            ))
+
+            startPolling(pairId)
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    const handleCancel = async (pairId) => {
+        if (!confirm("Are you sure you want to cancel this transcription?")) return
+
+        try {
+            await cancelTranscription(pairId)
+            stopPolling(pairId)
+
+            setStatuses(prev => ({
+                ...prev,
+                [pairId]: {
+                    status: 'error',
+                    message: 'Cancelled by user',
+                    progress: null
                 }
-            }, 3000)
+            }))
+
+            // Refresh list to sync state
+            loadData()
+
         } catch (err) {
             setError(err.message)
         }
     }
 
     const getStatusDisplay = (pair) => {
-        const status = statuses[pair.id]
-        if (!status) return null
+        const localStatus = statuses[pair.id]
+
+        // If we have a local status update, use it over the prop
+        const currentStatus = localStatus?.status || pair.status
+        const message = localStatus?.message || (currentStatus === 'synced' ? 'Sync complete' : null)
+        const progress = localStatus?.progress
+
+        if (currentStatus !== 'transcribing' && !localStatus) return null
 
         return (
             <div style={{ marginTop: '12px' }}>
-                {status.progress != null && (
+                {progress != null && currentStatus === 'transcribing' && (
                     <div style={{ marginBottom: '8px' }}>
                         <div className="progress-bar">
                             <div
                                 className="progress-fill"
-                                style={{ width: `${(status.progress * 100).toFixed(0)}%` }}
+                                style={{ width: `${(progress * 100).toFixed(0)}%` }}
                             ></div>
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                            {(status.progress * 100).toFixed(0)}%
+                            {(progress * 100).toFixed(0)}%
                         </div>
                     </div>
                 )}
-                {status.message && (
+                {message && (
                     <div style={{
                         fontSize: '0.8rem',
-                        color: status.status === 'error' ? 'var(--error)' : 'var(--text-secondary)',
+                        color: currentStatus === 'error' ? 'var(--error)' : 'var(--text-secondary)',
                         fontStyle: 'italic'
                     }}>
-                        {status.message}
+                        {message}
                     </div>
                 )}
             </div>
@@ -159,6 +216,18 @@ function TranscriptionPage() {
                                         🎙️ {pair.status === 'error' ? 'Retry' : 'Start'} Transcription
                                     </button>
                                 )}
+
+                                {pair.status === 'transcribing' && (
+                                    <button
+                                        className="btn btn-danger btn-sm"
+                                        onClick={() => handleCancel(pair.id)}
+                                        style={{ backgroundColor: '#ffebeel', color: '#d32f2f', border: '1px solid #ffcdd2' }}
+                                    >
+                                        🛑 Cancel
+                                    </button>
+                                )}
+
+
                             </div>
 
                             {getStatusDisplay(pair)}

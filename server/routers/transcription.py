@@ -195,3 +195,61 @@ async def _run_transcription(pair_id: int):
                     await db.commit()
         except Exception:
             pass  # Best effort
+
+
+async def reset_stale_transcriptions():
+    """
+    On startup, find any book pairs that are stuck in 'transcribing'
+    state (likely due to a server crash/restart) and reset them.
+    """
+    from services.transcription import logger
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(BookPair).where(BookPair.status == PairStatus.TRANSCRIBING)
+        )
+        stale_pairs = result.scalars().all()
+
+        if stale_pairs:
+            logger.warning(
+                f"Found {len(stale_pairs)} stale transcription job(s). Resetting..."
+            )
+            for pair in stale_pairs:
+                pair.status = PairStatus.ERROR
+                # We could set to UNMATCHED, but ERROR is more informative to the user
+                # that something went wrong.
+            
+            await db.commit()
+
+
+@router.post("/{pair_id}/cancel")
+async def cancel_transcription(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Cancel a running transcription job.
+    """
+    # 1. Update in-memory job status to act as a signal (if implemented)
+    # Since we can't easily kill an asyncio thread running synchronously,
+    # we mostly just update the DB status so the UI reflects it.
+    # A true "cancellation" of the running thread is complex without celery/rq.
+    # For now, we update state so the user isn't blocked.
+    
+    if pair_id in _transcription_jobs:
+        _transcription_jobs[pair_id]["status"] = PairStatus.ERROR
+        _transcription_jobs[pair_id]["message"] = "Cancelled by user"
+
+    # 2. Update DB
+    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    pair = result.scalar_one_or_none()
+    
+    if not pair:
+        raise HTTPException(status_code=404, detail="Book pair not found")
+        
+    if pair.status == PairStatus.TRANSCRIBING:
+        pair.status = PairStatus.ERROR
+        await db.commit()
+        
+    return {"status": "cancelled"}

@@ -206,7 +206,18 @@ async def scan_library(
                 result = await db.execute(
                     select(EBook).where(EBook.filename == filename)
                 )
-                if result.scalar_one_or_none():
+                existing_ebook = result.scalar_one_or_none()
+                
+                if existing_ebook:
+                    # If exists but missing series info, try to update metadata
+                    if existing_ebook.series is None:
+                         meta = extract_metadata(filepath, "ebook")
+                         if meta["series"] or meta["series_index"] is not None:
+                             existing_ebook.series = meta["series"]
+                             existing_ebook.series_index = meta["series_index"]
+                             existing_ebook.title = meta["title"] or existing_ebook.title
+                             existing_ebook.author = meta["author"] or existing_ebook.author
+                             db.add(existing_ebook)
                     continue
 
                 try:
@@ -245,7 +256,18 @@ async def scan_library(
                 result = await db.execute(
                     select(AudioBook).where(AudioBook.filename == filename)
                 )
-                if result.scalar_one_or_none():
+                existing_audiobook = result.scalar_one_or_none()
+                
+                if existing_audiobook:
+                    # Update metadata if missing
+                    if existing_audiobook.series is None:
+                         meta = extract_metadata(filepath, "audiobook")
+                         if meta["series"] or meta["series_index"] is not None:
+                             existing_audiobook.series = meta["series"]
+                             existing_audiobook.series_index = meta["series_index"]
+                             existing_audiobook.title = meta["title"] or existing_audiobook.title
+                             existing_audiobook.author = meta["author"] or existing_audiobook.author
+                             db.add(existing_audiobook)
                     continue
 
                 try:

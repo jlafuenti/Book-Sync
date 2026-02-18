@@ -10,8 +10,36 @@ function LibraryPage() {
     const [error, setError] = useState('')
     const [uploadingEbook, setUploadingEbook] = useState(false)
     const [uploadingAudiobook, setUploadingAudiobook] = useState(false)
+
+    // Filtering state
+    const [searchTerm, setSearchTerm] = useState('')
+    const [selectedAuthor, setSelectedAuthor] = useState('')
+    const [selectedSeries, setSelectedSeries] = useState('')
+
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
+
+    // Compute unique authors and series for filters
+    const allBooks = [...ebooks, ...audiobooks]
+    const uniqueAuthors = [...new Set(allBooks.map(b => b.author).filter(Boolean))].sort()
+    const uniqueSeries = [...new Set(allBooks.map(b => b.series).filter(Boolean))].sort()
+
+    // Filter logic
+    const filterBook = (book) => {
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase()
+            const matchTitle = book.title?.toLowerCase().includes(term)
+            const matchAuthor = book.author?.toLowerCase().includes(term)
+            const matchSeries = book.series?.toLowerCase().includes(term)
+            if (!matchTitle && !matchAuthor && !matchSeries) return false
+        }
+        if (selectedAuthor && book.author !== selectedAuthor) return false
+        if (selectedSeries && book.series !== selectedSeries) return false
+        return true
+    }
+
+    const filteredEbooks = ebooks.filter(filterBook)
+    const filteredAudiobooks = audiobooks.filter(filterBook)
 
     const loadData = async () => {
         try {
@@ -132,16 +160,75 @@ function LibraryPage() {
                 <input ref={audiobookFileRef} type="file" accept=".mp3,.m4a,.m4b,.flac,.ogg,.wav" hidden onChange={handleAudiobookUpload} />
             </div>
 
+            {/* Filters */}
+            <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
+                <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '200px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 500 }}>Search</label>
+                        <input
+                            type="text"
+                            placeholder="Search title, author..."
+                            className="form-input"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+                    <div style={{ flex: 1, minWidth: '200px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 500 }}>Author</label>
+                        <select
+                            className="form-input"
+                            value={selectedAuthor}
+                            onChange={e => {
+                                setSelectedAuthor(e.target.value)
+                                setSelectedSeries('') // Reset series when author changes
+                            }}
+                        >
+                            <option value="">All Authors</option>
+                            {uniqueAuthors.map(author => (
+                                <option key={author} value={author}>{author}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div style={{ flex: 1, minWidth: '200px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', fontWeight: 500 }}>Series</label>
+                        <select
+                            className="form-input"
+                            value={selectedSeries}
+                            onChange={e => setSelectedSeries(e.target.value)}
+                        >
+                            <option value="">All Series</option>
+                            {uniqueSeries.map(series => (
+                                <option key={series} value={series}>{series}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                        <button
+                            className="btn btn-secondary"
+                            onClick={() => {
+                                setSearchTerm('')
+                                setSelectedAuthor('')
+                                setSelectedSeries('')
+                            }}
+                            disabled={!searchTerm && !selectedAuthor && !selectedSeries}
+                        >
+                            Clear
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             {/* EBooks Table */}
             <div className="card" style={{ marginBottom: '24px' }}>
                 <div className="card-header">
-                    <h3>📚 EBooks</h3>
+                    <h3>📚 EBooks ({filteredEbooks.length})</h3>
                 </div>
-                {ebooks.length === 0 ? (
+
+                {filteredEbooks.length === 0 ? (
                     <div className="empty-state">
                         <div className="icon">📖</div>
-                        <h3>No ebooks yet</h3>
-                        <p>Scan your directories or upload an ebook to get started.</p>
+                        <h3>No ebooks found</h3>
+                        <p>{ebooks.length === 0 ? "Scan your directories or upload an ebook to get started." : "Try adjusting your filters."}</p>
                     </div>
                 ) : (
                     <div className="table-wrapper">
@@ -150,16 +237,20 @@ function LibraryPage() {
                                 <tr>
                                     <th>Title</th>
                                     <th>Author</th>
+                                    <th>Series</th>
                                     <th>Format</th>
                                     <th>Size</th>
                                     <th>Added</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {ebooks.map(book => (
+                                {filteredEbooks.map(book => (
                                     <tr key={book.id}>
                                         <td style={{ fontWeight: 500 }}>{book.title}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>
+                                            {book.series ? `${book.series} #${book.series_index}` : '—'}
+                                        </td>
                                         <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                         <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                         <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
@@ -174,13 +265,13 @@ function LibraryPage() {
             {/* Audiobooks Table */}
             <div className="card">
                 <div className="card-header">
-                    <h3>🎧 Audiobooks</h3>
+                    <h3>🎧 Audiobooks ({filteredAudiobooks.length})</h3>
                 </div>
-                {audiobooks.length === 0 ? (
+                {filteredAudiobooks.length === 0 ? (
                     <div className="empty-state">
                         <div className="icon">🎵</div>
-                        <h3>No audiobooks yet</h3>
-                        <p>Scan your directories or upload an audiobook to get started.</p>
+                        <h3>No audiobooks found</h3>
+                        <p>{audiobooks.length === 0 ? "Scan your directories or upload an audiobook to get started." : "Try adjusting your filters."}</p>
                     </div>
                 ) : (
                     <div className="table-wrapper">
@@ -189,16 +280,20 @@ function LibraryPage() {
                                 <tr>
                                     <th>Title</th>
                                     <th>Author</th>
+                                    <th>Series</th>
                                     <th>Format</th>
                                     <th>Size</th>
                                     <th>Added</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {audiobooks.map(book => (
+                                {filteredAudiobooks.map(book => (
                                     <tr key={book.id}>
                                         <td style={{ fontWeight: 500 }}>{book.title}</td>
                                         <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>
+                                            {book.series ? `${book.series} #${book.series_index}` : '—'}
+                                        </td>
                                         <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                         <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                         <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>

@@ -28,6 +28,11 @@ async def lifespan(app: FastAPI):
     logger.info("BookSync server starting up...")
     await init_db()
     logger.info("Database initialized")
+    
+    # Reset any stale transcription jobs
+    from routers.transcription import reset_stale_transcriptions
+    await reset_stale_transcriptions()
+    
     yield
     logger.info("BookSync server shutting down...")
 
