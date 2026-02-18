@@ -1,0 +1,51 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "8000:8000"
+    volumes:
+      - /path/to/your/ebooks:/data/ebooks              # ← REPLACE with your ebook folder
+      - /path/to/your/audiobooks:/data/audiobooks        # ← REPLACE with your audiobook folder
+      - booksync_data:/data/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
+      - JWT_SECRET_KEY=change-me-to-a-random-secret-key
+      - WHISPER_MODEL=medium
+      - WHISPER_DEVICE=auto
+      - EBOOK_DIR=/data/ebooks
+      - AUDIOBOOK_DIR=/data/audiobooks
+      - APP_DATA_DIR=/data/app
+    depends_on:
+      db:
+        condition: service_healthy
+    # Uncomment below for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - capabilities: [gpu]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=booksync
+      - POSTGRES_PASSWORD=booksync
+      - POSTGRES_DB=booksync
+    volumes:
+      - booksync_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booksync"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+
+volumes:
+  booksync_data:
+  booksync_db:
