@@ -57,7 +57,7 @@ def extract_title_from_filename(filename: str) -> str:
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_admin_user),
+    _: User = Depends(get_current_user),
 ):
     """
     Scan the ebook and audiobook directories for new files.
