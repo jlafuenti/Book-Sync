@@ -91,9 +91,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // EPUB Reading (Readium)
-    implementation("org.readium.kotlin:readium-shared:3.0.3")
-    implementation("org.readium.kotlin:readium-streamer:3.0.3")
-    implementation("org.readium.kotlin:readium-navigator:3.0.3")
+    implementation("org.readium.kotlin-toolkit:readium-shared:3.1.2")
+    implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.2")
+    implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.2")
 
     // Automotive / Android Auto
     implementation("androidx.car.app:app:1.4.0")
