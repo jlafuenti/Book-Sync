@@ -129,8 +129,8 @@ async def _run_transcription(pair_id: int):
                 raise Exception(f"Book pair {pair_id} not found")
 
             # Step 1: Transcribe audiobook with real-time progress
-            _transcription_jobs[pair_id]["message"] = "Loading Whisper model..."
-            _transcription_jobs[pair_id]["progress"] = 0.03
+            _transcription_jobs[pair_id]["message"] = "Downloading & loading Whisper model (this may take a minute)..."
+            _transcription_jobs[pair_id]["progress"] = 0.02
 
             from services.transcription import transcribe_audiobook, _format_duration
 

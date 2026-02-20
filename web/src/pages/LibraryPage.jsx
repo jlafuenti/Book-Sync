@@ -1,5 +1,80 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+
+// Tri-state sort: null → 'asc' → 'desc' → null
+function nextSortDir(current) {
+    if (!current) return 'asc'
+    if (current === 'asc') return 'desc'
+    return null
+}
+
+function sortBooks(books, sortCol, sortDir) {
+    if (!sortCol || !sortDir) return books
+    const sorted = [...books].sort((a, b) => {
+        let valA, valB
+
+        if (sortCol === 'series') {
+            // Sort by series name first, then by series_index within same series
+            const sA = (a.series || '').toLowerCase()
+            const sB = (b.series || '').toLowerCase()
+            if (!a.series && !b.series) return 0
+            if (!a.series) return 1  // blanks to bottom
+            if (!b.series) return -1
+            if (sA !== sB) {
+                valA = sA
+                valB = sB
+            } else {
+                // Same series — sort by index
+                valA = a.series_index ?? 999999
+                valB = b.series_index ?? 999999
+                const diff = valA - valB
+                return sortDir === 'asc' ? diff : -diff
+            }
+        } else if (sortCol === 'file_size') {
+            valA = a.file_size ?? 0
+            valB = b.file_size ?? 0
+            const diff = valA - valB
+            return sortDir === 'asc' ? diff : -diff
+        } else if (sortCol === 'uploaded_at') {
+            valA = new Date(a.uploaded_at || 0).getTime()
+            valB = new Date(b.uploaded_at || 0).getTime()
+            const diff = valA - valB
+            return sortDir === 'asc' ? diff : -diff
+        } else {
+            // String columns: title, author, format
+            valA = (a[sortCol] || '').toLowerCase()
+            valB = (b[sortCol] || '').toLowerCase()
+            if (!a[sortCol] && !b[sortCol]) return 0
+            if (!a[sortCol]) return 1
+            if (!b[sortCol]) return -1
+        }
+
+        if (valA < valB) return sortDir === 'asc' ? -1 : 1
+        if (valA > valB) return sortDir === 'asc' ? 1 : -1
+        return 0
+    })
+    return sorted
+}
+
+function SortableHeader({ label, column, sortCol, sortDir, onSort, style }) {
+    const isActive = sortCol === column
+    const arrow = isActive ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+    return (
+        <th
+            style={{
+                cursor: 'pointer',
+                userSelect: 'none',
+                whiteSpace: 'nowrap',
+                ...style,
+            }}
+            onClick={() => onSort(column)}
+            title={isActive ? `Sorted ${sortDir} — click to ${sortDir === 'asc' ? 'sort descending' : 'remove sort'}` : 'Click to sort'}
+        >
+            {label}
+            <span style={{ color: 'var(--accent)', fontSize: '0.75em', marginLeft: '2px' }}>{arrow}</span>
+        </th>
+    )
+}
 
 function LibraryPage() {
     const [ebooks, setEbooks] = useState([])
@@ -14,13 +89,17 @@ function LibraryPage() {
     const [uploadingAudiobook, setUploadingAudiobook] = useState(false)
 
     // Edit state
-    const [editingBook, setEditingBook] = useState(null) // { ...book }
-    const [editingType, setEditingType] = useState(null) // 'ebook' | 'audiobook'
+    const [editingBook, setEditingBook] = useState(null)
+    const [editingType, setEditingType] = useState(null)
 
     // Filtering state
     const [searchTerm, setSearchTerm] = useState('')
     const [selectedAuthor, setSelectedAuthor] = useState('')
     const [selectedSeries, setSelectedSeries] = useState('')
+
+    // Sort state — separate for each table
+    const [ebookSort, setEbookSort] = useState({ col: null, dir: null })
+    const [audiobookSort, setAudiobookSort] = useState({ col: null, dir: null })
 
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
@@ -44,8 +123,27 @@ function LibraryPage() {
         return true
     }
 
-    const filteredEbooks = ebooks.filter(filterBook)
-    const filteredAudiobooks = audiobooks.filter(filterBook)
+    const filteredEbooks = useMemo(
+        () => sortBooks(ebooks.filter(filterBook), ebookSort.col, ebookSort.dir),
+        [ebooks, searchTerm, selectedAuthor, selectedSeries, ebookSort]
+    )
+    const filteredAudiobooks = useMemo(
+        () => sortBooks(audiobooks.filter(filterBook), audiobookSort.col, audiobookSort.dir),
+        [audiobooks, searchTerm, selectedAuthor, selectedSeries, audiobookSort]
+    )
+
+    const handleEbookSort = (col) => {
+        setEbookSort(prev => ({
+            col: prev.col === col && prev.dir === 'desc' ? null : col,
+            dir: prev.col === col ? nextSortDir(prev.dir) : 'asc'
+        }))
+    }
+    const handleAudiobookSort = (col) => {
+        setAudiobookSort(prev => ({
+            col: prev.col === col && prev.dir === 'desc' ? null : col,
+            dir: prev.col === col ? nextSortDir(prev.dir) : 'asc'
+        }))
+    }
 
     const loadData = async () => {
         try {
@@ -290,12 +388,12 @@ function LibraryPage() {
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Title</th>
-                                    <th>Author</th>
-                                    <th>Series</th>
-                                    <th>Format</th>
-                                    <th>Size</th>
-                                    <th>Added</th>
+                                    <SortableHeader label="Title" column="title" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                    <SortableHeader label="Author" column="author" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                    <SortableHeader label="Series" column="series" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                    <SortableHeader label="Format" column="format" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                    <SortableHeader label="Size" column="file_size" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                    <SortableHeader label="Added" column="uploaded_at" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                     <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>
@@ -344,12 +442,12 @@ function LibraryPage() {
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Title</th>
-                                    <th>Author</th>
-                                    <th>Series</th>
-                                    <th>Format</th>
-                                    <th>Size</th>
-                                    <th>Added</th>
+                                    <SortableHeader label="Title" column="title" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                    <SortableHeader label="Author" column="author" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                    <SortableHeader label="Series" column="series" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                    <SortableHeader label="Format" column="format" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                    <SortableHeader label="Size" column="file_size" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                    <SortableHeader label="Added" column="uploaded_at" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                     <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>

@@ -40,15 +40,19 @@ class TranscribedSentence:
 # Thread-local storage for progress callbacks
 _progress_callback_local = threading.local()
 
-
 class WhisperProgressBar(tqdm_module.tqdm):
     """
     Custom tqdm replacement that intercepts Whisper's internal progress bar
     and forwards updates to our callback. Whisper processes audio in 30-second
     chunks, and its tqdm tracks frames processed vs total frames.
+    
+    We override display() to suppress console output (we only want the callback),
+    and override update() to forward progress.
     """
     
     def __init__(self, *args, **kwargs):
+        # Disable console output by setting file to devnull
+        kwargs['disable'] = False  # Ensure tqdm logic runs
         super().__init__(*args, **kwargs)
         self._callback = getattr(_progress_callback_local, 'callback', None)
         self._total_duration_sec = getattr(_progress_callback_local, 'total_duration', None)
@@ -58,6 +62,15 @@ class WhisperProgressBar(tqdm_module.tqdm):
         if self._callback and self.total and self.total > 0:
             fraction = self.n / self.total
             self._callback(fraction, self._total_duration_sec)
+    
+    def display(self, msg=None, pos=None):
+        # Suppress the console progress bar output — we report via callback only
+        pass
+    
+    def close(self):
+        # Suppress the final newline/cleanup output
+        self.disable = True
+        super().close()
 
 
 def _get_audio_duration(audio_path: str) -> Optional[float]:
@@ -188,47 +201,48 @@ def transcribe_audiobook(
     model_name = settings.whisper_model
 
     logger.info(f"Loading Whisper model '{model_name}' on {device}...")
+    if progress_callback:
+        progress_callback(0.0, total_duration)  # Show "Downloading/loading model" phase
+    
     model = whisper.load_model(model_name, device=device)
+    logger.info(f"Whisper model loaded successfully")
     
     if progress_callback:
         progress_callback(0.0, total_duration)
 
     # Step 3: Transcribe with progress tracking
-    # We monkey-patch tqdm in whisper.transcribe so Whisper's internal
-    # progress bar reports to our callback instead of printing to console.
+    # We monkey-patch tqdm.tqdm so Whisper's internal progress bar
+    # reports to our callback instead of printing to console.
+    #
+    # IMPORTANT: Whisper's tqdm is:
+    #   with tqdm.tqdm(total=..., disable=verbose is not False) as pbar:
+    #
+    # So verbose=False → disable=False → tqdm ENABLED (what we want)
+    #    verbose=None  → disable=True  → tqdm DISABLED
     logger.info(f"Transcribing: {audio_path}")
 
     # Set up thread-local progress callback
     _progress_callback_local.callback = progress_callback
     _progress_callback_local.total_duration = total_duration
     
-    # Monkey-patch tqdm in whisper's transcribe module
-    original_tqdm = getattr(whisper.transcribe, 'tqdm', tqdm_module)
+    # Monkey-patch tqdm so whisper uses our progress tracker
     original_tqdm_class = tqdm_module.tqdm
     
     try:
-        # Replace tqdm in whisper.transcribe module
-        if hasattr(whisper.transcribe, 'tqdm'):
-            # whisper imports tqdm as a module: from tqdm import tqdm
-            # We need to replace the reference whisper uses
-            whisper.transcribe.tqdm = WhisperProgressBar
-        
-        # Also patch the module-level tqdm.tqdm in case whisper uses it that way
+        # Whisper does `import tqdm` then `tqdm.tqdm(...)`, so patching
+        # tqdm.tqdm at the module level intercepts it.
         tqdm_module.tqdm = WhisperProgressBar
         
         result = model.transcribe(
             audio_path,
             word_timestamps=True,
-            # verbose=None enables tqdm progress bar (so our hook works)
-            # but does NOT print transcribed text to console.
-            # verbose=False would disable tqdm entirely.
-            verbose=None if progress_callback else False,
+            # verbose=False ENABLES tqdm progress (disable=False)
+            # verbose=None would DISABLE tqdm (disable=True)  
+            verbose=False,
         )
     finally:
         # Restore original tqdm
         tqdm_module.tqdm = original_tqdm_class
-        if hasattr(whisper.transcribe, 'tqdm'):
-            whisper.transcribe.tqdm = original_tqdm
         _progress_callback_local.callback = None
         _progress_callback_local.total_duration = None
 
