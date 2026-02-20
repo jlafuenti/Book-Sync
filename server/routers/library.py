@@ -205,7 +205,9 @@ async def parse_filename_metadata_with_settings(
         "title": None,
         "author": None,
         "series": None,
-        "series_index": None
+        "series_index": None,
+        "_metadata_source": "filename",
+        "_metadata_pattern": None,
     }
     
     patterns = await get_filename_patterns(db, file_type)
@@ -241,6 +243,9 @@ async def parse_filename_metadata_with_settings(
                 
                 # If we have at least a title, we consider it a match
                 if meta["title"]:
+                    meta["_metadata_source"] = "pattern"
+                    meta["_metadata_pattern"] = pattern_str
+                    
                     # Fallbacks from context if missing in pattern
                     if not meta["author"] and parent_dir_name:
                          meta["author"] = normalize_author(parent_dir_name)
@@ -253,6 +258,8 @@ async def parse_filename_metadata_with_settings(
 
     # Fallback to simple filename cleaning
     meta["title"] = extract_title_from_filename(filename)
+    meta["_metadata_source"] = "filename"
+    meta["_metadata_pattern"] = None
     if parent_dir_name:
         meta["author"] = normalize_author(parent_dir_name)
     
@@ -386,10 +393,26 @@ async def extract_metadata(
     # Merge: Prefer embedded if exists, but keep filename/path data as fallback
     meta = filename_meta.copy()
 
-    if file_meta.get("title"): meta["title"] = file_meta["title"]
-    if file_meta.get("author"): meta["author"] = file_meta["author"]
-    if file_meta.get("series"): meta["series"] = file_meta["series"]
-    if file_meta.get("series_index") is not None: meta["series_index"] = file_meta["series_index"]
+    has_embedded = False
+    if file_meta.get("title"):
+        meta["title"] = file_meta["title"]
+        has_embedded = True
+    if file_meta.get("author"):
+        meta["author"] = file_meta["author"]
+        has_embedded = True
+    if file_meta.get("series"):
+        meta["series"] = file_meta["series"]
+        has_embedded = True
+    if file_meta.get("series_index") is not None:
+        meta["series_index"] = file_meta["series_index"]
+        has_embedded = True
+    
+    # Track the source: if embedded data overrode anything, note it
+    if has_embedded:
+        if meta.get("_metadata_source") == "pattern":
+            meta["_metadata_source"] = "embedded+pattern"
+        else:
+            meta["_metadata_source"] = "embedded"
     
     logger.info(f"[extract_metadata]   Merged result: {meta}")
     return meta
@@ -502,7 +525,15 @@ async def scan_library(
                              existing_ebook.series_index = meta["series_index"]
                              existing_ebook.title = meta["title"] or existing_ebook.title
                              existing_ebook.author = meta["author"] or existing_ebook.author
+                             existing_ebook.metadata_source = meta.get("_metadata_source")
+                             existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
                              db.add(existing_ebook)
+                    # Always update metadata_source if it's not set yet
+                    elif existing_ebook.metadata_source is None:
+                         meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
+                         existing_ebook.metadata_source = meta.get("_metadata_source")
+                         existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
+                         db.add(existing_ebook)
                     continue
 
                 try:
@@ -518,6 +549,8 @@ async def scan_library(
                     author=meta["author"],
                     series=meta["series"],
                     series_index=meta["series_index"],
+                    metadata_source=meta.get("_metadata_source"),
+                    metadata_pattern=meta.get("_metadata_pattern"),
                     filename=filename,
                     file_path=filepath,
                     file_hash=file_hash,
@@ -552,7 +585,15 @@ async def scan_library(
                              existing_audiobook.series_index = meta["series_index"]
                              existing_audiobook.title = meta["title"] or existing_audiobook.title
                              existing_audiobook.author = meta["author"] or existing_audiobook.author
+                             existing_audiobook.metadata_source = meta.get("_metadata_source")
+                             existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
                              db.add(existing_audiobook)
+                    # Always update metadata_source if it's not set yet
+                    elif existing_audiobook.metadata_source is None:
+                         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+                         existing_audiobook.metadata_source = meta.get("_metadata_source")
+                         existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
+                         db.add(existing_audiobook)
                     continue
 
                 try:
@@ -568,6 +609,8 @@ async def scan_library(
                     author=meta["author"],
                     series=meta["series"],
                     series_index=meta["series_index"],
+                    metadata_source=meta.get("_metadata_source"),
+                    metadata_pattern=meta.get("_metadata_pattern"),
                     filename=filename,
                     file_path=filepath,
                     file_hash=file_hash,

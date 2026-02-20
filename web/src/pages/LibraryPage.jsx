@@ -517,14 +517,83 @@ function MetadataEditModal({ book, type, onClose, onSave }) {
         }
     }
 
+    // Build human-readable source description
+    const getSourceLabel = () => {
+        const src = book.metadata_source
+        if (!src) return { icon: '❓', label: 'Unknown', detail: 'Metadata source not tracked yet. Run a library scan to detect it.' }
+        if (src === 'embedded') return { icon: '🏷️', label: 'Embedded File Tags', detail: 'Metadata was read from the file\'s embedded tags (EPUB metadata / M4B iTunes atoms / MP3 ID3 tags).' }
+        if (src === 'pattern') return { icon: '🔍', label: 'Filename Pattern Match', detail: `Metadata was extracted using the filename pattern.` }
+        if (src === 'embedded+pattern') return { icon: '🏷️+🔍', label: 'Embedded Tags + Pattern', detail: 'Some fields came from embedded tags, others from a filename pattern match.' }
+        if (src === 'filename') return { icon: '📄', label: 'Filename (Fallback)', detail: 'No pattern matched and no embedded tags found. Title was derived from the filename, author from the parent directory.' }
+        return { icon: '❓', label: src, detail: '' }
+    }
+
+    const source = getSourceLabel()
+
     return (
         <div className="modal-overlay">
-            <div className="modal">
+            <div className="modal" style={{ maxWidth: '600px' }}>
                 <div className="modal-header">
                     <h3>Edit {type === 'ebook' ? 'EBook' : 'Audiobook'} Metadata</h3>
                     <button className="btn-close" onClick={onClose}>&times;</button>
                 </div>
                 <form onSubmit={handleSubmit} style={{ padding: '20px' }}>
+
+                    {/* File Path - read only */}
+                    {book.file_path && (
+                        <div style={{
+                            marginBottom: '16px',
+                            padding: '10px 14px',
+                            background: 'var(--bg-input)',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border)',
+                        }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                📁 File Path
+                            </div>
+                            <div style={{
+                                fontSize: '0.85rem',
+                                color: 'var(--text-secondary)',
+                                wordBreak: 'break-all',
+                                fontFamily: 'monospace',
+                            }}>
+                                {book.file_path}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Metadata Source Info */}
+                    <div style={{
+                        marginBottom: '20px',
+                        padding: '10px 14px',
+                        background: 'var(--bg-input)',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            {source.icon} Metadata Source
+                        </div>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                            {source.label}
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {source.detail}
+                        </div>
+                        {book.metadata_pattern && (
+                            <div style={{
+                                marginTop: '6px',
+                                padding: '6px 10px',
+                                background: 'var(--bg-card)',
+                                borderRadius: '4px',
+                                fontFamily: 'monospace',
+                                fontSize: '0.8rem',
+                                color: 'var(--accent)',
+                            }}>
+                                Pattern: {book.metadata_pattern}
+                            </div>
+                        )}
+                    </div>
+
                     <div className="form-group">
                         <label>Title</label>
                         <input

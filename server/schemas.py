@@ -55,10 +55,13 @@ class EBookResponse(BaseModel):
     title: str
     author: Optional[str]
     filename: str
+    file_path: Optional[str] = None
     file_size: Optional[int]
     format: str
     series: Optional[str] = None
     series_index: Optional[float] = None
+    metadata_source: Optional[str] = None
+    metadata_pattern: Optional[str] = None
     uploaded_at: datetime
 
     class Config:
@@ -70,11 +73,14 @@ class AudioBookResponse(BaseModel):
     title: str
     author: Optional[str]
     filename: str
+    file_path: Optional[str] = None
     file_size: Optional[int]
     duration_seconds: Optional[int]
     format: str
     series: Optional[str] = None
     series_index: Optional[float] = None
+    metadata_source: Optional[str] = None
+    metadata_pattern: Optional[str] = None
     uploaded_at: datetime
 
     class Config:

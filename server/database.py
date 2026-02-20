@@ -59,8 +59,12 @@ async def init_db():
         # Ebooks migration
         await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS series VARCHAR(500)"))
         await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS series_index FLOAT"))
+        await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS metadata_source VARCHAR(50)"))
+        await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS metadata_pattern VARCHAR(500)"))
 
         # Audiobooks migration
         await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS series VARCHAR(500)"))
         await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS series_index FLOAT"))
+        await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_source VARCHAR(50)"))
+        await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_pattern VARCHAR(500)"))
 

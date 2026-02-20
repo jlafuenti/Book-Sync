@@ -38,6 +38,8 @@ class EBook(Base):
     )
     series: Mapped[str] = mapped_column(String(500), nullable=True)
     series_index: Mapped[float] = mapped_column(Float, nullable=True)
+    metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
+    metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
 
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
@@ -62,6 +64,8 @@ class AudioBook(Base):
     format: Mapped[str] = mapped_column(String(10), default="mp3")
     series: Mapped[str] = mapped_column(String(500), nullable=True)
     series_index: Mapped[float] = mapped_column(Float, nullable=True)
+    metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
+    metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
