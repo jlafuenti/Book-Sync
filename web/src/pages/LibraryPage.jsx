@@ -76,7 +76,7 @@ function SortableHeader({ label, column, sortCol, sortDir, onSort, style }) {
     )
 }
 
-function LibraryPage() {
+function LibraryPage({ tab }) {
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
     const [loading, setLoading] = useState(true)
@@ -104,10 +104,13 @@ function LibraryPage() {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
-    // Compute unique authors and series for filters
-    const allBooks = [...ebooks, ...audiobooks]
-    const uniqueAuthors = [...new Set(allBooks.map(b => b.author).filter(Boolean))].sort()
-    const uniqueSeries = [...new Set(allBooks.map(b => b.series).filter(Boolean))].sort()
+    // Determine which tab to show
+    const activeTab = tab || 'ebooks'
+
+    // Compute unique authors and series for filters based on active tab
+    const currentBooks = activeTab === 'ebooks' ? ebooks : audiobooks
+    const uniqueAuthors = [...new Set(currentBooks.map(b => b.author).filter(Boolean))].sort()
+    const uniqueSeries = [...new Set(currentBooks.map(b => b.series).filter(Boolean))].sort()
 
     // Filter logic
     const filterBook = (book) => {
@@ -371,114 +374,118 @@ function LibraryPage() {
                 </div>
             </div>
 
-            {/* EBooks Table */}
-            <div className="card" style={{ marginBottom: '24px' }}>
-                <div className="card-header">
-                    <h3>📚 EBooks ({filteredEbooks.length})</h3>
-                </div>
+            {/* EBooks Tab */}
+            {activeTab === 'ebooks' && (
+                <div className="card" style={{ marginBottom: '24px' }}>
+                    <div className="card-header">
+                        <h3>📚 EBooks ({filteredEbooks.length})</h3>
+                    </div>
 
-                {filteredEbooks.length === 0 ? (
-                    <div className="empty-state">
-                        <div className="icon">📖</div>
-                        <h3>No ebooks found</h3>
-                        <p>{ebooks.length === 0 ? "Scan your directories or upload an ebook to get started." : "Try adjusting your filters."}</p>
-                    </div>
-                ) : (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <SortableHeader label="Title" column="title" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <SortableHeader label="Author" column="author" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <SortableHeader label="Series" column="series" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <SortableHeader label="Format" column="format" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <SortableHeader label="Size" column="file_size" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <SortableHeader label="Added" column="uploaded_at" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                    <th style={{ width: '60px' }}></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredEbooks.map(book => (
-                                    <tr key={book.id}>
-                                        <td style={{ fontWeight: 500 }}>{book.title}</td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>
-                                            {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
-                                        </td>
-                                        <td><span className="badge badge-auto_matched">{book.format}</span></td>
-                                        <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
-                                        <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                        <td>
-                                            <button
-                                                className="btn btn-sm btn-secondary"
-                                                onClick={() => openEdit(book, 'ebook')}
-                                                title="Edit metadata"
-                                                style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                            >
-                                                ✏️
-                                            </button>
-                                        </td>
+                    {filteredEbooks.length === 0 ? (
+                        <div className="empty-state">
+                            <div className="icon">📖</div>
+                            <h3>No ebooks found</h3>
+                            <p>{ebooks.length === 0 ? "Scan your directories or upload an ebook to get started." : "Try adjusting your filters."}</p>
+                        </div>
+                    ) : (
+                        <div className="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <SortableHeader label="Title" column="title" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <SortableHeader label="Author" column="author" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <SortableHeader label="Series" column="series" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <SortableHeader label="Format" column="format" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <SortableHeader label="Size" column="file_size" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <SortableHeader label="Added" column="uploaded_at" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
+                                        <th style={{ width: '60px' }}></th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-            {/* Audiobooks Table */}
-            <div className="card">
-                <div className="card-header">
-                    <h3>🎧 Audiobooks ({filteredAudiobooks.length})</h3>
+                                </thead>
+                                <tbody>
+                                    {filteredEbooks.map(book => (
+                                        <tr key={book.id}>
+                                            <td style={{ fontWeight: 500 }}>{book.title}</td>
+                                            <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
+                                            <td style={{ color: 'var(--text-secondary)' }}>
+                                                {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
+                                            </td>
+                                            <td><span className="badge badge-auto_matched">{book.format}</span></td>
+                                            <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
+                                            <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
+                                            <td>
+                                                <button
+                                                    className="btn btn-sm btn-secondary"
+                                                    onClick={() => openEdit(book, 'ebook')}
+                                                    title="Edit metadata"
+                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                >
+                                                    ✏️
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </div>
-                {filteredAudiobooks.length === 0 ? (
-                    <div className="empty-state">
-                        <div className="icon">🎵</div>
-                        <h3>No audiobooks found</h3>
-                        <p>{audiobooks.length === 0 ? "Scan your directories or upload an audiobook to get started." : "Try adjusting your filters."}</p>
+            )}
+
+            {/* Audiobooks Tab */}
+            {activeTab === 'audiobooks' && (
+                <div className="card">
+                    <div className="card-header">
+                        <h3>🎧 Audiobooks ({filteredAudiobooks.length})</h3>
                     </div>
-                ) : (
-                    <div className="table-wrapper">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <SortableHeader label="Title" column="title" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <SortableHeader label="Author" column="author" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <SortableHeader label="Series" column="series" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <SortableHeader label="Format" column="format" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <SortableHeader label="Size" column="file_size" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <SortableHeader label="Added" column="uploaded_at" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                    <th style={{ width: '60px' }}></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredAudiobooks.map(book => (
-                                    <tr key={book.id}>
-                                        <td style={{ fontWeight: 500 }}>{book.title}</td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
-                                        <td style={{ color: 'var(--text-secondary)' }}>
-                                            {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
-                                        </td>
-                                        <td><span className="badge badge-auto_matched">{book.format}</span></td>
-                                        <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
-                                        <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                        <td>
-                                            <button
-                                                className="btn btn-sm btn-secondary"
-                                                onClick={() => openEdit(book, 'audiobook')}
-                                                title="Edit metadata"
-                                                style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                            >
-                                                ✏️
-                                            </button>
-                                        </td>
+                    {filteredAudiobooks.length === 0 ? (
+                        <div className="empty-state">
+                            <div className="icon">🎵</div>
+                            <h3>No audiobooks found</h3>
+                            <p>{audiobooks.length === 0 ? "Scan your directories or upload an audiobook to get started." : "Try adjusting your filters."}</p>
+                        </div>
+                    ) : (
+                        <div className="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <SortableHeader label="Title" column="title" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <SortableHeader label="Author" column="author" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <SortableHeader label="Series" column="series" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <SortableHeader label="Format" column="format" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <SortableHeader label="Size" column="file_size" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <SortableHeader label="Added" column="uploaded_at" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
+                                        <th style={{ width: '60px' }}></th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
+                                </thead>
+                                <tbody>
+                                    {filteredAudiobooks.map(book => (
+                                        <tr key={book.id}>
+                                            <td style={{ fontWeight: 500 }}>{book.title}</td>
+                                            <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
+                                            <td style={{ color: 'var(--text-secondary)' }}>
+                                                {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}
+                                            </td>
+                                            <td><span className="badge badge-auto_matched">{book.format}</span></td>
+                                            <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
+                                            <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
+                                            <td>
+                                                <button
+                                                    className="btn btn-sm btn-secondary"
+                                                    onClick={() => openEdit(book, 'audiobook')}
+                                                    title="Edit metadata"
+                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                >
+                                                    ✏️
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {editingBook && (
                 <MetadataEditModal

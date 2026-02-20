@@ -28,3 +28,6 @@ web/build/
 
 # Data directories (runtime)
 data/
+
+# Android Gradle cache
+android/.gradle/

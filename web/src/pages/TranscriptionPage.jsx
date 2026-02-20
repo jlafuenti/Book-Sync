@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription } from '../api'
 
-function TranscriptionPage() {
+function TranscriptionPage({ tab }) {
     const [pairs, setPairs] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [statuses, setStatuses] = useState({})
     const pollingRef = useRef({})
+
+    const activeTab = tab || 'not-transcribed'
 
     const loadData = async () => {
         try {
@@ -168,8 +170,63 @@ function TranscriptionPage() {
         return <div className="loading-page"><div className="spinner"></div> Loading...</div>
     }
 
-    // Only show matched pairs (not unmatched ones)
+    // Only pairs that are matched (not raw unmatched ebooks/audiobooks)
     const matchedPairs = pairs.filter(p => p.status !== 'unmatched')
+
+    // Categorize pairs into tabs
+    const notTranscribed = matchedPairs.filter(p =>
+        ['auto_matched', 'manual_matched', 'error'].includes(p.status)
+    )
+    const inProgress = matchedPairs.filter(p => p.status === 'transcribing')
+    const transcribed = matchedPairs.filter(p => p.status === 'synced')
+
+    const renderPairCard = (pair, showActions = false) => (
+        <div key={pair.id} className="card">
+            <div style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: '8px' }}>
+                {pair.ebook.title}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                📚 {pair.ebook.format} · 🎧 {pair.audiobook.format}
+                {pair.ebook.author && ` · ${pair.ebook.author}`}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                <span className={`badge badge-${pair.status}`}>
+                    {pair.status === 'synced' ? '✅ Synced' :
+                        pair.status === 'transcribing' ? '⏳ Transcribing' :
+                            pair.status === 'error' ? '❌ Error' :
+                                '⏸️ Ready'}
+                </span>
+
+                {showActions && canTranscribe(pair) && (
+                    <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleStart(pair.id)}
+                    >
+                        🎙️ {pair.status === 'error' ? 'Retry' : 'Start'} Transcription
+                    </button>
+                )}
+
+                {pair.status === 'transcribing' && (
+                    <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => handleCancel(pair.id)}
+                        style={{ backgroundColor: '#ffebee', color: '#d32f2f', border: '1px solid #ffcdd2' }}
+                    >
+                        🛑 Cancel
+                    </button>
+                )}
+            </div>
+
+            {getStatusDisplay(pair)}
+
+            {pair.synced_at && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                    Synced: {new Date(pair.synced_at).toLocaleString()}
+                </div>
+            )}
+        </div>
+    )
 
     return (
         <div>
@@ -180,67 +237,89 @@ function TranscriptionPage() {
 
             {error && <div className="alert alert-error">⚠️ {error}</div>}
 
-            {matchedPairs.length === 0 ? (
-                <div className="card">
-                    <div className="empty-state">
-                        <div className="icon">🎙️</div>
-                        <h3>No matched pairs</h3>
-                        <p>
-                            Match some ebooks with audiobooks on the Book Pairs page first,
-                            then come here to start transcription.
-                        </p>
+            {/* Stats */}
+            <div className="stat-grid">
+                <div className="stat-card">
+                    <div className="stat-icon yellow">⏸️</div>
+                    <div>
+                        <div className="stat-value">{notTranscribed.length}</div>
+                        <div className="stat-label">Not Transcribed</div>
                     </div>
                 </div>
-            ) : (
-                <div className="card-grid">
-                    {matchedPairs.map(pair => (
-                        <div key={pair.id} className="card">
-                            <div style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: '8px' }}>
-                                {pair.ebook.title}
+                <div className="stat-card">
+                    <div className="stat-icon purple">⏳</div>
+                    <div>
+                        <div className="stat-value">{inProgress.length}</div>
+                        <div className="stat-label">In Progress</div>
+                    </div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-icon green">✅</div>
+                    <div>
+                        <div className="stat-value">{transcribed.length}</div>
+                        <div className="stat-label">Transcribed</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ====== Not Transcribed Tab ====== */}
+            {activeTab === 'not-transcribed' && (
+                <div>
+                    {notTranscribed.length === 0 ? (
+                        <div className="card">
+                            <div className="empty-state">
+                                <div className="icon">🎙️</div>
+                                <h3>No pairs waiting for transcription</h3>
+                                <p>
+                                    {matchedPairs.length === 0
+                                        ? 'Match some ebooks with audiobooks on the Book Pairs page first.'
+                                        : 'All matched pairs have been transcribed or are in progress.'}
+                                </p>
                             </div>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                                📚 {pair.ebook.format} · 🎧 {pair.audiobook.format}
-                            </div>
-
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                                <span className={`badge badge-${pair.status}`}>
-                                    {pair.status === 'synced' ? '✅ Synced' :
-                                        pair.status === 'transcribing' ? '⏳ Transcribing' :
-                                            pair.status === 'error' ? '❌ Error' :
-                                                '⏸️ Ready'}
-                                </span>
-
-                                {canTranscribe(pair) && (
-                                    <button
-                                        className="btn btn-primary btn-sm"
-                                        onClick={() => handleStart(pair.id)}
-                                    >
-                                        🎙️ {pair.status === 'error' ? 'Retry' : 'Start'} Transcription
-                                    </button>
-                                )}
-
-                                {pair.status === 'transcribing' && (
-                                    <button
-                                        className="btn btn-danger btn-sm"
-                                        onClick={() => handleCancel(pair.id)}
-                                        style={{ backgroundColor: '#ffebeel', color: '#d32f2f', border: '1px solid #ffcdd2' }}
-                                    >
-                                        🛑 Cancel
-                                    </button>
-                                )}
-
-
-                            </div>
-
-                            {getStatusDisplay(pair)}
-
-                            {pair.synced_at && (
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>
-                                    Synced: {new Date(pair.synced_at).toLocaleString()}
-                                </div>
-                            )}
                         </div>
-                    ))}
+                    ) : (
+                        <div className="card-grid">
+                            {notTranscribed.map(pair => renderPairCard(pair, true))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ====== In Progress Tab ====== */}
+            {activeTab === 'in-progress' && (
+                <div>
+                    {inProgress.length === 0 ? (
+                        <div className="card">
+                            <div className="empty-state">
+                                <div className="icon">⏳</div>
+                                <h3>No transcriptions in progress</h3>
+                                <p>Start a transcription from the "Not Transcribed" tab to see it here.</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="card-grid">
+                            {inProgress.map(pair => renderPairCard(pair, false))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ====== Transcribed Tab ====== */}
+            {activeTab === 'transcribed' && (
+                <div>
+                    {transcribed.length === 0 ? (
+                        <div className="card">
+                            <div className="empty-state">
+                                <div className="icon">✅</div>
+                                <h3>No transcribed pairs yet</h3>
+                                <p>Once transcription completes successfully, pairs will appear here.</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="card-grid">
+                            {transcribed.map(pair => renderPairCard(pair, false))}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
