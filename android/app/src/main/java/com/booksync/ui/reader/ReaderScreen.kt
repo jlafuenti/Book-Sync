@@ -52,7 +52,7 @@ class ReaderViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            _pair.value = repository.getPairsFlow().collect { pairs ->
+            repository.getPairsFlow().collect { pairs ->
                 _pair.value = pairs.find { it.id == pairId }
             }
         }

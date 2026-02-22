@@ -41,13 +41,16 @@ function LoginPage({ onLogin }) {
 
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
 
-                <form onSubmit={handleSubmit}>
+                <form onSubmit={handleSubmit} action="#" method="POST">
                     <div className="form-group">
-                        <label>Username</label>
+                        <label htmlFor="username">Username</label>
                         <input
+                            id="username"
+                            name="username"
                             type="text"
                             className="form-input"
                             placeholder="Enter username"
+                            autoComplete="username"
                             value={username}
                             onChange={e => setUsername(e.target.value)}
                             required
@@ -56,11 +59,14 @@ function LoginPage({ onLogin }) {
 
                     {isRegistering && (
                         <div className="form-group">
-                            <label>Email</label>
+                            <label htmlFor="email">Email</label>
                             <input
+                                id="email"
+                                name="email"
                                 type="email"
                                 className="form-input"
                                 placeholder="Enter email"
+                                autoComplete="email"
                                 value={email}
                                 onChange={e => setEmail(e.target.value)}
                                 required
@@ -69,11 +75,14 @@ function LoginPage({ onLogin }) {
                     )}
 
                     <div className="form-group">
-                        <label>Password</label>
+                        <label htmlFor="password">Password</label>
                         <input
+                            id="password"
+                            name="password"
                             type="password"
                             className="form-input"
                             placeholder="Enter password"
+                            autoComplete={isRegistering ? "new-password" : "current-password"}
                             value={password}
                             onChange={e => setPassword(e.target.value)}
                             required

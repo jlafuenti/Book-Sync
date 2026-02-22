@@ -6,7 +6,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.LibraryResult
 import dagger.hilt.android.AndroidEntryPoint
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -68,7 +71,6 @@ class AutoMediaBrowserService : MediaLibraryService() {
                         .setTitle("BookSync Audiobooks")
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
-                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_AUDIOBOOKS)
                         .build()
                 )
                 .build()

@@ -22,7 +22,7 @@ class BookSyncRepository @Inject constructor(
     private val syncPointDao: SyncPointDao,
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
 ) {
     // ============ Library ============
 

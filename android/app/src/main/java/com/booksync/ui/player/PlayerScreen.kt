@@ -146,7 +146,7 @@ fun PlayerScreen(
                 },
                 actions = {
                     FilledTonalIconButton(onClick = onSwitchToReader) {
-                        Icon(Icons.Default.MenuBook, "Switch to Reader")
+                        Icon(Icons.AutoMirrored.Filled.MenuBook, "Switch to Reader")
                     }
                 },
             )
@@ -274,7 +274,7 @@ fun PlayerScreen(
                 onClick = onSwitchToReader,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(Icons.Default.MenuBook, null)
+                Icon(Icons.AutoMirrored.Filled.MenuBook, null)
                 Spacer(Modifier.width(8.dp))
                 Text("Switch to Reading")
             }
