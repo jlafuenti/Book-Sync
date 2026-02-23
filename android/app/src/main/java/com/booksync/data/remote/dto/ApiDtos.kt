@@ -54,6 +54,8 @@ data class EBookResponse(
     val filename: String,
     val file_size: Long? = null,
     val format: String,
+    val series: String? = null,
+    val series_index: Float? = null,
     val uploaded_at: String
 )
 
@@ -66,6 +68,8 @@ data class AudioBookResponse(
     val file_size: Long? = null,
     val duration_seconds: Int? = null,
     val format: String,
+    val series: String? = null,
+    val series_index: Float? = null,
     val uploaded_at: String
 )
 
