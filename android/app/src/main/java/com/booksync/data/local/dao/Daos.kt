@@ -36,6 +36,21 @@ interface BookPairDao {
 }
 
 @Dao
+interface EBookDao {
+    @Query("SELECT * FROM ebooks ORDER BY title")
+    fun getAllEBooks(): Flow<List<EBookEntity>>
+
+    @Query("SELECT * FROM ebooks WHERE id = :ebookId")
+    suspend fun getEBookById(ebookId: Int): EBookEntity?
+
+    @Upsert
+    suspend fun upsertEBooks(ebooks: List<EBookEntity>)
+
+    @Query("UPDATE ebooks SET isDownloaded = :downloaded WHERE id = :ebookId")
+    suspend fun setDownloaded(ebookId: Int, downloaded: Boolean)
+}
+
+@Dao
 interface SyncPointDao {
     @Query("SELECT * FROM sync_points WHERE bookPairId = :pairId ORDER BY epubChapter, epubSentenceIndex")
     suspend fun getPointsForPair(pairId: Int): List<SyncPointEntity>

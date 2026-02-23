@@ -12,16 +12,18 @@ import com.booksync.data.local.entity.*
 @Database(
     entities = [
         BookPairEntity::class,
+        EBookEntity::class,
         SyncPointEntity::class,
         BookmarkEntity::class,
         PendingSyncEntity::class,
         UserProgressEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class BookSyncDatabase : RoomDatabase() {
     abstract fun bookPairDao(): BookPairDao
+    abstract fun eBookDao(): EBookDao
     abstract fun syncPointDao(): SyncPointDao
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun pendingSyncDao(): PendingSyncDao
