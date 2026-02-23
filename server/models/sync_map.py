@@ -58,6 +58,7 @@ class SyncPoint(Base):
         epub_text_preview: First 200 chars of the sentence for debugging
         audio_start_ms: Audio start timestamp in milliseconds
         audio_end_ms: Audio end timestamp in milliseconds
+        audio_text: The transcribed text that corresponds to this time range, user editable.
     """
 
     __tablename__ = "sync_points"
@@ -71,6 +72,7 @@ class SyncPoint(Base):
     epub_text_preview: Mapped[str] = mapped_column(String(200), nullable=True)
     audio_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     audio_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    audio_text: Mapped[str] = mapped_column(Text, nullable=True)
 
     # Relationships
     sync_map = relationship("SyncMap", back_populates="sync_points")

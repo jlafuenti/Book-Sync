@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription } from '../api'
 
 function TranscriptionPage({ tab }) {
@@ -205,6 +206,16 @@ function TranscriptionPage({ tab }) {
                     >
                         🎙️ {pair.status === 'error' ? 'Retry' : 'Start'} Transcription
                     </button>
+                )}
+
+                {pair.status === 'synced' && (
+                    <Link
+                        to={`/transcription/edit/${pair.id}`}
+                        className="btn btn-secondary btn-sm"
+                        style={{ textDecoration: 'none' }}
+                    >
+                        ✏️ Edit
+                    </Link>
                 )}
 
                 {pair.status === 'transcribing' && (

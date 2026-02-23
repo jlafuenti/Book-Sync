@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage'
 import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
 import TranscriptionPage from './pages/TranscriptionPage'
+import TranscriptionEditorPage from './pages/TranscriptionEditorPage'
 import SystemPage from './pages/SystemPage'
 
 function App() {
@@ -133,6 +134,7 @@ function App() {
                     <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />
                     <Route path="/transcription/in-progress" element={<TranscriptionPage tab="in-progress" />} />
                     <Route path="/transcription/transcribed" element={<TranscriptionPage tab="transcribed" />} />
+                    <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
                     {/* System */}
                     <Route path="/system" element={<SystemPage />} />
