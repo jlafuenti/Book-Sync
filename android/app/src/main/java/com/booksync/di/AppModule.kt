@@ -63,7 +63,7 @@ object AppModule {
     fun provideRetrofit(client: OkHttpClient, json: Json): Retrofit {
         val contentType = "application/json".toMediaType()
         return Retrofit.Builder()
-            .baseUrl("http://10.0.2.2:8000/") // localhost from Android emulator
+            .baseUrl("https://booksync.example.com/") // BookSync server via HTTPS
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
