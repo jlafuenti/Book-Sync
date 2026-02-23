@@ -56,6 +56,10 @@ class BookSyncRepository @Inject constructor(
         }
         bookPairDao.upsertPairs(entities)
     }
+    /** Search the library remotely */
+    suspend fun searchLibrary(query: String): SearchResponse {
+        return api.searchLibrary(query)
+    }
 
     // ============ Downloads ============
 

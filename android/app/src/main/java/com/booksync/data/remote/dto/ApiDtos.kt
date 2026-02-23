@@ -79,6 +79,16 @@ data class BookPairResponse(
     val synced_at: String? = null
 )
 
+// ============ Search ============
+
+@Serializable
+data class SearchResponse(
+    val query: String,
+    val ebooks: List<EBookResponse>,
+    val audiobooks: List<AudioBookResponse>,
+    val book_pairs: List<BookPairResponse>
+)
+
 // ============ Sync ============
 
 @Serializable

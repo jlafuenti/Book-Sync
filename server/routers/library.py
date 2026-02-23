@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from rapidfuzz import fuzz
@@ -30,7 +30,7 @@ from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
-    BookPairCreate, LibraryScanResponse,
+    BookPairCreate, LibraryScanResponse, SearchResponse
 )
 from routers.auth import get_current_user
 
@@ -733,6 +733,65 @@ async def list_audiobooks(
         .order_by(AudioBook.author.nulls_last(), AudioBook.series.nulls_last(), AudioBook.series_index.nulls_last(), AudioBook.title)
     )
     return result.scalars().all()
+
+
+@router.get("/search", response_model=SearchResponse)
+async def search_library(
+    q: str = Query(..., min_length=1, description="Search query for title, author, or series"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Global search across ebooks, audiobooks, and book pairs."""
+    search_term = f"%{q.lower()}%"
+    
+    # Search EBooks
+    ebook_query = select(EBook).where(
+        or_(
+            func.lower(EBook.title).like(search_term),
+            func.lower(EBook.author).like(search_term),
+            func.lower(EBook.series).like(search_term)
+        )
+    )
+    ebooks_result = await db.execute(ebook_query)
+    ebooks = ebooks_result.scalars().all()
+    
+    # Search Audiobooks
+    audiobook_query = select(AudioBook).where(
+        or_(
+            func.lower(AudioBook.title).like(search_term),
+            func.lower(AudioBook.author).like(search_term),
+            func.lower(AudioBook.series).like(search_term)
+        )
+    )
+    audiobooks_result = await db.execute(audiobook_query)
+    audiobooks = audiobooks_result.scalars().all()
+    
+    # Search BookPairs (matching either the ebook or audiobook)
+    pair_query = (
+        select(BookPair)
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        .join(BookPair.ebook)
+        .join(BookPair.audiobook)
+        .where(
+            or_(
+                func.lower(EBook.title).like(search_term),
+                func.lower(EBook.author).like(search_term),
+                func.lower(EBook.series).like(search_term),
+                func.lower(AudioBook.title).like(search_term),
+                func.lower(AudioBook.author).like(search_term),
+                func.lower(AudioBook.series).like(search_term)
+            )
+        )
+    )
+    pairs_result = await db.execute(pair_query)
+    pairs = pairs_result.scalars().all()
+    
+    return SearchResponse(
+        query=q,
+        ebooks=ebooks,
+        audiobooks=audiobooks,
+        book_pairs=pairs
+    )
 
 
 @router.get("/pairs", response_model=List[BookPairResponse])
