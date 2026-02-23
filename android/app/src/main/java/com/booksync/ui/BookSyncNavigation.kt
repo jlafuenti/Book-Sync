@@ -8,6 +8,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.booksync.ui.auth.LoginScreen
 import com.booksync.ui.library.LibraryScreen
+import com.booksync.ui.library.SearchScreen
 import com.booksync.ui.reader.ReaderScreen
 import com.booksync.ui.player.PlayerScreen
 
@@ -32,6 +33,21 @@ fun BookSyncNavigation() {
 
         composable("library") {
             LibraryScreen(
+                onBookSelect = { pairId ->
+                    navController.navigate("reader/$pairId")
+                },
+                onAudioSelect = { pairId ->
+                    navController.navigate("player/$pairId")
+                },
+                onSearchClick = {
+                    navController.navigate("search")
+                }
+            )
+        }
+
+        composable("search") {
+            SearchScreen(
+                onBack = { navController.popBackStack() },
                 onBookSelect = { pairId ->
                     navController.navigate("reader/$pairId")
                 },

@@ -251,3 +251,13 @@ class LibraryScanResponse(BaseModel):
     new_audiobooks: int
     auto_matched_pairs: int
     message: str
+
+# ============================================================
+# Search Schemas
+# ============================================================
+
+class SearchResponse(BaseModel):
+    query: str
+    ebooks: List[EBookResponse]
+    audiobooks: List[AudioBookResponse]
+    book_pairs: List[BookPairResponse]

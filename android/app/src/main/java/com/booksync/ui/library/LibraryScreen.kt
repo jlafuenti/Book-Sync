@@ -69,6 +69,7 @@ class LibraryViewModel @Inject constructor(
 fun LibraryScreen(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
+    onSearchClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val pairs by viewModel.pairs.collectAsState(initial = emptyList())
@@ -80,6 +81,9 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("📖 BookSync", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = onSearchClick) {
+                        Icon(Icons.Default.Search, "Search")
+                    }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }

@@ -37,6 +37,11 @@ interface BookSyncApi {
     @POST("api/library/scan")
     suspend fun scanLibrary(): Response<Unit>
 
+    // ============ Search ============
+
+    @GET("api/library/search")
+    suspend fun searchLibrary(@Query("q") query: String): com.booksync.data.remote.SearchResponse
+
     // ============ Files ============
 
     @GET("api/files/ebook/{ebookId}")
