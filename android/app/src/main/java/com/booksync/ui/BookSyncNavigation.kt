@@ -11,6 +11,15 @@ import com.booksync.ui.library.LibraryScreen
 import com.booksync.ui.library.SearchScreen
 import com.booksync.ui.reader.ReaderScreen
 import com.booksync.ui.player.PlayerScreen
+import com.booksync.ui.ebooks.EbooksScreen
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material3.*
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.navigation.compose.currentBackStackEntryAsState
 
 /**
  * Navigation graph for the BookSync app.
@@ -24,25 +33,77 @@ fun BookSyncNavigation() {
         composable("login") {
             LoginScreen(
                 onLoginSuccess = {
-                    navController.navigate("library") {
+                    navController.navigate("main") {
                         popUpTo("login") { inclusive = true }
                     }
                 }
             )
         }
 
-        composable("library") {
-            LibraryScreen(
-                onBookSelect = { pairId ->
-                    navController.navigate("reader/$pairId")
-                },
-                onAudioSelect = { pairId ->
-                    navController.navigate("player/$pairId")
-                },
-                onSearchClick = {
-                    navController.navigate("search")
+        composable("main") {
+            val bottomNavController = rememberNavController()
+            val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
+            val currentRoute = navBackStackEntry?.destination?.route
+
+            Scaffold(
+                bottomBar = {
+                    NavigationBar {
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.LibraryBooks, contentDescription = "Pairs") },
+                            label = { Text("Pairs") },
+                            selected = currentRoute == "library",
+                            onClick = {
+                                bottomNavController.navigate("library") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.Book, contentDescription = "Ebooks") },
+                            label = { Text("Ebooks") },
+                            selected = currentRoute == "ebooks",
+                            onClick = {
+                                bottomNavController.navigate("ebooks") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
+                    }
                 }
-            )
+            ) { padding ->
+                NavHost(navController = bottomNavController, startDestination = "library", modifier = Modifier.padding(padding)) {
+                    composable("library") {
+                        LibraryScreen(
+                            onBookSelect = { pairId ->
+                                navController.navigate("reader/$pairId")
+                            },
+                            onAudioSelect = { pairId ->
+                                navController.navigate("player/$pairId")
+                            },
+                            onSearchClick = {
+                                navController.navigate("search")
+                            }
+                        )
+                    }
+                    composable("ebooks") {
+                        EbooksScreen(
+                            onBookSelect = { ebookId ->
+                            },
+                            onSearchClick = {
+                                navController.navigate("search")
+                            }
+                        )
+                    }
+                }
+            }
         }
 
         composable("search") {

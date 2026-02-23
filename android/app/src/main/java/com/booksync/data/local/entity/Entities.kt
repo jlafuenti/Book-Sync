@@ -28,6 +28,20 @@ data class BookPairEntity(
     val syncMapDownloaded: Boolean = false
 )
 
+@Entity(tableName = "ebooks")
+data class EBookEntity(
+    @PrimaryKey val id: Int,
+    val title: String,
+    val author: String?,
+    val filename: String,
+    val fileSize: Long?,
+    val format: String,
+    val series: String?,
+    val seriesIndex: Float?,
+    val uploadedAt: String,
+    val isDownloaded: Boolean = false
+)
+
 @Entity(tableName = "sync_points")
 data class SyncPointEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,

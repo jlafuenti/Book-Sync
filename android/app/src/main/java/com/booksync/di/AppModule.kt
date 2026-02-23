@@ -81,6 +81,9 @@ object AppModule {
     fun provideBookPairDao(db: BookSyncDatabase): BookPairDao = db.bookPairDao()
 
     @Provides
+    fun provideEBookDao(db: BookSyncDatabase): EBookDao = db.eBookDao()
+
+    @Provides
     fun provideSyncPointDao(db: BookSyncDatabase): SyncPointDao = db.syncPointDao()
 
     @Provides

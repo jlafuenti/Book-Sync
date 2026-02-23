@@ -19,6 +19,7 @@ import javax.inject.Singleton
 class BookSyncRepository @Inject constructor(
     private val api: BookSyncApi,
     private val bookPairDao: BookPairDao,
+    private val eBookDao: EBookDao,
     private val syncPointDao: SyncPointDao,
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
@@ -56,6 +57,30 @@ class BookSyncRepository @Inject constructor(
         }
         bookPairDao.upsertPairs(entities)
     }
+    
+    /** Get all ebooks as a reactive Flow from local cache. */
+    fun getEbooksFlow(): Flow<List<EBookEntity>> = eBookDao.getAllEBooks()
+
+    /** Refresh ebooks from the server and update local cache. */
+    suspend fun refreshEbooks() {
+        val remoteEbooks = api.getEbooks()
+        val entities = remoteEbooks.map { ebook ->
+            val existing = eBookDao.getEBookById(ebook.id)
+            EBookEntity(
+                id = ebook.id,
+                title = ebook.title,
+                author = ebook.author,
+                filename = ebook.filename,
+                fileSize = ebook.file_size,
+                format = ebook.format,
+                series = ebook.series,
+                seriesIndex = ebook.series_index,
+                uploadedAt = ebook.uploaded_at,
+                isDownloaded = existing?.isDownloaded ?: false
+            )
+        }
+        eBookDao.upsertEBooks(entities)
+    }
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
         return api.searchLibrary(query)
@@ -75,6 +100,21 @@ class BookSyncRepository @Inject constructor(
             }
         }
         bookPairDao.setEbookDownloaded(pair.id, true)
+        return file
+    }
+
+    /** Download a standalone ebook file. */
+    suspend fun downloadStandaloneEbook(ebook: EBookEntity): File {
+        val response = api.downloadEbook(ebook.id)
+        val dir = File(context.filesDir, "ebooks")
+        dir.mkdirs()
+        val file = File(dir, ebook.filename)
+        response.body()?.byteStream()?.use { input ->
+            file.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        eBookDao.setDownloaded(ebook.id, true)
         return file
     }
 
