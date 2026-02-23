@@ -68,3 +68,6 @@ async def init_db():
         await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_source VARCHAR(50)"))
         await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS metadata_pattern VARCHAR(500)"))
 
+        # Sync points migration
+        await conn.execute(text("ALTER TABLE sync_points ADD COLUMN IF NOT EXISTS audio_text TEXT"))
+
