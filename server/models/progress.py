@@ -37,13 +37,13 @@ class UserProgress(Base):
     # E-book progress is typically stored as an EPUB CFI string or chapter/percentage
     epub_cfi: Mapped[str] = mapped_column(String(500), nullable=True)
     epub_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
-    epub_progress_percent: Mapped[float] = mapped_column(sqlalchemy.Float, nullable=True)
+    epub_progress_percent: Mapped[float] = mapped_column(Float, nullable=True)
     
     # Audiobook progress is simply milliseconds elapsed
     audio_position_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
     # State tracking
-    is_completed: Mapped[bool] = mapped_column(sqlalchemy.Boolean, default=False, nullable=False)
+    is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
