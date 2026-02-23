@@ -109,11 +109,13 @@ class BookPairCreate(BaseModel):
 # ============================================================
 
 class SyncPointResponse(BaseModel):
+    id: int
     epub_chapter: int
     epub_sentence_index: int
     epub_text_preview: Optional[str]
     audio_start_ms: int
     audio_end_ms: int
+    audio_text: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -143,6 +145,15 @@ class SyncMapSummaryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SyncPointTextUpdate(BaseModel):
+    id: int
+    audio_text: str
+
+
+class SyncMapTextUpdate(BaseModel):
+    points: List[SyncPointTextUpdate]
 
 
 # ============================================================

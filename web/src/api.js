@@ -189,6 +189,15 @@ export async function cancelTranscription(pairId) {
     return resp.json();
 }
 
+export async function updateTranscriptionText(pairId, points) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/text`, {
+        method: 'PUT',
+        body: JSON.stringify({ points }),
+    });
+    if (!resp.ok) throw new Error('Failed to update transcription text');
+    return resp.json();
+}
+
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {

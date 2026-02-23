@@ -13,7 +13,8 @@ from sqlalchemy.orm import selectinload
 from database import get_db, async_session
 from models.user import User
 from models.book import BookPair, PairStatus
-from schemas import TranscriptionStatusResponse
+from models.sync_map import SyncMap, SyncPoint
+from schemas import TranscriptionStatusResponse, SyncMapTextUpdate
 from routers.auth import get_current_user, get_admin_user
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
@@ -102,6 +103,51 @@ async def get_transcription_status(
         progress=1.0 if pair.status == PairStatus.SYNCED else None,
         message="Sync complete" if pair.status == PairStatus.SYNCED else None,
     )
+
+
+@router.put("/{pair_id}/text")
+async def update_transcription_text(
+    pair_id: int,
+    update_data: SyncMapTextUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Update transcription text for specific sync points without altering timestamps.
+    Useful for correcting Whisper transcription errors from the frontend.
+    """
+    # Verify sync map exists
+    result = await db.execute(
+        select(SyncMap).where(SyncMap.book_pair_id == pair_id)
+    )
+    sync_map = result.scalar_one_or_none()
+    
+    if not sync_map:
+        raise HTTPException(status_code=404, detail="Sync map not found")
+
+    point_ids = [p.id for p in update_data.points]
+    if not point_ids:
+        return {"status": "success", "updated": 0}
+
+    # Fetch the points to update
+    points_result = await db.execute(
+        select(SyncPoint).where(
+            SyncPoint.sync_map_id == sync_map.id,
+            SyncPoint.id.in_(point_ids)
+        )
+    )
+    existing_points = {p.id: p for p in points_result.scalars().all()}
+
+    updated_count = 0
+    for update_pt in update_data.points:
+        db_pt = existing_points.get(update_pt.id)
+        if db_pt:
+            db_pt.audio_text = update_pt.audio_text
+            updated_count += 1
+
+    await db.commit()
+    
+    return {"status": "success", "updated": updated_count}
 
 
 async def _run_transcription(pair_id: int):
