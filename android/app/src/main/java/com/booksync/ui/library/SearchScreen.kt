@@ -6,7 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,9 +18,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.booksync.data.remote.AudioBookResponse
-import com.booksync.data.remote.BookPairResponse
-import com.booksync.data.remote.EBookResponse
 import com.booksync.data.repository.BookSyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -29,6 +26,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+data class SearchResultItem(
+    val id: String,
+    val title: String,
+    val author: String?,
+    val series: String?,
+    val seriesIndex: Float?,
+    val isEbook: Boolean,
+    val isAudiobook: Boolean,
+    val pairId: Int? = null
+)
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
@@ -40,14 +48,8 @@ class SearchViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
 
-    private val _ebooks = MutableStateFlow<List<EBookResponse>>(emptyList())
-    val ebooks = _ebooks.asStateFlow()
-
-    private val _audiobooks = MutableStateFlow<List<AudioBookResponse>>(emptyList())
-    val audiobooks = _audiobooks.asStateFlow()
-
-    private val _pairs = MutableStateFlow<List<BookPairResponse>>(emptyList())
-    val pairs = _pairs.asStateFlow()
+    private val _searchResults = MutableStateFlow<List<SearchResultItem>>(emptyList())
+    val searchResults = _searchResults.asStateFlow()
 
     private var searchJob: Job? = null
 
@@ -55,9 +57,7 @@ class SearchViewModel @Inject constructor(
         _query.value = newQuery
         searchJob?.cancel()
         if (newQuery.isBlank()) {
-            _ebooks.value = emptyList()
-            _audiobooks.value = emptyList()
-            _pairs.value = emptyList()
+            _searchResults.value = emptyList()
             return
         }
 
@@ -80,9 +80,66 @@ class SearchViewModel @Inject constructor(
         _isLoading.value = true
         try {
             val response = repository.searchLibrary(q)
-            _ebooks.value = response.ebooks
-            _audiobooks.value = response.audiobooks
-            _pairs.value = response.book_pairs
+            val items = mutableListOf<SearchResultItem>()
+            
+            val pairedEbookIds = response.book_pairs.map { it.ebook.id }.toSet()
+            val pairedAudiobookIds = response.book_pairs.map { it.audiobook.id }.toSet()
+
+            response.book_pairs.forEach { pair ->
+                items.add(
+                    SearchResultItem(
+                        id = "pair_${pair.id}",
+                        title = pair.ebook.title,
+                        author = pair.ebook.author ?: pair.audiobook.author,
+                        series = pair.ebook.series ?: pair.audiobook.series,
+                        seriesIndex = pair.ebook.series_index ?: pair.audiobook.series_index,
+                        isEbook = true,
+                        isAudiobook = true,
+                        pairId = pair.id
+                    )
+                )
+            }
+            
+            response.ebooks.forEach { ebook ->
+                if (ebook.id !in pairedEbookIds) {
+                    items.add(
+                        SearchResultItem(
+                            id = "ebook_${ebook.id}",
+                            title = ebook.title,
+                            author = ebook.author,
+                            series = ebook.series,
+                            seriesIndex = ebook.series_index,
+                            isEbook = true,
+                            isAudiobook = false
+                        )
+                    )
+                }
+            }
+            
+            response.audiobooks.forEach { audio ->
+                if (audio.id !in pairedAudiobookIds) {
+                    items.add(
+                        SearchResultItem(
+                            id = "audio_${audio.id}",
+                            title = audio.title,
+                            author = audio.author,
+                            series = audio.series,
+                            seriesIndex = audio.series_index,
+                            isEbook = false,
+                            isAudiobook = true
+                        )
+                    )
+                }
+            }
+            
+            val prefixRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
+            
+            _searchResults.value = items.sortedWith(
+                compareBy<SearchResultItem, String?>(nullsLast()) { it.series?.replace(prefixRegex, "")?.lowercase() }
+                    .thenBy(nullsLast()) { it.seriesIndex }
+                    .thenBy { it.title.replace(prefixRegex, "").lowercase() }
+            )
+            
         } catch (_: Exception) {
             // handle error if needed
         } finally {
@@ -101,9 +158,7 @@ fun SearchScreen(
 ) {
     val query by viewModel.query.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
-    val ebooks by viewModel.ebooks.collectAsState()
-    val audiobooks by viewModel.audiobooks.collectAsState()
-    val pairs by viewModel.pairs.collectAsState()
+    val results by viewModel.searchResults.collectAsState()
 
     Scaffold(
         topBar = {
@@ -126,7 +181,7 @@ fun SearchScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -145,57 +200,52 @@ fun SearchScreen(
                 }
             }
 
-            if (!isLoading && query.isNotBlank() && ebooks.isEmpty() && audiobooks.isEmpty() && pairs.isEmpty()) {
+            if (!isLoading && query.isNotBlank() && results.isEmpty()) {
                 item {
                     Text("No results found.", modifier = Modifier.padding(16.dp))
                 }
             }
 
-            if (pairs.isNotEmpty()) {
-                item {
-                    Text("Matched Pairs", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
-                items(pairs) { pair ->
-                    Card(modifier = Modifier.fillMaxWidth(), onClick = { onBookSelect(pair.id) }) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = pair.ebook.title, fontWeight = FontWeight.Bold)
-                            pair.ebook.author?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                AssistChip(onClick = {}, label = { Text("Pair") }, leadingIcon = { Text("📚🎧") })
+            if (results.isNotEmpty()) {
+                items(results, key = { it.id }) { item ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            if (item.pairId != null) {
+                                onBookSelect(item.pairId)
                             }
                         }
-                    }
-                }
-            }
-
-            if (ebooks.isNotEmpty()) {
-                item {
-                    Text("Ebooks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
-                items(ebooks) { ebook ->
-                    Card(modifier = Modifier.fillMaxWidth()) { // No on-click for standalone ebook yet
+                    ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = ebook.title, fontWeight = FontWeight.Bold)
-                            ebook.author?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
+                            // Series Info
+                            if (!item.series.isNullOrBlank()) {
+                                Text(
+                                    text = buildString {
+                                        append(item.series)
+                                        if (item.seriesIndex != null && item.seriesIndex > 0f) {
+                                            val indexStr = if (item.seriesIndex % 1 == 0f) item.seriesIndex.toInt().toString() else item.seriesIndex.toString()
+                                            append(" #$indexStr")
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
+                        
+                            Text(text = item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            item.author?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
+                            
                             Spacer(Modifier.height(8.dp))
-                            AssistChip(onClick = {}, label = { Text(ebook.format) }, leadingIcon = { Text("📚") })
-                        }
-                    }
-                }
-            }
-
-            if (audiobooks.isNotEmpty()) {
-                item {
-                    Text("Audiobooks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
-                items(audiobooks) { audio ->
-                    Card(modifier = Modifier.fillMaxWidth()) { // No on-click for standalone audiobook yet
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = audio.title, fontWeight = FontWeight.Bold)
-                            audio.author?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
-                            Spacer(Modifier.height(8.dp))
-                            AssistChip(onClick = {}, label = { Text(audio.format) }, leadingIcon = { Text("🎧") })
+                            
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (item.isEbook) {
+                                    AssistChip(onClick = {}, label = { Text("Ebook") }, leadingIcon = { Text("📚") })
+                                }
+                                if (item.isAudiobook) {
+                                    AssistChip(onClick = {}, label = { Text("Audiobook") }, leadingIcon = { Text("🎧") })
+                                }
+                            }
                         }
                     }
                 }
