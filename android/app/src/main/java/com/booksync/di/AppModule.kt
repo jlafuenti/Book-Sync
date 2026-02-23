@@ -38,9 +38,8 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
-        @ApplicationContext context: Context,
+        authInterceptor: com.booksync.data.remote.AuthInterceptor
     ): OkHttpClient {
-        val prefs = context.dataStore
         return OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS) // Long timeout for large file downloads
@@ -48,13 +47,7 @@ object AppModule {
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC
             })
-            .addInterceptor { chain ->
-                // Add auth token from DataStore
-                // In production, inject TokenManager properly
-                val request = chain.request().newBuilder()
-                // Token will be added by AuthInterceptor (simplified here)
-                request.build().let { chain.proceed(it) }
-            }
+            .addInterceptor(authInterceptor)
             .build()
     }
 

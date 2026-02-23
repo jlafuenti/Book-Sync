@@ -27,9 +27,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+import com.booksync.data.remote.TokenManager
+
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val api: BookSyncApi,
+    private val tokenManager: TokenManager
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -43,7 +46,7 @@ class LoginViewModel @Inject constructor(
             _error.value = null
             try {
                 val tokens = api.login(LoginRequest(username, password))
-                // TODO: Store tokens in DataStore via TokenManager
+                tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
                 onSuccess()
             } catch (e: Exception) {
                 _error.value = e.message ?: "Login failed"
