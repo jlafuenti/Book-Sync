@@ -198,6 +198,40 @@ class BookmarkLogResponse(BaseModel):
 
 
 # ============================================================
+# User Progress Schemas
+# ============================================================
+
+from models.progress import ProgressType
+
+class ProgressUpdate(BaseModel):
+    book_pair_id: Optional[int] = None
+    epub_cfi: Optional[str] = None
+    epub_chapter: Optional[int] = None
+    epub_progress_percent: Optional[float] = None
+    audio_position_ms: Optional[int] = None
+    is_completed: Optional[bool] = None
+    device_id: Optional[str] = None
+
+class ProgressResponse(BaseModel):
+    id: int
+    user_id: int
+    media_type: ProgressType
+    book_pair_id: Optional[int]
+    ebook_id: Optional[int]
+    audiobook_id: Optional[int]
+    epub_cfi: Optional[str]
+    epub_chapter: Optional[int]
+    epub_progress_percent: Optional[float]
+    audio_position_ms: Optional[int]
+    is_completed: bool
+    updated_at: datetime
+    device_id: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================
 # Transcription Schemas
 # ============================================================
 

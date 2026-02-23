@@ -79,3 +79,24 @@ interface PendingSyncDao {
     @Query("DELETE FROM pending_sync")
     suspend fun deleteAll()
 }
+
+@Dao
+interface UserProgressDao {
+    @Query("SELECT * FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun getProgress(mediaType: String, mediaId: Int): UserProgressEntity?
+
+    @Query("SELECT * FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?>
+
+    @Query("SELECT * FROM user_progress")
+    fun getAllProgressFlow(): Flow<List<UserProgressEntity>>
+
+    @Upsert
+    suspend fun upsertProgress(progress: UserProgressEntity)
+
+    @Query("UPDATE user_progress SET syncedToServer = 0 WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun markUnsynced(mediaType: String, mediaId: Int)
+
+    @Query("SELECT * FROM user_progress WHERE syncedToServer = 0")
+    suspend fun getUnsyncedProgress(): List<UserProgressEntity>
+}

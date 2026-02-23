@@ -60,3 +60,18 @@ data class PendingSyncEntity(
     val audioPositionMs: Int?,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "user_progress", primaryKeys = ["mediaType", "mediaId"])
+data class UserProgressEntity(
+    val mediaType: String,
+    val mediaId: Int,
+    val bookPairId: Int?,
+    val epubCfi: String?,
+    val epubChapter: Int?,
+    val epubProgressPercent: Float?,
+    val audioPositionMs: Int?,
+    val isCompleted: Boolean,
+    val updatedAt: Long,
+    val deviceId: String?,
+    val syncedToServer: Boolean = true
+)

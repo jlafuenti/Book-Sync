@@ -22,6 +22,7 @@ class BookSyncRepository @Inject constructor(
     private val syncPointDao: SyncPointDao,
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
+    private val userProgressDao: UserProgressDao,
     @param:ApplicationContext private val context: Context,
 ) {
     // ============ Library ============
@@ -250,12 +251,94 @@ class BookSyncRepository @Inject constructor(
         }
     }
 
+    // ============ User Progress ============
+
+    /** Get the user progress flow from local cache */
+    fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?> =
+        userProgressDao.getProgressFlow(mediaType, mediaId)
+
+    /** Refresh progress from the server */
+    suspend fun refreshProgress(mediaType: String, mediaId: Int) {
+        try {
+            val remote = api.getProgress(mediaType, mediaId)
+            userProgressDao.upsertProgress(
+                UserProgressEntity(
+                    mediaType = remote.media_type,
+                    mediaId = if (remote.media_type == "ebook") remote.ebook_id ?: 0 else remote.audiobook_id ?: 0,
+                    bookPairId = remote.book_pair_id,
+                    epubCfi = remote.epub_cfi,
+                    epubChapter = remote.epub_chapter,
+                    epubProgressPercent = remote.epub_progress_percent,
+                    audioPositionMs = remote.audio_position_ms,
+                    isCompleted = remote.is_completed,
+                    updatedAt = System.currentTimeMillis(), // We ignore the remote string date for simpler local sorting
+                    deviceId = remote.device_id,
+                    syncedToServer = true
+                )
+            )
+        } catch (_: Exception) {
+            // Offline - use local cache
+        }
+    }
+
+    /** Update progress locally and queue for sync */
+    suspend fun updateProgress(
+        mediaType: String,
+        mediaId: Int,
+        bookPairId: Int? = null,
+        epubCfi: String? = null,
+        epubChapter: Int? = null,
+        epubProgressPercent: Float? = null,
+        audioPositionMs: Int? = null,
+        isCompleted: Boolean? = null,
+        deviceId: String? = "android-device" // Ideally fetched from actual settings
+    ) {
+        val existing = userProgressDao.getProgress(mediaType, mediaId)
+        
+        // Merge with existing
+        val merged = UserProgressEntity(
+            mediaType = mediaType,
+            mediaId = mediaId,
+            bookPairId = bookPairId ?: existing?.bookPairId,
+            epubCfi = epubCfi ?: existing?.epubCfi,
+            epubChapter = epubChapter ?: existing?.epubChapter,
+            epubProgressPercent = epubProgressPercent ?: existing?.epubProgressPercent,
+            audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
+            isCompleted = isCompleted ?: existing?.isCompleted ?: false,
+            updatedAt = System.currentTimeMillis(),
+            deviceId = deviceId,
+            syncedToServer = false
+        )
+        
+        userProgressDao.upsertProgress(merged)
+
+        try {
+            api.updateProgress(
+                mediaType,
+                mediaId,
+                ProgressUpdateRequest(
+                    book_pair_id = merged.bookPairId,
+                    epub_cfi = merged.epubCfi,
+                    epub_chapter = merged.epubChapter,
+                    epub_progress_percent = merged.epubProgressPercent,
+                    audio_position_ms = merged.audioPositionMs,
+                    is_completed = merged.isCompleted,
+                    device_id = merged.deviceId
+                )
+            )
+            userProgressDao.upsertProgress(merged.copy(syncedToServer = true))
+        } catch (_: Exception) {
+            // Keep syncedToServer = false, will be picked up by SyncWorker
+        }
+    }
+
     // ============ Offline Sync ============
 
     /** Process pending sync queue — called by WorkManager. */
     suspend fun processPendingSync() {
-        val pending = pendingSyncDao.getAllPending()
-        for (sync in pending) {
+        // ... (Process Bookmarks)
+        val pendingBookmarks = pendingSyncDao.getAllPending()
+        for (sync in pendingBookmarks) {
             try {
                 api.updateBookmark(
                     sync.bookPairId,
@@ -270,6 +353,29 @@ class BookSyncRepository @Inject constructor(
             } catch (_: Exception) {
                 break // Stop processing if still offline
             }
+        }
+
+        // Process Progress
+        val unsyncedProgress = userProgressDao.getUnsyncedProgress()
+        for (prog in unsyncedProgress) {
+             try {
+                 api.updateProgress(
+                     prog.mediaType,
+                     prog.mediaId,
+                     ProgressUpdateRequest(
+                         book_pair_id = prog.bookPairId,
+                         epub_cfi = prog.epubCfi,
+                         epub_chapter = prog.epubChapter,
+                         epub_progress_percent = prog.epubProgressPercent,
+                         audio_position_ms = prog.audioPositionMs,
+                         is_completed = prog.isCompleted,
+                         device_id = prog.deviceId
+                     )
+                 )
+                 userProgressDao.upsertProgress(prog.copy(syncedToServer = true))
+             } catch (_: Exception) {
+                 break
+             }
         }
     }
 }

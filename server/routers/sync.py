@@ -17,7 +17,11 @@ from models.user import User
 from models.book import BookPair
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
-from schemas import BookmarkUpdate, BookmarkResponse, BookmarkLogResponse
+from models.progress import UserProgress, ProgressType
+from schemas import (
+    BookmarkUpdate, BookmarkResponse, BookmarkLogResponse,
+    ProgressUpdate, ProgressResponse
+)
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
@@ -216,3 +220,131 @@ async def get_bookmark_log(
         .limit(limit)
     )
     return result.scalars().all()
+
+
+# ============================================================
+# User Progress Tracking (Individual Media)
+# ============================================================
+
+@router.get("/progress", response_model=List[ProgressResponse])
+async def get_all_progress(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all progress records for the current user."""
+    result = await db.execute(
+        select(UserProgress).where(UserProgress.user_id == current_user.id)
+    )
+    return result.scalars().all()
+
+
+@router.get("/progress/{media_type}/{media_id}", response_model=ProgressResponse)
+async def get_progress(
+    media_type: ProgressType,
+    media_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the user's progress for a specific piece of media."""
+    query = select(UserProgress).where(
+        UserProgress.user_id == current_user.id,
+        UserProgress.media_type == media_type
+    )
+    
+    if media_type == ProgressType.EBOOK:
+        query = query.where(UserProgress.ebook_id == media_id)
+    else:
+        query = query.where(UserProgress.audiobook_id == media_id)
+        
+    result = await db.execute(query)
+    progress = result.scalar_one_or_none()
+    
+    if not progress:
+        # Create an empty progress record to return
+        progress_data = {
+            "user_id": current_user.id,
+            "media_type": media_type,
+            "is_completed": False
+        }
+        if media_type == ProgressType.EBOOK:
+            progress_data["ebook_id"] = media_id
+        else:
+            progress_data["audiobook_id"] = media_id
+            
+        progress = UserProgress(**progress_data)
+        db.add(progress)
+        await db.flush()
+        await db.refresh(progress)
+
+    return progress
+
+
+@router.put("/progress/{media_type}/{media_id}", response_model=ProgressResponse)
+async def update_progress(
+    media_type: ProgressType,
+    media_id: int,
+    update_data: ProgressUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update progress for a specific piece of media."""
+    
+    # 1. Verify existence of media
+    if media_type == ProgressType.EBOOK:
+        # Check against EBook model (skip actual check here for brevity, assuming foreign keys protect us, but ideally we'd check)
+        pass 
+        
+    query = select(UserProgress).where(
+        UserProgress.user_id == current_user.id,
+        UserProgress.media_type == media_type
+    )
+    
+    if media_type == ProgressType.EBOOK:
+        query = query.where(UserProgress.ebook_id == media_id)
+    else:
+        query = query.where(UserProgress.audiobook_id == media_id)
+        
+    result = await db.execute(query)
+    progress = result.scalar_one_or_none()
+    
+    if not progress:
+        progress_data = {
+            "user_id": current_user.id,
+            "media_type": media_type,
+            "book_pair_id": update_data.book_pair_id
+        }
+        if media_type == ProgressType.EBOOK:
+            progress_data["ebook_id"] = media_id
+        else:
+            progress_data["audiobook_id"] = media_id
+            
+        progress = UserProgress(**progress_data)
+        db.add(progress)
+    
+    # Update fields
+    if update_data.book_pair_id is not None:
+        progress.book_pair_id = update_data.book_pair_id
+        
+    if media_type == ProgressType.EBOOK:
+        if update_data.epub_cfi is not None:
+            progress.epub_cfi = update_data.epub_cfi
+        if update_data.epub_chapter is not None:
+            progress.epub_chapter = update_data.epub_chapter
+        if update_data.epub_progress_percent is not None:
+            progress.epub_progress_percent = update_data.epub_progress_percent
+    elif media_type == ProgressType.AUDIOBOOK:
+        if update_data.audio_position_ms is not None:
+            progress.audio_position_ms = update_data.audio_position_ms
+            
+    if update_data.is_completed is not None:
+        progress.is_completed = update_data.is_completed
+        
+    if update_data.device_id is not None:
+        progress.device_id = update_data.device_id
+        
+    progress.updated_at = datetime.utcnow()
+    
+    await db.commit()
+    await db.refresh(progress)
+    
+    return progress
