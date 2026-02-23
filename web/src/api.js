@@ -214,6 +214,23 @@ export async function getDiskUsage() {
     return resp.json();
 }
 
+// ============ Progress ============
+
+export async function getProgress(mediaType, mediaId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`);
+    if (!resp.ok) throw new Error('Failed to fetch progress');
+    return resp.json();
+}
+
+export async function updateProgress(mediaType, mediaId, progressData) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`, {
+        method: 'PUT',
+        body: JSON.stringify(progressData),
+    });
+    if (!resp.ok) throw new Error('Failed to update progress');
+    return resp.json();
+}
+
 // ============ Settings ============
 
 export async function getSettings() {

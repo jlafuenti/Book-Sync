@@ -15,8 +15,9 @@ import com.booksync.data.local.entity.*
         SyncPointEntity::class,
         BookmarkEntity::class,
         PendingSyncEntity::class,
+        UserProgressEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class BookSyncDatabase : RoomDatabase() {
@@ -24,4 +25,5 @@ abstract class BookSyncDatabase : RoomDatabase() {
     abstract fun syncPointDao(): SyncPointDao
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun pendingSyncDao(): PendingSyncDao
+    abstract fun userProgressDao(): UserProgressDao
 }

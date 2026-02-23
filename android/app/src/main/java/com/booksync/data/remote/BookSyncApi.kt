@@ -62,4 +62,19 @@ interface BookSyncApi {
         @Path("pairId") pairId: Int,
         @Body update: BookmarkUpdateRequest
     ): BookmarkResponse
+
+    // ============ User Progress ============
+
+    @GET("api/sync/progress/{mediaType}/{mediaId}")
+    suspend fun getProgress(
+        @Path("mediaType") mediaType: String,
+        @Path("mediaId") mediaId: Int
+    ): ProgressResponse
+
+    @PUT("api/sync/progress/{mediaType}/{mediaId}")
+    suspend fun updateProgress(
+        @Path("mediaType") mediaType: String,
+        @Path("mediaId") mediaId: Int,
+        @Body update: ProgressUpdateRequest
+    ): ProgressResponse
 }

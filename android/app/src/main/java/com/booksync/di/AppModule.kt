@@ -74,7 +74,8 @@ object AppModule {
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).build()
+        ).fallbackToDestructiveMigration()
+         .build()
 
     @Provides
     fun provideBookPairDao(db: BookSyncDatabase): BookPairDao = db.bookPairDao()
@@ -87,6 +88,9 @@ object AppModule {
 
     @Provides
     fun providePendingSyncDao(db: BookSyncDatabase): PendingSyncDao = db.pendingSyncDao()
+
+    @Provides
+    fun provideUserProgressDao(db: BookSyncDatabase): UserProgressDao = db.userProgressDao()
 
     @Provides
     @Singleton

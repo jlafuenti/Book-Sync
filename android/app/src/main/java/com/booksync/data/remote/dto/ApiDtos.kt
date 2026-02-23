@@ -123,3 +123,33 @@ data class BookmarkResponse(
     val updated_at: String,
     val synced_at: String? = null
 )
+
+// ============ User Progress ============
+
+@Serializable
+data class ProgressUpdateRequest(
+    val book_pair_id: Int? = null,
+    val epub_cfi: String? = null,
+    val epub_chapter: Int? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean? = null,
+    val device_id: String? = null
+)
+
+@Serializable
+data class ProgressResponse(
+    val id: Int,
+    val user_id: Int,
+    val media_type: String,
+    val book_pair_id: Int? = null,
+    val ebook_id: Int? = null,
+    val audiobook_id: Int? = null,
+    val epub_cfi: String? = null,
+    val epub_chapter: Int? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean,
+    val updated_at: String,
+    val device_id: String? = null
+)
