@@ -13,6 +13,9 @@ interface BookPairDao {
     @Query("SELECT * FROM book_pairs ORDER BY ebookTitle")
     fun getAllPairs(): Flow<List<BookPairEntity>>
 
+    @Query("SELECT * FROM book_pairs WHERE ebookDownloaded = 1 OR audiobookDownloaded = 1 ORDER BY ebookTitle")
+    fun getDownloadedPairs(): Flow<List<BookPairEntity>>
+
     @Query("SELECT * FROM book_pairs WHERE id = :pairId")
     suspend fun getPairById(pairId: Int): BookPairEntity?
 
@@ -40,6 +43,9 @@ interface EBookDao {
     @Query("SELECT * FROM ebooks ORDER BY title")
     fun getAllEBooks(): Flow<List<EBookEntity>>
 
+    @Query("SELECT * FROM ebooks WHERE isDownloaded = 1 ORDER BY title")
+    fun getDownloadedEBooks(): Flow<List<EBookEntity>>
+
     @Query("SELECT * FROM ebooks WHERE id = :ebookId")
     suspend fun getEBookById(ebookId: Int): EBookEntity?
 
@@ -48,6 +54,24 @@ interface EBookDao {
 
     @Query("UPDATE ebooks SET isDownloaded = :downloaded WHERE id = :ebookId")
     suspend fun setDownloaded(ebookId: Int, downloaded: Boolean)
+}
+
+@Dao
+interface AudioBookDao {
+    @Query("SELECT * FROM audiobooks ORDER BY title")
+    fun getAllAudioBooks(): Flow<List<AudioBookEntity>>
+
+    @Query("SELECT * FROM audiobooks WHERE isDownloaded = 1 ORDER BY title")
+    fun getDownloadedAudioBooks(): Flow<List<AudioBookEntity>>
+
+    @Query("SELECT * FROM audiobooks WHERE id = :audiobookId")
+    suspend fun getAudioBookById(audiobookId: Int): AudioBookEntity?
+
+    @Upsert
+    suspend fun upsertAudioBooks(audiobooks: List<AudioBookEntity>)
+
+    @Query("UPDATE audiobooks SET isDownloaded = :downloaded WHERE id = :audiobookId")
+    suspend fun setDownloaded(audiobookId: Int, downloaded: Boolean)
 }
 
 @Dao

@@ -1,4 +1,4 @@
-package com.booksync.ui.ebooks
+package com.booksync.ui.audiobooks
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.CheckCircle
@@ -17,24 +16,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.booksync.data.local.entity.EBookEntity
-import java.io.File
+import com.booksync.data.local.entity.AudioBookEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EbooksScreen(
-    onBookSelect: (Int) -> Unit,
+fun AudiobooksScreen(
+    onAudioSelect: (Int) -> Unit,
     onSearchClick: () -> Unit,
-    viewModel: EbooksViewModel = hiltViewModel(),
+    viewModel: AudiobooksViewModel = hiltViewModel(),
 ) {
-    val ebooks by viewModel.ebooks.collectAsState(initial = emptyList())
+    val audiobooks by viewModel.audiobooks.collectAsState(initial = emptyList())
     val refreshing by viewModel.refreshing.collectAsState()
     val downloadingProgress by viewModel.downloadingProgress.collectAsState()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Ebooks", fontWeight = FontWeight.Bold) },
+                title = { Text("Audiobooks", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = onSearchClick) {
                         Icon(Icons.Default.Search, "Search")
@@ -46,7 +44,7 @@ fun EbooksScreen(
             )
         },
     ) { padding ->
-        if (ebooks.isEmpty() && !refreshing) {
+        if (audiobooks.isEmpty() && !refreshing) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -55,10 +53,10 @@ fun EbooksScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
+                Text("🎧", fontSize = MaterialTheme.typography.displayLarge.fontSize)
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "No ebooks yet",
+                    "No audiobooks yet",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -75,13 +73,13 @@ fun EbooksScreen(
                     }
                 }
 
-                items(ebooks) { ebook ->
-                    EbookCard(
-                        ebook = ebook,
-                        downloadStatus = downloadingProgress[ebook.id],
-                        onDownload = { viewModel.downloadEbook(ebook) },
-                        onDelete = { viewModel.deleteEbook(ebook) },
-                        onReadClick = { onBookSelect(ebook.id) },
+                items(audiobooks) { audio ->
+                    AudiobookCard(
+                        audio = audio,
+                        downloadStatus = downloadingProgress[audio.id],
+                        onDownload = { viewModel.downloadAudiobook(audio) },
+                        onDelete = { viewModel.deleteAudiobook(audio) },
+                        onListenClick = { onAudioSelect(audio.id) },
                     )
                 }
             }
@@ -90,25 +88,25 @@ fun EbooksScreen(
 }
 
 @Composable
-fun EbookCard(
-    ebook: EBookEntity,
+fun AudiobookCard(
+    audio: AudioBookEntity,
     downloadStatus: String?,
     onDownload: () -> Unit,
     onDelete: () -> Unit = {},
-    onReadClick: () -> Unit,
+    onListenClick: () -> Unit,
 ) {
     var showManageDialog by remember { mutableStateOf(false) }
 
     if (showManageDialog) {
         AlertDialog(
             onDismissRequest = { showManageDialog = false },
-            title = { Text("Manage Ebook") },
+            title = { Text("Manage Audiobook") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!ebook.isDownloaded) {
-                        TextButton(onClick = { onDownload(); showManageDialog = false }) { Text("Download Ebook") }
+                    if (!audio.isDownloaded) {
+                        TextButton(onClick = { onDownload(); showManageDialog = false }) { Text("Download Audiobook") }
                     } else {
-                        TextButton(onClick = { onDelete(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Ebook") }
+                        TextButton(onClick = { onDelete(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Audiobook") }
                     }
                 }
             },
@@ -123,7 +121,7 @@ fun EbookCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = ebook.title,
+                text = audio.title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
@@ -132,8 +130,8 @@ fun EbookCard(
                     .padding(vertical = 4.dp),
                 color = MaterialTheme.colorScheme.primary
             )
-            val authorText = ebook.author ?: "Unknown Author"
-            val seriesText = ebook.series?.let { "$it #${ebook.seriesIndex ?: "?"} - " } ?: ""
+            val authorText = audio.author ?: "Unknown Author"
+            val seriesText = audio.series?.let { "$it #${audio.seriesIndex ?: "?"} - " } ?: ""
             Text(
                 text = seriesText + authorText,
                 style = MaterialTheme.typography.bodyMedium,
@@ -149,11 +147,11 @@ fun EbookCard(
                 // Formatting chip
                 AssistChip(
                     onClick = { showManageDialog = true },
-                    label = { Text(ebook.format.uppercase()) },
+                    label = { Text(audio.format.uppercase()) },
                     leadingIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("📚")
-                            if (ebook.isDownloaded) {
+                            Text("🎧")
+                            if (audio.isDownloaded) {
                                 Spacer(Modifier.width(4.dp))
                                 Icon(Icons.Default.CheckCircle, null, tint = androidx.compose.ui.graphics.Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
                             }
@@ -162,9 +160,9 @@ fun EbookCard(
                 )
                 
                 // Actions
-                if (ebook.isDownloaded) {
-                    Button(onClick = onReadClick) {
-                        Text("📖 Read")
+                if (audio.isDownloaded) {
+                    Button(onClick = onListenClick) {
+                        Text("🎧 Listen")
                     }
                 } else if (downloadStatus != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

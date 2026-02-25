@@ -42,6 +42,20 @@ data class EBookEntity(
     val isDownloaded: Boolean = false
 )
 
+@Entity(tableName = "audiobooks")
+data class AudioBookEntity(
+    @PrimaryKey val id: Int,
+    val title: String,
+    val author: String?,
+    val filename: String,
+    val durationSeconds: Int?,
+    val format: String,
+    val series: String?,
+    val seriesIndex: Float?,
+    val uploadedAt: String,
+    val isDownloaded: Boolean = false
+)
+
 @Entity(tableName = "sync_points")
 data class SyncPointEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,

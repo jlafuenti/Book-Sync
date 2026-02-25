@@ -5,7 +5,9 @@ import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.*
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,6 +22,7 @@ class BookSyncRepository @Inject constructor(
     private val api: BookSyncApi,
     private val bookPairDao: BookPairDao,
     private val eBookDao: EBookDao,
+    private val audioBookDao: AudioBookDao,
     private val syncPointDao: SyncPointDao,
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
@@ -30,6 +33,9 @@ class BookSyncRepository @Inject constructor(
 
     /** Get all book pairs as a reactive Flow from local cache. */
     fun getPairsFlow(): Flow<List<BookPairEntity>> = bookPairDao.getAllPairs()
+
+    /** Get downloaded book pairs as a reactive Flow from local cache. */
+    fun getDownloadedPairsFlow(): Flow<List<BookPairEntity>> = bookPairDao.getDownloadedPairs()
 
     /** Refresh book pairs from the server and update local cache. */
     suspend fun refreshPairs() {
@@ -61,6 +67,9 @@ class BookSyncRepository @Inject constructor(
     /** Get all ebooks as a reactive Flow from local cache. */
     fun getEbooksFlow(): Flow<List<EBookEntity>> = eBookDao.getAllEBooks()
 
+    /** Get downloaded ebooks as a reactive Flow from local cache. */
+    fun getDownloadedEbooksFlow(): Flow<List<EBookEntity>> = eBookDao.getDownloadedEBooks()
+
     /** Refresh ebooks from the server and update local cache. */
     suspend fun refreshEbooks() {
         val remoteEbooks = api.getEbooks()
@@ -81,6 +90,34 @@ class BookSyncRepository @Inject constructor(
         }
         eBookDao.upsertEBooks(entities)
     }
+
+    /** Get all audiobooks as a reactive Flow from local cache. */
+    fun getAudiobooksFlow(): Flow<List<AudioBookEntity>> = audioBookDao.getAllAudioBooks()
+
+    /** Get downloaded audiobooks as a reactive Flow from local cache. */
+    fun getDownloadedAudiobooksFlow(): Flow<List<AudioBookEntity>> = audioBookDao.getDownloadedAudioBooks()
+
+    /** Refresh audiobooks from the server and update local cache. */
+    suspend fun refreshAudiobooks() {
+        val remoteAudiobooks = api.getAudiobooks()
+        val entities = remoteAudiobooks.map { audio ->
+            val existing = audioBookDao.getAudioBookById(audio.id)
+            AudioBookEntity(
+                id = audio.id,
+                title = audio.title,
+                author = audio.author,
+                filename = audio.filename,
+                durationSeconds = audio.duration_seconds,
+                format = audio.format,
+                series = audio.series,
+                seriesIndex = audio.series_index,
+                uploadedAt = audio.uploaded_at,
+                isDownloaded = existing?.isDownloaded ?: false
+            )
+        }
+        audioBookDao.upsertAudioBooks(entities)
+    }
+
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
         return api.searchLibrary(query)
@@ -89,14 +126,28 @@ class BookSyncRepository @Inject constructor(
     // ============ Downloads ============
 
     /** Download the ebook file for a book pair. */
-    suspend fun downloadEbook(pair: BookPairEntity): File {
+    suspend fun downloadEbook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadEbook(pair.ebookId)
         val dir = File(context.filesDir, "ebooks")
         dir.mkdirs()
         val file = File(dir, pair.ebookFilename)
-        response.body()?.byteStream()?.use { input ->
-            file.outputStream().use { output ->
-                input.copyTo(output)
+        withContext(Dispatchers.IO) {
+            val body = response.body() ?: return@withContext
+            val contentLength = body.contentLength()
+            body.byteStream().use { input ->
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    var bytesCopied = 0L
+                    var bytes = input.read(buffer)
+                    while(bytes >= 0) {
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        if (contentLength > 0) {
+                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                        }
+                        bytes = input.read(buffer)
+                    }
+                }
             }
         }
         bookPairDao.setEbookDownloaded(pair.id, true)
@@ -104,14 +155,28 @@ class BookSyncRepository @Inject constructor(
     }
 
     /** Download a standalone ebook file. */
-    suspend fun downloadStandaloneEbook(ebook: EBookEntity): File {
+    suspend fun downloadStandaloneEbook(ebook: EBookEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadEbook(ebook.id)
         val dir = File(context.filesDir, "ebooks")
         dir.mkdirs()
         val file = File(dir, ebook.filename)
-        response.body()?.byteStream()?.use { input ->
-            file.outputStream().use { output ->
-                input.copyTo(output)
+        withContext(Dispatchers.IO) {
+            val body = response.body() ?: return@withContext
+            val contentLength = body.contentLength()
+            body.byteStream().use { input ->
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    var bytesCopied = 0L
+                    var bytes = input.read(buffer)
+                    while(bytes >= 0) {
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        if (contentLength > 0) {
+                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                        }
+                        bytes = input.read(buffer)
+                    }
+                }
             }
         }
         eBookDao.setDownloaded(ebook.id, true)
@@ -119,17 +184,60 @@ class BookSyncRepository @Inject constructor(
     }
 
     /** Download the audiobook file for a book pair. */
-    suspend fun downloadAudiobook(pair: BookPairEntity): File {
+    suspend fun downloadAudiobook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadAudiobook(pair.audiobookId)
         val dir = File(context.filesDir, "audiobooks")
         dir.mkdirs()
         val file = File(dir, pair.audiobookFilename)
-        response.body()?.byteStream()?.use { input ->
-            file.outputStream().use { output ->
-                input.copyTo(output)
+        withContext(Dispatchers.IO) {
+            val body = response.body() ?: return@withContext
+            val contentLength = body.contentLength()
+            body.byteStream().use { input ->
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    var bytesCopied = 0L
+                    var bytes = input.read(buffer)
+                    while(bytes >= 0) {
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        if (contentLength > 0) {
+                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                        }
+                        bytes = input.read(buffer)
+                    }
+                }
             }
         }
         bookPairDao.setAudiobookDownloaded(pair.id, true)
+        return file
+    }
+
+    /** Download a standalone audiobook file. */
+    suspend fun downloadStandaloneAudiobook(audio: AudioBookEntity, onProgress: (Int) -> Unit = {}): File {
+        val response = api.downloadAudiobook(audio.id)
+        val dir = File(context.filesDir, "audiobooks")
+        dir.mkdirs()
+        val file = File(dir, audio.filename)
+        withContext(Dispatchers.IO) {
+            val body = response.body() ?: return@withContext
+            val contentLength = body.contentLength()
+            body.byteStream().use { input ->
+                file.outputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    var bytesCopied = 0L
+                    var bytes = input.read(buffer)
+                    while(bytes >= 0) {
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        if (contentLength > 0) {
+                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                        }
+                        bytes = input.read(buffer)
+                    }
+                }
+            }
+        }
+        audioBookDao.setDownloaded(audio.id, true)
         return file
     }
 
@@ -155,13 +263,31 @@ class BookSyncRepository @Inject constructor(
         bookPairDao.setSyncMapDownloaded(pairId, true)
     }
 
-    /** Get local file path for a downloaded ebook. */
     fun getEbookFile(pair: BookPairEntity): File =
         File(context.filesDir, "ebooks/${pair.ebookFilename}")
 
-    /** Get local file path for a downloaded audiobook. */
     fun getAudiobookFile(pair: BookPairEntity): File =
         File(context.filesDir, "audiobooks/${pair.audiobookFilename}")
+
+    suspend fun deleteEbook(pair: BookPairEntity) {
+        getEbookFile(pair).delete()
+        bookPairDao.setEbookDownloaded(pair.id, false)
+    }
+
+    suspend fun deleteAudiobook(pair: BookPairEntity) {
+        getAudiobookFile(pair).delete()
+        bookPairDao.setAudiobookDownloaded(pair.id, false)
+    }
+
+    suspend fun deleteStandaloneEbook(ebook: EBookEntity) {
+        File(context.filesDir, "ebooks/${ebook.filename}").delete()
+        eBookDao.setDownloaded(ebook.id, false)
+    }
+
+    suspend fun deleteStandaloneAudiobook(audio: AudioBookEntity) {
+        File(context.filesDir, "audiobooks/${audio.filename}").delete()
+        audioBookDao.setDownloaded(audio.id, false)
+    }
 
     // ============ Sync Points ============
 
