@@ -12,10 +12,14 @@ import com.booksync.ui.library.SearchScreen
 import com.booksync.ui.reader.ReaderScreen
 import com.booksync.ui.player.PlayerScreen
 import com.booksync.ui.ebooks.EbooksScreen
+import com.booksync.ui.audiobooks.AudiobooksScreen
+import com.booksync.ui.downloaded.DownloadedScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material3.*
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -76,6 +80,34 @@ fun BookSyncNavigation() {
                                 }
                             }
                         )
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.Headphones, contentDescription = "Audiobooks") },
+                            label = { Text("Audiobooks") },
+                            selected = currentRoute == "audiobooks",
+                            onClick = {
+                                bottomNavController.navigate("audiobooks") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.DownloadDone, contentDescription = "Downloaded") },
+                            label = { Text("Downloaded") },
+                            selected = currentRoute == "downloaded",
+                            onClick = {
+                                bottomNavController.navigate("downloaded") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
                     }
                 }
             ) { padding ->
@@ -100,6 +132,23 @@ fun BookSyncNavigation() {
                             onSearchClick = {
                                 navController.navigate("search")
                             }
+                        )
+                    }
+                    composable("audiobooks") {
+                        AudiobooksScreen(
+                            onAudioSelect = { audiobookId ->
+                            },
+                            onSearchClick = {
+                                navController.navigate("search")
+                            }
+                        )
+                    }
+                    composable("downloaded") {
+                        DownloadedScreen(
+                            onPairBookSelect = { pairId -> navController.navigate("reader/$pairId") },
+                            onPairAudioSelect = { pairId -> navController.navigate("player/$pairId") },
+                            onEbookSelect = { ebookId -> },
+                            onAudiobookSelect = { audiobookId -> }
                         )
                     }
                 }

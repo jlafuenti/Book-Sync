@@ -32,8 +32,8 @@ class LibraryViewModel @Inject constructor(
     private val _refreshing = MutableStateFlow(false)
     val refreshing = _refreshing.asStateFlow()
 
-    private val _downloading = MutableStateFlow<Set<Int>>(emptySet())
-    val downloading = _downloading.asStateFlow()
+    private val _downloadingProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
+    val downloadingProgress = _downloadingProgress.asStateFlow()
 
     init {
         refresh()
@@ -51,15 +51,64 @@ class LibraryViewModel @Inject constructor(
 
     fun downloadAll(pair: BookPairEntity) {
         viewModelScope.launch {
-            _downloading.value = _downloading.value + pair.id
+            _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting download...")
             try {
-                if (!pair.ebookDownloaded) repository.downloadEbook(pair)
-                if (!pair.audiobookDownloaded) repository.downloadAudiobook(pair)
+                if (!pair.ebookDownloaded) {
+                    repository.downloadEbook(pair) { p ->
+                        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Ebook ($p%)...")
+                    }
+                }
+                if (!pair.audiobookDownloaded) {
+                    repository.downloadAudiobook(pair) { p ->
+                        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Audiobook ($p%)...")
+                    }
+                }
                 if (!pair.syncMapDownloaded && pair.status == "synced") {
+                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Sync Data...")
                     repository.downloadSyncMap(pair.id)
                 }
             } catch (_: Exception) {}
-            _downloading.value = _downloading.value - pair.id
+            _downloadingProgress.value = _downloadingProgress.value - pair.id
+        }
+    }
+
+    fun downloadEbookOnly(pair: BookPairEntity) {
+        viewModelScope.launch {
+            try {
+                _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Ebook download...")
+                repository.downloadEbook(pair) { p ->
+                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Ebook ($p%)...")
+                }
+            } catch (_: Exception) {}
+            _downloadingProgress.value = _downloadingProgress.value - pair.id
+        }
+    }
+
+    fun downloadAudiobookOnly(pair: BookPairEntity) {
+        viewModelScope.launch {
+            try {
+                _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Audiobook download...")
+                repository.downloadAudiobook(pair) { p ->
+                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Audiobook ($p%)...")
+                }
+            } catch (_: Exception) {}
+            _downloadingProgress.value = _downloadingProgress.value - pair.id
+        }
+    }
+
+    fun deleteEbook(pair: BookPairEntity) {
+        viewModelScope.launch {
+            try {
+                repository.deleteEbook(pair)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun deleteAudiobook(pair: BookPairEntity) {
+        viewModelScope.launch {
+            try {
+                repository.deleteAudiobook(pair)
+            } catch (_: Exception) {}
         }
     }
 }
@@ -74,7 +123,7 @@ fun LibraryScreen(
 ) {
     val pairs by viewModel.pairs.collectAsState(initial = emptyList())
     val refreshing by viewModel.refreshing.collectAsState()
-    val downloading by viewModel.downloading.collectAsState()
+    val downloadingProgress by viewModel.downloadingProgress.collectAsState()
 
     Scaffold(
         topBar = {
@@ -130,8 +179,12 @@ fun LibraryScreen(
                 items(pairs) { pair ->
                     BookPairCard(
                         pair = pair,
-                        isDownloading = pair.id in downloading,
-                        onDownload = { viewModel.downloadAll(pair) },
+                        downloadStatus = downloadingProgress[pair.id],
+                        onDownloadAll = { viewModel.downloadAll(pair) },
+                        onDownloadEbook = { viewModel.downloadEbookOnly(pair) },
+                        onDownloadAudiobook = { viewModel.downloadAudiobookOnly(pair) },
+                        onDeleteEbook = { viewModel.deleteEbook(pair) },
+                        onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
                         onReadClick = { onBookSelect(pair.id) },
                         onListenClick = { onAudioSelect(pair.id) },
                     )
@@ -144,11 +197,41 @@ fun LibraryScreen(
 @Composable
 fun BookPairCard(
     pair: BookPairEntity,
-    isDownloading: Boolean,
-    onDownload: () -> Unit,
+    downloadStatus: String?,
+    onDownloadAll: () -> Unit,
+    onDownloadEbook: () -> Unit = {},
+    onDownloadAudiobook: () -> Unit = {},
+    onDeleteEbook: () -> Unit = {},
+    onDeleteAudiobook: () -> Unit = {},
     onReadClick: () -> Unit,
     onListenClick: () -> Unit,
 ) {
+    var showManageDialog by remember { mutableStateOf(false) }
+
+    if (showManageDialog) {
+        AlertDialog(
+            onDismissRequest = { showManageDialog = false },
+            title = { Text("Manage Book Pair") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!pair.ebookDownloaded) {
+                        TextButton(onClick = { onDownloadEbook(); showManageDialog = false }) { Text("Download Ebook") }
+                    } else {
+                        TextButton(onClick = { onDeleteEbook(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Ebook") }
+                    }
+                    if (!pair.audiobookDownloaded) {
+                        TextButton(onClick = { onDownloadAudiobook(); showManageDialog = false }) { Text("Download Audiobook") }
+                    } else {
+                        TextButton(onClick = { onDeleteAudiobook(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Audiobook") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showManageDialog = false }) { Text("Close") }
+            }
+        )
+    }
+
     val isReady = pair.ebookDownloaded && pair.audiobookDownloaded && pair.syncMapDownloaded
 
     ElevatedCard(
@@ -160,6 +243,11 @@ fun BookPairCard(
                 text = pair.ebookTitle,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showManageDialog = true }
+                    .padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.primary
             )
             pair.ebookAuthor?.let {
                 Text(
@@ -174,14 +262,30 @@ fun BookPairCard(
             // Status chips
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(
-                    onClick = {},
+                    onClick = { showManageDialog = true },
                     label = { Text(pair.ebookFormat) },
-                    leadingIcon = { Text("📚") },
+                    leadingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("📚")
+                            if (pair.ebookDownloaded) {
+                                Spacer(Modifier.width(4.dp))
+                                Icon(Icons.Default.CheckCircle, null, tint = androidx.compose.ui.graphics.Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
                 )
                 AssistChip(
-                    onClick = {},
+                    onClick = { showManageDialog = true },
                     label = { Text(pair.audiobookFormat) },
-                    leadingIcon = { Text("🎧") },
+                    leadingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🎧")
+                            if (pair.audiobookDownloaded) {
+                                Spacer(Modifier.width(4.dp))
+                                Icon(Icons.Default.CheckCircle, null, tint = androidx.compose.ui.graphics.Color(0xFF4CAF50), modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
                 )
                 if (pair.status == "synced") {
                     AssistChip(
@@ -198,33 +302,37 @@ fun BookPairCard(
             Spacer(Modifier.height(8.dp))
 
             // Download / action bar
-            if (isDownloading) {
+            if (downloadStatus != null) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Text("Downloading...", style = MaterialTheme.typography.bodySmall)
+                    Text(downloadStatus, style = MaterialTheme.typography.bodySmall)
                 }
-            } else if (!isReady) {
-                FilledTonalButton(onClick = onDownload) {
+            } else if (!pair.ebookDownloaded && !pair.audiobookDownloaded) {
+                FilledTonalButton(onClick = onDownloadAll) {
                     Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Download for Offline Use")
+                    Text("Download All for Offline Use")
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(
-                        onClick = onReadClick,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("📖 Read")
+                    if (pair.ebookDownloaded) {
+                        FilledTonalButton(
+                            onClick = onReadClick,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("📖 Read")
+                        }
                     }
-                    Button(
-                        onClick = onListenClick,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("🎧 Listen")
+                    if (pair.audiobookDownloaded) {
+                        Button(
+                            onClick = onListenClick,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("🎧 Listen")
+                        }
                     }
                 }
             }

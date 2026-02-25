@@ -1,21 +1,20 @@
-package com.booksync.ui.ebooks
+package com.booksync.ui.audiobooks
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.booksync.data.local.entity.EBookEntity
+import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.repository.BookSyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
-class EbooksViewModel @Inject constructor(
+class AudiobooksViewModel @Inject constructor(
     private val repository: BookSyncRepository,
 ) : ViewModel() {
-    val ebooks = repository.getEbooksFlow()
+    val audiobooks = repository.getAudiobooksFlow()
 
     private val _refreshing = MutableStateFlow(false)
     val refreshing = _refreshing.asStateFlow()
@@ -31,30 +30,30 @@ class EbooksViewModel @Inject constructor(
         viewModelScope.launch {
             _refreshing.value = true
             try {
-                repository.refreshEbooks()
+                repository.refreshAudiobooks()
             } catch (_: Exception) {}
             _refreshing.value = false
         }
     }
 
-    fun downloadEbook(ebook: EBookEntity) {
+    fun downloadAudiobook(audiobook: AudioBookEntity) {
         viewModelScope.launch {
-            _downloadingProgress.value = _downloadingProgress.value + (ebook.id to "Starting download...")
+            _downloadingProgress.value = _downloadingProgress.value + (audiobook.id to "Starting download...")
             try {
-                if (!ebook.isDownloaded) {
-                    repository.downloadStandaloneEbook(ebook) { p ->
-                        _downloadingProgress.value = _downloadingProgress.value + (ebook.id to "Downloading Ebook ($p%)...")
+                if (!audiobook.isDownloaded) {
+                    repository.downloadStandaloneAudiobook(audiobook) { p ->
+                        _downloadingProgress.value = _downloadingProgress.value + (audiobook.id to "Downloading Audiobook ($p%)...")
                     }
                 }
             } catch (_: Exception) {}
-            _downloadingProgress.value = _downloadingProgress.value - ebook.id
+            _downloadingProgress.value = _downloadingProgress.value - audiobook.id
         }
     }
 
-    fun deleteEbook(ebook: EBookEntity) {
+    fun deleteAudiobook(audiobook: AudioBookEntity) {
         viewModelScope.launch {
             try {
-                repository.deleteStandaloneEbook(ebook)
+                repository.deleteStandaloneAudiobook(audiobook)
             } catch (_: Exception) {}
         }
     }
