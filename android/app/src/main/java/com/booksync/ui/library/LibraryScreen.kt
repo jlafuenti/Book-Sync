@@ -119,6 +119,7 @@ fun LibraryScreen(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onSearchClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val pairs by viewModel.pairs.collectAsState(initial = emptyList())
@@ -132,6 +133,9 @@ fun LibraryScreen(
                 actions = {
                     IconButton(onClick = onSearchClick) {
                         Icon(Icons.Default.Search, "Search")
+                    }
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(Icons.Default.Settings, "Settings")
                     }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Default.Refresh, "Refresh")

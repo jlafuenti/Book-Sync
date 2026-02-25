@@ -14,6 +14,7 @@ import com.booksync.ui.player.PlayerScreen
 import com.booksync.ui.ebooks.EbooksScreen
 import com.booksync.ui.audiobooks.AudiobooksScreen
 import com.booksync.ui.downloaded.DownloadedScreen
+import com.booksync.ui.settings.SettingsScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LibraryBooks
@@ -122,6 +123,9 @@ fun BookSyncNavigation() {
                             },
                             onSearchClick = {
                                 navController.navigate("search")
+                            },
+                            onSettingsClick = {
+                                navController.navigate("settings")
                             }
                         )
                     }
@@ -164,6 +168,12 @@ fun BookSyncNavigation() {
                 onAudioSelect = { pairId ->
                     navController.navigate("player/$pairId")
                 }
+            )
+        }
+
+        composable("settings") {
+            SettingsScreen(
+                onBack = { navController.popBackStack() }
             )
         }
 
