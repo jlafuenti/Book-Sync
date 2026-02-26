@@ -3,6 +3,7 @@ package com.booksync.ui.audiobooks
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.booksync.data.local.entity.AudioBookEntity
+import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,12 @@ class AudiobooksViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
+    private val _unpairedEbooks = MutableStateFlow<List<EBookEntity>>(emptyList())
+    val unpairedEbooks = _unpairedEbooks.asStateFlow()
+
+    private val _pairingError = MutableStateFlow<String?>(null)
+    val pairingError = _pairingError.asStateFlow()
+
     init {
         refresh()
     }
@@ -34,6 +41,30 @@ class AudiobooksViewModel @Inject constructor(
             } catch (_: Exception) {}
             _refreshing.value = false
         }
+    }
+
+    fun loadUnpairedEbooks() {
+        viewModelScope.launch {
+            try {
+                _unpairedEbooks.value = repository.getUnpairedEbooks()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun pairWithEbook(audiobookId: Int, ebookId: Int) {
+        viewModelScope.launch {
+            try {
+                repository.createPair(ebookId, audiobookId)
+                _pairingError.value = null
+                refresh()
+            } catch (e: Exception) {
+                _pairingError.value = e.message
+            }
+        }
+    }
+
+    fun clearPairingError() {
+        _pairingError.value = null
     }
 
     fun downloadAudiobook(audiobook: AudioBookEntity) {

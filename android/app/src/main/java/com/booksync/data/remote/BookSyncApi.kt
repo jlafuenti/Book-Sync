@@ -37,6 +37,12 @@ interface BookSyncApi {
     @POST("api/library/scan")
     suspend fun scanLibrary(): Response<Unit>
 
+    @POST("api/library/pairs")
+    suspend fun createPair(@Body request: CreatePairRequest): BookPairResponse
+
+    @DELETE("api/library/pairs/{pairId}")
+    suspend fun deletePair(@Path("pairId") pairId: Int): Response<Unit>
+
     // ============ Search ============
 
     @GET("api/library/search")

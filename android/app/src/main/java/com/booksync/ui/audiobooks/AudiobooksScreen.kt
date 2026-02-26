@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,6 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.local.entity.AudioBookEntity
+import com.booksync.data.local.entity.EBookEntity
+import kotlinx.coroutines.flow.MutableStateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +83,8 @@ fun AudiobooksScreen(
                         onDownload = { viewModel.downloadAudiobook(audio) },
                         onDelete = { viewModel.deleteAudiobook(audio) },
                         onListenClick = { onAudioSelect(audio.id) },
+                        onPairClick = { viewModel.loadUnpairedEbooks() },
+                        viewModel = viewModel,
                     )
                 }
             }
@@ -87,6 +92,7 @@ fun AudiobooksScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudiobookCard(
     audio: AudioBookEntity,
@@ -94,8 +100,15 @@ fun AudiobookCard(
     onDownload: () -> Unit,
     onDelete: () -> Unit = {},
     onListenClick: () -> Unit,
+    onPairClick: () -> Unit = {},
+    viewModel: AudiobooksViewModel? = null,
 ) {
     var showManageDialog by remember { mutableStateOf(false) }
+    var showPairSheet by remember { mutableStateOf(false) }
+    var pairSearchQuery by remember { mutableStateOf("") }
+
+    val unpairedEbooks by (viewModel?.unpairedEbooks ?: MutableStateFlow(emptyList<EBookEntity>())).collectAsState()
+    val pairingError by (viewModel?.pairingError ?: MutableStateFlow<String?>(null)).collectAsState()
 
     if (showManageDialog) {
         AlertDialog(
@@ -108,12 +121,124 @@ fun AudiobookCard(
                     } else {
                         TextButton(onClick = { onDelete(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Audiobook") }
                     }
+                    if (viewModel != null) {
+                        TextButton(onClick = {
+                            showManageDialog = false
+                            onPairClick()
+                            showPairSheet = true
+                        }) {
+                            Icon(Icons.Default.Link, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("📚 Pair with Ebook")
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showManageDialog = false }) { Text("Close") }
             }
         )
+    }
+
+    // Pairing bottom sheet
+    if (showPairSheet && viewModel != null) {
+        val filteredEbooks = if (pairSearchQuery.isBlank()) {
+            unpairedEbooks
+        } else {
+            val q = pairSearchQuery.lowercase()
+            unpairedEbooks.filter {
+                it.title.lowercase().contains(q) ||
+                (it.author?.lowercase()?.contains(q) == true) ||
+                (it.series?.lowercase()?.contains(q) == true)
+            }
+        }
+
+        ModalBottomSheet(
+            onDismissRequest = {
+                showPairSheet = false
+                pairSearchQuery = ""
+                viewModel?.clearPairingError()
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 32.dp)
+            ) {
+                Text(
+                    "Pair \"${audio.title}\"",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Select an ebook to pair with this audiobook.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                )
+
+                if (pairingError != null) {
+                    Text(
+                        "Error: $pairingError",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+
+                OutlinedTextField(
+                    value = pairSearchQuery,
+                    onValueChange = { pairSearchQuery = it },
+                    label = { Text("Search ebooks...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Default.Search, null) }
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                if (unpairedEbooks.isEmpty()) {
+                    Text(
+                        "No unpaired ebooks available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 24.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(filteredEbooks) { ebook ->
+                            ListItem(
+                                headlineContent = { Text(ebook.title, fontWeight = FontWeight.Medium) },
+                                supportingContent = {
+                                    val parts = listOfNotNull(
+                                        ebook.author,
+                                        ebook.series?.let { s -> "$s${ebook.seriesIndex?.let { " #${it.toInt()}" } ?: ""}" }
+                                    )
+                                    if (parts.isNotEmpty()) {
+                                        Text(parts.joinToString(" · "))
+                                    }
+                                },
+                                trailingContent = {
+                                    AssistChip(
+                                        onClick = {},
+                                        label = { Text(ebook.format.uppercase(), style = MaterialTheme.typography.labelSmall) }
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    viewModel.pairWithEbook(audio.id, ebook.id)
+                                    showPairSheet = false
+                                    pairSearchQuery = ""
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     ElevatedCard(

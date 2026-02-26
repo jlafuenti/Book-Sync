@@ -118,6 +118,34 @@ class BookSyncRepository @Inject constructor(
         audioBookDao.upsertAudioBooks(entities)
     }
 
+    // ============ Pairing ============
+
+    /** Create a new book pair on the server and refresh local cache. */
+    suspend fun createPair(ebookId: Int, audiobookId: Int) {
+        api.createPair(CreatePairRequest(ebook_id = ebookId, audiobook_id = audiobookId))
+        refreshPairs()
+    }
+
+    /** Delete a book pair on the server and refresh local cache. */
+    suspend fun deletePair(pairId: Int) {
+        api.deletePair(pairId)
+        bookPairDao.deletePairById(pairId)
+    }
+
+    /** Get unpaired ebooks (ebooks not in any pair). */
+    suspend fun getUnpairedEbooks(): List<EBookEntity> {
+        val allEbooks = eBookDao.getAllEBooksOnce()
+        val pairedEbookIds = bookPairDao.getAllPairsOnce().map { it.ebookId }.toSet()
+        return allEbooks.filter { it.id !in pairedEbookIds }
+    }
+
+    /** Get unpaired audiobooks (audiobooks not in any pair). */
+    suspend fun getUnpairedAudiobooks(): List<AudioBookEntity> {
+        val allAudiobooks = audioBookDao.getAllAudioBooksOnce()
+        val pairedAudiobookIds = bookPairDao.getAllPairsOnce().map { it.audiobookId }.toSet()
+        return allAudiobooks.filter { it.id !in pairedAudiobookIds }
+    }
+
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
         return api.searchLibrary(query)
