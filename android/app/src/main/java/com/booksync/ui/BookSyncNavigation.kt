@@ -15,6 +15,7 @@ import com.booksync.ui.ebooks.EbooksScreen
 import com.booksync.ui.audiobooks.AudiobooksScreen
 import com.booksync.ui.downloaded.DownloadedScreen
 import com.booksync.ui.settings.SettingsScreen
+import com.booksync.ui.series.SeriesScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LibraryBooks
@@ -109,6 +110,20 @@ fun BookSyncNavigation() {
                                 }
                             }
                         )
+                        NavigationBarItem(
+                            icon = { Text("📖") },
+                            label = { Text("Series") },
+                            selected = currentRoute == "series",
+                            onClick = {
+                                bottomNavController.navigate("series") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
                     }
                 }
             ) { padding ->
@@ -153,6 +168,11 @@ fun BookSyncNavigation() {
                             onPairAudioSelect = { pairId -> navController.navigate("player/$pairId") },
                             onEbookSelect = { ebookId -> },
                             onAudiobookSelect = { audiobookId -> }
+                        )
+                    }
+                    composable("series") {
+                        SeriesScreen(
+                            onPairSelect = { pairId -> navController.navigate("reader/$pairId") },
                         )
                     }
                 }
