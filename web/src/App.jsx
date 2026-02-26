@@ -7,6 +7,7 @@ import PairsPage from './pages/PairsPage'
 import TranscriptionPage from './pages/TranscriptionPage'
 import TranscriptionEditorPage from './pages/TranscriptionEditorPage'
 import SystemPage from './pages/SystemPage'
+import SeriesPage from './pages/SeriesPage'
 
 function App() {
     const [user, setUser] = useState(null)
@@ -71,6 +72,7 @@ function App() {
                         <div className="nav-sub-group">
                             <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
                             <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
+                            <Link to="/library/series" className={subNavClass('/library/series')}>📖 Series</Link>
                         </div>
                     )}
 
@@ -124,6 +126,7 @@ function App() {
                     {/* Library routes */}
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
+                    <Route path="/library/series" element={<SeriesPage />} />
 
                     {/* Book Pairs routes */}
                     <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />

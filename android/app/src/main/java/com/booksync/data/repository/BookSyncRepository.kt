@@ -146,6 +146,15 @@ class BookSyncRepository @Inject constructor(
         return allAudiobooks.filter { it.id !in pairedAudiobookIds }
     }
 
+    /** Get a single pair by ID. */
+    suspend fun getPairById(pairId: Int): BookPairEntity? = bookPairDao.getPairById(pairId)
+
+    /** Get a single ebook by ID. */
+    suspend fun getEbookById(ebookId: Int): EBookEntity? = eBookDao.getEBookById(ebookId)
+
+    /** Get a single audiobook by ID. */
+    suspend fun getAudiobookById(audiobookId: Int): AudioBookEntity? = audioBookDao.getAudioBookById(audiobookId)
+
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
         return api.searchLibrary(query)
