@@ -83,6 +83,12 @@ data class BookPairResponse(
     val synced_at: String? = null
 )
 
+@Serializable
+data class CreatePairRequest(
+    val ebook_id: Int,
+    val audiobook_id: Int
+)
+
 // ============ Search ============
 
 @Serializable

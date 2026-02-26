@@ -111,6 +111,15 @@ class LibraryViewModel @Inject constructor(
             } catch (_: Exception) {}
         }
     }
+
+    fun deletePair(pair: BookPairEntity) {
+        viewModelScope.launch {
+            try {
+                repository.deletePair(pair.id)
+                refresh()
+            } catch (_: Exception) {}
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -189,6 +198,7 @@ fun LibraryScreen(
                         onDownloadAudiobook = { viewModel.downloadAudiobookOnly(pair) },
                         onDeleteEbook = { viewModel.deleteEbook(pair) },
                         onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
+                        onDeletePair = { viewModel.deletePair(pair) },
                         onReadClick = { onBookSelect(pair.id) },
                         onListenClick = { onAudioSelect(pair.id) },
                     )
@@ -207,10 +217,36 @@ fun BookPairCard(
     onDownloadAudiobook: () -> Unit = {},
     onDeleteEbook: () -> Unit = {},
     onDeleteAudiobook: () -> Unit = {},
+    onDeletePair: () -> Unit = {},
     onReadClick: () -> Unit,
     onListenClick: () -> Unit,
 ) {
     var showManageDialog by remember { mutableStateOf(false) }
+    var showUnlinkConfirm by remember { mutableStateOf(false) }
+
+    if (showUnlinkConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUnlinkConfirm = false },
+            icon = { Icon(Icons.Default.LinkOff, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Unlink Pair?") },
+            text = {
+                Text("This will unlink the ebook and audiobook. The files themselves will not be deleted — they will appear as unpaired items in their respective tabs.")
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnlinkConfirm = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUnlinkConfirm = false
+                        showManageDialog = false
+                        onDeletePair()
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Unlink") }
+            }
+        )
+    }
 
     if (showManageDialog) {
         AlertDialog(
@@ -227,6 +263,15 @@ fun BookPairCard(
                         TextButton(onClick = { onDownloadAudiobook(); showManageDialog = false }) { Text("Download Audiobook") }
                     } else {
                         TextButton(onClick = { onDeleteAudiobook(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Audiobook") }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    TextButton(
+                        onClick = { showUnlinkConfirm = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.LinkOff, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Unlink Pair")
                     }
                 }
             },
