@@ -12,6 +12,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -35,6 +37,9 @@ class LibraryViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError = _downloadError.asStateFlow()
+
     init {
         refresh()
     }
@@ -47,6 +52,10 @@ class LibraryViewModel @Inject constructor(
             } catch (_: Exception) {}
             _refreshing.value = false
         }
+    }
+
+    fun clearDownloadError() {
+        _downloadError.value = null
     }
 
     fun downloadAll(pair: BookPairEntity) {
@@ -67,7 +76,9 @@ class LibraryViewModel @Inject constructor(
                     _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Sync Data...")
                     repository.downloadSyncMap(pair.id)
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                _downloadError.value = e.message ?: "Download failed"
+            }
             _downloadingProgress.value = _downloadingProgress.value - pair.id
         }
     }
@@ -79,7 +90,9 @@ class LibraryViewModel @Inject constructor(
                 repository.downloadEbook(pair) { p ->
                     _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Ebook ($p%)...")
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                _downloadError.value = e.message ?: "Download failed"
+            }
             _downloadingProgress.value = _downloadingProgress.value - pair.id
         }
     }
@@ -91,7 +104,9 @@ class LibraryViewModel @Inject constructor(
                 repository.downloadAudiobook(pair) { p ->
                     _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Audiobook ($p%)...")
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                _downloadError.value = e.message ?: "Download failed"
+            }
             _downloadingProgress.value = _downloadingProgress.value - pair.id
         }
     }
@@ -134,6 +149,15 @@ fun LibraryScreen(
     val pairs by viewModel.pairs.collectAsState(initial = emptyList())
     val refreshing by viewModel.refreshing.collectAsState()
     val downloadingProgress by viewModel.downloadingProgress.collectAsState()
+    val downloadError by viewModel.downloadError.collectAsState()
+
+    val context = LocalContext.current
+    LaunchedEffect(downloadError) {
+        if (downloadError != null) {
+            Toast.makeText(context, "Download failed: $downloadError", Toast.LENGTH_LONG).show()
+            viewModel.clearDownloadError()
+        }
+    }
 
     Scaffold(
         topBar = {

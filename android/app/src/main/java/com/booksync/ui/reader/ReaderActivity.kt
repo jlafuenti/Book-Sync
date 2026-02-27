@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import org.readium.r2.navigator.preferences.Theme
+import org.readium.r2.navigator.preferences.FontFamily
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
@@ -55,6 +56,9 @@ class ReaderActivity : AppCompatActivity() {
         private const val PREFS_NAME = "reader_display"
         private const val KEY_FONT_SIZE = "font_size"
         private const val KEY_THEME = "theme"
+        private const val KEY_FONT_FAMILY = "font_family"
+        private const val KEY_LINE_SPACING = "line_spacing"
+        private const val KEY_MARGINS = "margins"
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -395,12 +399,35 @@ class ReaderActivity : AppCompatActivity() {
             "dark" -> Theme.DARK
             else -> null
         }
-        currentPreferences = EpubPreferences(fontSize = fontSize, theme = theme)
+        val fontFamilyName = prefs.getString(KEY_FONT_FAMILY, null)
+        val fontFamily = when (fontFamilyName) {
+            "serif" -> FontFamily.SERIF
+            "sans-serif" -> FontFamily.SANS_SERIF
+            "cursive" -> FontFamily.CURSIVE
+            "monospace" -> FontFamily.MONOSPACE
+            "system" -> null // Default
+            else -> null
+        }
+        val lineSpacingRaw = prefs.getFloat(KEY_LINE_SPACING, -1f)
+        val lineSpacing = if (lineSpacingRaw > 0) lineSpacingRaw.toDouble() else null
+        
+        val marginsRaw = prefs.getFloat(KEY_MARGINS, -1f)
+        val margins = if (marginsRaw > 0) marginsRaw.toDouble() else null
+
+        currentPreferences = EpubPreferences(
+            fontSize = fontSize,
+            theme = theme,
+            fontFamily = fontFamily,
+            lineHeight = lineSpacing,
+            pageMargins = margins,
+            publisherStyles = false
+        )
     }
 
     private fun savePreferences() {
         val editor = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
         editor.putFloat(KEY_FONT_SIZE, (currentPreferences.fontSize ?: 1.0).toFloat())
+        
         val themeName = when (currentPreferences.theme) {
             Theme.LIGHT -> "light"
             Theme.SEPIA -> "sepia"
@@ -409,6 +436,29 @@ class ReaderActivity : AppCompatActivity() {
         }
         if (themeName != null) editor.putString(KEY_THEME, themeName)
         else editor.remove(KEY_THEME)
+
+        val fontFamilyName = when (currentPreferences.fontFamily) {
+            FontFamily.SERIF -> "serif"
+            FontFamily.SANS_SERIF -> "sans-serif"
+            FontFamily.CURSIVE -> "cursive"
+            FontFamily.MONOSPACE -> "monospace"
+            else -> null
+        }
+        if (fontFamilyName != null) editor.putString(KEY_FONT_FAMILY, fontFamilyName)
+        else editor.remove(KEY_FONT_FAMILY)
+
+        if (currentPreferences.lineHeight != null) {
+            editor.putFloat(KEY_LINE_SPACING, currentPreferences.lineHeight!!.toFloat())
+        } else {
+            editor.remove(KEY_LINE_SPACING)
+        }
+
+        if (currentPreferences.pageMargins != null) {
+            editor.putFloat(KEY_MARGINS, currentPreferences.pageMargins!!.toFloat())
+        } else {
+            editor.remove(KEY_MARGINS)
+        }
+
         editor.apply()
     }
 
@@ -423,9 +473,22 @@ class ReaderActivity : AppCompatActivity() {
         val fontSizeText = dialogView.findViewById<TextView>(R.id.text_font_size)
         val btnDecrease = dialogView.findViewById<View>(R.id.btn_font_decrease)
         val btnIncrease = dialogView.findViewById<View>(R.id.btn_font_increase)
-        val btnLight = dialogView.findViewById<View>(R.id.btn_theme_light)
-        val btnSepia = dialogView.findViewById<View>(R.id.btn_theme_sepia)
-        val btnDark = dialogView.findViewById<View>(R.id.btn_theme_dark)
+        
+        val btnThemeLight = dialogView.findViewById<View>(R.id.btn_theme_light)
+        val btnThemeSepia = dialogView.findViewById<View>(R.id.btn_theme_sepia)
+        val btnThemeDark = dialogView.findViewById<View>(R.id.btn_theme_dark)
+
+        val btnFontSystem = dialogView.findViewById<View>(R.id.btn_font_system)
+        val btnFontSerif = dialogView.findViewById<View>(R.id.btn_font_serif)
+        val btnFontSans = dialogView.findViewById<View>(R.id.btn_font_sans)
+
+        val btnSpacing10 = dialogView.findViewById<View>(R.id.btn_spacing_10)
+        val btnSpacing15 = dialogView.findViewById<View>(R.id.btn_spacing_15)
+        val btnSpacing20 = dialogView.findViewById<View>(R.id.btn_spacing_20)
+
+        val btnMarginNarrow = dialogView.findViewById<View>(R.id.btn_margin_narrow)
+        val btnMarginNormal = dialogView.findViewById<View>(R.id.btn_margin_normal)
+        val btnMarginWide = dialogView.findViewById<View>(R.id.btn_margin_wide)
 
         // Show current size
         val currentSize = currentPreferences.fontSize ?: 1.0
@@ -451,21 +514,45 @@ class ReaderActivity : AppCompatActivity() {
             savePreferences()
         }
 
-        btnLight.setOnClickListener {
-            currentPreferences = currentPreferences.copy(theme = Theme.LIGHT)
+        // Theme Setters
+        fun updateTheme(theme: Theme?) {
+            currentPreferences = currentPreferences.copy(theme = theme)
             nav.submitPreferences(currentPreferences)
             savePreferences()
         }
-        btnSepia.setOnClickListener {
-            currentPreferences = currentPreferences.copy(theme = Theme.SEPIA)
+        btnThemeLight.setOnClickListener { updateTheme(Theme.LIGHT) }
+        btnThemeSepia.setOnClickListener { updateTheme(Theme.SEPIA) }
+        btnThemeDark.setOnClickListener { updateTheme(Theme.DARK) }
+
+        // Font Family Setters
+        fun updateFontFamily(fontFamily: FontFamily?) {
+            currentPreferences = currentPreferences.copy(fontFamily = fontFamily)
             nav.submitPreferences(currentPreferences)
             savePreferences()
         }
-        btnDark.setOnClickListener {
-            currentPreferences = currentPreferences.copy(theme = Theme.DARK)
+        btnFontSystem.setOnClickListener { updateFontFamily(null) }
+        btnFontSerif.setOnClickListener { updateFontFamily(FontFamily.SERIF) }
+        btnFontSans.setOnClickListener { updateFontFamily(FontFamily.SANS_SERIF) }
+
+        // Line Spacing Setters
+        fun updateLineSpacing(spacing: Double?) {
+            currentPreferences = currentPreferences.copy(lineHeight = spacing)
             nav.submitPreferences(currentPreferences)
             savePreferences()
         }
+        btnSpacing10.setOnClickListener { updateLineSpacing(1.0) }
+        btnSpacing15.setOnClickListener { updateLineSpacing(1.5) }
+        btnSpacing20.setOnClickListener { updateLineSpacing(2.0) }
+
+        // Page Margins Setters
+        fun updateMargins(margins: Double?) {
+            currentPreferences = currentPreferences.copy(pageMargins = margins)
+            nav.submitPreferences(currentPreferences)
+            savePreferences()
+        }
+        btnMarginNarrow.setOnClickListener { updateMargins(0.5) }
+        btnMarginNormal.setOnClickListener { updateMargins(1.0) }
+        btnMarginWide.setOnClickListener { updateMargins(2.0) }
 
         dialog.show()
     }

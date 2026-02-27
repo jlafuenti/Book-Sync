@@ -23,6 +23,9 @@ class AudiobooksViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError = _downloadError.asStateFlow()
+
     private val _unpairedEbooks = MutableStateFlow<List<EBookEntity>>(emptyList())
     val unpairedEbooks = _unpairedEbooks.asStateFlow()
 
@@ -67,6 +70,10 @@ class AudiobooksViewModel @Inject constructor(
         _pairingError.value = null
     }
 
+    fun clearDownloadError() {
+        _downloadError.value = null
+    }
+
     fun downloadAudiobook(audiobook: AudioBookEntity) {
         viewModelScope.launch {
             _downloadingProgress.value = _downloadingProgress.value + (audiobook.id to "Starting download...")
@@ -76,7 +83,9 @@ class AudiobooksViewModel @Inject constructor(
                         _downloadingProgress.value = _downloadingProgress.value + (audiobook.id to "Downloading Audiobook ($p%)...")
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                _downloadError.value = e.message ?: "Download failed"
+            }
             _downloadingProgress.value = _downloadingProgress.value - audiobook.id
         }
     }

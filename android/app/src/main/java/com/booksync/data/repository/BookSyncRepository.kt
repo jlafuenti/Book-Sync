@@ -165,11 +165,14 @@ class BookSyncRepository @Inject constructor(
     /** Download the ebook file for a book pair. */
     suspend fun downloadEbook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadEbook(pair.ebookId)
+        if (!response.isSuccessful) {
+            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
+        }
         val dir = File(context.filesDir, "ebooks")
         dir.mkdirs()
         val file = File(dir, pair.ebookFilename)
         withContext(Dispatchers.IO) {
-            val body = response.body() ?: return@withContext
+            val body = response.body() ?: throw Exception("Empty response body")
             val contentLength = body.contentLength()
             body.byteStream().use { input ->
                 file.outputStream().use { output ->
@@ -194,11 +197,14 @@ class BookSyncRepository @Inject constructor(
     /** Download a standalone ebook file. */
     suspend fun downloadStandaloneEbook(ebook: EBookEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadEbook(ebook.id)
+        if (!response.isSuccessful) {
+            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
+        }
         val dir = File(context.filesDir, "ebooks")
         dir.mkdirs()
         val file = File(dir, ebook.filename)
         withContext(Dispatchers.IO) {
-            val body = response.body() ?: return@withContext
+            val body = response.body() ?: throw Exception("Empty response body")
             val contentLength = body.contentLength()
             body.byteStream().use { input ->
                 file.outputStream().use { output ->
@@ -223,11 +229,14 @@ class BookSyncRepository @Inject constructor(
     /** Download the audiobook file for a book pair. */
     suspend fun downloadAudiobook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         val response = api.downloadAudiobook(pair.audiobookId)
+        if (!response.isSuccessful) {
+            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
+        }
         val dir = File(context.filesDir, "audiobooks")
         dir.mkdirs()
         val file = File(dir, pair.audiobookFilename)
         withContext(Dispatchers.IO) {
-            val body = response.body() ?: return@withContext
+            val body = response.body() ?: throw Exception("Empty response body")
             val contentLength = body.contentLength()
             body.byteStream().use { input ->
                 file.outputStream().use { output ->
