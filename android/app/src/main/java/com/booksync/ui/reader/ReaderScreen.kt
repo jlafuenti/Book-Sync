@@ -76,7 +76,7 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             repository.updateBookmark(
                 pairId = pairId,
-                source = "epub",
+                source = "ebook",
                 epubChapter = chapter,
                 epubSentenceIndex = sentenceIndex,
             )

@@ -30,6 +30,7 @@ class AutoMediaBrowserService : MediaLibraryService() {
         val player = ExoPlayer.Builder(this).build()
 
         mediaSession = MediaLibrarySession.Builder(this, player, LibraryCallback())
+            .setId("AutoBrowserSession")
             .build()
     }
 
