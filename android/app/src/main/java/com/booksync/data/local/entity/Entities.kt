@@ -74,6 +74,7 @@ data class BookmarkEntity(
     val epubChapter: Int?,
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
+    val epubLocator: String? = null,  // Readium Locator JSON for precise EPUB position
     val updatedAt: String,
     val syncedToServer: Boolean = true
 )

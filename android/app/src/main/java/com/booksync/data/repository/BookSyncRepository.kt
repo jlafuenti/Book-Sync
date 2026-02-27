@@ -368,6 +368,7 @@ class BookSyncRepository @Inject constructor(
         epubChapter: Int? = null,
         epubSentenceIndex: Int? = null,
         audioPositionMs: Int? = null,
+        epubLocator: String? = null,
     ) {
         // Save locally
         bookmarkDao.upsertBookmark(
@@ -377,6 +378,7 @@ class BookSyncRepository @Inject constructor(
                 epubChapter = epubChapter,
                 epubSentenceIndex = epubSentenceIndex,
                 audioPositionMs = audioPositionMs,
+                epubLocator = epubLocator,
                 updatedAt = System.currentTimeMillis().toString(),
                 syncedToServer = false,
             )
@@ -408,6 +410,11 @@ class BookSyncRepository @Inject constructor(
                 )
             )
         }
+    }
+
+    /** Update just the EPUB locator JSON for a bookmark (used by Readium reader). */
+    suspend fun updateBookmarkLocator(pairId: Int, locatorJson: String) {
+        bookmarkDao.updateLocator(pairId, locatorJson)
     }
 
     // ============ Position Conversion ============

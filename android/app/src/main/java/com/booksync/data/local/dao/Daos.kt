@@ -114,6 +114,9 @@ interface BookmarkDao {
 
     @Query("UPDATE bookmarks SET syncedToServer = 0 WHERE bookPairId = :pairId")
     suspend fun markUnsynced(pairId: Int)
+
+    @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
+    suspend fun updateLocator(pairId: Int, locatorJson: String)
 }
 
 @Dao

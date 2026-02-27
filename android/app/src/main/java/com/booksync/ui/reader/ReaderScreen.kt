@@ -1,8 +1,8 @@
 package com.booksync.ui.reader
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -10,15 +10,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.booksync.data.local.entity.BookPairEntity
-import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.repository.BookSyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,9 +26,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * EPUB Reader ViewModel.
- * In a full implementation, this would load the EPUB using Readium
- * and track sentence-level position.
+ * ViewModel that loads book pair data and checks if the ebook is downloaded.
  */
 @HiltViewModel
 class ReaderViewModel @Inject constructor(
@@ -41,59 +38,35 @@ class ReaderViewModel @Inject constructor(
     private val _pair = MutableStateFlow<BookPairEntity?>(null)
     val pair = _pair.asStateFlow()
 
-    private val _bookmark = MutableStateFlow<BookmarkEntity?>(null)
-    val bookmark = _bookmark.asStateFlow()
-
-    private val _currentChapter = MutableStateFlow(0)
-    val currentChapter = _currentChapter.asStateFlow()
-
-    private val _currentSentence = MutableStateFlow(0)
-    val currentSentence = _currentSentence.asStateFlow()
+    private val _isReady = MutableStateFlow(false)
+    val isReady = _isReady.asStateFlow()
 
     init {
         viewModelScope.launch {
             repository.getPairsFlow().collect { pairs ->
-                _pair.value = pairs.find { it.id == pairId }
+                val p = pairs.find { it.id == pairId }
+                _pair.value = p
+                _isReady.value = p?.ebookDownloaded == true
             }
         }
-        viewModelScope.launch {
-            repository.getBookmarkFlow(pairId).collect { bm ->
-                _bookmark.value = bm
-                bm?.let {
-                    _currentChapter.value = it.epubChapter ?: 0
-                    _currentSentence.value = it.epubSentenceIndex ?: 0
-                }
-            }
-        }
-        viewModelScope.launch {
-            repository.refreshBookmark(pairId)
-        }
     }
 
-    fun updatePosition(chapter: Int, sentenceIndex: Int) {
-        _currentChapter.value = chapter
-        _currentSentence.value = sentenceIndex
+    fun downloadEbook() {
+        val p = _pair.value ?: return
         viewModelScope.launch {
-            repository.updateBookmark(
-                pairId = pairId,
-                source = "ebook",
-                epubChapter = chapter,
-                epubSentenceIndex = sentenceIndex,
-            )
+            try {
+                repository.downloadEbook(p)
+                _isReady.value = true
+            } catch (_: Exception) {}
         }
-    }
-
-    fun nextChapter() {
-        val next = _currentChapter.value + 1
-        updatePosition(next, 0)
-    }
-
-    fun prevChapter() {
-        val prev = maxOf(0, _currentChapter.value - 1)
-        updatePosition(prev, 0)
     }
 }
 
+/**
+ * ReaderScreen acts as a launcher for the ReaderActivity.
+ * When the ebook is downloaded, it immediately launches the Readium-based reader activity.
+ * If not downloaded, it shows a download prompt.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderScreen(
@@ -103,9 +76,33 @@ fun ReaderScreen(
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     val pair by viewModel.pair.collectAsState()
-    val bookmark by viewModel.bookmark.collectAsState()
-    val currentChapter by viewModel.currentChapter.collectAsState()
-    val currentSentence by viewModel.currentSentence.collectAsState()
+    val isReady by viewModel.isReady.collectAsState()
+    val context = LocalContext.current
+
+    // Track whether we've launched the activity
+    var hasLaunched by remember { mutableStateOf(false) }
+
+    // Activity result launcher — detects switch-to-audio vs normal back
+    val launcher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == ReaderActivity.RESULT_SWITCH_TO_AUDIO) {
+            onSwitchToAudio()
+        } else {
+            onBack()
+        }
+    }
+
+    // Launch ReaderActivity when ebook is ready
+    LaunchedEffect(isReady) {
+        if (isReady && !hasLaunched) {
+            hasLaunched = true
+            val intent = Intent(context, ReaderActivity::class.java).apply {
+                putExtra(ReaderActivity.EXTRA_PAIR_ID, pairId)
+            }
+            launcher.launch(intent)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -122,105 +119,58 @@ fun ReaderScreen(
                     }
                 },
                 actions = {
-                    // Switch to audio button
                     FilledTonalIconButton(onClick = onSwitchToAudio) {
                         Icon(Icons.Default.Headphones, "Switch to Audio")
                     }
                 },
             )
         },
-        bottomBar = {
-            BottomAppBar {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = { viewModel.prevChapter() }) {
-                        Icon(Icons.Default.SkipPrevious, "Previous Chapter")
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            "Chapter ${currentChapter + 1}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            "Sentence ${currentSentence + 1}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = { viewModel.nextChapter() }) {
-                        Icon(Icons.Default.SkipNext, "Next Chapter")
-                    }
-                }
-            }
-        },
     ) { padding ->
-        // Reader content area
-        // In full implementation, this embeds a Readium navigator
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(padding),
+            contentAlignment = Alignment.Center,
         ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        "📖 EPUB Reader",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "This panel will render the EPUB content using the Readium SDK. " +
-                        "The reader tracks your position at the sentence level and syncs it " +
-                        "with the audiobook timeline.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 24.sp,
+            if (isReady) {
+                // Already launched activity — show a brief loading state
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text("Opening reader...")
+                }
+            } else {
+                // Ebook not downloaded
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.MenuBook,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.primary,
                     )
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        "Current Position:",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
+                        "Ebook Not Downloaded",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
                     )
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "Chapter ${currentChapter + 1}, Sentence ${currentSentence + 1}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
+                        "Download the ebook to start reading.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(24.dp))
+                    FilledTonalButton(onClick = { viewModel.downloadEbook() }) {
+                        Icon(Icons.Default.Download, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Download Ebook")
+                    }
                 }
             }
-
-            Spacer(Modifier.height(16.dp))
-
-            // Switch to audio CTA
-            ElevatedButton(
-                onClick = onSwitchToAudio,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.Headphones, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Switch to Audiobook")
-            }
-            Text(
-                "The audiobook will start 10 seconds before your current reading position.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
         }
     }
 }

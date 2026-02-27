@@ -32,6 +32,12 @@
             </intent-filter>
         </activity>
 
+        <!-- EPUB Reader Activity (Readium) -->
+        <activity
+            android:name=".ui.reader.ReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BookSync" />
+
         <!-- Audio Playback Service (foreground service for media) -->
         <service
             android:name=".player.AudioPlayerService"
