@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_switch_audio"
+        android:title="Switch to Audio"
+        android:icon="@android:drawable/ic_lock_silent_mode_off"
+        app:showAsAction="ifRoom"
+        app:iconTint="@android:color/white" />
+
+    <item
+        android:id="@+id/action_font_settings"
+        android:title="Display Settings"
+        android:icon="@android:drawable/ic_menu_preferences"
+        app:showAsAction="ifRoom"
+        app:iconTint="@android:color/white" />
+
+    <item
+        android:id="@+id/action_toc"
+        android:title="Table of Contents"
+        android:icon="@android:drawable/ic_menu_agenda"
+        app:showAsAction="ifRoom"
+        app:iconTint="@android:color/white" />
+
+</menu>
