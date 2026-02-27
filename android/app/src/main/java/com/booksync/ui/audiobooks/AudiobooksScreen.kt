@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -31,6 +33,15 @@ fun AudiobooksScreen(
     val audiobooks by viewModel.audiobooks.collectAsState(initial = emptyList())
     val refreshing by viewModel.refreshing.collectAsState()
     val downloadingProgress by viewModel.downloadingProgress.collectAsState()
+    val downloadError by viewModel.downloadError.collectAsState()
+
+    val context = LocalContext.current
+    LaunchedEffect(downloadError) {
+        if (downloadError != null) {
+            Toast.makeText(context, "Download failed: $downloadError", Toast.LENGTH_LONG).show()
+            viewModel.clearDownloadError()
+        }
+    }
 
     Scaffold(
         topBar = {
