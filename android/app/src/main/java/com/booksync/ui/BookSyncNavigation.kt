@@ -1,6 +1,14 @@
 package com.booksync.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -23,9 +31,22 @@ import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material3.*
-import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.currentBackStackEntryAsState
+import com.booksync.data.remote.TokenManager
+import dagger.hilt.android.EntryPointAccessors
+import kotlinx.coroutines.flow.firstOrNull
+
+/**
+ * Hilt entry point to access TokenManager from a Composable context.
+ */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface TokenManagerEntryPoint {
+    fun tokenManager(): TokenManager
+}
 
 /**
  * Navigation graph for the BookSync app.
@@ -33,8 +54,30 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 @Composable
 fun BookSyncNavigation() {
     val navController = rememberNavController()
+    val context = LocalContext.current
 
-    NavHost(navController = navController, startDestination = "login") {
+    // Check for existing auth token
+    var startDestination by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        val entryPoint = EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            TokenManagerEntryPoint::class.java
+        )
+        val tokenManager = entryPoint.tokenManager()
+        val existingToken = tokenManager.getAccessToken().firstOrNull()
+        startDestination = if (!existingToken.isNullOrEmpty()) "main" else "login"
+    }
+
+    if (startDestination == null) {
+        // Show loading while checking token
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
+    NavHost(navController = navController, startDestination = startDestination!!) {
 
         composable("login") {
             LoginScreen(
