@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.content.Context
+import androidx.work.*
+import com.booksync.worker.DownloadWorker
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 /**
@@ -51,7 +55,10 @@ enum class SeriesSort { NAME, COUNT }
 @HiltViewModel
 class SeriesViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    private val workManager = WorkManager.getInstance(context)
 
     private val _refreshing = MutableStateFlow(false)
     val refreshing = _refreshing.asStateFlow()
@@ -71,7 +78,50 @@ class SeriesViewModel @Inject constructor(
         buildSeriesGroups(pairs, ebooks, audiobooks)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Pair(emptyList(), emptyList()))
 
-    init { refresh() }
+    init { 
+        refresh() 
+        observeWorkManager()
+    }
+
+    private fun observeWorkManager() {
+        viewModelScope.launch {
+            workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
+                val newProgress = _downloadProgress.value.toMutableMap()
+                for (info in workInfos) {
+                    val entityId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                    val currentType = info.progress.getString("CURRENT")
+                    val workType = info.progress.getString(DownloadWorker.KEY_TYPE) ?: "ALL"
+                    val isRunning = info.state == WorkInfo.State.RUNNING
+
+                    if (entityId != -1) {
+                        val stringKey = when (workType) {
+                            "STANDALONE_EBOOK" -> "ebook_$entityId"
+                            "STANDALONE_AUDIOBOOK" -> "audio_$entityId"
+                            else -> "pair_$entityId"
+                        }
+                        
+                        if (isRunning) {
+                            val typeLabel = when (currentType) {
+                                "EBOOK" -> "Ebook"
+                                "AUDIOBOOK" -> "Audiobook"
+                                "SYNC_MAP" -> "Sync Data"
+                                else -> "files"
+                            }
+                            if (progress >= 0) {
+                                newProgress[stringKey] = "Downloading $typeLabel ($progress%)..."
+                            } else {
+                                newProgress[stringKey] = "Downloading $typeLabel..."
+                            }
+                        } else if (info.state.isFinished) {
+                            newProgress.remove(stringKey)
+                        }
+                    }
+                }
+                _downloadProgress.value = newProgress
+            }
+        }
+    }
 
     fun refresh() {
         viewModelScope.launch {
@@ -132,29 +182,27 @@ class SeriesViewModel @Inject constructor(
 
     // Pair actions
     fun downloadPairEbook(pairId: Int) {
-        viewModelScope.launch {
-            val pair = repository.getPairById(pairId) ?: return@launch
-            _downloadProgress.value += ("pair_$pairId" to "Downloading Ebook...")
-            try {
-                repository.downloadEbook(pair) { p ->
-                    _downloadProgress.value += ("pair_$pairId" to "Downloading Ebook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadProgress.value -= "pair_$pairId"
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pairId,
+                DownloadWorker.KEY_TYPE to "EBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_ebook_$pairId", ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value += ("pair_$pairId" to "Starting Ebook download...")
     }
 
     fun downloadPairAudiobook(pairId: Int) {
-        viewModelScope.launch {
-            val pair = repository.getPairById(pairId) ?: return@launch
-            _downloadProgress.value += ("pair_$pairId" to "Downloading Audiobook...")
-            try {
-                repository.downloadAudiobook(pair) { p ->
-                    _downloadProgress.value += ("pair_$pairId" to "Downloading Audiobook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadProgress.value -= "pair_$pairId"
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pairId,
+                DownloadWorker.KEY_TYPE to "AUDIOBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_audio_$pairId", ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value += ("pair_$pairId" to "Starting Audiobook download...")
     }
 
     fun deletePairEbook(pairId: Int) {
@@ -182,16 +230,15 @@ class SeriesViewModel @Inject constructor(
 
     // Standalone ebook actions
     fun downloadStandaloneEbook(ebookId: Int) {
-        viewModelScope.launch {
-            val ebook = repository.getEbookById(ebookId) ?: return@launch
-            _downloadProgress.value += ("ebook_$ebookId" to "Downloading Ebook...")
-            try {
-                repository.downloadStandaloneEbook(ebook) { p ->
-                    _downloadProgress.value += ("ebook_$ebookId" to "Downloading Ebook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadProgress.value -= "ebook_$ebookId"
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to ebookId,
+                DownloadWorker.KEY_TYPE to "STANDALONE_EBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_standalone_ebook_$ebookId", ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value += ("ebook_$ebookId" to "Starting Ebook download...")
     }
 
     fun deleteStandaloneEbook(ebookId: Int) {
@@ -203,16 +250,15 @@ class SeriesViewModel @Inject constructor(
 
     // Standalone audiobook actions
     fun downloadStandaloneAudiobook(audiobookId: Int) {
-        viewModelScope.launch {
-            val audio = repository.getAudiobookById(audiobookId) ?: return@launch
-            _downloadProgress.value += ("audio_$audiobookId" to "Downloading Audiobook...")
-            try {
-                repository.downloadStandaloneAudiobook(audio) { p ->
-                    _downloadProgress.value += ("audio_$audiobookId" to "Downloading Audiobook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadProgress.value -= "audio_$audiobookId"
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to audiobookId,
+                DownloadWorker.KEY_TYPE to "STANDALONE_AUDIOBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_standalone_audiobook_$audiobookId", ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value += ("audio_$audiobookId" to "Starting Audiobook download...")
     }
 
     fun deleteStandaloneAudiobook(audiobookId: Int) {

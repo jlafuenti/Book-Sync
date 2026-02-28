@@ -1,12 +1,16 @@
 package com.booksync.ui.downloaded
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.*
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -15,7 +19,10 @@ import javax.inject.Inject
 @HiltViewModel
 class DownloadedViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+    private val workManager = WorkManager.getInstance(context)
+
     val downloadedPairs = repository.getDownloadedPairsFlow()
     val downloadedEbooks = repository.getDownloadedEbooksFlow()
     val downloadedAudiobooks = repository.getDownloadedAudiobooksFlow()
@@ -23,51 +30,89 @@ class DownloadedViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<Map<Int, String>>(emptyMap())
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
-    fun downloadAll(pair: BookPairEntity) {
+    init {
+        observeWorkManager()
+    }
+
+    private fun observeWorkManager() {
         viewModelScope.launch {
-            _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting download...")
-            try {
-                if (!pair.ebookDownloaded) {
-                    repository.downloadEbook(pair) { p ->
-                        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Ebook ($p%)...")
+            workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
+                val newProgress = _downloadingProgress.value.toMutableMap()
+                for (info in workInfos) {
+                    val pairId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                    val currentType = info.progress.getString("CURRENT")
+                    val isRunning = info.state == WorkInfo.State.RUNNING
+
+                    if (pairId != -1) {
+                        if (isRunning) {
+                            val typeLabel = when (currentType) {
+                                "EBOOK" -> "Ebook"
+                                "AUDIOBOOK" -> "Audiobook"
+                                "SYNC_MAP" -> "Sync Data"
+                                else -> "files"
+                            }
+                            if (progress >= 0) {
+                                newProgress[pairId] = "Downloading $typeLabel ($progress%)..."
+                            } else {
+                                newProgress[pairId] = "Downloading $typeLabel..."
+                            }
+                        } else if (info.state.isFinished) {
+                            newProgress.remove(pairId)
+                        }
                     }
                 }
-                if (!pair.audiobookDownloaded) {
-                    repository.downloadAudiobook(pair) { p ->
-                        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Audiobook ($p%)...")
-                    }
-                }
-                if (!pair.syncMapDownloaded && pair.status == "synced") {
-                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Sync Data...")
-                    repository.downloadSyncMap(pair.id)
-                }
-            } catch (_: Exception) {}
-            _downloadingProgress.value = _downloadingProgress.value - pair.id
+                _downloadingProgress.value = newProgress
+            }
         }
+    }
+
+    fun downloadAll(pair: BookPairEntity) {
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pair.id,
+                DownloadWorker.KEY_TYPE to "ALL"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(
+            "download_pair_${pair.id}",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting download...")
     }
 
     fun downloadEbookOnly(pair: BookPairEntity) {
-        viewModelScope.launch {
-            try {
-                _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Ebook download...")
-                repository.downloadEbook(pair) { p ->
-                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Ebook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadingProgress.value = _downloadingProgress.value - pair.id
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pair.id,
+                DownloadWorker.KEY_TYPE to "EBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(
+            "download_ebook_${pair.id}",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Ebook download...")
     }
 
     fun downloadAudiobookOnly(pair: BookPairEntity) {
-        viewModelScope.launch {
-            try {
-                _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Audiobook download...")
-                repository.downloadAudiobook(pair) { p ->
-                    _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Downloading Audiobook ($p%)...")
-                }
-            } catch (_: Exception) {}
-            _downloadingProgress.value = _downloadingProgress.value - pair.id
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pair.id,
+                DownloadWorker.KEY_TYPE to "AUDIOBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(
+            "download_audio_${pair.id}",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Starting Audiobook download...")
     }
 
     fun deleteEbook(pair: BookPairEntity) = viewModelScope.launch { repository.deleteEbook(pair) }

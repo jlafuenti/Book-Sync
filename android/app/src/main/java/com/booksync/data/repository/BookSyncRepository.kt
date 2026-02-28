@@ -210,12 +210,17 @@ class BookSyncRepository @Inject constructor(
                 file.outputStream().use { output ->
                     val buffer = ByteArray(8 * 1024)
                     var bytesCopied = 0L
+                    var lastProgress = -1
                     var bytes = input.read(buffer)
                     while(bytes >= 0) {
                         output.write(buffer, 0, bytes)
                         bytesCopied += bytes
                         if (contentLength > 0) {
-                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                            val progress = (bytesCopied * 100 / contentLength).toInt()
+                            if (progress != lastProgress) {
+                                lastProgress = progress
+                                onProgress(progress)
+                            }
                         }
                         bytes = input.read(buffer)
                     }
@@ -242,12 +247,17 @@ class BookSyncRepository @Inject constructor(
                 file.outputStream().use { output ->
                     val buffer = ByteArray(8 * 1024)
                     var bytesCopied = 0L
+                    var lastProgress = -1
                     var bytes = input.read(buffer)
                     while(bytes >= 0) {
                         output.write(buffer, 0, bytes)
                         bytesCopied += bytes
                         if (contentLength > 0) {
-                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                            val progress = (bytesCopied * 100 / contentLength).toInt()
+                            if (progress != lastProgress) {
+                                lastProgress = progress
+                                onProgress(progress)
+                            }
                         }
                         bytes = input.read(buffer)
                     }
@@ -271,12 +281,17 @@ class BookSyncRepository @Inject constructor(
                 file.outputStream().use { output ->
                     val buffer = ByteArray(8 * 1024)
                     var bytesCopied = 0L
+                    var lastProgress = -1
                     var bytes = input.read(buffer)
                     while(bytes >= 0) {
                         output.write(buffer, 0, bytes)
                         bytesCopied += bytes
                         if (contentLength > 0) {
-                            onProgress((bytesCopied * 100 / contentLength).toInt())
+                            val progress = (bytesCopied * 100 / contentLength).toInt()
+                            if (progress != lastProgress) {
+                                lastProgress = progress
+                                onProgress(progress)
+                            }
                         }
                         bytes = input.read(buffer)
                     }

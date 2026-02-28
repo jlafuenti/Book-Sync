@@ -1,6 +1,8 @@
 package com.booksync.player
 
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -43,10 +45,14 @@ class AudioPlayerService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var sleepTimerJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private lateinit var sharedPrefs: SharedPreferences
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        sharedPrefs = getSharedPreferences("audio_player_prefs", Context.MODE_PRIVATE)
+        val initialSpeed = sharedPrefs.getFloat("playback_speed", 1.0f)
+
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -57,6 +63,8 @@ class AudioPlayerService : MediaSessionService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        
+        player.playbackParameters = player.playbackParameters.withSpeed(initialSpeed)
 
         val sessionCallback = object : MediaSession.Callback {
             override fun onConnect(
@@ -84,6 +92,7 @@ class AudioPlayerService : MediaSessionService() {
                         val speed = args.getFloat("speed", 1.0f)
                         session.player.playbackParameters =
                             session.player.playbackParameters.withSpeed(speed)
+                        sharedPrefs.edit().putFloat("playback_speed", speed).apply()
                         return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                     }
                     CMD_SET_SLEEP_TIMER -> {
