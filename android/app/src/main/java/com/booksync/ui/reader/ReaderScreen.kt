@@ -23,6 +23,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import android.content.Context
+import androidx.work.*
+import com.booksync.worker.DownloadWorker
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 /**
@@ -32,14 +36,19 @@ import javax.inject.Inject
 class ReaderViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     savedStateHandle: SavedStateHandle,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
     private val pairId: Int = savedStateHandle["pairId"] ?: 0
+    private val workManager = WorkManager.getInstance(context)
 
     private val _pair = MutableStateFlow<BookPairEntity?>(null)
     val pair = _pair.asStateFlow()
 
     private val _isReady = MutableStateFlow(false)
     val isReady = _isReady.asStateFlow()
+
+    private val _downloadingProgress = MutableStateFlow<String?>(null)
+    val downloadingProgress = _downloadingProgress.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -49,16 +58,53 @@ class ReaderViewModel @Inject constructor(
                 _isReady.value = p?.ebookDownloaded == true
             }
         }
+        observeWorkManager()
+    }
+
+    private fun observeWorkManager() {
+        viewModelScope.launch {
+            workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
+                var currentProgress: String? = null
+                for (info in workInfos) {
+                    val id = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                    val currentType = info.progress.getString("CURRENT")
+                    val isRunning = info.state == WorkInfo.State.RUNNING
+
+                    if (id == pairId) {
+                        if (isRunning) {
+                            val typeLabel = when (currentType) {
+                                "EBOOK" -> "Ebook"
+                                "AUDIOBOOK" -> "Audiobook"
+                                "SYNC_MAP" -> "Sync Data"
+                                else -> "files"
+                            }
+                            currentProgress = if (progress >= 0) {
+                                "Downloading $typeLabel ($progress%)..."
+                            } else {
+                                "Downloading $typeLabel..."
+                            }
+                        } else if (info.state.isFinished) {
+                            // Clear progress if finished
+                            currentProgress = null
+                        }
+                    }
+                }
+                _downloadingProgress.value = currentProgress
+            }
+        }
     }
 
     fun downloadEbook() {
         val p = _pair.value ?: return
-        viewModelScope.launch {
-            try {
-                repository.downloadEbook(p)
-                _isReady.value = true
-            } catch (_: Exception) {}
-        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to p.id,
+                DownloadWorker.KEY_TYPE to "EBOOK"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_ebook_${p.id}", ExistingWorkPolicy.REPLACE, request)
     }
 }
 
@@ -77,6 +123,7 @@ fun ReaderScreen(
 ) {
     val pair by viewModel.pair.collectAsState()
     val isReady by viewModel.isReady.collectAsState()
+    val downloadingProgress by viewModel.downloadingProgress.collectAsState()
     val context = LocalContext.current
 
     // Track whether we've launched the activity
@@ -164,10 +211,20 @@ fun ReaderScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(24.dp))
-                    FilledTonalButton(onClick = { viewModel.downloadEbook() }) {
-                        Icon(Icons.Default.Download, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Download Ebook")
+                    if (downloadingProgress != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Text(downloadingProgress!!, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    } else {
+                        FilledTonalButton(onClick = { viewModel.downloadEbook() }) {
+                            Icon(Icons.Default.Download, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Download Ebook")
+                        }
                     }
                 }
             }

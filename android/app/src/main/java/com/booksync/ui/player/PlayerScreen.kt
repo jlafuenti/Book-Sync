@@ -30,6 +30,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
@@ -51,7 +52,7 @@ import javax.inject.Inject
 @HiltViewModel
 class PlayerViewModel @Inject constructor(
     private val repository: BookSyncRepository,
-    @ApplicationContext private val appContext: Context,
+    @param:ApplicationContext private val appContext: Context,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val pairId: Int = savedStateHandle["pairId"] ?: 0
@@ -171,6 +172,18 @@ class PlayerViewModel @Inject constructor(
 
                 // Start position polling
                 startPositionPolling()
+
+                // Fetch initial speed setting from service
+                val futureCmd = mediaController.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_GET_SPEED, Bundle.EMPTY), Bundle.EMPTY)
+                futureCmd.addListener({
+                    try {
+                        val result = futureCmd.get()
+                        if (result.resultCode == SessionResult.RESULT_SUCCESS) {
+                            val initialSpeed = result.extras.getFloat("speed", 1.0f)
+                            _speed.value = initialSpeed
+                        }
+                    } catch (_: Exception) {}
+                }, { it.run() })
 
                 // Load media if pair is ready
                 _pair.value?.let { loadAudio(it, mediaController) }
@@ -565,7 +578,12 @@ fun PlayerScreen(
             ) {
                 // Speed button
                 FilledTonalButton(onClick = { viewModel.cycleSpeed() }, enabled = isDownloaded) {
-                    Text("${speed}×", fontWeight = FontWeight.Bold)
+                    val speedText = if (speed % 1.0f == 0f) {
+                        "%.1f×".format(speed)
+                    } else {
+                        "${speed}×"
+                    }
+                    Text(speedText, fontWeight = FontWeight.Bold)
                 }
 
                 // Sleep timer button
