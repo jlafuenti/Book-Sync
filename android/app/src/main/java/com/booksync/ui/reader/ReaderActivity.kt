@@ -711,89 +711,126 @@ class ReaderActivity : AppCompatActivity() {
         val nav = navigator ?: return
 
         val dialogView = layoutInflater.inflate(R.layout.dialog_display_settings, null)
-        val fontSizeText = dialogView.findViewById<TextView>(R.id.text_font_size)
-        val btnDecrease = dialogView.findViewById<View>(R.id.btn_font_decrease)
-        val btnIncrease = dialogView.findViewById<View>(R.id.btn_font_increase)
-        
+
+        // Tab switching
+        val tabLayout = dialogView.findViewById<com.google.android.material.tabs.TabLayout>(R.id.tab_layout)
+        val textContent = dialogView.findViewById<View>(R.id.tab_text_content)
+        val displayContent = dialogView.findViewById<View>(R.id.tab_display_content)
+
+        tabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
+                when (tab?.position) {
+                    0 -> {
+                        textContent.visibility = View.VISIBLE
+                        displayContent.visibility = View.GONE
+                    }
+                    1 -> {
+                        textContent.visibility = View.GONE
+                        displayContent.visibility = View.VISIBLE
+                    }
+                }
+            }
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
+        })
+
+        // ======== TEXT TAB ========
+
+        // Font Family toggle group
+        val fontGroup = dialogView.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.font_family_group)
+        val btnFontSystem = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_system)
+        val btnFontSerif = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_serif)
+        val btnFontSans = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_sans)
+
+        // Pre-select current font
+        when (currentPreferences.fontFamily) {
+            FontFamily.SERIF -> fontGroup.check(R.id.btn_font_serif)
+            FontFamily.SANS_SERIF -> fontGroup.check(R.id.btn_font_sans)
+            else -> fontGroup.check(R.id.btn_font_system)
+        }
+
+        fontGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) {
+                val fontFamily = when (checkedId) {
+                    R.id.btn_font_serif -> FontFamily.SERIF
+                    R.id.btn_font_sans -> FontFamily.SANS_SERIF
+                    else -> null
+                }
+                currentPreferences = currentPreferences.copy(fontFamily = fontFamily)
+                nav.submitPreferences(currentPreferences)
+                savePreferences()
+            }
+        }
+
+        // Font Size slider
+        val sliderFontSize = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_font_size)
+        val currentSize = currentPreferences.fontSize ?: 1.0
+        sliderFontSize.value = (currentSize * 100).toFloat().coerceIn(50f, 300f)
+        sliderFontSize.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                val newSize = value.toDouble() / 100.0
+                currentPreferences = currentPreferences.copy(fontSize = newSize)
+                nav.submitPreferences(currentPreferences)
+                savePreferences()
+            }
+        }
+
+        // Line Spacing slider
+        val sliderSpacing = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_spacing)
+        val currentSpacing = currentPreferences.lineHeight ?: 1.2
+        sliderSpacing.value = currentSpacing.toFloat().coerceIn(1.0f, 2.5f)
+        sliderSpacing.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                currentPreferences = currentPreferences.copy(lineHeight = value.toDouble())
+                nav.submitPreferences(currentPreferences)
+                savePreferences()
+            }
+        }
+
+        // Margins slider
+        val sliderMargins = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_margins)
+        val currentMargins = currentPreferences.pageMargins ?: 1.0
+        sliderMargins.value = currentMargins.toFloat().coerceIn(0.5f, 3.0f)
+        sliderMargins.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                currentPreferences = currentPreferences.copy(pageMargins = value.toDouble())
+                nav.submitPreferences(currentPreferences)
+                savePreferences()
+            }
+        }
+
+        // ======== DISPLAY TAB ========
+
         val btnThemeLight = dialogView.findViewById<View>(R.id.btn_theme_light)
         val btnThemeSepia = dialogView.findViewById<View>(R.id.btn_theme_sepia)
         val btnThemeDark = dialogView.findViewById<View>(R.id.btn_theme_dark)
+        val checkLight = dialogView.findViewById<View>(R.id.check_theme_light)
+        val checkSepia = dialogView.findViewById<View>(R.id.check_theme_sepia)
+        val checkDark = dialogView.findViewById<View>(R.id.check_theme_dark)
 
-        val btnFontSystem = dialogView.findViewById<View>(R.id.btn_font_system)
-        val btnFontSerif = dialogView.findViewById<View>(R.id.btn_font_serif)
-        val btnFontSans = dialogView.findViewById<View>(R.id.btn_font_sans)
+        fun updateThemeChecks(theme: Theme?) {
+            checkLight.visibility = if (theme == Theme.LIGHT) View.VISIBLE else View.GONE
+            checkSepia.visibility = if (theme == Theme.SEPIA) View.VISIBLE else View.GONE
+            checkDark.visibility = if (theme == Theme.DARK || theme == null) View.VISIBLE else View.GONE
+        }
 
-        val btnSpacing10 = dialogView.findViewById<View>(R.id.btn_spacing_10)
-        val btnSpacing15 = dialogView.findViewById<View>(R.id.btn_spacing_15)
-        val btnSpacing20 = dialogView.findViewById<View>(R.id.btn_spacing_20)
+        // Show current checkmark
+        updateThemeChecks(currentPreferences.theme)
 
-        val btnMarginNarrow = dialogView.findViewById<View>(R.id.btn_margin_narrow)
-        val btnMarginNormal = dialogView.findViewById<View>(R.id.btn_margin_normal)
-        val btnMarginWide = dialogView.findViewById<View>(R.id.btn_margin_wide)
+        fun applyTheme(theme: Theme?) {
+            currentPreferences = currentPreferences.copy(theme = theme)
+            nav.submitPreferences(currentPreferences)
+            savePreferences()
+            updateThemeChecks(theme)
+        }
 
-        // Show current size
-        val currentSize = currentPreferences.fontSize ?: 1.0
-        fontSizeText.text = "${(currentSize * 100).toInt()}%"
+        btnThemeLight.setOnClickListener { applyTheme(Theme.LIGHT) }
+        btnThemeSepia.setOnClickListener { applyTheme(Theme.SEPIA) }
+        btnThemeDark.setOnClickListener { applyTheme(Theme.DARK) }
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .create()
-
-        btnDecrease.setOnClickListener {
-            val newSize = ((currentPreferences.fontSize ?: 1.0) - 0.1).coerceAtLeast(0.5)
-            currentPreferences = currentPreferences.copy(fontSize = newSize)
-            fontSizeText.text = "${(newSize * 100).toInt()}%"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-
-        btnIncrease.setOnClickListener {
-            val newSize = ((currentPreferences.fontSize ?: 1.0) + 0.1).coerceAtMost(3.0)
-            currentPreferences = currentPreferences.copy(fontSize = newSize)
-            fontSizeText.text = "${(newSize * 100).toInt()}%"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-
-        // Theme Setters
-        fun updateTheme(theme: Theme?) {
-            currentPreferences = currentPreferences.copy(theme = theme)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        btnThemeLight.setOnClickListener { updateTheme(Theme.LIGHT) }
-        btnThemeSepia.setOnClickListener { updateTheme(Theme.SEPIA) }
-        btnThemeDark.setOnClickListener { updateTheme(Theme.DARK) }
-
-        // Font Family Setters
-        fun updateFontFamily(fontFamily: FontFamily?) {
-            currentPreferences = currentPreferences.copy(fontFamily = fontFamily)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        btnFontSystem.setOnClickListener { updateFontFamily(null) }
-        btnFontSerif.setOnClickListener { updateFontFamily(FontFamily.SERIF) }
-        btnFontSans.setOnClickListener { updateFontFamily(FontFamily.SANS_SERIF) }
-
-        // Line Spacing Setters
-        fun updateLineSpacing(spacing: Double?) {
-            currentPreferences = currentPreferences.copy(lineHeight = spacing)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        btnSpacing10.setOnClickListener { updateLineSpacing(1.0) }
-        btnSpacing15.setOnClickListener { updateLineSpacing(1.5) }
-        btnSpacing20.setOnClickListener { updateLineSpacing(2.0) }
-
-        // Page Margins Setters
-        fun updateMargins(margins: Double?) {
-            currentPreferences = currentPreferences.copy(pageMargins = margins)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        btnMarginNarrow.setOnClickListener { updateMargins(0.5) }
-        btnMarginNormal.setOnClickListener { updateMargins(1.0) }
-        btnMarginWide.setOnClickListener { updateMargins(2.0) }
 
         dialog.show()
     }
