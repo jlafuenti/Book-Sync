@@ -74,6 +74,12 @@ interface BookSyncApi {
         @Body update: BookmarkUpdateRequest
     ): BookmarkResponse
 
+    @GET("api/sync/bookmark/{pairId}/log")
+    suspend fun getBookmarkLog(
+        @Path("pairId") pairId: Int,
+        @Query("limit") limit: Int = 50
+    ): List<BookmarkLogResponse>
+
     // ============ User Progress ============
 
     @GET("api/sync/progress/{mediaType}/{mediaId}")

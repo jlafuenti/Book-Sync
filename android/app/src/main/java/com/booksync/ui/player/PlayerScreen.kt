@@ -48,6 +48,11 @@ import javax.inject.Inject
 import android.util.Log
 
 /**
+ * Represents a chapter marker in an M4B audiobook.
+ */
+data class Chapter(val title: String, val startMs: Long)
+
+/**
  * Audio Player ViewModel.
  * Connects to AudioPlayerService via MediaController for real playback.
  */
@@ -83,6 +88,12 @@ class PlayerViewModel @Inject constructor(
     private val _coverArtBitmap = MutableStateFlow<Bitmap?>(null)
     val coverArtBitmap = _coverArtBitmap.asStateFlow()
 
+    private val _chapters = MutableStateFlow<List<Chapter>>(emptyList())
+    val chapters = _chapters.asStateFlow()
+
+    private val _currentChapterIndex = MutableStateFlow(-1)
+    val currentChapterIndex = _currentChapterIndex.asStateFlow()
+
     private var controller: MediaController? = null
     private var positionPollingJob: kotlinx.coroutines.Job? = null
     private var savedPositionFromBookmark: Long = 0L
@@ -90,6 +101,7 @@ class PlayerViewModel @Inject constructor(
     private var lastSaveTimeMs = 0L
     private var pendingSeekPosition: Long = -1L  // Seek deferred until player is ready
     private val SAVE_INTERVAL_MS = 5000L  // Save bookmark every 5 seconds
+    private var chaptersLoaded = false
 
     companion object {
         val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
@@ -279,6 +291,15 @@ class PlayerViewModel @Inject constructor(
                     val wasPlaying = _isPlaying.value
                     _isPlaying.value = ctrl.isPlaying
 
+                    // Update current chapter index based on position
+                    updateCurrentChapterIndex(ctrl.currentPosition)
+
+                    // Try loading chapters once the player is ready
+                    if (!chaptersLoaded && ctrl.playbackState == Player.STATE_READY) {
+                        chaptersLoaded = true
+                        loadChaptersFromService(ctrl)
+                    }
+
                     // Save bookmark periodically while playing (every 5 seconds)
                     val now = System.currentTimeMillis()
                     if (ctrl.isPlaying && (now - lastSaveTimeMs >= SAVE_INTERVAL_MS)) {
@@ -330,6 +351,98 @@ class PlayerViewModel @Inject constructor(
         val ctrl = controller ?: return
         val newPos = maxOf(0L, ctrl.currentPosition - seconds * 1000L)
         seekTo(newPos)
+    }
+
+    fun skipToNextChapter() {
+        val chaps = _chapters.value
+        val currentIdx = _currentChapterIndex.value
+        if (currentIdx < chaps.size - 1) {
+            seekTo(chaps[currentIdx + 1].startMs)
+        }
+    }
+
+    fun skipToPreviousChapter() {
+        val chaps = _chapters.value
+        val currentIdx = _currentChapterIndex.value
+        val pos = _positionMs.value
+        // If more than 3 seconds into the current chapter, restart it
+        if (currentIdx >= 0 && currentIdx < chaps.size && pos - chaps[currentIdx].startMs > 3000) {
+            seekTo(chaps[currentIdx].startMs)
+        } else if (currentIdx > 0) {
+            seekTo(chaps[currentIdx - 1].startMs)
+        } else {
+            seekTo(0L)
+        }
+    }
+
+    private fun loadChaptersFromService(ctrl: MediaController) {
+        val futureCmd = ctrl.sendCustomCommand(
+            SessionCommand(AudioPlayerService.CMD_GET_CHAPTERS, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
+        futureCmd.addListener({
+            try {
+                val result = futureCmd.get()
+                if (result.resultCode == SessionResult.RESULT_SUCCESS) {
+                    val count = result.extras.getInt("count", 0)
+                    if (count > 0) {
+                        val titles = result.extras.getStringArray("titles") ?: emptyArray()
+                        val startTimes = result.extras.getLongArray("startTimesMs") ?: longArrayOf()
+                        val chapterList = titles.zip(startTimes.toList()).map { (title, startMs) ->
+                            Chapter(title, startMs)
+                        }
+                        _chapters.value = chapterList
+                        Log.d("PlayerViewModel", "Loaded ${chapterList.size} chapters from service")
+                        updateCurrentChapterIndex(_positionMs.value)
+                    } else {
+                        Log.d("PlayerViewModel", "No chapters found in media")
+                        // Try fallback: parse from file directly
+                        loadChaptersFromFile()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("PlayerViewModel", "Failed to load chapters from service", e)
+                loadChaptersFromFile()
+            }
+        }, { it.run() })
+    }
+
+    /**
+     * Fallback chapter loading: use FFmpeg-style chapter parsing from the M4B file.
+     * This uses MediaMetadataRetriever which unfortunately doesn't support chapter
+     * extraction. As a last resort, the chapters list stays empty and the UI shows
+     * "No chapters found in this file".
+     */
+    private fun loadChaptersFromFile() {
+        val pair = _pair.value ?: return
+        if (!pair.audiobookDownloaded) return
+        val audioFile = repository.getAudiobookFile(pair)
+        if (!audioFile.exists()) return
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                // MediaMetadataRetriever doesn't expose M4B chapter markers.
+                // In the future, we could add an ffprobe-based parser or a dedicated
+                // MP4 chapter atom reader. For now, we leave chapters empty.
+                Log.d("PlayerViewModel", "Fallback chapter loading: no chapters extracted from ${audioFile.name}")
+            } catch (e: Exception) {
+                Log.w("PlayerViewModel", "Error in fallback chapter loading", e)
+            }
+        }
+    }
+
+    private fun updateCurrentChapterIndex(positionMs: Long) {
+        val chaps = _chapters.value
+        if (chaps.isEmpty()) return
+        // Find the last chapter whose startMs <= current position
+        var idx = chaps.size - 1
+        for (i in chaps.indices) {
+            if (chaps[i].startMs > positionMs) {
+                idx = maxOf(0, i - 1)
+                break
+            }
+        }
+        _currentChapterIndex.value = idx
     }
 
     fun cycleSpeed() {
@@ -419,6 +532,8 @@ fun PlayerScreen(
     val sleepTimerMinutes by viewModel.sleepTimerMinutes.collectAsState()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
     val coverArt by viewModel.coverArtBitmap.collectAsState()
+    val chapters by viewModel.chapters.collectAsState()
+    val currentChapterIndex by viewModel.currentChapterIndex.collectAsState()
 
     var showSleepTimerDialog by remember { mutableStateOf(false) }
 
@@ -587,9 +702,17 @@ fun PlayerScreen(
 
             // Playback controls
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Chapter back
+                IconButton(
+                    onClick = { viewModel.skipToPreviousChapter() },
+                    enabled = isDownloaded && chapters.isNotEmpty()
+                ) {
+                    Icon(Icons.Default.SkipPrevious, "Previous Chapter", modifier = Modifier.size(28.dp))
+                }
+
                 IconButton(onClick = { viewModel.skipBackward(10) }, enabled = isDownloaded) {
                     Icon(Icons.Default.Replay10, "Rewind 10s", modifier = Modifier.size(32.dp))
                 }
@@ -608,6 +731,14 @@ fun PlayerScreen(
 
                 IconButton(onClick = { viewModel.skipForward(30) }, enabled = isDownloaded) {
                     Icon(Icons.Default.Forward30, "Forward 30s", modifier = Modifier.size(32.dp))
+                }
+
+                // Chapter forward
+                IconButton(
+                    onClick = { viewModel.skipToNextChapter() },
+                    enabled = isDownloaded && chapters.isNotEmpty()
+                ) {
+                    Icon(Icons.Default.SkipNext, "Next Chapter", modifier = Modifier.size(28.dp))
                 }
             }
 
@@ -630,17 +761,16 @@ fun PlayerScreen(
                 }
 
                 // Sleep timer button
-                FilledTonalButton(
+                IconButton(
                     onClick = { showSleepTimerDialog = true },
                     enabled = isDownloaded,
                 ) {
-                    Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    if (sleepTimerMinutes > 0) {
-                        Text(formatTime(sleepTimerRemainingMs))
-                    } else {
-                        Text("Sleep")
-                    }
+                    Icon(
+                        Icons.Default.NightsStay,
+                        contentDescription = "Sleep Timer",
+                        modifier = Modifier.size(28.dp),
+                        tint = if (sleepTimerMinutes > 0) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                    )
                 }
             }
 

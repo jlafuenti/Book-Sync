@@ -385,6 +385,17 @@ class BookSyncRepository @Inject constructor(
     }
 
     /**
+     * Fetch bookmark history from the server.
+     */
+    suspend fun getBookmarkHistory(pairId: Int, limit: Int = 50): List<BookmarkLogResponse> {
+        return try {
+            api.getBookmarkLog(pairId, limit)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
      * Update bookmark position.
      * Saves locally immediately and queues sync to server.
      */
