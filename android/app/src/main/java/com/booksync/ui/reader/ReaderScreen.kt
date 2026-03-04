@@ -66,13 +66,11 @@ class ReaderViewModel @Inject constructor(
             workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
                 var currentProgress: String? = null
                 for (info in workInfos) {
-                    val id = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
-                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
-                    val currentType = info.progress.getString("CURRENT")
-                    val isRunning = info.state == WorkInfo.State.RUNNING
-
-                    if (id == pairId) {
-                        if (isRunning) {
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        val currentType = info.progress.getString("CURRENT")
+                        val id = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                        if (id == pairId) {
+                            val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
                             val typeLabel = when (currentType) {
                                 "EBOOK" -> "Ebook"
                                 "AUDIOBOOK" -> "Audiobook"
@@ -84,9 +82,6 @@ class ReaderViewModel @Inject constructor(
                             } else {
                                 "Downloading $typeLabel..."
                             }
-                        } else if (info.state.isFinished) {
-                            // Clear progress if finished
-                            currentProgress = null
                         }
                     }
                 }

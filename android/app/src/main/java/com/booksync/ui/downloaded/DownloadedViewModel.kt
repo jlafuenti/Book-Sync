@@ -37,15 +37,13 @@ class DownloadedViewModel @Inject constructor(
     private fun observeWorkManager() {
         viewModelScope.launch {
             workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
-                val newProgress = _downloadingProgress.value.toMutableMap()
+                val newProgress = mutableMapOf<Int, String>()
                 for (info in workInfos) {
-                    val pairId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
-                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
-                    val currentType = info.progress.getString("CURRENT")
-                    val isRunning = info.state == WorkInfo.State.RUNNING
-
-                    if (pairId != -1) {
-                        if (isRunning) {
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        val pairId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                        if (pairId != -1) {
+                            val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                            val currentType = info.progress.getString("CURRENT")
                             val typeLabel = when (currentType) {
                                 "EBOOK" -> "Ebook"
                                 "AUDIOBOOK" -> "Audiobook"
@@ -57,8 +55,6 @@ class DownloadedViewModel @Inject constructor(
                             } else {
                                 newProgress[pairId] = "Downloading $typeLabel..."
                             }
-                        } else if (info.state.isFinished) {
-                            newProgress.remove(pairId)
                         }
                     }
                 }

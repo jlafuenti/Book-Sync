@@ -19,7 +19,7 @@ import com.booksync.data.local.entity.*
         PendingSyncEntity::class,
         UserProgressEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class BookSyncDatabase : RoomDatabase() {

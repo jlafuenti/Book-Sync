@@ -48,23 +48,19 @@ class EbooksViewModel @Inject constructor(
     private fun observeWorkManager() {
         viewModelScope.launch {
             workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
-                val newProgress = _downloadingProgress.value.toMutableMap()
+                val newProgress = mutableMapOf<Int, String>()
                 for (info in workInfos) {
-                    val ebookId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
-                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
-                    val workType = info.progress.getString(DownloadWorker.KEY_TYPE)
-                    val isRunning = info.state == WorkInfo.State.RUNNING
-
-                    if (ebookId != -1 && workType == "STANDALONE_EBOOK") {
-                        if (isRunning) {
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        val ebookId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                        val workType = info.progress.getString(DownloadWorker.KEY_TYPE)
+                        if (ebookId != -1 && workType == "STANDALONE_EBOOK") {
+                            val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
                             val typeLabel = "Ebook"
                             if (progress >= 0) {
                                 newProgress[ebookId] = "Downloading $typeLabel ($progress%)..."
                             } else {
                                 newProgress[ebookId] = "Downloading $typeLabel..."
                             }
-                        } else if (info.state.isFinished) {
-                            newProgress.remove(ebookId)
                         }
                     }
                 }

@@ -86,22 +86,21 @@ class SeriesViewModel @Inject constructor(
     private fun observeWorkManager() {
         viewModelScope.launch {
             workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
-                val newProgress = _downloadProgress.value.toMutableMap()
+                val newProgress = mutableMapOf<String, String>()
                 for (info in workInfos) {
-                    val entityId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
-                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
-                    val currentType = info.progress.getString("CURRENT")
-                    val workType = info.progress.getString(DownloadWorker.KEY_TYPE) ?: "ALL"
-                    val isRunning = info.state == WorkInfo.State.RUNNING
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        val entityId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                        if (entityId != -1) {
+                            val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                            val currentType = info.progress.getString("CURRENT")
+                            val workType = info.progress.getString(DownloadWorker.KEY_TYPE) ?: "ALL"
+                            
+                            val stringKey = when (workType) {
+                                "STANDALONE_EBOOK" -> "ebook_$entityId"
+                                "STANDALONE_AUDIOBOOK" -> "audio_$entityId"
+                                else -> "pair_$entityId"
+                            }
 
-                    if (entityId != -1) {
-                        val stringKey = when (workType) {
-                            "STANDALONE_EBOOK" -> "ebook_$entityId"
-                            "STANDALONE_AUDIOBOOK" -> "audio_$entityId"
-                            else -> "pair_$entityId"
-                        }
-                        
-                        if (isRunning) {
                             val typeLabel = when (currentType) {
                                 "EBOOK" -> "Ebook"
                                 "AUDIOBOOK" -> "Audiobook"
@@ -113,8 +112,6 @@ class SeriesViewModel @Inject constructor(
                             } else {
                                 newProgress[stringKey] = "Downloading $typeLabel..."
                             }
-                        } else if (info.state.isFinished) {
-                            newProgress.remove(stringKey)
                         }
                     }
                 }

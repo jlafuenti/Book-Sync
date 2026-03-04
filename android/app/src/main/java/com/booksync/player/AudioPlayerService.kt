@@ -149,8 +149,12 @@ class AudioPlayerService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player
-        if (player != null && !player.playWhenReady) {
-            stopSelf()
+        if (player != null) {
+            // Save position as safety net for crash recovery
+            saveLastPosition(player.currentPosition)
+            if (!player.playWhenReady) {
+                stopSelf()
+            }
         }
     }
 
@@ -158,10 +162,20 @@ class AudioPlayerService : MediaSessionService() {
         sleepTimerJob?.cancel()
         serviceScope.cancel()
         mediaSession?.run {
+            // Save position as safety net for crash recovery
+            saveLastPosition(player.currentPosition)
             player.release()
             release()
         }
         mediaSession = null
         super.onDestroy()
+    }
+
+    private fun saveLastPosition(positionMs: Long) {
+        getSharedPreferences("audio_player_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("last_position_ms", positionMs)
+            .putLong("last_position_saved_at", System.currentTimeMillis())
+            .apply()
     }
 }
