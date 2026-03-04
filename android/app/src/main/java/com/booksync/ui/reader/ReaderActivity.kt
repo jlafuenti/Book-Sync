@@ -16,6 +16,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.booksync.R
+import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
 import com.google.android.material.appbar.MaterialToolbar
@@ -74,6 +75,8 @@ class ReaderActivity : AppCompatActivity() {
     private var isSeeking = false
     private var syncChapterOffset = 0 // Offset between SyncMap epub_chapter and Readium spine index
     private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
+    /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
+    private var sentenceSyncPending = false
 
     // UI views
     private lateinit var topBar: View
@@ -537,9 +540,21 @@ class ReaderActivity : AppCompatActivity() {
                         .trim()
                 } else ""
                 
-                val syncPoint = repository.getSyncPointForEpubText(pairId, syncChapter, textPreview)
                 val locatorJson = locator.toJSON().toString()
 
+            if (sentenceSyncPending) {
+                // Don't overwrite the sentence-level audio bookmark;
+                // just save the epub locator so we can restore the page position.
+                // Flag stays true for the rest of the activity lifecycle.
+                Log.d(TAG, "savePosition: sentenceSyncPending=true, skipping audio sync")
+                repository.updateBookmark(
+                    pairId = pairId,
+                    source = "ebook",
+                    epubChapter = syncChapter,
+                    epubLocator = locatorJson,
+                )
+            } else {
+                val syncPoint = repository.getSyncPointForEpubText(pairId, syncChapter, textPreview)
                 repository.updateBookmark(
                     pairId = pairId,
                     source = "ebook",
@@ -548,6 +563,7 @@ class ReaderActivity : AppCompatActivity() {
                     audioPositionMs = syncPoint?.audioStartMs,
                     epubLocator = locatorJson,
                 )
+            }
             } catch (e: Exception) {
                 Log.w(TAG, "Error saving position", e)
             }
@@ -780,6 +796,98 @@ class ReaderActivity : AppCompatActivity() {
         btnMarginWide.setOnClickListener { updateMargins(2.0) }
 
         dialog.show()
+    }
+
+    // ============ Text Selection Sync ============
+
+    override fun onActionModeStarted(mode: android.view.ActionMode?) {
+        super.onActionModeStarted(mode)
+        if (mode == null || pair?.audiobookDownloaded != true) return
+
+        // Add our custom item and force the floating toolbar to refresh
+        if (mode.menu?.findItem(R.id.action_sync_selection) == null) {
+            val item = mode.menu?.add(0, R.id.action_sync_selection, 0, "Sync to Audio")
+            item?.setOnMenuItemClickListener {
+                syncSelectedTextToAudio()
+                mode.finish()
+                true
+            }
+            Log.d(TAG, "Added 'Sync to Audio' to ActionMode menu")
+        }
+        // Force floating toolbar to rebuild with the new item
+        mode.invalidate()
+    }
+
+    private fun syncSelectedTextToAudio() {
+        // Get selected text from the WebView inside the navigator fragment
+        val webView = navigator?.view?.let { findWebView(it) }
+        if (webView == null) {
+            Log.w(TAG, "Could not find WebView for text selection")
+            return
+        }
+
+        webView.evaluateJavascript("window.getSelection().toString()") { result ->
+            // Result comes back as a JSON string with quotes
+            val selectedText = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
+            Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
+
+            if (selectedText.length < 5) {
+                android.widget.Toast.makeText(this, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
+                return@evaluateJavascript
+            }
+
+            // Find current chapter for hint
+            val locator = navigator?.currentLocator?.value ?: return@evaluateJavascript
+            val pub = publication ?: return@evaluateJavascript
+            val rawChapterIndex = pub.readingOrder.indexOfFirst {
+                val pubHref = it.href.toString()
+                val locHref = locator.href.toString()
+                pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
+            }
+            val chapterIndex = rawChapterIndex.coerceAtLeast(0)
+            val syncChapter = (chapterIndex - syncChapterOffset).coerceAtLeast(0)
+            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, syncChapter=$syncChapter, text='${selectedText.take(60)}'")
+
+            lifecycleScope.launch {
+                val audioMs = repository.epubToAudioText(pairId, syncChapter, selectedText, rewindMs = 2000)
+                if (audioMs > 0) {
+                    Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
+                    sentenceSyncPending = true
+                    // Save to process-local state so the player can read it directly,
+                    // bypassing the server round-trip race condition.
+                    SyncState.pendingAudioSeekMs = audioMs.toLong()
+                    repository.updateBookmark(
+                        pairId = pairId,
+                        source = "ebook",
+                        epubChapter = syncChapter,
+                        audioPositionMs = audioMs,
+                    )
+                    val timeStr = formatAudioTime(audioMs.toLong())
+                    android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun formatAudioTime(ms: Long): String {
+        val totalSec = (ms / 1000).toInt()
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return "%d:%02d:%02d".format(h, m, s)
+    }
+
+    private fun findWebView(view: View): android.webkit.WebView? {
+        if (view is android.webkit.WebView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val result = findWebView(view.getChildAt(i))
+                if (result != null) return result
+            }
+        }
+        return null
     }
 
     // ============ Lifecycle ============

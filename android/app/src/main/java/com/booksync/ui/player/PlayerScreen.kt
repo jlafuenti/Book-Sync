@@ -35,6 +35,7 @@ import androidx.media3.session.SessionToken
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.player.AudioPlayerService
+import com.booksync.SyncState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
@@ -44,6 +45,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import android.util.Log
 
 /**
  * Audio Player ViewModel.
@@ -94,6 +96,16 @@ class PlayerViewModel @Inject constructor(
     }
 
     init {
+        // Check for process-local sentence sync position (bypasses server race condition)
+        val pendingSeek = SyncState.pendingAudioSeekMs
+        if (pendingSeek > 0) {
+            SyncState.pendingAudioSeekMs = -1L
+            Log.d("PlayerViewModel", "Found pending sentence sync seek: $pendingSeek ms")
+            savedPositionFromBookmark = pendingSeek
+            bookmarkLoaded = true
+            _positionMs.value = pendingSeek
+        }
+
         viewModelScope.launch {
             repository.getPairsFlow().collect { pairs ->
                 val found = pairs.find { it.id == pairId }
@@ -111,6 +123,7 @@ class PlayerViewModel @Inject constructor(
             repository.refreshBookmark(pairId)
             repository.getBookmarkFlow(pairId).collect { bm ->
                 bm?.audioPositionMs?.let { pos ->
+                    Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")
                     savedPositionFromBookmark = pos.toLong()
                     if (!bookmarkLoaded) {
                         bookmarkLoaded = true
@@ -119,8 +132,10 @@ class PlayerViewModel @Inject constructor(
                         controller?.let { ctrl ->
                             if (ctrl.isConnected && pos > 0) {
                                 if (ctrl.playbackState == Player.STATE_READY) {
+                                    Log.d("PlayerViewModel", "Seeking to bookmark pos=$pos (controller already ready)")
                                     ctrl.seekTo(pos.toLong())
                                 } else {
+                                    Log.d("PlayerViewModel", "Deferring seek to pos=$pos (state=${ctrl.playbackState})")
                                     pendingSeekPosition = pos.toLong()
                                 }
                             }
@@ -187,6 +202,23 @@ class PlayerViewModel @Inject constructor(
 
                 // Load media if pair is ready
                 _pair.value?.let { loadAudio(it, mediaController) }
+
+                // If bookmark was already loaded before controller connected,
+                // seek to the saved position now. This handles the race condition
+                // where the bookmark arrives before the controller is connected,
+                // especially when the service is already running at a different position.
+                if (bookmarkLoaded && savedPositionFromBookmark > 0) {
+                    Log.d("PlayerViewModel", "connectToService: bookmark already loaded, seeking to $savedPositionFromBookmark, playbackState=${mediaController.playbackState}")
+                    if (mediaController.playbackState == Player.STATE_READY) {
+                        mediaController.seekTo(savedPositionFromBookmark)
+                        _positionMs.value = savedPositionFromBookmark
+                    } else {
+                        pendingSeekPosition = savedPositionFromBookmark
+                        _positionMs.value = savedPositionFromBookmark
+                    }
+                } else {
+                    Log.d("PlayerViewModel", "connectToService: bookmarkLoaded=$bookmarkLoaded, savedPos=$savedPositionFromBookmark")
+                }
             } catch (_: Exception) {}
         }, { it.run() })
     }
@@ -353,6 +385,14 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Pause playback and save bookmark. Called when switching to reader.
+     */
+    fun stopAndSave() {
+        controller?.pause()
+        saveBookmark()
+    }
+
     override fun onCleared() {
         positionPollingJob?.cancel()
         // Save final position before cleanup
@@ -435,7 +475,10 @@ fun PlayerScreen(
                     }
                 },
                 actions = {
-                    FilledTonalIconButton(onClick = onSwitchToReader) {
+                    FilledTonalIconButton(onClick = {
+                        viewModel.stopAndSave()
+                        onSwitchToReader()
+                    }) {
                         Icon(Icons.Default.AutoStories, "Switch to Reader")
                     }
                 },
@@ -605,7 +648,10 @@ fun PlayerScreen(
 
             // Switch to reader CTA
             OutlinedButton(
-                onClick = onSwitchToReader,
+                onClick = {
+                    viewModel.stopAndSave()
+                    onSwitchToReader()
+                },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Default.AutoStories, null)
