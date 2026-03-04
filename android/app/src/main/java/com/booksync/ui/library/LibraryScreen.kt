@@ -55,17 +55,16 @@ class LibraryViewModel @Inject constructor(
     private fun observeWorkManager() {
         viewModelScope.launch {
             workManager.getWorkInfosByTagFlow("download_worker").collect { workInfos ->
-                val newProgress = _downloadingProgress.value.toMutableMap()
+                val newProgress = mutableMapOf<Int, String>()
                 var errorMsg: String? = null
 
                 for (info in workInfos) {
-                    val pairId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
-                    val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
-                    val currentType = info.progress.getString("CURRENT")
-                    val isRunning = info.state == WorkInfo.State.RUNNING
-
-                    if (pairId != -1) {
-                        if (isRunning) {
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        val pairId = info.progress.getInt(DownloadWorker.KEY_PAIR_ID, -1)
+                        val progress = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                        val currentType = info.progress.getString("CURRENT")
+                        
+                        if (pairId != -1) {
                             val typeLabel = when (currentType) {
                                 "EBOOK" -> "Ebook"
                                 "AUDIOBOOK" -> "Audiobook"
@@ -77,13 +76,10 @@ class LibraryViewModel @Inject constructor(
                             } else {
                                 newProgress[pairId] = "Downloading $typeLabel..."
                             }
-                        } else if (info.state.isFinished) {
-                            newProgress.remove(pairId)
-                            if (info.state == WorkInfo.State.FAILED) {
-                                val err = info.outputData.getString(DownloadWorker.ERROR_KEY)
-                                if (err != null) errorMsg = err
-                            }
                         }
+                    } else if (info.state == WorkInfo.State.FAILED) {
+                        val err = info.outputData.getString(DownloadWorker.ERROR_KEY)
+                        if (err != null) errorMsg = err
                     }
                 }
                 
@@ -437,15 +433,21 @@ fun BookPairCard(
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (pair.ebookDownloaded) {
+                    if (pair.ebookDownloaded && pair.audiobookDownloaded) {
+                        Button(
+                            onClick = onReadClick, // Unified Mode is managed by ReaderActivity
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("📖🎧 Read & Listen")
+                        }
+                    } else if (pair.ebookDownloaded) {
                         FilledTonalButton(
                             onClick = onReadClick,
                             modifier = Modifier.weight(1f),
                         ) {
                             Text("📖 Read")
                         }
-                    }
-                    if (pair.audiobookDownloaded) {
+                    } else if (pair.audiobookDownloaded) {
                         Button(
                             onClick = onListenClick,
                             modifier = Modifier.weight(1f),

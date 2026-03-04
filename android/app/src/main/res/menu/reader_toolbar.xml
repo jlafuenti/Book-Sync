@@ -17,10 +17,10 @@
         app:iconTint="@android:color/white" />
 
     <item
-        android:id="@+id/action_toc"
-        android:title="Table of Contents"
-        android:icon="@android:drawable/ic_menu_agenda"
-        app:showAsAction="ifRoom"
+        android:id="@+id/action_sync"
+        android:title="Sync Audio to Page"
+        android:icon="@android:drawable/ic_menu_save"
+        app:showAsAction="always"
         app:iconTint="@android:color/white" />
 
 </menu>

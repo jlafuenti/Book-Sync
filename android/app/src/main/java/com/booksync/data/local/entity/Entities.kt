@@ -87,6 +87,7 @@ data class PendingSyncEntity(
     val epubChapter: Int?,
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
+    val epubLocator: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

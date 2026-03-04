@@ -37,8 +37,15 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideRetryInterceptor(): com.booksync.data.remote.RetryInterceptor {
+        return com.booksync.data.remote.RetryInterceptor(maxRetries = 3)
+    }
+
+    @Provides
+    @Singleton
     fun provideOkHttpClient(
-        authInterceptor: com.booksync.data.remote.AuthInterceptor
+        authInterceptor: com.booksync.data.remote.AuthInterceptor,
+        retryInterceptor: com.booksync.data.remote.RetryInterceptor
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -47,6 +54,7 @@ object AppModule {
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC
             })
+            .addInterceptor(retryInterceptor)
             .addInterceptor(authInterceptor)
             .build()
     }

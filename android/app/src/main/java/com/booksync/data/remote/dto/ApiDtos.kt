@@ -128,7 +128,8 @@ data class BookmarkUpdateRequest(
     val source: String,
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
-    val audio_position_ms: Int? = null
+    val audio_position_ms: Int? = null,
+    val epub_locator: String? = null
 )
 
 @Serializable
@@ -140,6 +141,7 @@ data class BookmarkResponse(
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
+    val epub_locator: String? = null,
     val updated_at: String,
     val synced_at: String? = null
 )

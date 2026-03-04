@@ -44,8 +44,13 @@ class DownloadWorker @AssistedInject constructor(
 
     private fun updateNotificationProgress(progress: Int, typeText: String) {
         notificationBuilder?.let { builder ->
-            builder.setContentText("Downloaded $progress%")
-                .setProgress(100, progress, false)
+            if (progress >= 0) {
+                builder.setContentText("$typeText: $progress%")
+                    .setProgress(100, progress, false)
+            } else {
+                builder.setContentText("Downloading $typeText...")
+                    .setProgress(100, 0, true)
+            }
             notificationManager.notify(notificationId, builder.build())
         }
     }
@@ -130,6 +135,7 @@ class DownloadWorker @AssistedInject constructor(
                 }
 
                 if (type == "ALL" && !pair.syncMapDownloaded && pair.status == "synced") {
+                    updateNotificationProgress(-1, "Sync Data")
                     setProgressAsync(workDataOf(PROGRESS_KEY to -1, "CURRENT" to "SYNC_MAP", KEY_PAIR_ID to pairId, KEY_TYPE to type))
                     repository.downloadSyncMap(pair.id)
                 }

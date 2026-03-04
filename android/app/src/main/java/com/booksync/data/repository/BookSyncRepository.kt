@@ -366,6 +366,7 @@ class BookSyncRepository @Inject constructor(
     suspend fun refreshBookmark(pairId: Int) {
         try {
             val remote = api.getBookmark(pairId)
+            val existing = bookmarkDao.getBookmark(pairId)
             bookmarkDao.upsertBookmark(
                 BookmarkEntity(
                     bookPairId = pairId,
@@ -373,6 +374,7 @@ class BookSyncRepository @Inject constructor(
                     epubChapter = remote.epub_chapter,
                     epubSentenceIndex = remote.epub_sentence_index,
                     audioPositionMs = remote.audio_position_ms,
+                    epubLocator = remote.epub_locator ?: existing?.epubLocator,
                     updatedAt = remote.updated_at,
                     syncedToServer = true,
                 )
@@ -394,19 +396,22 @@ class BookSyncRepository @Inject constructor(
         audioPositionMs: Int? = null,
         epubLocator: String? = null,
     ) {
-        // Save locally
-        bookmarkDao.upsertBookmark(
-            BookmarkEntity(
-                bookPairId = pairId,
-                source = source,
-                epubChapter = epubChapter,
-                epubSentenceIndex = epubSentenceIndex,
-                audioPositionMs = audioPositionMs,
-                epubLocator = epubLocator,
-                updatedAt = System.currentTimeMillis().toString(),
-                syncedToServer = false,
-            )
+        val existing = bookmarkDao.getBookmark(pairId)
+        
+        // Merge with existing
+        val merged = BookmarkEntity(
+            bookPairId = pairId,
+            source = source,
+            epubChapter = epubChapter ?: existing?.epubChapter,
+            epubSentenceIndex = epubSentenceIndex ?: existing?.epubSentenceIndex,
+            audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
+            epubLocator = epubLocator ?: existing?.epubLocator,
+            updatedAt = System.currentTimeMillis().toString(),
+            syncedToServer = false,
         )
+
+        // Save locally
+        bookmarkDao.upsertBookmark(merged)
 
         // Try immediate sync
         try {
@@ -414,23 +419,23 @@ class BookSyncRepository @Inject constructor(
                 pairId,
                 BookmarkUpdateRequest(
                     source = source,
-                    epub_chapter = epubChapter,
-                    epub_sentence_index = epubSentenceIndex,
-                    audio_position_ms = audioPositionMs,
+                    epub_chapter = merged.epubChapter,
+                    epub_sentence_index = merged.epubSentenceIndex,
+                    audio_position_ms = merged.audioPositionMs,
+                    epub_locator = merged.epubLocator,
                 )
             )
-            bookmarkDao.upsertBookmark(
-                bookmarkDao.getBookmark(pairId)!!.copy(syncedToServer = true)
-            )
+            bookmarkDao.upsertBookmark(merged.copy(syncedToServer = true))
         } catch (_: Exception) {
             // Offline — queue for later sync
             pendingSyncDao.insert(
                 PendingSyncEntity(
                     bookPairId = pairId,
                     source = source,
-                    epubChapter = epubChapter,
-                    epubSentenceIndex = epubSentenceIndex,
-                    audioPositionMs = audioPositionMs,
+                    epubChapter = merged.epubChapter,
+                    epubSentenceIndex = merged.epubSentenceIndex,
+                    audioPositionMs = merged.audioPositionMs,
+                    epubLocator = merged.epubLocator,
                 )
             )
         }
@@ -443,49 +448,157 @@ class BookSyncRepository @Inject constructor(
 
     // ============ Position Conversion ============
 
-    /**
-     * Convert an EPUB position to an audio position using the local sync map.
-     * Returns the audio position in milliseconds with rewind applied.
-     */
-    suspend fun epubToAudio(
-        pairId: Int,
-        chapter: Int,
-        sentenceIndex: Int,
-        rewindMs: Int = 10_000,
-    ): Int {
-        val points = syncPointDao.getPointsForPair(pairId)
-
-        // Find exact match
-        val exact = points.find { it.epubChapter == chapter && it.epubSentenceIndex == sentenceIndex }
-        if (exact != null) {
-            return maxOf(0, exact.audioStartMs - rewindMs)
-        }
-
-        // Find closest preceding point
-        val preceding = points.filter {
-            it.epubChapter < chapter ||
-                    (it.epubChapter == chapter && it.epubSentenceIndex <= sentenceIndex)
-        }.lastOrNull()
-
-        return if (preceding != null) {
-            maxOf(0, preceding.audioStartMs - rewindMs)
-        } else {
-            0
-        }
+    /** Normalize text for comparison: lowercase, convert ALL whitespace to spaces, strip punctuation */
+    private fun normalizeForSearch(text: String): String {
+        return text.lowercase()
+            // Convert ALL Unicode whitespace variants to regular spaces FIRST
+            .replace('\u00A0', ' ')  // non-breaking space (very common in epubs)
+            .replace('\u2002', ' ')  // en space
+            .replace('\u2003', ' ')  // em space
+            .replace('\u2009', ' ')  // thin space
+            .replace('\u200B', ' ')  // zero-width space
+            .replace('\u202F', ' ')  // narrow no-break space
+            .replace(Regex("[^a-z0-9 ]"), "") // Keep ONLY a-z, digits, regular space
+            .replace(Regex(" +"), " ")        // Collapse multiple spaces
+            .trim()
     }
 
     /**
-     * Convert an audio position to an EPUB position using the local sync map.
-     * Returns (chapter, sentenceIndex).
+     * Find the best matching SyncPointEntity for a given extracted EPUB text snippet.
+     *
+     * NEW ALGORITHM: Instead of comparing against individual short sentence previews,
+     * this concatenates ALL sync point previews for the chapter into one big normalized
+     * text block, then does substring search to find where the ebook page text appears.
+     * The character offset is mapped back to the corresponding sentence/sync point.
      */
-    suspend fun audioToEpub(pairId: Int, audioPositionMs: Int): Pair<Int, Int> {
+    suspend fun getSyncPointForEpubText(pairId: Int, chapter: Int, epubText: String): SyncPointEntity? = withContext(Dispatchers.Default) {
+        // Search the target chapter and neighboring chapters
+        val allPoints = syncPointDao.getPointsForPair(pairId)
+        
+        if (allPoints.isEmpty()) {
+            android.util.Log.d("SyncMatch", "No sync points found for pair $pairId")
+            return@withContext null
+        }
+
+        // Log available chapters in sync map for debugging
+        val availableChapters = allPoints.map { it.epubChapter }.distinct().sorted()
+        android.util.Log.d("SyncMatch", "Available sync chapters: $availableChapters")
+
+        val normalizedEpub = normalizeForSearch(epubText)
+        android.util.Log.d("SyncMatch", "Searching transcript for epubText (length ${normalizedEpub.length}): '${normalizedEpub.take(100)}...'")
+
+        // Try each chapter in range: target first, then expanding outward (±10 to handle offset issues)
+        val chaptersToTry = listOf(chapter) + (1..10).flatMap { d -> listOf(chapter - d, chapter + d) }
+
+        for (targetChapter in chaptersToTry) {
+            val points = allPoints.filter { it.epubChapter == targetChapter }
+                .sortedBy { it.epubSentenceIndex }
+            if (points.isEmpty()) continue
+
+            // Build concatenated transcript with sentence boundary tracking
+            val transcriptBuilder = StringBuilder()
+            val sentenceBoundaries = mutableListOf<Pair<Int, Int>>() // (startCharIndex, pointIndex)
+
+            for ((idx, point) in points.withIndex()) {
+                val preview = point.epubTextPreview ?: continue
+                val normalized = normalizeForSearch(preview)
+                if (normalized.isEmpty()) continue
+
+                val startPos = transcriptBuilder.length
+                transcriptBuilder.append(normalized)
+                transcriptBuilder.append(" ") // Space between sentences
+                sentenceBoundaries.add(Pair(startPos, idx))
+            }
+
+            val transcript = transcriptBuilder.toString()
+            if (transcript.isEmpty()) continue
+
+            // Log first 80 chars of transcript for debugging
+            android.util.Log.d("SyncMatch", "Chapter $targetChapter transcript (${transcript.length} chars): '${transcript.take(80)}...'")
+
+            // Progressive substring search: try decreasing lengths
+            val searchLengths = listOf(
+                minOf(normalizedEpub.length, 200),
+                minOf(normalizedEpub.length, 150),
+                minOf(normalizedEpub.length, 100),
+                minOf(normalizedEpub.length, 60),
+                minOf(normalizedEpub.length, 30),
+            ).distinct().filter { it > 10 }
+
+            for (searchLen in searchLengths) {
+                // Try from the start of the extracted text
+                val searchText = normalizedEpub.take(searchLen)
+                var matchIndex = transcript.indexOf(searchText)
+
+                // Also try from a bit into the text (skip potential chapter headings at start)
+                if (matchIndex < 0 && normalizedEpub.length > searchLen + 30) {
+                    val offsetText = normalizedEpub.substring(30).take(searchLen)
+                    matchIndex = transcript.indexOf(offsetText)
+                }
+
+                if (matchIndex >= 0) {
+                    // Map character offset to sentence index
+                    var matchedPointIdx = 0
+                    for ((startPos, idx) in sentenceBoundaries) {
+                        if (startPos <= matchIndex) {
+                            matchedPointIdx = idx
+                        } else {
+                            break
+                        }
+                    }
+
+                    val matchedPoint = points[matchedPointIdx]
+                    android.util.Log.d("SyncMatch", "MATCH found in chapter $targetChapter! " +
+                        "Sentence ${matchedPoint.epubSentenceIndex}, audio=${matchedPoint.audioStartMs}ms, " +
+                        "searchLen=$searchLen, preview='${matchedPoint.epubTextPreview?.take(60)}'")
+                    return@withContext matchedPoint
+                }
+            }
+
+            android.util.Log.d("SyncMatch", "No substring match in chapter $targetChapter")
+        }
+
+        android.util.Log.d("SyncMatch", "No match found in any chapter (searched ±10 around chapter $chapter)")
+        return@withContext null
+    }
+
+    suspend fun getSentenceIndexFromProgression(pairId: Int, chapter: Int, progression: Float): Int {
+        val points = syncPointDao.getPointsForPair(pairId).filter { it.epubChapter == chapter }
+        if (points.isEmpty()) return 0
+        val index = (progression * points.size).toInt().coerceIn(0, points.size - 1)
+        return points[index].epubSentenceIndex
+    }
+
+    /**
+     * Convert an EPUB position (chapter + extracted text) to an audio position using the local sync map.
+     * Returns the audio position in milliseconds with rewind applied.
+     */
+    suspend fun epubToAudioText(
+        pairId: Int,
+        chapter: Int,
+        epubText: String,
+        rewindMs: Int = 10_000,
+    ): Int {
+        val syncPoint = getSyncPointForEpubText(pairId, chapter, epubText) ?: return 0
+        return maxOf(0, syncPoint.audioStartMs - rewindMs)
+    }
+
+    /**
+     * Convert an audio position to an EPUB text snippet using the local sync map.
+     * Returns (chapter, epubTextPreview).
+     */
+    suspend fun audioToEpubText(pairId: Int, audioPositionMs: Int): Pair<Int, String> {
         val points = syncPointDao.getPointsForPair(pairId)
 
-        val best = points.filter { it.audioStartMs <= audioPositionMs }.lastOrNull()
+        // Sort by audioStartMs to find the correct sync point closest to the audio position
+        val sorted = points.sortedBy { it.audioStartMs }
+        val best = sorted.filter { it.audioStartMs <= audioPositionMs }.lastOrNull()
+        android.util.Log.d("AudioToEpub", "audioToEpubText: audioPos=${audioPositionMs}ms, " +
+            "best=${best?.let { "ch${it.epubChapter} s${it.epubSentenceIndex} audio=${it.audioStartMs}ms preview='${it.epubTextPreview?.take(50)}'" } ?: "null"}")
         return if (best != null) {
-            Pair(best.epubChapter, best.epubSentenceIndex)
+            Pair(best.epubChapter, best.epubTextPreview ?: "")
         } else {
-            Pair(0, 0)
+            Pair(0, "")
         }
     }
 
@@ -585,6 +698,7 @@ class BookSyncRepository @Inject constructor(
                         epub_chapter = sync.epubChapter,
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
+                        epub_locator = sync.epubLocator,
                     )
                 )
                 pendingSyncDao.delete(sync)
