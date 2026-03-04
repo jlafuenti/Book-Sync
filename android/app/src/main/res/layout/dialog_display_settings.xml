@@ -96,7 +96,7 @@
                     android:insetBottom="0dp" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
-            <!-- Font Size — slider with A / A icons -->
+            <!-- Font Size -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -112,33 +112,53 @@
                 android:gravity="center_vertical"
                 android:layout_marginBottom="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_font_decrease"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
                     android:text="A"
-                    android:textSize="12sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginEnd="8dp" />
+                    android:textSize="14sp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
 
-                <com.google.android.material.slider.Slider
-                    android:id="@+id/slider_font_size"
+                <TextView
+                    android:id="@+id/text_font_size"
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:valueFrom="50"
-                    android:valueTo="300"
-                    android:stepSize="10" />
+                    android:text="100%"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:gravity="center" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_font_increase"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
                     android:text="A"
-                    android:textSize="24sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginStart="8dp" />
+                    android:textSize="20sp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
+
+                <ImageButton
+                    android:id="@+id/btn_font_reset"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_restore_24"
+                    app:tint="?attr/colorPrimary" />
             </LinearLayout>
 
-            <!-- Line Spacing — slider -->
+            <!-- Line Spacing -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -154,33 +174,59 @@
                 android:gravity="center_vertical"
                 android:layout_marginBottom="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="≡"
-                    android:textSize="16sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginEnd="8dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_spacing_decrease"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:icon="@drawable/ic_spacing_compact"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:paddingTop="0dp"
+                    android:paddingBottom="0dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
 
-                <com.google.android.material.slider.Slider
-                    android:id="@+id/slider_spacing"
+                <TextView
+                    android:id="@+id/text_spacing"
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:valueFrom="1.0"
-                    android:valueTo="2.5"
-                    android:stepSize="0.1" />
+                    android:text="1.2x"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:gravity="center" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="≡"
-                    android:textSize="24sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginStart="8dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_spacing_increase"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:icon="@drawable/ic_spacing_wide"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:paddingTop="0dp"
+                    android:paddingBottom="0dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
+
+                <ImageButton
+                    android:id="@+id/btn_spacing_reset"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_restore_24"
+                    app:tint="?attr/colorPrimary" />
             </LinearLayout>
 
-            <!-- Margins — slider -->
+            <!-- Margins -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -195,30 +241,56 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="┃ ┃"
-                    android:textSize="14sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginEnd="8dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_margin_decrease"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:icon="@drawable/ic_margin_narrow"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:paddingTop="0dp"
+                    android:paddingBottom="0dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
 
-                <com.google.android.material.slider.Slider
-                    android:id="@+id/slider_margins"
+                <TextView
+                    android:id="@+id/text_margins"
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:valueFrom="0.5"
-                    android:valueTo="3.0"
-                    android:stepSize="0.25" />
+                    android:text="1.0x"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:gravity="center" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="┃    ┃"
-                    android:textSize="14sp"
-                    android:textColor="?android:attr/textColorSecondary"
-                    android:layout_marginStart="8dp" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_margin_increase"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:icon="@drawable/ic_margin_wide"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    android:paddingTop="0dp"
+                    android:paddingBottom="0dp"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp" />
+
+                <ImageButton
+                    android:id="@+id/btn_margin_reset"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:src="@drawable/ic_restore_24"
+                    app:tint="?attr/colorPrimary" />
             </LinearLayout>
 
         </LinearLayout>

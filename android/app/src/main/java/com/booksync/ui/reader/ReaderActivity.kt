@@ -762,42 +762,77 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
-        // Font Size slider
-        val sliderFontSize = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_font_size)
-        val currentSize = currentPreferences.fontSize ?: 1.0
-        sliderFontSize.value = (currentSize * 100).toFloat().coerceIn(50f, 300f)
-        sliderFontSize.addOnChangeListener { _, value, fromUser ->
-            if (fromUser) {
-                val newSize = value.toDouble() / 100.0
-                currentPreferences = currentPreferences.copy(fontSize = newSize)
-                nav.submitPreferences(currentPreferences)
-                savePreferences()
-            }
-        }
+        // Font Size
+        val btnFontDecrease = dialogView.findViewById<View>(R.id.btn_font_decrease)
+        val btnFontIncrease = dialogView.findViewById<View>(R.id.btn_font_increase)
+        val btnFontReset = dialogView.findViewById<View>(R.id.btn_font_reset)
+        val textFontSize = dialogView.findViewById<TextView>(R.id.text_font_size)
 
-        // Line Spacing slider
-        val sliderSpacing = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_spacing)
-        val currentSpacing = currentPreferences.lineHeight ?: 1.2
-        sliderSpacing.value = currentSpacing.toFloat().coerceIn(1.0f, 2.5f)
-        sliderSpacing.addOnChangeListener { _, value, fromUser ->
-            if (fromUser) {
-                currentPreferences = currentPreferences.copy(lineHeight = value.toDouble())
-                nav.submitPreferences(currentPreferences)
-                savePreferences()
-            }
+        fun updateFontSize(newSize: Double?) {
+            currentPreferences = currentPreferences.copy(fontSize = newSize)
+            textFontSize.text = if (newSize != null) "${(newSize * 100).toInt()}%" else "100%"
+            nav.submitPreferences(currentPreferences)
+            savePreferences()
         }
+        textFontSize.text = "${((currentPreferences.fontSize ?: 1.0) * 100).toInt()}%"
 
-        // Margins slider
-        val sliderMargins = dialogView.findViewById<com.google.android.material.slider.Slider>(R.id.slider_margins)
-        val currentMargins = currentPreferences.pageMargins ?: 1.0
-        sliderMargins.value = currentMargins.toFloat().coerceIn(0.5f, 3.0f)
-        sliderMargins.addOnChangeListener { _, value, fromUser ->
-            if (fromUser) {
-                currentPreferences = currentPreferences.copy(pageMargins = value.toDouble())
-                nav.submitPreferences(currentPreferences)
-                savePreferences()
-            }
+        btnFontDecrease.setOnClickListener {
+            val current = currentPreferences.fontSize ?: 1.0
+            updateFontSize((current - 0.1).coerceAtLeast(0.5))
         }
+        btnFontIncrease.setOnClickListener {
+            val current = currentPreferences.fontSize ?: 1.0
+            updateFontSize((current + 0.1).coerceAtMost(3.0))
+        }
+        btnFontReset.setOnClickListener { updateFontSize(null) }
+
+        // Line Spacing
+        val btnSpacingDecrease = dialogView.findViewById<View>(R.id.btn_spacing_decrease)
+        val btnSpacingIncrease = dialogView.findViewById<View>(R.id.btn_spacing_increase)
+        val btnSpacingReset = dialogView.findViewById<View>(R.id.btn_spacing_reset)
+        val textSpacing = dialogView.findViewById<TextView>(R.id.text_spacing)
+
+        fun updateSpacing(newSpacing: Double?) {
+            currentPreferences = currentPreferences.copy(lineHeight = newSpacing)
+            textSpacing.text = if (newSpacing != null) "%.1fx".format(newSpacing) else "1.2x"
+            nav.submitPreferences(currentPreferences)
+            savePreferences()
+        }
+        textSpacing.text = "%.1fx".format(currentPreferences.lineHeight ?: 1.2)
+
+        btnSpacingDecrease.setOnClickListener {
+            val current = currentPreferences.lineHeight ?: 1.2
+            updateSpacing((current - 0.1).coerceAtLeast(1.0))
+        }
+        btnSpacingIncrease.setOnClickListener {
+            val current = currentPreferences.lineHeight ?: 1.2
+            updateSpacing((current + 0.1).coerceAtMost(2.5))
+        }
+        btnSpacingReset.setOnClickListener { updateSpacing(null) }
+
+        // Margins
+        val btnMarginDecrease = dialogView.findViewById<View>(R.id.btn_margin_decrease)
+        val btnMarginIncrease = dialogView.findViewById<View>(R.id.btn_margin_increase)
+        val btnMarginReset = dialogView.findViewById<View>(R.id.btn_margin_reset)
+        val textMargins = dialogView.findViewById<TextView>(R.id.text_margins)
+
+        fun updateMargins(newMargins: Double?) {
+            currentPreferences = currentPreferences.copy(pageMargins = newMargins)
+            textMargins.text = if (newMargins != null) "%.2fx".format(newMargins) else "1.00x"
+            nav.submitPreferences(currentPreferences)
+            savePreferences()
+        }
+        textMargins.text = "%.2fx".format(currentPreferences.pageMargins ?: 1.0)
+
+        btnMarginDecrease.setOnClickListener {
+            val current = currentPreferences.pageMargins ?: 1.0
+            updateMargins((current - 0.25).coerceAtLeast(0.5))
+        }
+        btnMarginIncrease.setOnClickListener {
+            val current = currentPreferences.pageMargins ?: 1.0
+            updateMargins((current + 0.25).coerceAtMost(3.0))
+        }
+        btnMarginReset.setOnClickListener { updateMargins(null) }
 
         // ======== DISPLAY TAB ========
 
