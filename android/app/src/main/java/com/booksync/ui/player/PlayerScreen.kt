@@ -46,6 +46,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import android.util.Log
+import com.booksync.data.remote.BookmarkLogResponse
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Represents a chapter marker in an M4B audiobook.
@@ -93,6 +101,9 @@ class PlayerViewModel @Inject constructor(
 
     private val _currentChapterIndex = MutableStateFlow(-1)
     val currentChapterIndex = _currentChapterIndex.asStateFlow()
+
+    private val _history = MutableStateFlow<List<BookmarkLogResponse>>(emptyList())
+    val history = _history.asStateFlow()
 
     private var controller: MediaController? = null
     private var positionPollingJob: kotlinx.coroutines.Job? = null
@@ -514,6 +525,12 @@ class PlayerViewModel @Inject constructor(
         controller = null
         super.onCleared()
     }
+
+    fun loadHistory() {
+        viewModelScope.launch {
+            _history.value = repository.getBookmarkHistory(pairId)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -536,9 +553,98 @@ fun PlayerScreen(
     val currentChapterIndex by viewModel.currentChapterIndex.collectAsState()
 
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var showChaptersDialog by remember { mutableStateOf(false) }
+    var showHistoryDialog by remember { mutableStateOf(false) }
 
     // Not downloaded warning
     val isDownloaded = pair?.audiobookDownloaded == true
+
+    // Chapters dialog
+    if (showChaptersDialog) {
+        AlertDialog(
+            onDismissRequest = { showChaptersDialog = false },
+            title = { Text("Chapters") },
+            text = {
+                if (chapters.isEmpty()) {
+                    Text(
+                        "No chapters found in this file",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn {
+                        itemsIndexed(chapters) { index, chapter ->
+                            ListItem(
+                                headlineContent = { Text(chapter.title) },
+                                trailingContent = { Text(formatTime(chapter.startMs)) },
+                                modifier = Modifier.clickable {
+                                    viewModel.seekTo(chapter.startMs)
+                                    showChaptersDialog = false
+                                },
+                                colors = if (index == currentChapterIndex)
+                                    ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                                else ListItemDefaults.colors()
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChaptersDialog = false }) { Text("Close") }
+            },
+        )
+    }
+
+    // History dialog
+    if (showHistoryDialog) {
+        val historyItems by viewModel.history.collectAsState()
+        AlertDialog(
+            onDismissRequest = { showHistoryDialog = false },
+            title = { Text("Position History") },
+            text = {
+                if (historyItems.isEmpty()) {
+                    Text(
+                        "No history yet",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn {
+                        items(historyItems) { item ->
+                            ListItem(
+                                headlineContent = {
+                                    Text(
+                                        if (item.new_audio_position_ms != null)
+                                            "Audio: ${formatTime(item.new_audio_position_ms.toLong())}"
+                                        else "Chapter ${item.new_epub_chapter ?: "?"}"
+                                    )
+                                },
+                                supportingContent = {
+                                    Text("${item.source} · ${formatAbsoluteTime(item.changed_at)}")
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        if (item.source == "audiobook") Icons.Default.Headphones
+                                        else Icons.Default.MenuBook,
+                                        contentDescription = null
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    item.new_audio_position_ms?.let { ms ->
+                                        viewModel.seekTo(ms.toLong())
+                                        showHistoryDialog = false
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHistoryDialog = false }) { Text("Close") }
+            },
+        )
+    }
 
     // Sleep timer dialog
     if (showSleepTimerDialog) {
@@ -772,6 +878,33 @@ fun PlayerScreen(
                         tint = if (sleepTimerMinutes > 0) MaterialTheme.colorScheme.primary else LocalContentColor.current
                     )
                 }
+
+                // Chapters button
+                IconButton(
+                    onClick = { showChaptersDialog = true },
+                    enabled = isDownloaded,
+                ) {
+                    Icon(
+                        Icons.Default.FormatListBulleted,
+                        contentDescription = "Chapters",
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+
+                // History button
+                IconButton(
+                    onClick = {
+                        viewModel.loadHistory()
+                        showHistoryDialog = true
+                    },
+                    enabled = isDownloaded,
+                ) {
+                    Icon(
+                        Icons.Default.History,
+                        contentDescription = "History",
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -801,5 +934,25 @@ private fun formatTime(ms: Long): String {
         "%d:%02d:%02d".format(hours, minutes, seconds)
     } else {
         "%d:%02d".format(minutes, seconds)
+    }
+}
+
+/**
+ * Format a server timestamp into a human-readable local time.
+ * Server sends UTC timestamps like "2026-03-04T21:52:14.923182" (no timezone suffix).
+ * We parse as UTC and convert to the device's local timezone.
+ */
+private fun formatAbsoluteTime(isoTimestamp: String): String {
+    return try {
+        val utcTime = java.time.LocalDateTime.parse(
+            isoTimestamp,
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.SSSSSS][.SSSSS][.SSSS][.SSS][.SS][.S]")
+        )
+        val zonedUtc = utcTime.atZone(java.time.ZoneId.of("UTC"))
+        val localTime = zonedUtc.withZoneSameInstant(java.time.ZoneId.systemDefault())
+        val formatter = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault())
+        localTime.format(formatter)
+    } catch (_: Exception) {
+        isoTimestamp // fallback: show raw timestamp
     }
 }

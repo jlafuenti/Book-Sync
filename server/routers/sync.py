@@ -170,18 +170,24 @@ async def update_bookmark(
         await db.flush()
         await db.refresh(bookmark)
     else:
-        # Log previous position
-        log = BookmarkLog(
-            bookmark_id=bookmark.id,
-            source=update.source,
-            prev_epub_chapter=bookmark.epub_chapter,
-            prev_epub_sentence_index=bookmark.epub_sentence_index,
-            prev_audio_position_ms=bookmark.audio_position_ms,
-            new_epub_chapter=epub_ch,
-            new_epub_sentence_index=epub_si,
-            new_audio_position_ms=audio_ms,
+        # Only log if position actually changed
+        position_changed = (
+            bookmark.epub_chapter != epub_ch
+            or bookmark.epub_sentence_index != epub_si
+            or bookmark.audio_position_ms != audio_ms
         )
-        db.add(log)
+        if position_changed:
+            log = BookmarkLog(
+                bookmark_id=bookmark.id,
+                source=update.source,
+                prev_epub_chapter=bookmark.epub_chapter,
+                prev_epub_sentence_index=bookmark.epub_sentence_index,
+                prev_audio_position_ms=bookmark.audio_position_ms,
+                new_epub_chapter=epub_ch,
+                new_epub_sentence_index=epub_si,
+                new_audio_position_ms=audio_ms,
+            )
+            db.add(log)
 
         # Update bookmark
         bookmark.source = update.source
