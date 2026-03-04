@@ -38,6 +38,8 @@ fun UnifiedAudioPlayer(
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
     val coverArtBitmap by viewModel.coverArtBitmap.collectAsState()
     val coverArt = coverArtBitmap?.asImageBitmap()
+    val chapters by viewModel.chapters.collectAsState()
+    val currentChapterIndex by viewModel.currentChapterIndex.collectAsState()
 
     var sheetState by remember { mutableStateOf(bottomSheetBehavior.state) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
@@ -141,6 +143,8 @@ fun UnifiedAudioPlayer(
                 sleepTimerMinutes = sleepTimerMinutes,
                 sleepTimerRemainingMs = sleepTimerRemainingMs,
                 coverArt = coverArt,
+                chapters = chapters,
+                currentChapterIndex = currentChapterIndex,
                 onShowSleepTimerDialog = { showSleepTimerDialog = true },
                 onCollapse = { bottomSheetBehavior.state = BottomSheetBehavior.STATE_COLLAPSED }
             )
@@ -257,6 +261,8 @@ fun ExpandedPlayer(
     sleepTimerMinutes: Int,
     sleepTimerRemainingMs: Long,
     coverArt: androidx.compose.ui.graphics.ImageBitmap?,
+    chapters: List<Chapter>,
+    currentChapterIndex: Int,
     onShowSleepTimerDialog: () -> Unit,
     onCollapse: () -> Unit
 ) {
@@ -344,9 +350,17 @@ fun ExpandedPlayer(
 
         // Playback controls
         Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Chapter back
+            IconButton(
+                onClick = { viewModel.skipToPreviousChapter() },
+                enabled = chapters.isNotEmpty()
+            ) {
+                Icon(Icons.Default.SkipPrevious, "Previous Chapter", modifier = Modifier.size(28.dp))
+            }
+
             IconButton(onClick = { viewModel.skipBackward(10) }) {
                 Icon(Icons.Default.Replay10, "Rewind 10s", modifier = Modifier.size(32.dp))
             }
@@ -364,6 +378,14 @@ fun ExpandedPlayer(
 
             IconButton(onClick = { viewModel.skipForward(30) }) {
                 Icon(Icons.Default.Forward30, "Forward 30s", modifier = Modifier.size(32.dp))
+            }
+
+            // Chapter forward
+            IconButton(
+                onClick = { viewModel.skipToNextChapter() },
+                enabled = chapters.isNotEmpty()
+            ) {
+                Icon(Icons.Default.SkipNext, "Next Chapter", modifier = Modifier.size(28.dp))
             }
         }
 
@@ -386,14 +408,13 @@ fun ExpandedPlayer(
             }
 
             // Sleep timer button
-            FilledTonalButton(onClick = onShowSleepTimerDialog) {
-                Icon(Icons.Default.Timer, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                if (sleepTimerMinutes > 0) {
-                    Text(formatTime(sleepTimerRemainingMs))
-                } else {
-                    Text("Sleep")
-                }
+            IconButton(onClick = onShowSleepTimerDialog) {
+                Icon(
+                    Icons.Default.NightsStay,
+                    contentDescription = "Sleep Timer",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (sleepTimerMinutes > 0) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                )
             }
         }
         

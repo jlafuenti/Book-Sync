@@ -146,6 +146,19 @@ data class BookmarkResponse(
     val synced_at: String? = null
 )
 
+@Serializable
+data class BookmarkLogResponse(
+    val id: Int,
+    val source: String,
+    val prev_epub_chapter: Int? = null,
+    val prev_epub_sentence_index: Int? = null,
+    val prev_audio_position_ms: Int? = null,
+    val new_epub_chapter: Int? = null,
+    val new_epub_sentence_index: Int? = null,
+    val new_audio_position_ms: Int? = null,
+    val changed_at: String
+)
+
 // ============ User Progress ============
 
 @Serializable
