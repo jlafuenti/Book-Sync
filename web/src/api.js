@@ -115,9 +115,21 @@ export async function getEbooks() {
     return resp.json();
 }
 
+export async function getEbook(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}`);
+    if (!resp.ok) throw new Error('Failed to fetch ebook');
+    return resp.json();
+}
+
 export async function getAudiobooks() {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks`);
     if (!resp.ok) throw new Error('Failed to fetch audiobooks');
+    return resp.json();
+}
+
+export async function getAudiobook(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}`);
+    if (!resp.ok) throw new Error('Failed to fetch audiobook');
     return resp.json();
 }
 
@@ -275,3 +287,48 @@ export async function updateAudiobookMetadata(bookId, meta) {
     return resp.json();
 }
 
+// ============ Chapters ============
+
+export async function getEbookChapters(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}/chapters`);
+    if (!resp.ok) throw new Error('Failed to get ebook chapters');
+    return resp.json();
+}
+
+export async function getAudiobookChapters(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/chapters`);
+    if (!resp.ok) throw new Error('Failed to get audiobook chapters');
+    return resp.json();
+}
+
+export async function updateAudiobookChapters(id, chapters) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/chapters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chapters)
+    });
+    if (!resp.ok) throw new Error('Failed to update audiobook chapters');
+    return resp.json();
+}
+
+// ============ Match ============
+
+export async function searchMetadata(provider, query, author) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/match/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, query, author })
+    });
+    if (!resp.ok) throw new Error('Failed to search metadata');
+    return resp.json();
+}
+
+export async function applyMetadata(bookType, bookId, data) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/match/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ book_type: bookType, book_id: bookId, matched_data: data })
+    });
+    if (!resp.ok) throw new Error('Failed to apply metadata');
+    return resp.json();
+}
