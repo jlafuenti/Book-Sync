@@ -72,9 +72,14 @@ function App() {
                         <div className="nav-sub-group">
                             <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
                             <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
-                            <Link to="/library/series" className={subNavClass('/library/series')}>📖 Series</Link>
                         </div>
                     )}
+
+                    {/* Series */}
+                    <Link to="/series" className={navClass('/series')}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /><path d="M12 2v20" /></svg>
+                        Series
+                    </Link>
 
                     {/* Book Pairs */}
                     <Link to="/pairs/paired" className={navClass('/pairs')}>
@@ -126,7 +131,9 @@ function App() {
                     {/* Library routes */}
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
-                    <Route path="/library/series" element={<SeriesPage />} />
+
+                    {/* Series routes */}
+                    <Route path="/series" element={<SeriesPage />} />
 
                     {/* Book Pairs routes */}
                     <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />

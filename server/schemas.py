@@ -63,6 +63,19 @@ class EBookResponse(BaseModel):
     metadata_source: Optional[str] = None
     metadata_pattern: Optional[str] = None
     uploaded_at: datetime
+    # Extended metadata
+    description: Optional[str] = None
+    publisher: Optional[str] = None
+    publish_year: Optional[int] = None
+    language: Optional[str] = None
+    genres: Optional[str] = None
+    tags: Optional[str] = None
+    isbn: Optional[str] = None
+    asin: Optional[str] = None
+    narrators: Optional[str] = None
+    is_explicit: Optional[bool] = None
+    is_abridged: Optional[bool] = None
+    cover_path: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -82,6 +95,19 @@ class AudioBookResponse(BaseModel):
     metadata_source: Optional[str] = None
     metadata_pattern: Optional[str] = None
     uploaded_at: datetime
+    # Extended metadata
+    description: Optional[str] = None
+    publisher: Optional[str] = None
+    publish_year: Optional[int] = None
+    language: Optional[str] = None
+    genres: Optional[str] = None
+    tags: Optional[str] = None
+    isbn: Optional[str] = None
+    asin: Optional[str] = None
+    narrators: Optional[str] = None
+    is_explicit: Optional[bool] = None
+    is_abridged: Optional[bool] = None
+    cover_path: Optional[str] = None
 
     class Config:
         from_attributes = True

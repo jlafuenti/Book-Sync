@@ -4,7 +4,7 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, BigInteger, Enum, ForeignKey, Float
+from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -41,6 +41,20 @@ class EBook(Base):
     metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
     metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
 
+    # Extended metadata fields
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    publisher: Mapped[str] = mapped_column(String(500), nullable=True)
+    publish_year: Mapped[int] = mapped_column(Integer, nullable=True)
+    language: Mapped[str] = mapped_column(String(50), nullable=True)
+    genres: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
+    tags: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
+    isbn: Mapped[str] = mapped_column(String(20), nullable=True)
+    asin: Mapped[str] = mapped_column(String(20), nullable=True)
+    narrators: Mapped[str] = mapped_column(String(500), nullable=True)
+    is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
+    is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
+    cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
+
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
 
@@ -69,6 +83,20 @@ class AudioBook(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+
+    # Extended metadata fields
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    publisher: Mapped[str] = mapped_column(String(500), nullable=True)
+    publish_year: Mapped[int] = mapped_column(Integer, nullable=True)
+    language: Mapped[str] = mapped_column(String(50), nullable=True)
+    genres: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
+    tags: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
+    isbn: Mapped[str] = mapped_column(String(20), nullable=True)
+    asin: Mapped[str] = mapped_column(String(20), nullable=True)
+    narrators: Mapped[str] = mapped_column(String(500), nullable=True)
+    is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
+    is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
+    cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
 
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")

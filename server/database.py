@@ -71,3 +71,17 @@ async def init_db():
         # Sync points migration
         await conn.execute(text("ALTER TABLE sync_points ADD COLUMN IF NOT EXISTS audio_text TEXT"))
 
+        # Extended metadata migration (W7)
+        for table in ("ebooks", "audiobooks"):
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS description TEXT"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS publisher VARCHAR(500)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS publish_year INTEGER"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS language VARCHAR(50)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS genres VARCHAR(1000)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tags VARCHAR(1000)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS isbn VARCHAR(20)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS asin VARCHAR(20)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS narrators VARCHAR(500)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_explicit BOOLEAN"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_abridged BOOLEAN"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS cover_path VARCHAR(2000)"))
