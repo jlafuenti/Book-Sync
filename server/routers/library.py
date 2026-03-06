@@ -320,6 +320,33 @@ async def extract_metadata(
             c = book.get_metadata('DC', 'creator')
             if c: file_meta["author"] = normalize_author(c[0][0])
             
+            # Extended EPUB metadata
+            desc = book.get_metadata('DC', 'description')
+            if desc: file_meta["description"] = desc[0][0]
+            
+            pub = book.get_metadata('DC', 'publisher')
+            if pub: file_meta["publisher"] = pub[0][0]
+            
+            lang = book.get_metadata('DC', 'language')
+            if lang: file_meta["language"] = lang[0][0]
+            
+            date = book.get_metadata('DC', 'date')
+            if date:
+                match = re.search(r'\d{4}', date[0][0])
+                if match: file_meta["publish_year"] = int(match.group(0))
+                
+            subjects = book.get_metadata('DC', 'subject')
+            if subjects: file_meta["genres"] = ",".join([s[0] for s in subjects if s[0]])
+                
+            identifiers = book.get_metadata('DC', 'identifier')
+            if identifiers:
+                for id_tuple in identifiers:
+                    val = id_tuple[0].lower()
+                    if 'isbn' in val or (len(id_tuple)>1 and isinstance(id_tuple[1], dict) and 'isbn' in str(id_tuple[1]).lower()):
+                        file_meta["isbn"] = id_tuple[0].replace('urn:isbn:', '')
+                    elif 'asin' in val or (len(id_tuple)>1 and isinstance(id_tuple[1], dict) and 'asin' in str(id_tuple[1]).lower()):
+                        file_meta["asin"] = id_tuple[0].replace('urn:asin:', '')
+            
             # Series (Calibre stores in <meta name="calibre:series" content="..."/>)
             all_meta = book.get_metadata('OPF', 'meta')
             if all_meta:
@@ -350,6 +377,16 @@ async def extract_metadata(
                         if '\xa9nam' in audio: file_meta["title"] = str(audio['\xa9nam'][0])
                         if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
                         if '\xa9alb' in audio: file_meta["series"] = normalize_series(str(audio['\xa9alb'][0]))
+                        
+                        if '\xa9des' in audio: file_meta["description"] = str(audio['\xa9des'][0])
+                        elif 'desc' in audio: file_meta["description"] = str(audio['desc'][0])
+                        
+                        if '\xa9day' in audio:
+                            match = re.search(r'\d{4}', str(audio['\xa9day'][0]))
+                            if match: file_meta["publish_year"] = int(match.group(0))
+                            
+                        if '\xa9gen' in audio: file_meta["genres"] = str(audio['\xa9gen'][0])
+                        
                         # Track number as series index
                         if 'trkn' in audio:
                             try:
@@ -370,6 +407,33 @@ async def extract_metadata(
                         
                         if 'TALB' in audio: file_meta["series"] = normalize_series(str(audio['TALB']))
                         elif 'album' in audio: file_meta["series"] = normalize_series(str(audio['album'][0]))
+                        
+                        # Extended fields
+                        for kv in audio.keys():
+                            if kv.startswith('COMM'):
+                                file_meta["description"] = str(audio[kv].text[0])
+                                break
+                        if 'description' not in file_meta:
+                            for dk in ['description', 'summary']:
+                                if dk in audio: 
+                                    file_meta["description"] = str(audio[dk][0])
+                                    break
+                                    
+                        if 'TCON' in audio: file_meta["genres"] = str(audio['TCON'])
+                        elif 'genre' in audio: file_meta["genres"] = str(audio['genre'][0])
+                        
+                        year_val = None
+                        if 'TDRC' in audio: year_val = str(audio['TDRC'])
+                        elif 'TYER' in audio: year_val = str(audio['TYER'])
+                        elif 'date' in audio: year_val = str(audio['date'][0])
+                        elif 'year' in audio: year_val = str(audio['year'][0])
+                        if year_val:
+                            match = re.search(r'\d{4}', year_val)
+                            if match: file_meta["publish_year"] = int(match.group(0))
+                            
+                        if 'TPUB' in audio: file_meta["publisher"] = str(audio['TPUB'])
+                        elif 'organization' in audio: file_meta["publisher"] = str(audio['organization'][0])
+                        elif 'publisher' in audio: file_meta["publisher"] = str(audio['publisher'][0])
                     else:
                         # Generic fallback — try common keys
                         for title_key in ['\xa9nam', 'TIT2', 'title', 'TITLE']:
@@ -397,18 +461,10 @@ async def extract_metadata(
     meta = filename_meta.copy()
 
     has_embedded = False
-    if file_meta.get("title"):
-        meta["title"] = file_meta["title"]
-        has_embedded = True
-    if file_meta.get("author"):
-        meta["author"] = file_meta["author"]
-        has_embedded = True
-    if file_meta.get("series"):
-        meta["series"] = file_meta["series"]
-        has_embedded = True
-    if file_meta.get("series_index") is not None:
-        meta["series_index"] = file_meta["series_index"]
-        has_embedded = True
+    for field in ["title", "author", "series", "series_index", "description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
+        if file_meta.get(field) is not None:
+            meta[field] = file_meta[field]
+            has_embedded = True
     
     # Track the source: if embedded data overrode anything, note it
     if has_embedded:
@@ -485,7 +541,13 @@ async def normalize_library_metadata(
     }
 
 
-def _extract_and_save_cover(filepath: str, book_type: str, book_id: int) -> Optional[str]:
+def sanitize_filename(name: str) -> str:
+    if not name: return ""
+    name = re.sub(r'[\\/*?:"<>|]', "", name)
+    name = name.replace(" ", "_")
+    return name.strip()
+
+def _extract_and_save_cover(filepath: str, book_type: str, book_id: int, book_title: str = None) -> Optional[str]:
     covers_path = Path(settings.covers_dir)
     covers_path.mkdir(parents=True, exist_ok=True)
     
@@ -527,7 +589,9 @@ def _extract_and_save_cover(filepath: str, book_type: str, book_id: int) -> Opti
                         ext = ".png" if "png" in audio.pictures[0].mime.lower() else ".jpg"
                         
         if cover_bytes:
-            filename = f"{book_type}_{book_id}{ext}"
+            safe_title = sanitize_filename(book_title)
+            base_name = safe_title if safe_title else book_type
+            filename = f"{base_name}_{book_id}{ext}"
             dest_path = covers_path / filename
             with open(dest_path, "wb") as f:
                 f.write(cover_bytes)
@@ -572,28 +636,34 @@ async def scan_library(
                 existing_ebook = result.scalar_one_or_none()
                 
                 if existing_ebook:
-                    # If exists but missing series info, try to update metadata
-                    if existing_ebook.series is None:
-                         # Pass db session and await
-                         meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
-                         if meta["series"] or meta["series_index"] is not None:
-                             existing_ebook.series = meta["series"]
-                             existing_ebook.series_index = meta["series_index"]
-                             existing_ebook.title = meta["title"] or existing_ebook.title
-                             existing_ebook.author = meta["author"] or existing_ebook.author
-                             existing_ebook.metadata_source = meta.get("_metadata_source")
-                             existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
-                             db.add(existing_ebook)
-                    # Always update metadata_source if it's not set yet
-                    elif existing_ebook.metadata_source is None:
-                         meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
+                    # If exists, see if we can enrich it with embedded metadata
+                    meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
+                    updated = False
+                    
+                    if not existing_ebook.metadata_source:
+                         existing_ebook.title = meta.get("title") or existing_ebook.title
+                         existing_ebook.author = meta.get("author") or existing_ebook.author
                          existing_ebook.metadata_source = meta.get("_metadata_source")
                          existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
-                         db.add(existing_ebook)
+                         updated = True
+                         
+                    if meta.get("series") and not existing_ebook.series:
+                         existing_ebook.series = meta["series"]
+                         existing_ebook.series_index = meta.get("series_index")
+                         updated = True
+                         
+                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
+                         if meta.get(f) is not None and getattr(existing_ebook, f) is None:
+                             setattr(existing_ebook, f, meta.get(f))
+                             updated = True
+
+                    if updated:
+                        db.add(existing_ebook)
+
                     # Try to extract cover if missing
                     if not existing_ebook.cover_path:
                         try:
-                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", existing_ebook.id)
+                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", existing_ebook.id, existing_ebook.title)
                             if cover_path:
                                 existing_ebook.cover_path = cover_path
                                 db.add(existing_ebook)
@@ -611,10 +681,18 @@ async def scan_library(
                 meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
 
                 ebook = EBook(
-                    title=meta["title"] or filename,
-                    author=meta["author"],
-                    series=meta["series"],
-                    series_index=meta["series_index"],
+                    title=meta.get("title") or filename,
+                    author=meta.get("author"),
+                    series=meta.get("series"),
+                    series_index=meta.get("series_index"),
+                    description=meta.get("description"),
+                    publisher=meta.get("publisher"),
+                    publish_year=meta.get("publish_year"),
+                    language=meta.get("language"),
+                    genres=meta.get("genres"),
+                    tags=meta.get("tags"),
+                    isbn=meta.get("isbn"),
+                    asin=meta.get("asin"),
                     metadata_source=meta.get("_metadata_source"),
                     metadata_pattern=meta.get("_metadata_pattern"),
                     filename=filename,
@@ -628,7 +706,7 @@ async def scan_library(
                 
                 # Try to extract cover
                 try:
-                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", ebook.id)
+                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", ebook.id, ebook.title)
                     if cover_path:
                         ebook.cover_path = cover_path
                         db.add(ebook)
@@ -1319,13 +1397,14 @@ async def upload_ebook_cover(
     covers_path.mkdir(parents=True, exist_ok=True)
     
     ext = Path(file.filename).suffix
-    new_filename = f"ebook_{book.id}{ext}"
+    safe_title = sanitize_filename(book.title) if book.title else "ebook"
+    new_filename = f"{safe_title}_{book.id}{ext}"
     dest_path = covers_path / new_filename
     
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    book.cover_path = f"/api/files/covers/{new_filename}"  # Route doesn't exist yet, we'll need a way to serve it
+    book.cover_path = f"/api/files/covers/{new_filename}"
     await db.commit()
     await db.refresh(book)
     return book
@@ -1386,13 +1465,14 @@ async def upload_audiobook_cover(
     covers_path.mkdir(parents=True, exist_ok=True)
     
     ext = Path(file.filename).suffix
-    new_filename = f"audiobook_{book.id}{ext}"
+    safe_title = sanitize_filename(book.title) if book.title else "audiobook"
+    new_filename = f"{safe_title}_{book.id}{ext}"
     dest_path = covers_path / new_filename
     
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    book.cover_path = f"/api/files/covers/{new_filename}"  # We need a route to serve this
+    book.cover_path = f"/api/files/covers/{new_filename}"
     await db.commit()
     await db.refresh(book)
     return book
