@@ -24,6 +24,9 @@ import ebooklib
 from ebooklib import epub
 import mutagen
 from markdownify import markdownify as md
+import zipfile
+import xml.etree.ElementTree as ET
+import tempfile
 
 from database import get_db
 from config import settings
@@ -1220,52 +1223,120 @@ def _write_ebook_metadata(filepath: str, book) -> None:
     logger.info(f"[write-back] Writing EPUB metadata to: {filepath}")
     
     try:
-        epub_book = epub.read_epub(filepath, options={'ignore_ncx': True})
+        # We use zipfile and ElementTree instead of ebooklib.write_epub because 
+        # ebooklib is notorious for destroying complex epub structures and causing "Bad Zip File" errors.
         
-        # Update title
-        if book.title is not None:
-            # Clear existing titles and set new one
-            epub_book.set_unique_metadata('DC', 'title', book.title)
-        
-        # Update author
-        if book.author is not None:
-            epub_book.set_unique_metadata('DC', 'creator', book.author)
+        # 1. Find the OPF file
+        opf_path = None
+        with zipfile.ZipFile(filepath, 'r') as zin:
+            # First look at container.xml
+            try:
+                container = zin.read("META-INF/container.xml")
+                root = ET.fromstring(container)
+                # usually urn:oasis:names:tc:opendocument:xmlns:container
+                for rootfile in root.iter():
+                    if 'rootfile' in rootfile.tag and 'full-path' in rootfile.attrib:
+                        opf_path = rootfile.attrib['full-path']
+                        break
+            except Exception:
+                pass
             
-        # Update extended DC fields
-        if getattr(book, 'description', None) is not None:
-            epub_book.set_unique_metadata('DC', 'description', book.description)
-        if getattr(book, 'publisher', None) is not None:
-            epub_book.set_unique_metadata('DC', 'publisher', book.publisher)
-        if getattr(book, 'language', None) is not None:
-            epub_book.set_unique_metadata('DC', 'language', book.language)
-        if getattr(book, 'publish_year', None) is not None:
-            epub_book.set_unique_metadata('DC', 'date', str(book.publish_year))
-        
-        # Update series (Calibre-style metadata)
-        if book.series is not None:
-            # Remove existing calibre:series meta
-            existing_meta = epub_book.get_metadata('OPF', 'meta') or []
-            for m in list(existing_meta):
-                attrs = m[1] if len(m) > 1 else {}
-                if attrs.get('name') in ('calibre:series', 'calibre:series_index'):
-                    try:
-                        epub_book.metadata.get('http://www.idpf.org/2007/opf', []).remove(m)
-                    except (ValueError, KeyError):
-                        pass
+            # Fallback if container.xml parsing fails
+            if not opf_path:
+                for name in zin.namelist():
+                    if name.lower().endswith('.opf'):
+                        opf_path = name
+                        break
+                        
+        if not opf_path:
+            logger.error(f"[write-back] Could not locate OPF file in {filepath}")
+            return
             
-            # Add new series metadata
-            epub_book.add_metadata('OPF', 'meta', '', {
-                'name': 'calibre:series',
-                'content': book.series or ''
-            })
-            if book.series_index is not None:
-                epub_book.add_metadata('OPF', 'meta', '', {
-                    'name': 'calibre:series_index',
-                    'content': str(book.series_index)
-                })
+        # 2. Extract and modify the OPF
+        with zipfile.ZipFile(filepath, 'r') as zin:
+            opf_content = zin.read(opf_path)
+            
+        # Parse OPF XML
+        # Register namespaces to preserve them on write
+        namespaces = {
+            'opf': 'http://www.idpf.org/2007/opf',
+            'dc': 'http://purl.org/dc/elements/1.1/',
+            'calibre': 'http://calibre.kovidgoyal.net/2009/metadata',
+        }
+        for prefix, uri in namespaces.items():
+            ET.register_namespace(prefix, uri)
+            
+        root = ET.fromstring(opf_content)
+        metadata = None
+        for child in root.iter():
+            if child.tag.endswith('metadata'):
+                metadata = child
+                break
+                
+        if metadata is None:
+            logger.error(f"[write-back] No metadata block found in OPF for {filepath}")
+            return
+            
+        # Helper to set or add a DC tag
+        def set_dc_tag(tag_name, value):
+            if not value: return
+            found = False
+            for child in list(metadata):
+                if child.tag.endswith(tag_name):
+                    child.text = str(value)
+                    found = True
+            if not found:
+                el = ET.SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
+                el.text = str(value)
+                
+        set_dc_tag("title", book.title)
+        set_dc_tag("creator", book.author)
+        set_dc_tag("description", getattr(book, 'description', None))
+        set_dc_tag("publisher", getattr(book, 'publisher', None))
+        set_dc_tag("language", getattr(book, 'language', None))
+        set_dc_tag("date", getattr(book, 'publish_year', None))
         
-        epub.write_epub(filepath, epub_book)
-        logger.info(f"[write-back] EPUB metadata written successfully")
+        # Calibre series meta tags
+        if getattr(book, 'series', None):
+            # Remove existing series tags
+            for meta_tag in list(metadata):
+                if meta_tag.tag.endswith('meta'):
+                    name_attr = meta_tag.attrib.get('name')
+                    if name_attr in ('calibre:series', 'calibre:series_index'):
+                        metadata.remove(meta_tag)
+                        
+            # Add new ones
+            series_meta = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            series_meta.attrib['name'] = 'calibre:series'
+            series_meta.attrib['content'] = str(book.series)
+            
+            if getattr(book, 'series_index', None) is not None:
+                index_meta = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+                index_meta.attrib['name'] = 'calibre:series_index'
+                index_meta.attrib['content'] = str(book.series_index)
+                
+        # Write modified OPF back to a new zip file, then replace original
+        modified_opf = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+        
+        fd, temp_path = tempfile.mkstemp(suffix=".epub")
+        os.close(fd)
+        
+        try:
+            with zipfile.ZipFile(filepath, 'r') as zin:
+                with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+                    # Write all files except the OPF
+                    for item in zin.infolist():
+                        if item.filename != opf_path:
+                            zout.writestr(item, zin.read(item.filename))
+                    # Write the new OPF
+                    zout.writestr(opf_path, modified_opf)
+                    
+            # Replace original
+            shutil.move(temp_path, filepath)
+            logger.info(f"[write-back] EPUB metadata written safely to {filepath}")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
         
     except Exception as e:
         logger.error(f"[write-back] Failed to write EPUB metadata: {e}")
