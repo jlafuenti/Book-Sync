@@ -187,11 +187,11 @@ async def apply_remote_cover(
     # Download the image
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
-            resp = await client.get(req.cover_url, timeout=15.0)
+            resp = await client.get(req.cover_url, timeout=60.0)
             resp.raise_for_status()
             content = resp.content
         except Exception as e:
-            logger.error(f"Failed to download remote cover: {e}")
+            logger.error(f"Failed to download remote cover: {repr(e)}")
             raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
             
     # Save the file
