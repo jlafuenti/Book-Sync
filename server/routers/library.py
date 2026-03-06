@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
+import asyncio
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
@@ -484,6 +485,59 @@ async def normalize_library_metadata(
     }
 
 
+def _extract_and_save_cover(filepath: str, book_type: str, book_id: int) -> Optional[str]:
+    covers_path = Path(settings.covers_dir)
+    covers_path.mkdir(parents=True, exist_ok=True)
+    
+    cover_bytes = None
+    ext = ".jpg"
+    
+    try:
+        if book_type == "ebook" and filepath.lower().endswith(".epub"):
+            book = epub.read_epub(filepath, options={'ignore_ncx': True})
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_COVER:
+                    cover_bytes = item.get_content()
+                    ext = Path(item.file_name).suffix if item.file_name else ".jpg"
+                    break
+                elif item.get_type() == ebooklib.ITEM_IMAGE:
+                    if "cover" in (item.file_name or "").lower():
+                        cover_bytes = item.get_content()
+                        ext = Path(item.file_name).suffix if item.file_name else ".jpg"
+        
+        elif book_type == "audiobook":
+            audio = mutagen.File(filepath)
+            if audio:
+                if type(audio).__name__ in ('MP4', 'M4A') and 'covr' in audio:
+                    covers = audio['covr']
+                    if covers:
+                        cover_bytes = bytes(covers[0])
+                        ext = ".png" if getattr(covers[0], 'imageformat', None) == mutagen.mp4.MP4Cover.FORMAT_PNG else ".jpg"
+                elif type(audio).__name__ == 'MP3':
+                    from mutagen.id3 import APIC
+                    if hasattr(audio, 'tags') and audio.tags:
+                        for tag in audio.tags.values():
+                            if isinstance(tag, APIC):
+                                cover_bytes = tag.data
+                                ext = ".png" if "png" in tag.mime.lower() else ".jpg"
+                                break
+                elif type(audio).__name__ in ('FLAC', 'OggVorbis', 'OggOpus'):
+                    if getattr(audio, 'pictures', None) and audio.pictures:
+                        cover_bytes = audio.pictures[0].data
+                        ext = ".png" if "png" in audio.pictures[0].mime.lower() else ".jpg"
+                        
+        if cover_bytes:
+            filename = f"{book_type}_{book_id}{ext}"
+            dest_path = covers_path / filename
+            with open(dest_path, "wb") as f:
+                f.write(cover_bytes)
+            return f"/api/files/covers/{filename}"
+            
+    except Exception as e:
+        logger.warning(f"Failed to extract cover for {filepath}: {e}")
+        
+    return None
+
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
@@ -536,6 +590,16 @@ async def scan_library(
                          existing_ebook.metadata_source = meta.get("_metadata_source")
                          existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
                          db.add(existing_ebook)
+                    # Try to extract cover if missing
+                    if not existing_ebook.cover_path:
+                        try:
+                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", existing_ebook.id)
+                            if cover_path:
+                                existing_ebook.cover_path = cover_path
+                                db.add(existing_ebook)
+                        except Exception as e:
+                            logger.error(f"Error extracting cover after scan for ebook {existing_ebook.id}: {e}")
+                    
                     continue
 
                 try:
@@ -560,6 +624,17 @@ async def scan_library(
                     format=ext.lstrip("."),
                 )
                 db.add(ebook)
+                await db.flush()  # flush to get ID
+                
+                # Try to extract cover
+                try:
+                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", ebook.id)
+                    if cover_path:
+                        ebook.cover_path = cover_path
+                        db.add(ebook)
+                except Exception as e:
+                    logger.error(f"Error extracting cover for new ebook {ebook.id}: {e}")
+                    
                 new_ebooks += 1
 
     # Scan audiobook directory
@@ -596,6 +671,16 @@ async def scan_library(
                          existing_audiobook.metadata_source = meta.get("_metadata_source")
                          existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
                          db.add(existing_audiobook)
+                    # Try to extract cover if missing
+                    if not existing_audiobook.cover_path:
+                        try:
+                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "audiobook", existing_audiobook.id)
+                            if cover_path:
+                                existing_audiobook.cover_path = cover_path
+                                db.add(existing_audiobook)
+                        except Exception as e:
+                            logger.error(f"Error extracting cover after scan for audiobook {existing_audiobook.id}: {e}")
+                            
                     continue
 
                 try:
@@ -620,6 +705,17 @@ async def scan_library(
                     format=ext.lstrip("."),
                 )
                 db.add(audiobook)
+                await db.flush() # flush to get ID
+                
+                # Try to extract cover
+                try:
+                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "audiobook", audiobook.id)
+                    if cover_path:
+                        audiobook.cover_path = cover_path
+                        db.add(audiobook)
+                except Exception as e:
+                    logger.error(f"Error extracting cover for new audiobook {audiobook.id}: {e}")
+
                 new_audiobooks += 1
 
     await db.flush()
