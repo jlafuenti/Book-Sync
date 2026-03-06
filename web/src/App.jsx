@@ -8,6 +8,7 @@ import TranscriptionPage from './pages/TranscriptionPage'
 import TranscriptionEditorPage from './pages/TranscriptionEditorPage'
 import SystemPage from './pages/SystemPage'
 import SeriesPage from './pages/SeriesPage'
+import BookDetailPage from './pages/BookDetailPage'
 
 function App() {
     const [user, setUser] = useState(null)
@@ -148,6 +149,9 @@ function App() {
 
                     {/* System */}
                     <Route path="/system" element={<SystemPage />} />
+
+                    {/* Book Detail */}
+                    <Route path="/book/:type/:id" element={<BookDetailPage />} />
 
                     {/* Redirects */}
                     <Route path="/" element={<Navigate to="/library/ebooks" replace />} />

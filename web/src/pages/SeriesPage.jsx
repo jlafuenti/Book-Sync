@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { getEbooks, getAudiobooks, getPairs, createPair } from '../api'
 
 /**
@@ -384,7 +385,14 @@ function ItemRow({ item, showIndex }) {
                 </td>
             )}
             <td style={{ padding: '10px 12px' }}>
-                <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{item.title}</div>
+                <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>
+                    <Link
+                        to={`/book/${item.type === 'audiobook' ? 'audiobook' : 'ebook'}/${item.type === 'audiobook' ? item.audiobookId : item.ebookId}`}
+                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                    >
+                        {item.title}
+                    </Link>
+                </div>
                 {item.author && (
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.author}</div>
                 )}
