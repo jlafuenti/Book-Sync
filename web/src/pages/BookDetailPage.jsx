@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 
@@ -38,6 +38,7 @@ function BookDetailPage() {
     const [error, setError] = useState(null)
     const [showEditModal, setShowEditModal] = useState(false)
     const [editModalTab, setEditModalTab] = useState('Details')
+    const [rescanning, setRescanning] = useState(false)
 
     useEffect(() => {
         setLoading(true)
@@ -58,6 +59,20 @@ function BookDetailPage() {
         const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
         const updatedBook = await updateFunc(bookId, data);
         setBook(updatedBook);
+    }
+
+    const handleRescan = async () => {
+        if (!window.confirm("Rescan this file? This will overwrite its metadata with any tags found inside the file.")) return;
+        setRescanning(true);
+        setError(null);
+        try {
+            const updatedBook = await rescanBook(type, id);
+            setBook(updatedBook);
+        } catch (err) {
+            setError(err.message || 'Failed to rescan file');
+        } finally {
+            setRescanning(false);
+        }
     }
 
     if (loading) {
@@ -167,6 +182,9 @@ function BookDetailPage() {
                         )}
                         <button className="btn btn-secondary" onClick={() => { setEditModalTab('Match'); setShowEditModal(true); }}>
                             🔍 Match
+                        </button>
+                        <button className="btn btn-secondary" onClick={handleRescan} disabled={rescanning}>
+                            {rescanning ? '🔄 Rescanning...' : '🔄 Rescan File'}
                         </button>
                     </div>
                 </div>

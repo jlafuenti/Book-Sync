@@ -895,6 +895,73 @@ async def scan_library(
     )
 
 
+@router.post("/{book_type}s/{book_id}/rescan")
+async def rescan_book_file(
+    book_type: str,
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user)
+):
+    """
+    Force a rescan of a single file to extract metadata from its tags/filename.
+    Overrides all DB metadata fields with whatever is extracted.
+    """
+    if book_type not in ["ebook", "audiobook"]:
+        raise HTTPException(status_code=400, detail="Invalid book type")
+        
+    model = EBook if book_type == "ebook" else AudioBook
+    library_root = settings.ebook_dir if book_type == "ebook" else settings.audiobook_dir
+    
+    result = await db.execute(select(model).where(model.id == book_id))
+    book = result.scalar_one_or_none()
+    
+    if not book:
+        raise HTTPException(status_code=404, detail=f"{book_type} not found")
+        
+    if not os.path.exists(book.file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+        
+    logger.info(f"Forcing rescan of {book_type} {book.id}: {book.file_path}")
+    
+    meta = await extract_metadata(book.file_path, book_type, db, library_root=library_root)
+    
+    # Overwrite DB with extracted data
+    book.title = meta.get("title") or book.title
+    book.author = meta.get("author") or book.author
+    book.series = meta.get("series") or book.series
+    book.series_index = meta.get("series_index") or book.series_index
+    book.description = meta.get("description") or book.description
+    book.publisher = meta.get("publisher") or book.publisher
+    book.publish_year = meta.get("publish_year") or book.publish_year
+    book.language = meta.get("language") or book.language
+    book.genres = meta.get("genres") or book.genres
+    book.tags = meta.get("tags") or book.tags
+    
+    if book_type == "audiobook":
+        if meta.get("narrators"): book.narrators = meta["narrators"]
+    if book_type == "ebook":
+        if meta.get("isbn"): book.isbn = meta["isbn"]
+        if meta.get("asin"): book.asin = meta["asin"]
+        
+    book.metadata_source = meta.get("_metadata_source")
+    book.metadata_pattern = meta.get("_metadata_pattern")
+    
+    # Try to extract cover if missing
+    if not book.cover_path:
+        try:
+            cover_path = await asyncio.to_thread(_extract_and_save_cover, book.file_path, book_type, book.id, book.title)
+            if cover_path:
+                book.cover_path = cover_path
+        except Exception as e:
+            logger.error(f"Error extracting cover after scan for {book_type} {book.id}: {e}")
+            
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+    
+    return book
+
+
 async def auto_match_books(db: AsyncSession) -> int:
     """
     Attempt to auto-match unmatched ebooks and audiobooks by title similarity.

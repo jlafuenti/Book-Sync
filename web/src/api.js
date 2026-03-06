@@ -133,6 +133,14 @@ export async function getAudiobook(id) {
     return resp.json();
 }
 
+export async function rescanBook(type, id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/${type}s/${id}/rescan`, {
+        method: 'POST'
+    });
+    if (!resp.ok) throw new Error(`Failed to rescan ${type}`);
+    return resp.json();
+}
+
 
 export async function getPairs() {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs`);
