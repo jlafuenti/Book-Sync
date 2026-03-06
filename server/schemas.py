@@ -357,5 +357,5 @@ class MetadataDiscrepancy(BaseModel):
 
 class ResolveDiscrepancyRequest(BaseModel):
     # Dictionaries mapping field_name to the resolved value
-    ebook_updates: Dict[str, Optional[str]]
-    audiobook_updates: Dict[str, Optional[str]]
+    ebook_updates: dict[str, Optional[str]]
+    audiobook_updates: dict[str, Optional[str]]
