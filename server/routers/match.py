@@ -29,14 +29,21 @@ async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchRes
         q += f"+inauthor:{author}"
         
     url = f"https://www.googleapis.com/books/v1/volumes?q={q}&maxResults=10"
+    if hasattr(settings, 'google_books_api_key') and settings.google_books_api_key:
+        url += f"&key={settings.google_books_api_key}"
     
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, timeout=10.0)
             resp.raise_for_status()
             data = resp.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Google Books API HTTP error: {e}")
+            if e.response.status_code == 429:
+                raise HTTPException(status_code=429, detail="Google Books rate limit exceeded. Try Open Library or add an API key.")
+            raise HTTPException(status_code=502, detail="External provider error")
         except Exception as e:
-            logger.error(f"Google Books API error: {e}")
+            logger.error(f"Google Books API connection error: {e}")
             raise HTTPException(status_code=502, detail="External provider error")
             
     results = []
