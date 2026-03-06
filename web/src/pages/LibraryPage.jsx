@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary } from '../api'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -92,6 +92,7 @@ function LibraryPage({ tab }) {
     // Edit state
     const [editingBook, setEditingBook] = useState(null)
     const [editingType, setEditingType] = useState(null)
+    const [rescanningAll, setRescanningAll] = useState(false)
 
     // Filtering state
     const [searchTerm, setSearchTerm] = useState('')
@@ -190,6 +191,24 @@ function LibraryPage({ tab }) {
             setError(err.message)
         } finally {
             setNormalizing(false)
+        }
+    }
+
+    const handleRescanAll = async () => {
+        if (!window.confirm("WARNING: This will force a complete rescan of EVERY file in your library, overwriting all current database metadata (titles, authors, series, etc) with whatever tags are physically embedded inside the files. This cannot be undone!\n\nAre you sure you want to completely overwrite your metadata?")) {
+            return;
+        }
+        setRescanningAll(true)
+        setScanResult(null)
+        setError('')
+        try {
+            const result = await rescanAllLibrary()
+            setScanResult(result)
+            await loadData()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setRescanningAll(false)
         }
     }
 
@@ -296,16 +315,24 @@ function LibraryPage({ tab }) {
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-                <button className="btn btn-primary" onClick={handleScan} disabled={scanning || normalizing}>
+                <button className="btn btn-primary" onClick={handleScan} disabled={scanning || normalizing || rescanningAll}>
                     {scanning ? <><div className="spinner"></div> Scanning...</> : '🔍 Scan Directories'}
                 </button>
                 <button
                     className="btn btn-secondary"
                     onClick={handleNormalize}
-                    disabled={scanning || normalizing}
+                    disabled={scanning || normalizing || rescanningAll}
                     title="Fix author names like 'Butcher, Jim' → 'Jim Butcher' and series like 'Dresden Files, The' → 'The Dresden Files'"
                 >
                     {normalizing ? <><div className="spinner"></div> Normalizing...</> : '🔄 Normalize Metadata'}
+                </button>
+                <button
+                    className="btn btn-danger"
+                    onClick={handleRescanAll}
+                    disabled={scanning || normalizing || rescanningAll}
+                    title="Forcefully extract metadata from EVERY single file and overwrite the database. Destructive!"
+                >
+                    {rescanningAll ? <><div className="spinner"></div> Overwriting...</> : '⚠️ Force Rescan All'}
                 </button>
                 <button className="btn btn-secondary" onClick={() => ebookFileRef.current?.click()} disabled={uploadingEbook}>
                     {uploadingEbook ? <><div className="spinner"></div> Uploading...</> : '📄 Upload EBook'}
