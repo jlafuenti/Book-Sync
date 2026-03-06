@@ -133,6 +133,21 @@ export async function getAudiobook(id) {
     return resp.json();
 }
 
+export async function getAudiobookChapters(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/chapters`);
+    if (!resp.ok) throw new Error('Failed to fetch audiobook chapters');
+    return resp.json();
+}
+
+export async function updateAudiobookChapters(id, chapters) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/chapters`, {
+        method: 'PUT',
+        body: JSON.stringify(chapters)
+    });
+    if (!resp.ok) throw new Error('Failed to update audiobook chapters');
+    return resp.json();
+}
+
 export async function getPairs() {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs`);
     if (!resp.ok) throw new Error('Failed to fetch book pairs');

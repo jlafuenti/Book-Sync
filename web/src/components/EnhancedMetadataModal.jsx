@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { uploadEbookCover, uploadAudiobookCover } from '../api';
+import ChapterEditor from './ChapterEditor';
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -27,8 +28,8 @@ function formatDate(iso) {
     })
 }
 
-export default function EnhancedMetadataModal({ book, type, onClose, onSave }) {
-    const [activeTab, setActiveTab] = useState('Details');
+export default function EnhancedMetadataModal({ book, type, onClose, onSave, initialTab = 'Details' }) {
+    const [activeTab, setActiveTab] = useState(initialTab);
     const [saving, setSaving] = useState(false);
 
     // Details Tab Form State
@@ -280,10 +281,8 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave }) {
                     )}
 
                     {activeTab === 'Chapters' && (
-                        <div className="p-4 flex-center empty-state">
-                            <div className="icon">📑</div>
-                            <h3>Chapter Editor</h3>
-                            <p>Chapter Editor functionality is coming in W5 Phase.</p>
+                        <div className="p-4">
+                            <ChapterEditor bookId={book.id} />
                         </div>
                     )}
                 </div>
