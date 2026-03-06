@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import settings
+
 from database import get_db
 from models.user import User
 from models.book import EBook, AudioBook, BookPair
@@ -32,6 +34,10 @@ MIME_TYPES = {
     ".ogg": "audio/ogg",
     ".wav": "audio/wav",
     ".aac": "audio/aac",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
 }
 
 
@@ -56,6 +62,23 @@ async def download_ebook(
     return FileResponse(
         path=ebook.file_path,
         filename=ebook.filename,
+        media_type=media_type,
+    )
+
+@router.get("/covers/{filename}")
+async def get_cover(filename: str):
+    """Serve a cover image by filename."""
+    covers_dir = Path(settings.covers_dir)
+    file_path = covers_dir / filename
+    
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Cover not found")
+        
+    ext = file_path.suffix.lower()
+    media_type = MIME_TYPES.get(ext, "image/jpeg")
+    
+    return FileResponse(
+        path=file_path,
         media_type=media_type,
     )
 

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
+import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func
@@ -1015,6 +1016,17 @@ class MetadataUpdate(BaseModel):
     author: Optional[str] = None
     series: Optional[str] = None
     series_index: Optional[float] = None
+    description: Optional[str] = None
+    publisher: Optional[str] = None
+    publish_year: Optional[int] = None
+    language: Optional[str] = None
+    genres: Optional[str] = None
+    tags: Optional[str] = None
+    narrators: Optional[str] = None
+    isbn: Optional[str] = None
+    asin: Optional[str] = None
+    is_explicit: Optional[bool] = None
+    is_abridged: Optional[bool] = None
 
 
 def _write_ebook_metadata(filepath: str, book) -> None:
@@ -1036,13 +1048,23 @@ def _write_ebook_metadata(filepath: str, book) -> None:
         epub_book = epub.read_epub(filepath, options={'ignore_ncx': True})
         
         # Update title
-        if book.title:
+        if book.title is not None:
             # Clear existing titles and set new one
             epub_book.set_unique_metadata('DC', 'title', book.title)
         
         # Update author
-        if book.author:
+        if book.author is not None:
             epub_book.set_unique_metadata('DC', 'creator', book.author)
+            
+        # Update extended DC fields
+        if getattr(book, 'description', None) is not None:
+            epub_book.set_unique_metadata('DC', 'description', book.description)
+        if getattr(book, 'publisher', None) is not None:
+            epub_book.set_unique_metadata('DC', 'publisher', book.publisher)
+        if getattr(book, 'language', None) is not None:
+            epub_book.set_unique_metadata('DC', 'language', book.language)
+        if getattr(book, 'publish_year', None) is not None:
+            epub_book.set_unique_metadata('DC', 'date', str(book.publish_year))
         
         # Update series (Calibre-style metadata)
         if book.series is not None:
@@ -1097,31 +1119,43 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
         
         if audio_type in ('MP4', 'M4A'):
             # iTunes-style atoms for M4B/M4A
-            if book.title: audio['\xa9nam'] = [book.title]
-            if book.author: audio['\xa9ART'] = [book.author]
-            if book.series: audio['\xa9alb'] = [book.series]
+            if book.title is not None: audio['\xa9nam'] = [book.title]
+            if book.author is not None: audio['\xa9ART'] = [book.author]
+            if book.series is not None: audio['\xa9alb'] = [book.series]
             if book.series_index is not None:
                 audio['trkn'] = [(int(book.series_index), 0)]
+            if getattr(book, 'description', None) is not None: audio['desc'] = [book.description]
+            if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
+            if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
                 
         elif audio_type == 'MP3':
-            from mutagen.id3 import TIT2, TPE1, TALB, TRCK
+            from mutagen.id3 import TIT2, TPE1, TALB, TRCK, COMM, TCON, TYER, TPUB
             
             if audio.tags is None:
                 audio.add_tags()
             
-            if book.title: audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
-            if book.author: audio.tags['TPE1'] = TPE1(encoding=3, text=book.author)
-            if book.series: audio.tags['TALB'] = TALB(encoding=3, text=book.series)
+            if book.title is not None: audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
+            if book.author is not None: audio.tags['TPE1'] = TPE1(encoding=3, text=book.author)
+            if book.series is not None: audio.tags['TALB'] = TALB(encoding=3, text=book.series)
             if book.series_index is not None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
+            if getattr(book, 'description', None) is not None:
+                audio.tags['COMM'] = COMM(encoding=3, lang='eng', desc='', text=book.description)
+            if getattr(book, 'genres', None) is not None: audio.tags['TCON'] = TCON(encoding=3, text=book.genres)
+            if getattr(book, 'publish_year', None) is not None: audio.tags['TYER'] = TYER(encoding=3, text=str(book.publish_year))
+            if getattr(book, 'publisher', None) is not None: audio.tags['TPUB'] = TPUB(encoding=3, text=book.publisher)
                 
         elif audio_type in ('FLAC', 'OggVorbis', 'OggOpus'):
             # Vorbis comments
-            if book.title: audio['title'] = [book.title]
-            if book.author: audio['artist'] = [book.author]
-            if book.series: audio['album'] = [book.series]
+            if book.title is not None: audio['title'] = [book.title]
+            if book.author is not None: audio['artist'] = [book.author]
+            if book.series is not None: audio['album'] = [book.series]
             if book.series_index is not None:
                 audio['tracknumber'] = [str(int(book.series_index))]
+            if getattr(book, 'description', None) is not None: audio['description'] = [book.description]
+            if getattr(book, 'genres', None) is not None: audio['genre'] = [book.genres]
+            if getattr(book, 'publish_year', None) is not None: audio['date'] = [str(book.publish_year)]
+            if getattr(book, 'publisher', None) is not None: audio['organization'] = [book.publisher]
         else:
             logger.warning(f"[write-back] Unsupported audio type for write-back: {audio_type}")
             return
@@ -1150,6 +1184,17 @@ async def update_ebook_metadata(
     if meta.author is not None: book.author = meta.author
     if meta.series is not None: book.series = meta.series
     if meta.series_index is not None: book.series_index = meta.series_index
+    if meta.description is not None: book.description = meta.description
+    if meta.publisher is not None: book.publisher = meta.publisher
+    if meta.publish_year is not None: book.publish_year = meta.publish_year
+    if meta.language is not None: book.language = meta.language
+    if meta.genres is not None: book.genres = meta.genres
+    if meta.tags is not None: book.tags = meta.tags
+    if meta.narrators is not None: book.narrators = meta.narrators
+    if meta.isbn is not None: book.isbn = meta.isbn
+    if meta.asin is not None: book.asin = meta.asin
+    if meta.is_explicit is not None: book.is_explicit = meta.is_explicit
+    if meta.is_abridged is not None: book.is_abridged = meta.is_abridged
     
     # Write metadata back to the file
     try:
@@ -1157,6 +1202,34 @@ async def update_ebook_metadata(
     except Exception as e:
         logger.warning(f"Failed to write metadata to ebook file: {e}")
     
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+@router.post("/ebooks/{book_id}/cover", response_model=EBookResponse)
+async def upload_ebook_cover(
+    book_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Upload a new cover image for an ebook."""
+    result = await db.execute(select(EBook).where(EBook.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+        
+    covers_path = Path(settings.covers_dir)
+    covers_path.mkdir(parents=True, exist_ok=True)
+    
+    ext = Path(file.filename).suffix
+    new_filename = f"ebook_{book.id}{ext}"
+    dest_path = covers_path / new_filename
+    
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    book.cover_path = f"/api/files/covers/{new_filename}"  # Route doesn't exist yet, we'll need a way to serve it
     await db.commit()
     await db.refresh(book)
     return book
@@ -1178,6 +1251,17 @@ async def update_audiobook_metadata(
     if meta.author is not None: book.author = meta.author
     if meta.series is not None: book.series = meta.series
     if meta.series_index is not None: book.series_index = meta.series_index
+    if meta.description is not None: book.description = meta.description
+    if meta.publisher is not None: book.publisher = meta.publisher
+    if meta.publish_year is not None: book.publish_year = meta.publish_year
+    if meta.language is not None: book.language = meta.language
+    if meta.genres is not None: book.genres = meta.genres
+    if meta.tags is not None: book.tags = meta.tags
+    if meta.narrators is not None: book.narrators = meta.narrators
+    if meta.isbn is not None: book.isbn = meta.isbn
+    if meta.asin is not None: book.asin = meta.asin
+    if meta.is_explicit is not None: book.is_explicit = meta.is_explicit
+    if meta.is_abridged is not None: book.is_abridged = meta.is_abridged
     
     # Write metadata back to the file
     try:
@@ -1185,6 +1269,34 @@ async def update_audiobook_metadata(
     except Exception as e:
         logger.warning(f"Failed to write metadata to audiobook file: {e}")
     
+    await db.commit()
+    await db.refresh(book)
+    return book
+
+@router.post("/audiobooks/{book_id}/cover", response_model=AudioBookResponse)
+async def upload_audiobook_cover(
+    book_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Upload a new cover image for an audiobook."""
+    result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
+    book = result.scalar_one_or_none()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+        
+    covers_path = Path(settings.covers_dir)
+    covers_path.mkdir(parents=True, exist_ok=True)
+    
+    ext = Path(file.filename).suffix
+    new_filename = f"audiobook_{book.id}{ext}"
+    dest_path = covers_path / new_filename
+    
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    book.cover_path = f"/api/files/covers/{new_filename}"  # We need a route to serve this
     await db.commit()
     await db.refresh(book)
     return book

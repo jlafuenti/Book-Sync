@@ -177,6 +177,28 @@ export async function uploadAudiobook(file) {
     return resp.json();
 }
 
+export async function uploadEbookCover(id, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}/cover`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to upload cover');
+    return resp.json();
+}
+
+export async function uploadAudiobookCover(id, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/cover`, {
+        method: 'POST',
+        body: formData,
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to upload cover');
+    return resp.json();
+}
+
 // ============ Transcription ============
 
 export async function startTranscription(pairId) {
