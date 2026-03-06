@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     server_host: str = "0.0.0.0"
     server_port: int = 8000
 
+    # External APIs
+    google_books_api_key: Optional[str] = Field(default=None, alias="GOOGLE_BOOKS_API_KEY")
+
     # Sync Settings
     default_rewind_seconds: int = 10
 
