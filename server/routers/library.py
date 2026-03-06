@@ -171,6 +171,34 @@ def compute_file_hash(filepath: str) -> str:
         sha256.update(data)
     return sha256.hexdigest()
 
+def extract_series_and_index(text: str) -> tuple[Optional[str], Optional[float]]:
+    """
+    Given a string like 'The Cinder Spires #2' or 'The Cinder Spires, Book 2',
+    returns the series name and the index.
+    """
+    if not text:
+        return None, None
+    text = text.strip()
+    
+    # Matches "Series Name #2", "Series Name # 2.5"
+    match = re.search(r'#\s*(\d+(?:\.\d+)?)', text)
+    if match:
+        idx = float(match.group(1))
+        series_name = text[:match.start()].strip()
+        # Clean up any trailing punctuation
+        series_name = re.sub(r'[,:\-]\s*$', '', series_name).strip()
+        return normalize_series(series_name), idx
+        
+    # Matches "Series Name, Book 2"
+    match = re.search(r'(?:,\s*|\s+|-?\s*)Book\s+(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+    if match:
+        idx = float(match.group(1))
+        series_name = text[:match.start()].strip()
+        series_name = re.sub(r'[,:\-]\s*$', '', series_name).strip()
+        return normalize_series(series_name), idx
+
+    return normalize_series(text), None
+
 
 def extract_title_from_filename(filename: str) -> str:
     """
@@ -381,7 +409,15 @@ async def extract_metadata(
                         # MP4/M4B uses iTunes-style atoms
                         if '\xa9nam' in audio: file_meta["title"] = str(audio['\xa9nam'][0])
                         if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
-                        if '\xa9alb' in audio: file_meta["series"] = normalize_series(str(audio['\xa9alb'][0]))
+                        
+                        series_str = None
+                        if '\xa9grp' in audio: series_str = str(audio['\xa9grp'][0])
+                        elif '\xa9alb' in audio: series_str = str(audio['\xa9alb'][0])
+                        
+                        if series_str:
+                            s_name, s_idx = extract_series_and_index(series_str)
+                            if s_name: file_meta["series"] = s_name
+                            if s_idx is not None: file_meta["series_index"] = s_idx
                         
                         if '\xa9des' in audio: file_meta["description"] = md(str(audio['\xa9des'][0])).strip()
                         elif 'desc' in audio: file_meta["description"] = md(str(audio['desc'][0])).strip()
@@ -418,8 +454,19 @@ async def extract_metadata(
                         if 'TPE1' in audio: file_meta["author"] = normalize_author(str(audio['TPE1']))
                         elif 'artist' in audio: file_meta["author"] = normalize_author(str(audio['artist'][0]))
                         
-                        if 'TALB' in audio: file_meta["series"] = normalize_series(str(audio['TALB']))
-                        elif 'album' in audio: file_meta["series"] = normalize_series(str(audio['album'][0]))
+                        series_str = None
+                        if 'TIT3' in audio: series_str = str(audio['TIT3'])
+                        elif 'subtitle' in audio: series_str = str(audio['subtitle'][0])
+                        elif 'TIT1' in audio: series_str = str(audio['TIT1'])
+                        elif 'GRP1' in audio: series_str = str(audio['GRP1'])
+                        elif 'grouping' in audio: series_str = str(audio['grouping'][0])
+                        elif 'TALB' in audio: series_str = str(audio['TALB'])
+                        elif 'album' in audio: series_str = str(audio['album'][0])
+                        
+                        if series_str:
+                            s_name, s_idx = extract_series_and_index(series_str)
+                            if s_name: file_meta["series"] = s_name
+                            if s_idx is not None: file_meta["series_index"] = s_idx
                         
                         # Extended fields
                         for kv in audio.keys():
