@@ -342,7 +342,16 @@ export async function searchMetadata(provider, query, author) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, query, author })
     });
-    if (!resp.ok) throw new Error('Failed to search metadata');
+    if (!resp.ok) {
+        let errMessage = 'Failed to search metadata';
+        try {
+            const errData = await resp.json();
+            if (errData && errData.detail) errMessage = errData.detail;
+        } catch (e) {
+            // Ignore JSON parse errors
+        }
+        throw new Error(errMessage);
+    }
     return resp.json();
 }
 

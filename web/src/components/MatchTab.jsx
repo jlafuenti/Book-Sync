@@ -137,7 +137,8 @@ export default function MatchTab({ currentData, onApply }) {
                                     </p>
                                     <button
                                         type="button"
-                                        className="btn btn-secondary btn-sm mt-auto"
+                                        className="btn btn-primary btn-sm mt-auto"
+                                        style={{ alignSelf: 'flex-start' }}
                                         onClick={() => handleSelectResult(res)}
                                     >
                                         Select
