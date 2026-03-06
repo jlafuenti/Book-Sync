@@ -163,6 +163,25 @@ class Chapter(BaseModel):
     title: str
 
 # ============================================================
+# Match Schemas
+# ============================================================
+
+class MatchRequest(BaseModel):
+    provider: str
+    query: str
+    author: Optional[str] = None
+
+class MatchResult(BaseModel):
+    id: str
+    title: str
+    author: Optional[str] = None
+    publish_year: Optional[int] = None
+    publisher: Optional[str] = None
+    description: Optional[str] = None
+    isbn: Optional[str] = None
+    cover_url: Optional[str] = None
+
+# ============================================================
 # Sync Map Schemas
 # ============================================================
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { uploadEbookCover, uploadAudiobookCover } from '../api';
+import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover } from '../api';
 import ChapterEditor from './ChapterEditor';
+import MatchTab from './MatchTab';
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -55,6 +56,7 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     const [coverFile, setCoverFile] = useState(null);
     const [uploadingCover, setUploadingCover] = useState(false);
     const [coverPreview, setCoverPreview] = useState(book.cover_path || null);
+    const [remoteCoverUrl, setRemoteCoverUrl] = useState(null); // Track if a matched cover needs to be downloaded
 
     const handleChange = (e) => {
         const { name, value, type: inputType, checked } = e.target;
@@ -85,10 +87,36 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                 is_explicit: formData.is_explicit,
                 is_abridged: formData.is_abridged,
             });
+
+            // If the user selected a remote cover from Match, tell the server to download it
+            if (remoteCoverUrl) {
+                await applyRemoteCover(type, book.id, remoteCoverUrl);
+            }
+
             onClose();
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleMatchApply = (matchPayload) => {
+        const { coverUrl, ...textFields } = matchPayload;
+
+        // Update all text fields that were checked/selected
+        setFormData(prev => ({
+            ...prev,
+            ...textFields
+        }));
+
+        // Handle cover if selected
+        if (coverUrl) {
+            setRemoteCoverUrl(coverUrl);
+            setCoverPreview(coverUrl); // Update preview immediately
+            setCoverFile(null); // Clear any manually uploaded file
+        }
+
+        // Flip back to details tab to let user review
+        setActiveTab('Details');
     };
 
     const handleCoverChange = async (e) => {
@@ -273,11 +301,10 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                     )}
 
                     {activeTab === 'Match' && (
-                        <div className="p-4 flex-center empty-state">
-                            <div className="icon">🔍</div>
-                            <h3>Quick Match</h3>
-                            <p>External Match functionality is coming in W3 Phase.</p>
-                        </div>
+                        <MatchTab
+                            currentData={formData}
+                            onApply={handleMatchApply}
+                        />
                     )}
 
                     {activeTab === 'Chapters' && (
