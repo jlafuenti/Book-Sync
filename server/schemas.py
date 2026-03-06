@@ -338,3 +338,24 @@ class SearchResponse(BaseModel):
     ebooks: List[EBookResponse]
     audiobooks: List[AudioBookResponse]
     book_pairs: List[BookPairResponse]
+
+# ============================================================
+# Metadata Cleanup Schemas
+# ============================================================
+
+class DiscrepantField(BaseModel):
+    field: str
+    ebook_value: Optional[str]
+    audiobook_value: Optional[str]
+
+class MetadataDiscrepancy(BaseModel):
+    pair_id: int
+    ebook_id: int
+    audiobook_id: int
+    title: str
+    discrepancies: List[DiscrepantField]
+
+class ResolveDiscrepancyRequest(BaseModel):
+    # Dictionaries mapping field_name to the resolved value
+    ebook_updates: Dict[str, Optional[str]]
+    audiobook_updates: Dict[str, Optional[str]]
