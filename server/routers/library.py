@@ -511,6 +511,14 @@ async def normalize_library_metadata(
                 logger.info(f"[normalize] Ebook '{book.title}': series '{book.series}' → '{new_series}'")
                 book.series = new_series
                 changed = True
+        
+        if book.description:
+            new_desc = md(book.description).strip()
+            if new_desc != book.description:
+                logger.info(f"[normalize] Ebook '{book.title}': description converted to markdown")
+                book.description = new_desc
+                changed = True
+                
         if changed:
             db.add(book)
             updated_ebooks += 1
@@ -531,6 +539,14 @@ async def normalize_library_metadata(
                 logger.info(f"[normalize] Audiobook '{book.title}': series '{book.series}' → '{new_series}'")
                 book.series = new_series
                 changed = True
+                
+        if book.description:
+            new_desc = md(book.description).strip()
+            if new_desc != book.description:
+                logger.info(f"[normalize] Audiobook '{book.title}': description converted to markdown")
+                book.description = new_desc
+                changed = True
+                
         if changed:
             db.add(book)
             updated_audiobooks += 1
