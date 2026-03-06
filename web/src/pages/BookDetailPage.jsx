@@ -165,7 +165,7 @@ function BookDetailPage() {
                                 📑 Edit Chapters
                             </button>
                         )}
-                        <button className="btn btn-secondary" disabled title="Coming in W3">
+                        <button className="btn btn-secondary" onClick={() => { setEditModalTab('Match'); setShowEditModal(true); }}>
                             🔍 Match
                         </button>
                     </div>

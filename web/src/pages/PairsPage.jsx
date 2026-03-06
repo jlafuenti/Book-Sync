@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getPairs, getEbooks, getAudiobooks, createPair, deletePair } from '../api'
+import MetadataCleanupModal from '../components/MetadataCleanupModal'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -45,6 +46,9 @@ function PairsPage({ tab }) {
     // Sort/filter state for paired table
     const [pairSort, setPairSort] = useState({ col: null, dir: null })
     const [searchTerm, setSearchTerm] = useState('')
+
+    // Metadata cleanup modal
+    const [showCleanupModal, setShowCleanupModal] = useState(false)
 
     const activeTab = tab || 'paired'
 
@@ -225,6 +229,13 @@ function PairsPage({ tab }) {
                                     disabled={!searchTerm}
                                 >
                                     Clear
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    style={{ marginLeft: '10px' }}
+                                    onClick={() => setShowCleanupModal(true)}
+                                >
+                                    🧹 Clean Up Metadata
                                 </button>
                             </div>
                         </div>
@@ -489,6 +500,16 @@ function PairsPage({ tab }) {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {showCleanupModal && (
+                <MetadataCleanupModal
+                    onClose={() => setShowCleanupModal(false)}
+                    onComplete={() => {
+                        setShowCleanupModal(false);
+                        loadData();
+                    }}
+                />
             )}
         </div>
     )

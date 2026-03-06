@@ -37,7 +37,8 @@ from models.book import EBook, AudioBook, BookPair, PairStatus
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
-    EBookDetailResponse, AudioBookDetailResponse
+    EBookDetailResponse, AudioBookDetailResponse,
+    MetadataDiscrepancy, ResolveDiscrepancyRequest, DiscrepantField
 )
 from routers.auth import get_current_user
 
@@ -1676,3 +1677,132 @@ async def debug_metadata(
         debug_info["merged_result"] = merged
     
     return debug_info
+
+# ============================================================
+# Metadata Cleanup Endpoints
+# ============================================================
+
+FIELDS_TO_COMPARE = [
+    "title", "author", "series", "series_index", "description",
+    "publisher", "publish_year", "language", "genres", "tags",
+    "is_explicit", "is_abridged", "cover_path"
+]
+
+@router.get("/pairs-discrepancies", response_model=List[MetadataDiscrepancy])
+async def get_metadata_discrepancies(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Find all book pairs with discrepancies in their shared metadata fields."""
+    result = await db.execute(
+        select(BookPair)
+        .options(
+            selectinload(BookPair.ebook),
+            selectinload(BookPair.audiobook)
+        )
+    )
+    pairs = result.scalars().all()
+    
+    discrepancies: List[MetadataDiscrepancy] = []
+    
+    for pair in pairs:
+        if not pair.ebook or not pair.audiobook:
+            continue
+            
+        diffs = []
+        for field in FIELDS_TO_COMPARE:
+            ebook_val = getattr(pair.ebook, field)
+            audio_val = getattr(pair.audiobook, field)
+            
+            # Normalize empty strings to None for comparison
+            if ebook_val == "": ebook_val = None
+            if audio_val == "": audio_val = None
+            
+            # Format numbers to avoid float vs int mismatches
+            if field == "series_index":
+                if ebook_val is not None: ebook_val = float(ebook_val)
+                if audio_val is not None: audio_val = float(audio_val)
+                
+            if ebook_val != audio_val:
+                diffs.append(DiscrepantField(
+                    field=field,
+                    ebook_value=str(ebook_val) if ebook_val is not None else None,
+                    audiobook_value=str(audio_val) if audio_val is not None else None
+                ))
+                
+        if diffs:
+            discrepancies.append(MetadataDiscrepancy(
+                pair_id=pair.id,
+                ebook_id=pair.ebook.id,
+                audiobook_id=pair.audiobook.id,
+                title=pair.ebook.title or pair.audiobook.title or "Unknown",
+                discrepancies=diffs
+            ))
+            
+    return discrepancies
+
+@router.post("/pairs/{pair_id}/resolve-discrepancies")
+async def resolve_metadata_discrepancy(
+    pair_id: int,
+    req: ResolveDiscrepancyRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Apply resolutions to mismatched metadata fields on a pair."""
+    result = await db.execute(
+        select(BookPair)
+        .options(
+            selectinload(BookPair.ebook),
+            selectinload(BookPair.audiobook)
+        )
+        .where(BookPair.id == pair_id)
+    )
+    pair = result.scalar_one_or_none()
+    
+    if not pair or not pair.ebook or not pair.audiobook:
+        raise HTTPException(status_code=404, detail="Pair, EBook, or AudioBook not found")
+        
+    ebook = pair.ebook
+    audiobook = pair.audiobook
+    
+    # Process EBook updates
+    ebook_changed = False
+    for field, value in req.ebook_updates.items():
+        if field in FIELDS_TO_COMPARE:
+            # Handle type conversions
+            if field == "series_index" and value is not None:
+                value = float(value)
+            elif field == "publish_year" and value is not None:
+                value = int(value)
+            elif field in ["is_explicit", "is_abridged"] and value is not None:
+                value = str(value).lower() in ("true", "1")
+                
+            setattr(ebook, field, value)
+            ebook_changed = True
+            
+    # Process AudioBook updates
+    audio_changed = False
+    for field, value in req.audiobook_updates.items():
+        if field in FIELDS_TO_COMPARE:
+            # Handle type conversions
+            if field == "series_index" and value is not None:
+                value = float(value)
+            elif field == "publish_year" and value is not None:
+                value = int(value)
+            elif field in ["is_explicit", "is_abridged"] and value is not None:
+                value = str(value).lower() in ("true", "1")
+                
+            setattr(audiobook, field, value)
+            audio_changed = True
+            
+    if ebook_changed or audio_changed:
+        await db.commit()
+        
+        # Write back to files
+        if ebook_changed:
+            _write_ebook_metadata(ebook)
+        if audio_changed:
+            _write_audiobook_metadata(audiobook)
+            
+    return {"message": "Discrepancies resolved successfully"}
+

@@ -364,3 +364,21 @@ export async function applyRemoteCover(bookType, bookId, coverUrl) {
     if (!resp.ok) throw new Error('Failed to apply remote cover');
     return resp.json();
 }
+
+// ============ Cleanup ============
+
+export async function getMetadataDiscrepancies() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/pairs-discrepancies`);
+    if (!resp.ok) throw new Error('Failed to get metadata discrepancies');
+    return resp.json();
+}
+
+export async function resolveMetadataDiscrepancies(pairId, resolutions) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}/resolve-discrepancies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(resolutions)
+    });
+    if (!resp.ok) throw new Error('Failed to resolve metadata discrepancies');
+    return resp.json();
+}
