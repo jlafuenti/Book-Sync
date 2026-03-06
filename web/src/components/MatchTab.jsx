@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { searchMetadata } from '../api';
 
 export default function MatchTab({ currentData, onApply }) {
-    const [provider, setProvider] = useState('google');
+    const [provider, setProvider] = useState('openlibrary');
     const [query, setQuery] = useState(currentData.title || currentData.isbn || '');
     const [author, setAuthor] = useState(currentData.author || '');
     const [loading, setLoading] = useState(false);

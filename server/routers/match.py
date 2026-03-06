@@ -185,7 +185,7 @@ async def apply_remote_cover(
         raise HTTPException(status_code=404, detail="Book not found")
         
     # Download the image
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             resp = await client.get(req.cover_url, timeout=15.0)
             resp.raise_for_status()
