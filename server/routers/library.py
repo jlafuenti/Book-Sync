@@ -23,6 +23,7 @@ from rapidfuzz import fuzz
 import ebooklib
 from ebooklib import epub
 import mutagen
+from markdownify import markdownify as md
 
 from database import get_db
 from config import settings
@@ -322,7 +323,7 @@ async def extract_metadata(
             
             # Extended EPUB metadata
             desc = book.get_metadata('DC', 'description')
-            if desc: file_meta["description"] = desc[0][0]
+            if desc: file_meta["description"] = md(desc[0][0]).strip()
             
             pub = book.get_metadata('DC', 'publisher')
             if pub: file_meta["publisher"] = pub[0][0]
@@ -378,8 +379,8 @@ async def extract_metadata(
                         if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
                         if '\xa9alb' in audio: file_meta["series"] = normalize_series(str(audio['\xa9alb'][0]))
                         
-                        if '\xa9des' in audio: file_meta["description"] = str(audio['\xa9des'][0])
-                        elif 'desc' in audio: file_meta["description"] = str(audio['desc'][0])
+                        if '\xa9des' in audio: file_meta["description"] = md(str(audio['\xa9des'][0])).strip()
+                        elif 'desc' in audio: file_meta["description"] = md(str(audio['desc'][0])).strip()
                         
                         if '\xa9day' in audio:
                             match = re.search(r'\d{4}', str(audio['\xa9day'][0]))
@@ -411,12 +412,12 @@ async def extract_metadata(
                         # Extended fields
                         for kv in audio.keys():
                             if kv.startswith('COMM'):
-                                file_meta["description"] = str(audio[kv].text[0])
+                                file_meta["description"] = md(str(audio[kv].text[0])).strip()
                                 break
                         if 'description' not in file_meta:
                             for dk in ['description', 'summary']:
                                 if dk in audio: 
-                                    file_meta["description"] = str(audio[dk][0])
+                                    file_meta["description"] = md(str(audio[dk][0])).strip()
                                     break
                                     
                         if 'TCON' in audio: file_meta["genres"] = str(audio['TCON'])
