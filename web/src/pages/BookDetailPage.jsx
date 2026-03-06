@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 
 function formatBytes(bytes) {
@@ -150,7 +151,9 @@ function BookDetailPage() {
                         </p>
                     )}
                     {book.description && (
-                        <p className="book-detail-description">{book.description}</p>
+                        <div className="book-detail-description">
+                            <ReactMarkdown>{book.description}</ReactMarkdown>
+                        </div>
                     )}
                     <div className="book-detail-actions">
                         <button className="btn btn-primary" onClick={() => setShowEditModal(true)}>
