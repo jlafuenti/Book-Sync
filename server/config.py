@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     ebook_dir: str = Field(default="/data/ebooks", alias="EBOOK_DIR")
     audiobook_dir: str = Field(default="/data/audiobooks", alias="AUDIOBOOK_DIR")
     app_data_dir: str = Field(default="/data/app", alias="APP_DATA_DIR")
+    covers_dir: str = Field(default="/data/app/covers", alias="COVERS_DIR")
 
     # Server
     server_host: str = "0.0.0.0"

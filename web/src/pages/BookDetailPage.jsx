@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -34,6 +35,7 @@ function BookDetailPage() {
     const [book, setBook] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
+    const [showEditModal, setShowEditModal] = useState(false)
 
     useEffect(() => {
         setLoading(true)
@@ -49,6 +51,12 @@ function BookDetailPage() {
                 setLoading(false)
             })
     }, [type, id])
+
+    const handleSaveMetadata = async (bookId, data) => {
+        const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
+        const updatedBook = await updateFunc(bookId, data);
+        setBook(updatedBook);
+    }
 
     if (loading) {
         return (
@@ -145,7 +153,7 @@ function BookDetailPage() {
                         <p className="book-detail-description">{book.description}</p>
                     )}
                     <div className="book-detail-actions">
-                        <button className="btn btn-primary" disabled title="Coming in W2">
+                        <button className="btn btn-primary" onClick={() => setShowEditModal(true)}>
                             ✏️ Edit Metadata
                         </button>
                         {isAudiobook && (
@@ -219,6 +227,15 @@ function BookDetailPage() {
                     ))}
                 </div>
             </div>
+
+            {showEditModal && (
+                <EnhancedMetadataModal
+                    book={book}
+                    type={type}
+                    onClose={() => setShowEditModal(false)}
+                    onSave={handleSaveMetadata}
+                />
+            )}
         </div>
     )
 }

@@ -687,6 +687,91 @@ tr:hover td {
     }
 }
 
+.modal.modal-xl {
+    max-width: 800px;
+    padding: 0;
+    overflow-y: visible;
+}
+
+.modal-header {
+    padding: 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h3 {
+    margin: 0;
+}
+
+.modal-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    background: var(--bg-card);
+    overflow-x: auto;
+}
+
+.modal-tab {
+    padding: 14px 20px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.modal-tab:hover {
+    color: var(--text-primary);
+}
+
+.modal-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.modal-body {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* ============ Form Grid ============ */
+
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px 20px;
+}
+
+.form-group.span-2 {
+    grid-column: span 2;
+}
+
+/* Utility classes */
+.p-0 {
+    padding: 0 !important;
+}
+
+.p-4 {
+    padding: 24px !important;
+}
+
+.mt-2 {
+    margin-top: 16px !important;
+}
+
+.flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+}
+
 /* ============ Empty State ============ */
 
 .empty-state {
