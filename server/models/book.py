@@ -48,8 +48,8 @@ class EBook(Base):
     language: Mapped[str] = mapped_column(String(50), nullable=True)
     genres: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
     tags: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
-    isbn: Mapped[str] = mapped_column(String(20), nullable=True)
-    asin: Mapped[str] = mapped_column(String(20), nullable=True)
+    isbn: Mapped[str] = mapped_column(String(100), nullable=True)
+    asin: Mapped[str] = mapped_column(String(100), nullable=True)
     narrators: Mapped[str] = mapped_column(String(500), nullable=True)
     is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
@@ -91,8 +91,8 @@ class AudioBook(Base):
     language: Mapped[str] = mapped_column(String(50), nullable=True)
     genres: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
     tags: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
-    isbn: Mapped[str] = mapped_column(String(20), nullable=True)
-    asin: Mapped[str] = mapped_column(String(20), nullable=True)
+    isbn: Mapped[str] = mapped_column(String(100), nullable=True)
+    asin: Mapped[str] = mapped_column(String(100), nullable=True)
     narrators: Mapped[str] = mapped_column(String(500), nullable=True)
     is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
