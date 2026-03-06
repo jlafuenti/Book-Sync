@@ -6,6 +6,7 @@ import httpx
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.future import select
 from config import settings
 from database import get_db
 from schemas import MatchRequest, MatchResult
@@ -177,7 +178,8 @@ async def apply_remote_cover(
         raise HTTPException(status_code=400, detail="Invalid book_type")
         
     model = EBook if req.book_type == "ebook" else AudioBook
-    book = db.query(model).filter(model.id == req.book_id).first()
+    result = await db.execute(select(model).filter(model.id == req.book_id))
+    book = result.scalar_one_or_none()
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -228,6 +230,6 @@ async def apply_remote_cover(
                 
     # Update DB
     book.cover_path = str(file_path)
-    db.commit()
+    await db.commit()
     
     return {"message": "Cover applied successfully", "cover_path": str(file_path)}
