@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
 from config import settings
-from routers import auth, library, sync, files, transcription, stats, chapters
+from routers import auth, library, sync, files, transcription, stats, chapters, match
 from routers import settings as settings_router
 
 # Configure logging
@@ -85,6 +85,7 @@ app.include_router(transcription.router)
 app.include_router(stats.router)
 app.include_router(settings_router.router)
 app.include_router(chapters.router, prefix="/api/library")
+app.include_router(match.router, prefix="/api/library")
 
 
 @app.get("/")

@@ -346,12 +346,12 @@ export async function searchMetadata(provider, query, author) {
     return resp.json();
 }
 
-export async function applyMetadata(bookType, bookId, data) {
-    const resp = await fetchWithAuth(`${API_BASE}/library/match/apply`, {
+export async function applyRemoteCover(bookType, bookId, coverUrl) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/match/apply-cover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ book_type: bookType, book_id: bookId, matched_data: data })
+        body: JSON.stringify({ book_type: bookType, book_id: bookId, cover_url: coverUrl })
     });
-    if (!resp.ok) throw new Error('Failed to apply metadata');
+    if (!resp.ok) throw new Error('Failed to apply remote cover');
     return resp.json();
 }
