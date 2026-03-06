@@ -130,6 +130,28 @@ class BookPairCreate(BaseModel):
     audiobook_id: int
 
 
+class PairedBookSummary(BaseModel):
+    id: int
+    title: str
+    author: Optional[str]
+    format: str
+
+    class Config:
+        from_attributes = True
+
+
+class EBookDetailResponse(EBookResponse):
+    paired_with: Optional[PairedBookSummary] = None
+    pair_id: Optional[int] = None
+    pair_status: Optional[PairStatus] = None
+
+
+class AudioBookDetailResponse(AudioBookResponse):
+    paired_with: Optional[PairedBookSummary] = None
+    pair_id: Optional[int] = None
+    pair_status: Optional[PairStatus] = None
+
+
 # ============================================================
 # Sync Map Schemas
 # ============================================================

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { getPairs, getEbooks, getAudiobooks, createPair, deletePair } from '../api'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
@@ -260,7 +261,11 @@ function PairsPage({ tab }) {
                                     <tbody>
                                         {sortedPairs.map(pair => (
                                             <tr key={pair.id}>
-                                                <td style={{ fontWeight: 500 }}>{pair.ebook.title}</td>
+                                                <td style={{ fontWeight: 500 }}>
+                                                    <Link to={`/book/ebook/${pair.ebook.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                        {pair.ebook.title}
+                                                    </Link>
+                                                </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
                                                     <span className="badge badge-auto_matched" style={{ marginRight: '6px' }}>{pair.ebook.format}</span>
                                                     {pair.ebook.author || 'Unknown author'}
@@ -330,7 +335,11 @@ function PairsPage({ tab }) {
                                     <tbody>
                                         {unpairedEbooks.map(ebook => (
                                             <tr key={ebook.id}>
-                                                <td style={{ fontWeight: 500 }}>{ebook.title}</td>
+                                                <td style={{ fontWeight: 500 }}>
+                                                    <Link to={`/book/ebook/${ebook.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                        {ebook.title}
+                                                    </Link>
+                                                </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>{ebook.author || '—'}</td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
                                                     {ebook.series ? `${ebook.series}${ebook.series_index ? ` #${ebook.series_index}` : ''}` : '—'}
@@ -396,7 +405,11 @@ function PairsPage({ tab }) {
                                     <tbody>
                                         {unpairedAudiobooks.map(ab => (
                                             <tr key={ab.id}>
-                                                <td style={{ fontWeight: 500 }}>{ab.title}</td>
+                                                <td style={{ fontWeight: 500 }}>
+                                                    <Link to={`/book/audiobook/${ab.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                        {ab.title}
+                                                    </Link>
+                                                </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>{ab.author || '—'}</td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
                                                     {ab.series ? `${ab.series}${ab.series_index ? ` #${ab.series_index}` : ''}` : '—'}

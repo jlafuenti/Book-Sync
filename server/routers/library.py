@@ -30,7 +30,8 @@ from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
-    BookPairCreate, LibraryScanResponse, SearchResponse
+    BookPairCreate, LibraryScanResponse, SearchResponse,
+    EBookDetailResponse, AudioBookDetailResponse
 )
 from routers.auth import get_current_user
 
@@ -733,6 +734,62 @@ async def list_audiobooks(
         .order_by(AudioBook.author.nulls_last(), AudioBook.series.nulls_last(), AudioBook.series_index.nulls_last(), AudioBook.title)
     )
     return result.scalars().all()
+
+
+@router.get("/ebooks/{book_id}", response_model=EBookDetailResponse)
+async def get_ebook_detail(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Get a single ebook and its pair status."""
+    result = await db.execute(
+        select(EBook)
+        .options(
+            selectinload(EBook.pairs).selectinload(BookPair.audiobook)
+        )
+        .where(EBook.id == book_id)
+    )
+    ebook = result.scalar_one_or_none()
+    if not ebook:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    response_data = EBookDetailResponse.model_validate(ebook)
+    if ebook.pairs:
+        pair = ebook.pairs[0]
+        response_data.pair_id = pair.id
+        response_data.pair_status = pair.status
+        response_data.paired_with = pair.audiobook
+
+    return response_data
+
+
+@router.get("/audiobooks/{book_id}", response_model=AudioBookDetailResponse)
+async def get_audiobook_detail(
+    book_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Get a single audiobook and its pair status."""
+    result = await db.execute(
+        select(AudioBook)
+        .options(
+            selectinload(AudioBook.pairs).selectinload(BookPair.ebook)
+        )
+        .where(AudioBook.id == book_id)
+    )
+    audiobook = result.scalar_one_or_none()
+    if not audiobook:
+        raise HTTPException(status_code=404, detail="Audiobook not found")
+
+    response_data = AudioBookDetailResponse.model_validate(audiobook)
+    if audiobook.pairs:
+        pair = audiobook.pairs[0]
+        response_data.pair_id = pair.id
+        response_data.pair_status = pair.status
+        response_data.paired_with = pair.ebook
+
+    return response_data
 
 
 @router.get("/search", response_model=SearchResponse)
