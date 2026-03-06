@@ -37,6 +37,7 @@ function BookDetailPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [showEditModal, setShowEditModal] = useState(false)
+    const [editModalTab, setEditModalTab] = useState('Details')
 
     useEffect(() => {
         setLoading(true)
@@ -156,11 +157,11 @@ function BookDetailPage() {
                         </div>
                     )}
                     <div className="book-detail-actions">
-                        <button className="btn btn-primary" onClick={() => setShowEditModal(true)}>
+                        <button className="btn btn-primary" onClick={() => { setEditModalTab('Details'); setShowEditModal(true); }}>
                             ✏️ Edit Metadata
                         </button>
                         {isAudiobook && (
-                            <button className="btn btn-secondary" disabled title="Coming in W5">
+                            <button className="btn btn-secondary" onClick={() => { setEditModalTab('Chapters'); setShowEditModal(true); }}>
                                 📑 Edit Chapters
                             </button>
                         )}
@@ -235,6 +236,7 @@ function BookDetailPage() {
                 <EnhancedMetadataModal
                     book={book}
                     type={type}
+                    initialTab={editModalTab}
                     onClose={() => setShowEditModal(false)}
                     onSave={handleSaveMetadata}
                 />

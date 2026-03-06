@@ -153,6 +153,16 @@ class AudioBookDetailResponse(AudioBookResponse):
 
 
 # ============================================================
+# Chapter Schemas
+# ============================================================
+
+class Chapter(BaseModel):
+    id: int
+    start_time: float
+    end_time: float
+    title: str
+
+# ============================================================
 # Sync Map Schemas
 # ============================================================
 
