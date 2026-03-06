@@ -109,6 +109,12 @@ export async function normalizeLibrary() {
     return resp.json();
 }
 
+export async function rescanAllLibrary() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/rescan-all`, { method: 'POST' });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Force rescan failed');
+    return resp.json();
+}
+
 export async function getEbooks() {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks`);
     if (!resp.ok) throw new Error('Failed to fetch ebooks');

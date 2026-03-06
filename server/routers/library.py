@@ -895,6 +895,104 @@ async def scan_library(
     )
 
 
+@router.post("/rescan-all")
+async def rescan_all_files(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user)
+):
+    """
+    Force a rescan of EVERY file in the library to extract metadata.
+    Overrides all DB metadata fields with whatever is extracted from the files.
+    """
+    updated_ebooks = 0
+    updated_audiobooks = 0
+    
+    # Ebooks
+    result = await db.execute(select(EBook))
+    for book in result.scalars().all():
+        if not os.path.exists(book.file_path):
+            continue
+            
+        logger.info(f"[global-rescan] Forcing rescan of ebook {book.id}: {book.file_path}")
+        try:
+            meta = await extract_metadata(book.file_path, "ebook", db, library_root=settings.ebook_dir)
+            
+            book.title = meta.get("title") or book.title
+            book.author = meta.get("author") or book.author
+            book.series = meta.get("series") or book.series
+            book.series_index = meta.get("series_index") or book.series_index
+            book.description = meta.get("description") or book.description
+            book.publisher = meta.get("publisher") or book.publisher
+            book.publish_year = meta.get("publish_year") or book.publish_year
+            book.language = meta.get("language") or book.language
+            book.genres = meta.get("genres") or book.genres
+            book.tags = meta.get("tags") or book.tags
+            
+            if meta.get("isbn"): book.isbn = meta["isbn"]
+            if meta.get("asin"): book.asin = meta["asin"]
+                
+            book.metadata_source = meta.get("_metadata_source")
+            book.metadata_pattern = meta.get("_metadata_pattern")
+            
+            if not book.cover_path:
+                try:
+                    cover_path = await asyncio.to_thread(_extract_and_save_cover, book.file_path, "ebook", book.id, book.title)
+                    if cover_path:
+                        book.cover_path = cover_path
+                except Exception as e:
+                    pass
+            
+            db.add(book)
+            updated_ebooks += 1
+        except Exception as e:
+            logger.error(f"[global-rescan] Error on ebook {book.id}: {e}")
+
+    # Audiobooks
+    result = await db.execute(select(AudioBook))
+    for book in result.scalars().all():
+        if not os.path.exists(book.file_path):
+            continue
+            
+        logger.info(f"[global-rescan] Forcing rescan of audiobook {book.id}: {book.file_path}")
+        try:
+            meta = await extract_metadata(book.file_path, "audiobook", db, library_root=settings.audiobook_dir)
+            
+            book.title = meta.get("title") or book.title
+            book.author = meta.get("author") or book.author
+            book.series = meta.get("series") or book.series
+            book.series_index = meta.get("series_index") or book.series_index
+            book.description = meta.get("description") or book.description
+            book.publisher = meta.get("publisher") or book.publisher
+            book.publish_year = meta.get("publish_year") or book.publish_year
+            book.language = meta.get("language") or book.language
+            book.genres = meta.get("genres") or book.genres
+            book.tags = meta.get("tags") or book.tags
+            
+            if meta.get("narrators"): book.narrators = meta["narrators"]
+                
+            book.metadata_source = meta.get("_metadata_source")
+            book.metadata_pattern = meta.get("_metadata_pattern")
+            
+            if not book.cover_path:
+                try:
+                    cover_path = await asyncio.to_thread(_extract_and_save_cover, book.file_path, "audiobook", book.id)
+                    if cover_path:
+                        book.cover_path = cover_path
+                except Exception as e:
+                    pass
+
+            db.add(book)
+            updated_audiobooks += 1
+        except Exception as e:
+            logger.error(f"[global-rescan] Error on audiobook {book.id}: {e}")
+
+    await db.commit()
+    
+    return {
+        "message": f"Force-rescanned {updated_ebooks} ebooks and {updated_audiobooks} audiobooks."
+    }
+
+
 @router.post("/{book_type}s/{book_id}/rescan")
 async def rescan_book_file(
     book_type: str,
