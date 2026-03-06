@@ -385,12 +385,20 @@ async def extract_metadata(
                         
                         if '\xa9des' in audio: file_meta["description"] = md(str(audio['\xa9des'][0])).strip()
                         elif 'desc' in audio: file_meta["description"] = md(str(audio['desc'][0])).strip()
+                        elif '\xa9cmt' in audio: file_meta["description"] = md(str(audio['\xa9cmt'][0])).strip()
                         
                         if '\xa9day' in audio:
                             match = re.search(r'\d{4}', str(audio['\xa9day'][0]))
                             if match: file_meta["publish_year"] = int(match.group(0))
                             
                         if '\xa9gen' in audio: file_meta["genres"] = str(audio['\xa9gen'][0])
+                        
+                        if '\xa9wrt' in audio: file_meta["narrators"] = str(audio['\xa9wrt'][0])
+                        elif '\xa9com' in audio: file_meta["narrators"] = str(audio['\xa9com'][0])
+                        
+                        if '\xa9pub' in audio: file_meta["publisher"] = str(audio['\xa9pub'][0])
+                        elif '----:com.apple.iTunes:publisher' in audio:
+                            file_meta["publisher"] = str(audio['----:com.apple.iTunes:publisher'][0], 'utf-8')
                         
                         # Track number as series index
                         if 'trkn' in audio:
@@ -439,6 +447,9 @@ async def extract_metadata(
                         if 'TPUB' in audio: file_meta["publisher"] = str(audio['TPUB'])
                         elif 'organization' in audio: file_meta["publisher"] = str(audio['organization'][0])
                         elif 'publisher' in audio: file_meta["publisher"] = str(audio['publisher'][0])
+                        
+                        if 'TCOM' in audio: file_meta["narrators"] = str(audio['TCOM'])
+                        elif 'composer' in audio: file_meta["narrators"] = str(audio['composer'][0])
                     else:
                         # Generic fallback — try common keys
                         for title_key in ['\xa9nam', 'TIT2', 'title', 'TITLE']:
@@ -754,22 +765,28 @@ async def scan_library(
                 
                 if existing_audiobook:
                     # Update metadata if missing
-                    if existing_audiobook.series is None:
-                         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
-                         if meta["series"] or meta["series_index"] is not None:
-                             existing_audiobook.series = meta["series"]
-                             existing_audiobook.series_index = meta["series_index"]
-                             existing_audiobook.title = meta["title"] or existing_audiobook.title
-                             existing_audiobook.author = meta["author"] or existing_audiobook.author
-                             existing_audiobook.metadata_source = meta.get("_metadata_source")
-                             existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
-                             db.add(existing_audiobook)
-                    # Always update metadata_source if it's not set yet
-                    elif existing_audiobook.metadata_source is None:
-                         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+                    meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+                    updated = False
+                    
+                    if not existing_audiobook.metadata_source:
+                         existing_audiobook.title = meta.get("title") or existing_audiobook.title
+                         existing_audiobook.author = meta.get("author") or existing_audiobook.author
                          existing_audiobook.metadata_source = meta.get("_metadata_source")
                          existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
-                         db.add(existing_audiobook)
+                         updated = True
+                         
+                    if meta.get("series") and not existing_audiobook.series:
+                         existing_audiobook.series = meta["series"]
+                         existing_audiobook.series_index = meta.get("series_index")
+                         updated = True
+                         
+                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators"]:
+                         if meta.get(f) is not None and getattr(existing_audiobook, f) is None:
+                             setattr(existing_audiobook, f, meta.get(f))
+                             updated = True
+
+                    if updated:
+                        db.add(existing_audiobook)
                     # Try to extract cover if missing
                     if not existing_audiobook.cover_path:
                         try:
