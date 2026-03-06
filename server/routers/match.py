@@ -229,7 +229,8 @@ async def apply_remote_cover(
                 logger.warning(f"Failed to delete old cover {old_path}: {e}")
                 
     # Update DB
-    book.cover_path = str(file_path)
+    url_path = f"/api/files/covers/{filename}"
+    book.cover_path = url_path
     await db.commit()
     
-    return {"message": "Cover applied successfully", "cover_path": str(file_path)}
+    return {"message": "Cover applied successfully", "cover_path": url_path}
