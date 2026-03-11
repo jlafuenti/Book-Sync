@@ -1,0 +1,33 @@
+# Docker Compose for the Jetson Orin Nano transcription server.
+# Deploy this file ON the Jetson alongside the ./jetson directory.
+#
+# Usage:
+#   docker compose -f docker-compose.jetson.yml up -d
+#
+services:
+  transcriber:
+    build:
+      context: ./jetson
+      dockerfile: Dockerfile
+    container_name: booksync_transcriber
+    runtime: nvidia
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - whisper_models:/root/.cache/huggingface/hub # Persist downloaded models
+    environment:
+      - WHISPER_MODEL=medium
+      - WHISPER_COMPUTE_TYPE=float16
+      - WHISPER_DEVICE=cuda
+      - VAD_FILTER=true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  whisper_models:
