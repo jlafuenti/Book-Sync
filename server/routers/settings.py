@@ -24,7 +24,12 @@ DEFAULT_SETTINGS = {
         "<Author>/<Series>/<Title>",
         "<Author>/<Title>",
         "<Title>"
-    ]
+    ],
+    "transcription_provider": "remote_with_fallback",
+    "transcription_remote_url": "",
+    "transcription_remote_timeout": 7200,
+    "auto_transcribe_enabled": False,
+    "whisper_model": "medium"
 }
 
 @router.get("/", response_model=Dict[str, Any])

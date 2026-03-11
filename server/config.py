@@ -34,6 +34,18 @@ class Settings(BaseSettings):
         alias="WHISPER_DEVICE",
         description="'auto' detects GPU, 'cpu' forces CPU, 'cuda' forces GPU",
     )
+    
+    # Remote Transcription
+    transcription_provider: str = Field(
+        default="remote_with_fallback", 
+        alias="TRANSCRIPTION_PROVIDER",
+        description="Options: 'local', 'remote', 'remote_with_fallback'"
+    )
+    transcription_remote_url: str = Field(default="", alias="TRANSCRIPTION_REMOTE_URL")
+    transcription_remote_timeout: int = Field(default=7200, alias="TRANSCRIPTION_REMOTE_TIMEOUT")
+
+    # Auto-transcribe
+    auto_transcribe_enabled: bool = Field(default=False, alias="AUTO_TRANSCRIBE_ENABLED")
 
     # File Paths
     ebook_dir: str = Field(default="/data/ebooks", alias="EBOOK_DIR")
