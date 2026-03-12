@@ -288,7 +288,7 @@ function TranscriptionSettingsSection() {
         setTestResult(null)
         try {
             const result = await testRemoteConnection(remoteUrl)
-            if (result.status === 'healthy') {
+            if (result.success === true) {
                 setTestResult({ 
                     success: true, 
                     text: `Connection successful! GPU: ${result.gpu_name || 'None'}. Model: ${result.model_loaded ? 'Loaded' : 'Not Loaded'}` 
