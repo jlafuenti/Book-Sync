@@ -290,6 +290,9 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     provider = await get_transcription_provider()
     await _update_queue_item(item_id, message=f"Transcribing via {provider.name()}...")
 
+    # Capture event loop reference for thread-safe progress updates
+    _loop = asyncio.get_running_loop()
+
     def on_whisper_progress(fraction: float, total_duration_sec: float):
         """Called by transcription provider with real-time progress."""
         mapped_progress = 0.05 + (fraction * 0.45)
@@ -304,8 +307,9 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             pct = int(fraction * 100)
             msg = f"Transcribing via {provider.name()}... ({pct}%)"
 
-        # Fire-and-forget DB update in background
-        asyncio.get_event_loop().create_task(
+        # Schedule the DB update on the event loop (thread-safe)
+        _loop.call_soon_threadsafe(
+            _loop.create_task,
             _update_queue_item(item_id, progress=round(mapped_progress, 3), message=msg)
         )
 

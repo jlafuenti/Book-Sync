@@ -8,7 +8,7 @@ class TranscriptionQueueItem(Base):
     __tablename__ = "transcription_queue"
 
     id = Column(Integer, primary_key=True, index=True)
-    book_pair_id = Column(Integer, ForeignKey("book_pairs.id"), unique=True, index=True, nullable=False)
+    book_pair_id = Column(Integer, ForeignKey("book_pairs.id"), index=True, nullable=False)
     
     # "pending", "in_progress", "completed", "failed", "cancelled"
     status = Column(String, default="pending", nullable=False)
