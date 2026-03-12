@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getDiskUsage, getSettings, updateSettings } from '../api'
+import { getDiskUsage, getSettings, updateSettings, testRemoteConnection } from '../api'
 
 function SystemPage() {
     const [stats, setStats] = useState(null)
@@ -79,6 +79,7 @@ function SystemPage() {
             </div>
 
             <SettingsSection />
+            <TranscriptionSettingsSection />
 
             <div className="card">
                 <div className="card-header">
@@ -227,6 +228,211 @@ function SettingsSection() {
 }
 
 export default SystemPage
+
+function TranscriptionSettingsSection() {
+    const [provider, setProvider] = useState('remote_with_fallback')
+    const [remoteUrl, setRemoteUrl] = useState('')
+    const [remoteTimeout, setRemoteTimeout] = useState(7200)
+    const [autoTranscribe, setAutoTranscribe] = useState(false)
+    const [whisperModel, setWhisperModel] = useState('medium')
+    
+    const [loading, setLoading] = useState(false)
+    const [msg, setMsg] = useState(null)
+    const [testResult, setTestResult] = useState(null)
+    const [isTesting, setIsTesting] = useState(false)
+
+    useEffect(() => {
+        loadSettings()
+    }, [])
+
+    const loadSettings = async () => {
+        try {
+            const settings = await getSettings()
+            if (settings.transcription_provider) setProvider(settings.transcription_provider)
+            if (settings.transcription_remote_url !== undefined) setRemoteUrl(settings.transcription_remote_url)
+            if (settings.transcription_remote_timeout !== undefined) setRemoteTimeout(settings.transcription_remote_timeout)
+            if (settings.auto_transcribe_enabled !== undefined) setAutoTranscribe(settings.auto_transcribe_enabled)
+            if (settings.whisper_model) setWhisperModel(settings.whisper_model)
+        } catch (err) {
+            console.error(err)
+        }
+    }
+
+    const handleSave = async () => {
+        setLoading(true)
+        setMsg(null)
+        try {
+            await updateSettings({
+                transcription_provider: provider,
+                transcription_remote_url: remoteUrl,
+                transcription_remote_timeout: parseInt(remoteTimeout) || 7200,
+                auto_transcribe_enabled: autoTranscribe,
+                whisper_model: whisperModel
+            })
+            setMsg({ type: 'success', text: 'Transcription settings saved' })
+        } catch (err) {
+            console.error(err)
+            setMsg({ type: 'error', text: 'Failed to save transcription settings' })
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleTestConnection = async () => {
+        if (!remoteUrl) {
+            setTestResult({ success: false, text: "Wait, you didn't enter a URL yet!" })
+            return
+        }
+        
+        setIsTesting(true)
+        setTestResult(null)
+        try {
+            const result = await testRemoteConnection(remoteUrl)
+            if (result.status === 'healthy') {
+                setTestResult({ 
+                    success: true, 
+                    text: `Connection successful! GPU: ${result.gpu_name || 'None'}. Model: ${result.model_loaded ? 'Loaded' : 'Not Loaded'}` 
+                })
+            } else {
+                setTestResult({ success: false, text: "Server responded, but status is not healthy." })
+            }
+        } catch (err) {
+            setTestResult({ success: false, text: `Connection failed: ${err.message}` })
+        } finally {
+            setIsTesting(false)
+        }
+    }
+
+    return (
+        <div className="card" style={{ marginBottom: '24px' }}>
+            <div className="card-header">
+                <h3>Transcription Settings</h3>
+            </div>
+            <div style={{ padding: '16px' }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Configure how books are transcribed and synchronized. Remote transcription via Jetson Orin Nano is highly recommended for speed.
+                </p>
+
+                {/* Provider Selection */}
+                <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>Transcription Backend</label>
+                    <select 
+                        className="input" 
+                        value={provider} 
+                        onChange={e => setProvider(e.target.value)}
+                        style={{ width: '100%', maxWidth: '400px' }}
+                    >
+                        <option value="remote_with_fallback">Remote with Fallback (Recommended)</option>
+                        <option value="remote">Remote Only</option>
+                        <option value="local">Local Only</option>
+                    </select>
+                </div>
+
+                {/* Remote URL (Only show if remote is selected) */}
+                {provider !== 'local' && (
+                    <div style={{ marginBottom: '16px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>Jetson Remote URL</label>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                            <input
+                                type="text"
+                                className="input"
+                                value={remoteUrl}
+                                onChange={e => setRemoteUrl(e.target.value)}
+                                placeholder="http://192.168.1.100:9000"
+                                style={{ flex: '1 1 300px' }}
+                            />
+                            <button 
+                                className="btn btn-secondary" 
+                                onClick={handleTestConnection}
+                                disabled={isTesting}
+                                style={{ whiteSpace: 'nowrap' }}
+                            >
+                                {isTesting ? 'Testing...' : 'Test Connection'}
+                            </button>
+                        </div>
+                        {testResult && (
+                            <div style={{ 
+                                marginTop: '8px', 
+                                fontSize: '0.85rem', 
+                                color: testResult.success ? 'var(--success)' : 'var(--error)' 
+                            }}>
+                                {testResult.success ? '✅ ' : '❌ '}{testResult.text}
+                            </div>
+                        )}
+                        
+                        <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>Remote Timeout (Seconds)</label>
+                            <input
+                                type="number"
+                                className="input"
+                                value={remoteTimeout}
+                                onChange={e => setRemoteTimeout(e.target.value)}
+                                style={{ width: '150px' }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', margin: 0 }}>
+                                How long to wait for a 10+ hour audiobook before failing (default: 7200s / 2 hours).
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {/* Local Whisper Model */}
+                <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>Local Whisper Model</label>
+                    <select 
+                        className="input" 
+                        value={whisperModel} 
+                        onChange={e => setWhisperModel(e.target.value)}
+                        style={{ width: '100%', maxWidth: '200px' }}
+                    >
+                        <option value="tiny">Tiny (Fastest, least accurate)</option>
+                        <option value="base">Base</option>
+                        <option value="small">Small</option>
+                        <option value="medium">Medium (Recommended)</option>
+                        <option value="large-v3">Large v3 (Slowest, most accurate)</option>
+                    </select>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', margin: 0 }}>
+                        Takes effect only when using the Local Whisper backend. Remote model is configured in the Jetson's docker-compose file.
+                    </p>
+                </div>
+
+                {/* Auto-transcribe */}
+                <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input 
+                        type="checkbox" 
+                        id="autoTranscribeToggle"
+                        checked={autoTranscribe}
+                        onChange={e => setAutoTranscribe(e.target.checked)}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                    />
+                    <div>
+                        <label htmlFor="autoTranscribeToggle" style={{ fontWeight: 600, cursor: 'pointer', display: 'block' }}>
+                            Auto-transcribe new books
+                        </label>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                            Automatically add newly matched book pairs to the transcription queue during library scans.
+                        </p>
+                    </div>
+                </div>
+
+                {msg && (
+                    <div className={`alert alert-${msg.type}`} style={{ marginBottom: '16px' }}>
+                        {msg.text}
+                    </div>
+                )}
+
+                <button
+                    className="btn btn-primary"
+                    onClick={handleSave}
+                    disabled={loading}
+                >
+                    {loading ? 'Saving...' : 'Save Transcription Settings'}
+                </button>
+            </div>
+        </div>
+    )
+}
+
 
 function StatCard({ title, icon, color, usedHuman, totalHuman, usedBytes, totalBytes }) {
     const percent = totalBytes > 0 ? Math.min(100, (usedBytes / totalBytes) * 100) : 0
