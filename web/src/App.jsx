@@ -6,6 +6,7 @@ import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
 import TranscriptionPage from './pages/TranscriptionPage'
 import TranscriptionEditorPage from './pages/TranscriptionEditorPage'
+import TranscriptionQueuePage from './pages/TranscriptionQueuePage'
 import SystemPage from './pages/SystemPage'
 import SeriesPage from './pages/SeriesPage'
 import BookDetailPage from './pages/BookDetailPage'
@@ -103,6 +104,7 @@ function App() {
                     {isSection('/transcription') && (
                         <div className="nav-sub-group">
                             <Link to="/transcription/not-transcribed" className={subNavClass('/transcription/not-transcribed')}>⏸️ Not Transcribed</Link>
+                            <Link to="/transcription/queue" className={subNavClass('/transcription/queue')}>📋 Queue</Link>
                             <Link to="/transcription/in-progress" className={subNavClass('/transcription/in-progress')}>⏳ In Progress</Link>
                             <Link to="/transcription/transcribed" className={subNavClass('/transcription/transcribed')}>✅ Transcribed</Link>
                         </div>
@@ -145,6 +147,7 @@ function App() {
                     <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />
                     <Route path="/transcription/in-progress" element={<TranscriptionPage tab="in-progress" />} />
                     <Route path="/transcription/transcribed" element={<TranscriptionPage tab="transcribed" />} />
+                    <Route path="/transcription/queue" element={<TranscriptionQueuePage />} />
                     <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
                     {/* System */}

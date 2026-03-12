@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription } from '../api'
+import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue } from '../api'
 
 function TranscriptionPage({ tab }) {
     const [pairs, setPairs] = useState([])
@@ -85,8 +85,7 @@ function TranscriptionPage({ tab }) {
     const handleStart = async (pairId) => {
         setError('')
         try {
-            const status = await startTranscription(pairId)
-            setStatuses(prev => ({ ...prev, [pairId]: status }))
+            await startTranscription(pairId)
 
             // Optimistically update local pair status
             setPairs(prev => prev.map(p =>
@@ -94,6 +93,19 @@ function TranscriptionPage({ tab }) {
             ))
 
             startPolling(pairId)
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    const handleAddAllToQueue = async () => {
+        if (notTranscribedPairs.length === 0) return
+        setError('')
+        try {
+            const ids = notTranscribedPairs.map(p => p.id)
+            await addToQueue(ids)
+            // Refresh to pick up status changes
+            loadData()
         } catch (err) {
             setError(err.message)
         }
@@ -175,7 +187,7 @@ function TranscriptionPage({ tab }) {
     const matchedPairs = pairs.filter(p => p.status !== 'unmatched')
 
     // Categorize pairs into tabs
-    const notTranscribed = matchedPairs.filter(p =>
+    const notTranscribedPairs = matchedPairs.filter(p =>
         ['auto_matched', 'manual_matched', 'error'].includes(p.status)
     )
     const inProgress = matchedPairs.filter(p => p.status === 'transcribing')
@@ -204,7 +216,7 @@ function TranscriptionPage({ tab }) {
                         className="btn btn-primary btn-sm"
                         onClick={() => handleStart(pair.id)}
                     >
-                        🎙️ {pair.status === 'error' ? 'Retry' : 'Start'} Transcription
+                        📋 {pair.status === 'error' ? 'Retry → Queue' : 'Add to Queue'}
                     </button>
                 )}
 
@@ -253,7 +265,7 @@ function TranscriptionPage({ tab }) {
                 <div className="stat-card">
                     <div className="stat-icon yellow">⏸️</div>
                     <div>
-                        <div className="stat-value">{notTranscribed.length}</div>
+                        <div className="stat-value">{notTranscribedPairs.length}</div>
                         <div className="stat-label">Not Transcribed</div>
                     </div>
                 </div>
@@ -276,7 +288,17 @@ function TranscriptionPage({ tab }) {
             {/* ====== Not Transcribed Tab ====== */}
             {activeTab === 'not-transcribed' && (
                 <div>
-                    {notTranscribed.length === 0 ? (
+                    {notTranscribedPairs.length > 1 && (
+                        <div style={{ marginBottom: '16px', textAlign: 'right' }}>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleAddAllToQueue}
+                            >
+                                📋 Add All {notTranscribedPairs.length} to Queue
+                            </button>
+                        </div>
+                    )}
+                    {notTranscribedPairs.length === 0 ? (
                         <div className="card">
                             <div className="empty-state">
                                 <div className="icon">🎙️</div>
@@ -290,7 +312,7 @@ function TranscriptionPage({ tab }) {
                         </div>
                     ) : (
                         <div className="card-grid">
-                            {notTranscribed.map(pair => renderPairCard(pair, true))}
+                            {notTranscribedPairs.map(pair => renderPairCard(pair, true))}
                         </div>
                     )}
                 </div>
