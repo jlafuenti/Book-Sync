@@ -5,6 +5,9 @@ FROM dustynv/faster-whisper:r36.4.0-cu128-24.04
 
 WORKDIR /app
 
+# Install ffmpeg/ffprobe (needed for audio chunking to avoid OOM on large files)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Install remaining Python dependencies (faster-whisper is already in the base image)
 COPY requirements.txt .
 # Force use of standard PyPI. The base image configures pip to use a
