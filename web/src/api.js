@@ -447,3 +447,35 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
     if (!resp.ok) throw new Error('Failed to resolve metadata discrepancies');
     return resp.json();
 }
+
+// ============ Delete & Verify ============
+
+export async function deleteEbook(id, deleteFile = false) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}?delete_file=${deleteFile}`, {
+        method: 'DELETE'
+    });
+    if (!resp.ok) throw new Error('Failed to delete ebook');
+}
+
+export async function deleteAudiobook(id, deleteFile = false) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}?delete_file=${deleteFile}`, {
+        method: 'DELETE'
+    });
+    if (!resp.ok) throw new Error('Failed to delete audiobook');
+}
+
+export async function verifyFiles() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/verify`);
+    if (!resp.ok) throw new Error('Failed to verify files');
+    return resp.json();
+}
+
+export async function cleanupOrphans(ebookIds, audiobookIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/cleanup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds })
+    });
+    if (!resp.ok) throw new Error('Failed to cleanup orphaned entries');
+    return resp.json();
+}
