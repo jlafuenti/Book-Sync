@@ -293,11 +293,14 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # Capture event loop reference for thread-safe progress updates
     _loop = asyncio.get_running_loop()
 
-    def on_whisper_progress(fraction: float, total_duration_sec: float):
+    def on_whisper_progress(fraction: float, total_duration_sec: float, message: str = None):
         """Called by transcription provider with real-time progress."""
         mapped_progress = 0.05 + (fraction * 0.45)
 
-        if total_duration_sec and total_duration_sec > 0:
+        if message:
+            # If the provider (like Jetson) supplies a detailed message, just use it
+            msg = f"{provider.name()} - {message}"
+        elif total_duration_sec and total_duration_sec > 0:
             elapsed_sec = fraction * total_duration_sec
             elapsed_str = _format_duration(elapsed_sec)
             total_str = _format_duration(total_duration_sec)

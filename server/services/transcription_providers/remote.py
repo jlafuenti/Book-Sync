@@ -45,9 +45,10 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         data = resp.json()
                         if data.get("active"):
                             progress = data.get("progress", 0.0)
+                            message = data.get("message")
                             # We pass None for duration to the callback, 
                             # because the Jetson message already handles the time logic
-                            progress_callback(progress, None)
+                            progress_callback(progress, None, message)
                 except httpx.RequestError as e:
                     logger.debug(f"Progress polling failed: {e}")
                 
