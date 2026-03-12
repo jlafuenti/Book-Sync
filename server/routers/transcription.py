@@ -122,6 +122,18 @@ async def cancel_transcription(
     _: User = Depends(get_current_user),
 ):
     """Cancel an active or pending transcription job."""
+    # Update BookPair status first to ensure UI gets unstuck
+    pair_result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    pair = pair_result.scalar_one_or_none()
+    
+    if not pair:
+        raise HTTPException(status_code=404, detail="Book pair not found")
+        
+    was_transcribing = pair.status == PairStatus.TRANSCRIBING
+    if was_transcribing:
+        pair.status = PairStatus.ERROR
+        await db.commit()
+
     # Find the queue item for this pair
     result = await db.execute(
         select(TranscriptionQueueItem).where(
@@ -131,17 +143,12 @@ async def cancel_transcription(
     )
     item = result.scalar_one_or_none()
 
-    if not item:
+    if item:
+        from services.queue_manager import cancel_item
+        await cancel_item(item.id)
+    elif not was_transcribing:
+        # Only throw 404 if it wasn't transcribing AND no item was found
         raise HTTPException(status_code=404, detail="No active transcription found for this pair")
-
-    from services.queue_manager import cancel_item
-    await cancel_item(item.id)
-
-    # Update BookPair status
-    pair_result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
-    pair = pair_result.scalar_one_or_none()
-    if pair and pair.status == PairStatus.TRANSCRIBING:
-        pair.status = PairStatus.ERROR
 
     return {"status": "cancelled"}
 
