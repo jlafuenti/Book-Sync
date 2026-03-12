@@ -1,11 +1,21 @@
 """
-Transcription router: trigger and monitor Whisper transcription jobs.
+Transcription router: queue management and monitoring for transcription jobs.
+
+Endpoints:
+  POST /{pair_id}/start     — Add a book pair to the transcription queue
+  GET  /{pair_id}/status    — Get transcription status for a pair
+  POST /{pair_id}/cancel    — Cancel a transcription job
+  PUT  /{pair_id}/text      — Update transcription text for sync points
+  GET  /queue               — List the full transcription queue
+  POST /queue/batch         — Add multiple pairs to the queue
+  DELETE /queue/{item_id}   — Remove a queue item
+  PUT  /queue/{item_id}/priority — Change priority of a queue item
 """
 
 import asyncio
-from typing import Dict
+from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,29 +24,34 @@ from database import get_db, async_session
 from models.user import User
 from models.book import BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
-from schemas import TranscriptionStatusResponse, SyncMapTextUpdate
+from models.transcription_queue import TranscriptionQueueItem
+from schemas import (
+    TranscriptionStatusResponse,
+    SyncMapTextUpdate,
+    QueueItemResponse,
+    QueueAddRequest,
+    QueuePriorityUpdate,
+)
 from routers.auth import get_current_user, get_admin_user
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
 
-# In-memory tracking of transcription jobs
-# In production, this could be moved to Redis or the database
-_transcription_jobs: Dict[int, dict] = {}
 
+# ====================================================================
+# Queue Management Endpoints
+# ====================================================================
 
-@router.post("/{pair_id}/start", response_model=TranscriptionStatusResponse)
+@router.post("/{pair_id}/start", response_model=QueueItemResponse)
 async def start_transcription(
     pair_id: int,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
     """
-    Start the transcription and alignment pipeline for a book pair.
-    This runs Whisper on the audiobook, extracts text from the EPUB,
-    aligns them, and generates a SyncMap.
+    Add a book pair to the transcription queue.
+    Replaces the old direct-start approach with queue-based processing.
     """
-    # Verify book pair exists and is in a valid state
+    # Verify book pair exists
     result = await db.execute(
         select(BookPair)
         .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
@@ -46,32 +61,26 @@ async def start_transcription(
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
 
-    if pair.status == PairStatus.TRANSCRIBING:
-        raise HTTPException(status_code=409, detail="Transcription already in progress")
-
     if pair.status == PairStatus.SYNCED:
         raise HTTPException(
             status_code=409,
             detail="Already synced. Delete existing sync map first to re-transcribe.",
         )
 
-    # Mark as transcribing
-    pair.status = PairStatus.TRANSCRIBING
-    _transcription_jobs[pair_id] = {
-        "status": PairStatus.TRANSCRIBING,
-        "progress": 0.0,
-        "message": "Starting transcription...",
-    }
+    # Add to queue via the queue manager
+    from services.queue_manager import add_to_queue
+    created = await add_to_queue([pair_id])
 
-    # Launch background transcription
-    background_tasks.add_task(_run_transcription, pair_id)
+    if not created:
+        # Already in queue
+        from services.queue_manager import get_queue_item_for_pair
+        existing = await get_queue_item_for_pair(pair_id)
+        if existing:
+            return _queue_item_to_response(existing, pair)
+        raise HTTPException(status_code=409, detail="Already in transcription queue")
 
-    return TranscriptionStatusResponse(
-        book_pair_id=pair_id,
-        status=PairStatus.TRANSCRIBING,
-        progress=0.0,
-        message="Transcription started",
-    )
+    item = created[0]
+    return _queue_item_to_response(item, pair)
 
 
 @router.get("/{pair_id}/status", response_model=TranscriptionStatusResponse)
@@ -80,15 +89,16 @@ async def get_transcription_status(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Get the status of a transcription job."""
-    # Check in-memory job status first
-    if pair_id in _transcription_jobs:
-        job = _transcription_jobs[pair_id]
+    """Get the status of a transcription job (checks queue first, then DB)."""
+    # Check queue for active/pending items
+    from services.queue_manager import get_queue_item_for_pair
+    queue_item = await get_queue_item_for_pair(pair_id)
+    if queue_item:
         return TranscriptionStatusResponse(
             book_pair_id=pair_id,
-            status=job["status"],
-            progress=job.get("progress"),
-            message=job.get("message"),
+            status=PairStatus.TRANSCRIBING if queue_item.status in ("pending", "in_progress") else PairStatus.ERROR,
+            progress=queue_item.progress,
+            message=queue_item.message,
         )
 
     # Fall back to database status
@@ -105,6 +115,147 @@ async def get_transcription_status(
     )
 
 
+@router.post("/{pair_id}/cancel")
+async def cancel_transcription(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Cancel an active or pending transcription job."""
+    # Find the queue item for this pair
+    result = await db.execute(
+        select(TranscriptionQueueItem).where(
+            TranscriptionQueueItem.book_pair_id == pair_id,
+            TranscriptionQueueItem.status.in_(["pending", "in_progress"]),
+        )
+    )
+    item = result.scalar_one_or_none()
+
+    if not item:
+        raise HTTPException(status_code=404, detail="No active transcription found for this pair")
+
+    from services.queue_manager import cancel_item
+    await cancel_item(item.id)
+
+    # Update BookPair status
+    pair_result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    pair = pair_result.scalar_one_or_none()
+    if pair and pair.status == PairStatus.TRANSCRIBING:
+        pair.status = PairStatus.ERROR
+
+    return {"status": "cancelled"}
+
+
+@router.get("/queue", response_model=List[QueueItemResponse])
+async def get_queue(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Get the full transcription queue with positions."""
+    from services.queue_manager import get_queue as get_queue_items
+    items = await get_queue_items()
+
+    # Enrich with book titles
+    responses = []
+    for i, item in enumerate(items):
+        pair_result = await db.execute(
+            select(BookPair)
+            .options(selectinload(BookPair.ebook))
+            .where(BookPair.id == item.book_pair_id)
+        )
+        pair = pair_result.scalar_one_or_none()
+        title = pair.ebook.title if pair and pair.ebook else f"Pair #{item.book_pair_id}"
+
+        responses.append(QueueItemResponse(
+            id=item.id,
+            book_pair_id=item.book_pair_id,
+            book_title=title,
+            status=item.status,
+            priority=item.priority,
+            position=i + 1,
+            progress=item.progress,
+            message=item.message,
+            error_message=item.error_message,
+            created_at=item.created_at,
+            started_at=item.started_at,
+            completed_at=item.completed_at,
+        ))
+
+    return responses
+
+
+@router.post("/queue/batch", response_model=List[QueueItemResponse])
+async def batch_add_to_queue(
+    body: QueueAddRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Add multiple book pairs to the transcription queue at once."""
+    from services.queue_manager import add_to_queue
+    created = await add_to_queue(body.pair_ids)
+
+    responses = []
+    for item in created:
+        pair_result = await db.execute(
+            select(BookPair)
+            .options(selectinload(BookPair.ebook))
+            .where(BookPair.id == item.book_pair_id)
+        )
+        pair = pair_result.scalar_one_or_none()
+        title = pair.ebook.title if pair and pair.ebook else f"Pair #{item.book_pair_id}"
+
+        responses.append(QueueItemResponse(
+            id=item.id,
+            book_pair_id=item.book_pair_id,
+            book_title=title,
+            status=item.status,
+            priority=item.priority,
+            position=0,
+            progress=item.progress,
+            message=item.message,
+            created_at=item.created_at,
+        ))
+
+    return responses
+
+
+@router.delete("/queue/{item_id}")
+async def remove_from_queue(
+    item_id: int,
+    _: User = Depends(get_current_user),
+):
+    """Remove a queue item (only if not in_progress)."""
+    from services.queue_manager import remove_item
+    removed = await remove_item(item_id)
+    if not removed:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove this item. It may not exist or is currently in progress (cancel it first).",
+        )
+    return {"status": "removed"}
+
+
+@router.put("/queue/{item_id}/priority")
+async def update_queue_priority(
+    item_id: int,
+    body: QueuePriorityUpdate,
+    _: User = Depends(get_current_user),
+):
+    """Update the priority of a pending queue item."""
+    from services.queue_manager import update_priority
+    updated = await update_priority(item_id, body.priority)
+    if not updated:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update priority. Item may not exist or is not in pending state.",
+        )
+    return {"status": "updated", "priority": body.priority}
+
+
+# ====================================================================
+# Sync Text Editing (unchanged from before)
+# ====================================================================
+
 @router.put("/{pair_id}/text")
 async def update_transcription_text(
     pair_id: int,
@@ -116,12 +267,11 @@ async def update_transcription_text(
     Update transcription text for specific sync points without altering timestamps.
     Useful for correcting Whisper transcription errors from the frontend.
     """
-    # Verify sync map exists
     result = await db.execute(
         select(SyncMap).where(SyncMap.book_pair_id == pair_id)
     )
     sync_map = result.scalar_one_or_none()
-    
+
     if not sync_map:
         raise HTTPException(status_code=404, detail="Sync map not found")
 
@@ -129,7 +279,6 @@ async def update_transcription_text(
     if not point_ids:
         return {"status": "success", "updated": 0}
 
-    # Fetch the points to update
     points_result = await db.execute(
         select(SyncPoint).where(
             SyncPoint.sync_map_id == sync_map.id,
@@ -146,129 +295,13 @@ async def update_transcription_text(
             updated_count += 1
 
     await db.commit()
-    
+
     return {"status": "success", "updated": updated_count}
 
 
-async def _run_transcription(pair_id: int):
-    """
-    Background task: run the full transcription + alignment pipeline.
-
-    Steps:
-    1. Transcribe audiobook with Whisper → timestamped sentences
-    2. Extract text from EPUB → sentence list
-    3. Align the two sentence lists → SyncMap
-    """
-    try:
-        _transcription_jobs[pair_id]["message"] = "Loading audiobook for transcription..."
-        _transcription_jobs[pair_id]["progress"] = 0.02
-
-        async with async_session() as db:
-            # Load book pair with related data
-            result = await db.execute(
-                select(BookPair)
-                .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
-                .where(BookPair.id == pair_id)
-            )
-            pair = result.scalar_one_or_none()
-            if not pair:
-                raise Exception(f"Book pair {pair_id} not found")
-
-            # Step 1: Transcribe audiobook via the configured provider
-            _transcription_jobs[pair_id]["message"] = "Selecting transcription provider..."
-            _transcription_jobs[pair_id]["progress"] = 0.02
-
-            from services.transcription import _format_duration
-            from services.transcription_providers import get_transcription_provider
-
-            provider = await get_transcription_provider()
-            _transcription_jobs[pair_id]["message"] = f"Transcribing via {provider.name()}..."
-
-            def on_whisper_progress(fraction: float, total_duration_sec: float):
-                """Called by transcription provider with real-time progress."""
-                # Map provider's 0-100% onto our 5-50% range
-                mapped_progress = 0.05 + (fraction * 0.45)
-                _transcription_jobs[pair_id]["progress"] = round(mapped_progress, 3)
-                
-                # Build a descriptive message with time info
-                if total_duration_sec and total_duration_sec > 0:
-                    elapsed_sec = fraction * total_duration_sec
-                    elapsed_str = _format_duration(elapsed_sec)
-                    total_str = _format_duration(total_duration_sec)
-                    pct = int(fraction * 100)
-                    _transcription_jobs[pair_id]["message"] = (
-                        f"Transcribing ({provider.name()}): {elapsed_str} / {total_str} ({pct}%)"
-                    )
-                else:
-                    pct = int(fraction * 100)
-                    _transcription_jobs[pair_id]["message"] = (
-                        f"Transcribing via {provider.name()}... ({pct}%)"
-                    )
-
-            whisper_sentences = await provider.transcribe(
-                pair.audiobook.file_path,
-                progress_callback=on_whisper_progress,
-            )
-
-            _transcription_jobs[pair_id]["progress"] = 0.50
-            _transcription_jobs[pair_id]["message"] = (
-                f"Transcription complete ({len(whisper_sentences)} sentences). "
-                "Extracting EPUB text..."
-            )
-
-            # Step 2: Extract EPUB text
-            from services.epub_parser import extract_epub_sentences
-            epub_sentences = await asyncio.to_thread(
-                extract_epub_sentences, pair.ebook.file_path
-            )
-
-            _transcription_jobs[pair_id]["progress"] = 0.6
-            _transcription_jobs[pair_id]["message"] = (
-                f"EPUB extracted ({len(epub_sentences)} sentences). "
-                "Aligning text to audio..."
-            )
-
-            # Step 3: Align texts
-            from services.alignment import align_texts
-            sync_points_data = await asyncio.to_thread(
-                align_texts, epub_sentences, whisper_sentences
-            )
-
-            _transcription_jobs[pair_id]["progress"] = 0.9
-            _transcription_jobs[pair_id]["message"] = "Saving sync map..."
-
-            # Step 4: Save sync map
-            from services.sync_engine import save_sync_map
-            await save_sync_map(db, pair_id, sync_points_data)
-
-            # Update pair status
-            from datetime import datetime
-            pair.status = PairStatus.SYNCED
-            pair.synced_at = datetime.utcnow()
-            await db.commit()
-
-            _transcription_jobs[pair_id]["status"] = PairStatus.SYNCED
-            _transcription_jobs[pair_id]["progress"] = 1.0
-            _transcription_jobs[pair_id]["message"] = "Sync complete!"
-
-    except Exception as e:
-        _transcription_jobs[pair_id]["status"] = PairStatus.ERROR
-        _transcription_jobs[pair_id]["progress"] = None
-        _transcription_jobs[pair_id]["message"] = f"Error: {str(e)}"
-
-        # Update database status
-        try:
-            async with async_session() as db:
-                result = await db.execute(
-                    select(BookPair).where(BookPair.id == pair_id)
-                )
-                pair = result.scalar_one_or_none()
-                if pair:
-                    pair.status = PairStatus.ERROR
-                    await db.commit()
-        except Exception:
-            pass  # Best effort
-
+# ====================================================================
+# Startup utility
+# ====================================================================
 
 async def reset_stale_transcriptions():
     """
@@ -289,40 +322,34 @@ async def reset_stale_transcriptions():
             )
             for pair in stale_pairs:
                 pair.status = PairStatus.ERROR
-                # We could set to UNMATCHED, but ERROR is more informative to the user
-                # that something went wrong.
-            
+
             await db.commit()
 
 
-@router.post("/{pair_id}/cancel")
-async def cancel_transcription(
-    pair_id: int,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """
-    Cancel a running transcription job.
-    """
-    # 1. Update in-memory job status to act as a signal (if implemented)
-    # Since we can't easily kill an asyncio thread running synchronously,
-    # we mostly just update the DB status so the UI reflects it.
-    # A true "cancellation" of the running thread is complex without celery/rq.
-    # For now, we update state so the user isn't blocked.
-    
-    if pair_id in _transcription_jobs:
-        _transcription_jobs[pair_id]["status"] = PairStatus.ERROR
-        _transcription_jobs[pair_id]["message"] = "Cancelled by user"
+# ====================================================================
+# Helpers
+# ====================================================================
 
-    # 2. Update DB
-    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
-    pair = result.scalar_one_or_none()
-    
-    if not pair:
-        raise HTTPException(status_code=404, detail="Book pair not found")
-        
-    if pair.status == PairStatus.TRANSCRIBING:
-        pair.status = PairStatus.ERROR
-        await db.commit()
-        
-    return {"status": "cancelled"}
+def _queue_item_to_response(
+    item: TranscriptionQueueItem,
+    pair: BookPair = None,
+) -> QueueItemResponse:
+    """Convert a queue item model to a response schema."""
+    title = None
+    if pair and pair.ebook:
+        title = pair.ebook.title
+
+    return QueueItemResponse(
+        id=item.id,
+        book_pair_id=item.book_pair_id,
+        book_title=title,
+        status=item.status,
+        priority=item.priority,
+        position=item.position or 0,
+        progress=item.progress,
+        message=item.message,
+        error_message=item.error_message,
+        created_at=item.created_at,
+        started_at=item.started_at,
+        completed_at=item.completed_at,
+    )

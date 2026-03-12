@@ -48,6 +48,7 @@ async def init_db():
     async with engine.begin() as conn:
         from models import user, book, sync_map, bookmark
         from models.settings import SystemSetting # Explicit import
+        from models.transcription_queue import TranscriptionQueueItem  # Queue model
         
         await conn.run_sync(Base.metadata.create_all)
 

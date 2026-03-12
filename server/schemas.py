@@ -319,6 +319,32 @@ class TranscriptionStatusResponse(BaseModel):
     message: Optional[str] = None
 
 
+class QueueItemResponse(BaseModel):
+    id: int
+    book_pair_id: int
+    book_title: Optional[str] = None
+    status: str
+    priority: int
+    position: int = 0
+    progress: Optional[float] = None
+    message: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class QueueAddRequest(BaseModel):
+    pair_ids: List[int]
+
+
+class QueuePriorityUpdate(BaseModel):
+    priority: int
+
+
 # ============================================================
 # Library Scan Schemas
 # ============================================================
