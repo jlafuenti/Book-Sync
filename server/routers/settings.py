@@ -43,7 +43,20 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
         if s.key in ["ebook_filename_patterns", "audiobook_filename_patterns", "filename_patterns"]:
              settings_dict[s.key] = s.value.split("\n") if s.value else []
         else:
-            settings_dict[s.key] = s.value
+            # Cast back to correct type based on DEFAULT_SETTINGS
+            if s.key in DEFAULT_SETTINGS:
+                default_type = type(DEFAULT_SETTINGS[s.key])
+                if default_type is bool:
+                    settings_dict[s.key] = str(s.value).lower() == "true"
+                elif default_type is int:
+                    try:
+                        settings_dict[s.key] = int(s.value)
+                    except ValueError:
+                        settings_dict[s.key] = DEFAULT_SETTINGS[s.key]
+                else:
+                    settings_dict[s.key] = s.value
+            else:
+                settings_dict[s.key] = s.value
             
     # merge with defaults if missing
     for key, val in DEFAULT_SETTINGS.items():
