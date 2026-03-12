@@ -247,6 +247,40 @@ export async function updateTranscriptionText(pairId, points) {
     return resp.json();
 }
 
+// ============ Transcription Queue ============
+
+export async function getTranscriptionQueue() {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue`);
+    if (!resp.ok) throw new Error('Failed to fetch transcription queue');
+    return resp.json();
+}
+
+export async function addToQueue(pairIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/batch`, {
+        method: 'POST',
+        body: JSON.stringify({ pair_ids: pairIds }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to add to queue');
+    return resp.json();
+}
+
+export async function removeFromQueue(itemId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to remove from queue');
+    return resp.json();
+}
+
+export async function updateQueuePriority(itemId, priority) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}/priority`, {
+        method: 'PUT',
+        body: JSON.stringify({ priority }),
+    });
+    if (!resp.ok) throw new Error('Failed to update priority');
+    return resp.json();
+}
+
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {
