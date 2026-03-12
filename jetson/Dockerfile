@@ -7,7 +7,9 @@ WORKDIR /app
 
 # Install remaining Python dependencies (faster-whisper is already in the base image)
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Force use of standard PyPI. The base image configures pip to use a
+# jetson-ai-lab proxy that is sometimes offline / fails DNS.
+RUN pip3 install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt
 
 # Download NLTK sentence tokenizer data at build time
 RUN python3 -c "import nltk; nltk.download('punkt_tab', quiet=True)"
