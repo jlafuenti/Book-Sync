@@ -302,17 +302,18 @@ export async function updateSettings(settings) {
 
 export async function testRemoteConnection(url) {
     if (!url) throw new Error("URL is required");
-    // We append /v1/health to test the Jetson fastAPI server
-    const fullUrl = url.endsWith('/') ? `${url}v1/health` : `${url}/v1/health`;
+    // We ping via the backend to avoid CORS and VPN local-routing issues 
+    // where the user's browser cannot reach the Jetson directly.
+    const resp = await fetchWithAuth(`${API_BASE}/settings/test-remote?url=${encodeURIComponent(url)}`);
     
-    // We use a regular fetch here since we're hitting a 3rd party IP directly
-    const resp = await fetch(fullUrl, {
-        method: 'GET',
-        // Give it a short timeout in case the IP is dead
-        signal: AbortSignal.timeout(3000)
-    });
-    
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+            const errBody = await resp.json();
+            if (errBody.detail) msg = errBody.detail;
+        } catch(e) {}
+        throw new Error(msg);
+    }
     return resp.json();
 }
 
