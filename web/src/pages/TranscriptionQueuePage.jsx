@@ -4,6 +4,7 @@ import { getTranscriptionQueue, removeFromQueue, cancelTranscription, updateQueu
 function TranscriptionQueuePage() {
     const [queue, setQueue] = useState([])
     const [loading, setLoading] = useState(true)
+    const [searchQuery, setSearchQuery] = useState('')
     const [error, setError] = useState('')
     const pollingRef = useRef(null)
 
@@ -65,8 +66,14 @@ function TranscriptionQueuePage() {
         return <div className="loading-page"><div className="spinner"></div> Loading queue...</div>
     }
 
-    const activeItem = queue.find(q => q.status === 'in_progress')
-    const pendingItems = queue.filter(q => q.status === 'pending')
+    const filteredQueue = queue.filter(q => {
+        if (!searchQuery) return true
+        const title = q.book_title || `Pair #${q.book_pair_id}`
+        return title.toLowerCase().includes(searchQuery.toLowerCase())
+    })
+
+    const activeItem = filteredQueue.find(q => q.status === 'in_progress')
+    const pendingItems = filteredQueue.filter(q => q.status === 'pending')
 
     return (
         <div>
@@ -100,6 +107,17 @@ function TranscriptionQueuePage() {
                         <div className="stat-label">Total</div>
                     </div>
                 </div>
+            </div>
+
+            <div style={{ marginBottom: '24px' }}>
+                <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Search queue by book title..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border)' }}
+                />
             </div>
 
             {/* Active Job */}
