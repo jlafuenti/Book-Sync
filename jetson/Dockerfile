@@ -1,6 +1,6 @@
 # Jetson Orin Nano — faster-whisper transcription server
-# Uses dustynv's JetPack 6-compatible base image with CUDA + PyTorch pre-installed
-FROM dustynv/whisper:r36.2.0
+# Uses dustynv's JetPack 6-compatible base image specifically compiled with CTranslate2 CUDA support for ARM64
+FROM dustynv/faster-whisper:r36.2.0
 
 WORKDIR /app
 
