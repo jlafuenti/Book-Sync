@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary } from '../api'
+import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles, cleanupOrphans } from '../api'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -93,6 +93,18 @@ function LibraryPage({ tab }) {
     const [editingBook, setEditingBook] = useState(null)
     const [editingType, setEditingType] = useState(null)
     const [rescanningAll, setRescanningAll] = useState(false)
+
+    // Delete state
+    const [deleteTarget, setDeleteTarget] = useState(null) // { id, title, type: 'ebook'|'audiobook' }
+    const [deleteSourceFile, setDeleteSourceFile] = useState(false)
+    const [deleting, setDeleting] = useState(false)
+
+    // Verify state
+    const [verifying, setVerifying] = useState(false)
+    const [verifyReport, setVerifyReport] = useState(null) // { orphaned_ebooks, orphaned_audiobooks }
+    const [selectedOrphanEbooks, setSelectedOrphanEbooks] = useState(new Set())
+    const [selectedOrphanAudiobooks, setSelectedOrphanAudiobooks] = useState(new Set())
+    const [cleaningUp, setCleaningUp] = useState(false)
 
     // Filtering state
     const [searchTerm, setSearchTerm] = useState('')
@@ -270,6 +282,98 @@ function LibraryPage({ tab }) {
         setEditingType(type)
     }
 
+    // --- Delete handlers ---
+    const openDeleteModal = (book, type) => {
+        setDeleteTarget({ id: book.id, title: book.title, author: book.author, type })
+        setDeleteSourceFile(false)
+    }
+
+    const handleDelete = async () => {
+        if (!deleteTarget) return
+        setDeleting(true)
+        try {
+            if (deleteTarget.type === 'ebook') {
+                await deleteEbook(deleteTarget.id, deleteSourceFile)
+                setEbooks(prev => prev.filter(b => b.id !== deleteTarget.id))
+            } else {
+                await deleteAudiobook(deleteTarget.id, deleteSourceFile)
+                setAudiobooks(prev => prev.filter(b => b.id !== deleteTarget.id))
+            }
+            setDeleteTarget(null)
+        } catch (err) {
+            alert('Failed to delete: ' + err.message)
+        } finally {
+            setDeleting(false)
+        }
+    }
+
+    // --- Verify handlers ---
+    const handleVerify = async () => {
+        setVerifying(true)
+        setVerifyReport(null)
+        setError('')
+        try {
+            const report = await verifyFiles()
+            setVerifyReport(report)
+            setSelectedOrphanEbooks(new Set())
+            setSelectedOrphanAudiobooks(new Set())
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setVerifying(false)
+        }
+    }
+
+    const toggleOrphanEbook = (id) => {
+        setSelectedOrphanEbooks(prev => {
+            const next = new Set(prev)
+            next.has(id) ? next.delete(id) : next.add(id)
+            return next
+        })
+    }
+
+    const toggleOrphanAudiobook = (id) => {
+        setSelectedOrphanAudiobooks(prev => {
+            const next = new Set(prev)
+            next.has(id) ? next.delete(id) : next.add(id)
+            return next
+        })
+    }
+
+    const selectAllOrphans = () => {
+        if (!verifyReport) return
+        setSelectedOrphanEbooks(new Set(verifyReport.orphaned_ebooks.map(e => e.id)))
+        setSelectedOrphanAudiobooks(new Set(verifyReport.orphaned_audiobooks.map(a => a.id)))
+    }
+
+    const deselectAllOrphans = () => {
+        setSelectedOrphanEbooks(new Set())
+        setSelectedOrphanAudiobooks(new Set())
+    }
+
+    const handleCleanup = async () => {
+        if (selectedOrphanEbooks.size === 0 && selectedOrphanAudiobooks.size === 0) return
+        setCleaningUp(true)
+        try {
+            const result = await cleanupOrphans([...selectedOrphanEbooks], [...selectedOrphanAudiobooks])
+            // Remove cleaned items from local state too
+            setEbooks(prev => prev.filter(b => !selectedOrphanEbooks.has(b.id)))
+            setAudiobooks(prev => prev.filter(b => !selectedOrphanAudiobooks.has(b.id)))
+            // Remove cleaned items from report
+            setVerifyReport(prev => ({
+                orphaned_ebooks: prev.orphaned_ebooks.filter(e => !selectedOrphanEbooks.has(e.id)),
+                orphaned_audiobooks: prev.orphaned_audiobooks.filter(a => !selectedOrphanAudiobooks.has(a.id)),
+            }))
+            setSelectedOrphanEbooks(new Set())
+            setSelectedOrphanAudiobooks(new Set())
+            setScanResult({ message: result.message })
+        } catch (err) {
+            alert('Cleanup failed: ' + err.message)
+        } finally {
+            setCleaningUp(false)
+        }
+    }
+
     const formatSize = (bytes) => {
         if (!bytes) return '—'
         if (bytes < 1024) return `${bytes} B`
@@ -340,9 +444,102 @@ function LibraryPage({ tab }) {
                 <button className="btn btn-secondary" onClick={() => audiobookFileRef.current?.click()} disabled={uploadingAudiobook}>
                     {uploadingAudiobook ? <><div className="spinner"></div> Uploading...</> : '🎵 Upload Audiobook'}
                 </button>
+                <button
+                    className="btn btn-secondary"
+                    onClick={handleVerify}
+                    disabled={verifying}
+                    title="Check all books against their source files and find orphaned entries"
+                >
+                    {verifying ? <><div className="spinner"></div> Verifying...</> : '🔎 Verify Files'}
+                </button>
                 <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
                 <input ref={audiobookFileRef} type="file" accept=".mp3,.m4a,.m4b,.flac,.ogg,.wav" hidden onChange={handleAudiobookUpload} />
             </div>
+
+            {/* Verify Report */}
+            {verifyReport && (
+                <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                        <h3 style={{ margin: 0 }}>🔎 File Verification Report</h3>
+                        <button className="btn btn-secondary" onClick={() => setVerifyReport(null)} style={{ padding: '4px 12px' }}>✕ Close</button>
+                    </div>
+                    {verifyReport.orphaned_ebooks.length === 0 && verifyReport.orphaned_audiobooks.length === 0 ? (
+                        <div className="alert alert-success">✅ All files verified — no orphaned entries found!</div>
+                    ) : (
+                        <>
+                            <div className="alert alert-error" style={{ marginBottom: '16px' }}>
+                                ⚠️ Found {verifyReport.orphaned_ebooks.length} orphaned ebook(s) and {verifyReport.orphaned_audiobooks.length} orphaned audiobook(s) with missing source files.
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                                <button className="btn btn-secondary" onClick={selectAllOrphans} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>Select All</button>
+                                <button className="btn btn-secondary" onClick={deselectAllOrphans} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>Deselect All</button>
+                                <button
+                                    className="btn btn-danger"
+                                    onClick={handleCleanup}
+                                    disabled={cleaningUp || (selectedOrphanEbooks.size === 0 && selectedOrphanAudiobooks.size === 0)}
+                                    style={{ padding: '6px 12px', fontSize: '0.85rem' }}
+                                >
+                                    {cleaningUp ? <><div className="spinner"></div> Cleaning...</> : `🗑️ Delete Selected (${selectedOrphanEbooks.size + selectedOrphanAudiobooks.size})`}
+                                </button>
+                            </div>
+                            {verifyReport.orphaned_ebooks.length > 0 && (
+                                <>
+                                    <h4 style={{ margin: '12px 0 8px' }}>📚 Orphaned EBooks</h4>
+                                    <div className="table-wrapper">
+                                        <table>
+                                            <thead>
+                                                <tr>
+                                                    <th style={{ width: '40px' }}></th>
+                                                    <th>Title</th>
+                                                    <th>Author</th>
+                                                    <th>File Path</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {verifyReport.orphaned_ebooks.map(e => (
+                                                    <tr key={e.id}>
+                                                        <td><input type="checkbox" checked={selectedOrphanEbooks.has(e.id)} onChange={() => toggleOrphanEbook(e.id)} /></td>
+                                                        <td style={{ fontWeight: 500 }}>{e.title}</td>
+                                                        <td style={{ color: 'var(--text-secondary)' }}>{e.author || '—'}</td>
+                                                        <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem', wordBreak: 'break-all' }}>{e.file_path}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </>
+                            )}
+                            {verifyReport.orphaned_audiobooks.length > 0 && (
+                                <>
+                                    <h4 style={{ margin: '12px 0 8px' }}>🎧 Orphaned Audiobooks</h4>
+                                    <div className="table-wrapper">
+                                        <table>
+                                            <thead>
+                                                <tr>
+                                                    <th style={{ width: '40px' }}></th>
+                                                    <th>Title</th>
+                                                    <th>Author</th>
+                                                    <th>File Path</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {verifyReport.orphaned_audiobooks.map(a => (
+                                                    <tr key={a.id}>
+                                                        <td><input type="checkbox" checked={selectedOrphanAudiobooks.has(a.id)} onChange={() => toggleOrphanAudiobook(a.id)} /></td>
+                                                        <td style={{ fontWeight: 500 }}>{a.title}</td>
+                                                        <td style={{ color: 'var(--text-secondary)' }}>{a.author || '—'}</td>
+                                                        <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem', wordBreak: 'break-all' }}>{a.file_path}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
 
             {/* Filters */}
             <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
@@ -444,14 +641,22 @@ function LibraryPage({ tab }) {
                                             <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                             <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                             <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                            <td>
+                                            <td style={{ whiteSpace: 'nowrap' }}>
                                                 <button
                                                     className="btn btn-sm btn-secondary"
                                                     onClick={() => openEdit(book, 'ebook')}
                                                     title="Edit metadata"
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                    style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
                                                 >
                                                     ✏️
+                                                </button>
+                                                <button
+                                                    className="btn btn-sm btn-danger"
+                                                    onClick={() => openDeleteModal(book, 'ebook')}
+                                                    title="Delete ebook"
+                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                >
+                                                    🗑️
                                                 </button>
                                             </td>
                                         </tr>
@@ -506,14 +711,22 @@ function LibraryPage({ tab }) {
                                                 <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                                 <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                                 <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                                <td>
+                                                <td style={{ whiteSpace: 'nowrap' }}>
                                                     <button
                                                         className="btn btn-sm btn-secondary"
                                                         onClick={() => openEdit(book, 'audiobook')}
                                                         title="Edit metadata"
-                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
                                                     >
                                                         ✏️
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-sm btn-danger"
+                                                        onClick={() => openDeleteModal(book, 'audiobook')}
+                                                        title="Delete audiobook"
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                    >
+                                                        🗑️
                                                     </button>
                                                 </td>
                                             </tr>
@@ -526,6 +739,47 @@ function LibraryPage({ tab }) {
                     </div >
                 )
             }
+            {/* Delete Confirmation Modal */}
+            {deleteTarget && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.6)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                    <div className="card" style={{ padding: '24px', maxWidth: '480px', width: '90%' }}>
+                        <h3 style={{ marginTop: 0 }}>🗑️ Confirm Delete</h3>
+                        <p>
+                            Are you sure you want to delete <strong>{deleteTarget.title}</strong>
+                            {deleteTarget.author ? ` by ${deleteTarget.author}` : ''}
+                            {' '}from BookSync?
+                        </p>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                            This will also remove any associated book pairs, sync maps, and bookmarks.
+                        </p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '16px 0', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={deleteSourceFile}
+                                onChange={(e) => setDeleteSourceFile(e.target.checked)}
+                            />
+                            <span>Also delete the source file from disk</span>
+                        </label>
+                        {deleteSourceFile && (
+                            <div className="alert alert-error" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
+                                ⚠️ This will permanently delete the file from your server's filesystem!
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                                Cancel
+                            </button>
+                            <button className="btn btn-danger" onClick={handleDelete} disabled={deleting}>
+                                {deleting ? <><div className="spinner"></div> Deleting...</> : 'Delete'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     )
 }

@@ -34,6 +34,7 @@ from models.settings import SystemSetting
 from models.user import User
 from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
+from models.transcription_queue import TranscriptionQueueItem
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
@@ -2056,3 +2057,184 @@ async def resolve_metadata_discrepancy(
             
     return {"message": "Discrepancies resolved successfully"}
 
+
+# ---------------------------------------------------------------------------
+# Delete individual books
+# ---------------------------------------------------------------------------
+
+@router.delete("/ebooks/{ebook_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ebook(
+    ebook_id: int,
+    delete_file: bool = Query(False, description="Also delete the source file from disk"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Delete an ebook from the database.  Optionally delete the source file."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    ebook = result.scalar_one_or_none()
+    if not ebook:
+        raise HTTPException(status_code=404, detail="EBook not found")
+
+    file_path = ebook.file_path
+
+    # Remove associated transcription queue items for any pairs this ebook is in
+    pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
+    pairs = pairs_result.scalars().all()
+    for pair in pairs:
+        queue_result = await db.execute(
+            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
+        )
+        for qi in queue_result.scalars().all():
+            await db.delete(qi)
+
+    # Delete the ebook (cascades to BookPair → SyncMap, Bookmarks)
+    await db.delete(ebook)
+    await db.commit()
+
+    # Optionally delete source file
+    if delete_file and file_path:
+        try:
+            os.unlink(file_path)
+            logger.info(f"Deleted source file: {file_path}")
+        except OSError as e:
+            logger.warning(f"Could not delete source file {file_path}: {e}")
+
+
+@router.delete("/audiobooks/{audiobook_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_audiobook(
+    audiobook_id: int,
+    delete_file: bool = Query(False, description="Also delete the source file from disk"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Delete an audiobook from the database.  Optionally delete the source file."""
+    result = await db.execute(select(AudioBook).where(AudioBook.id == audiobook_id))
+    audiobook = result.scalar_one_or_none()
+    if not audiobook:
+        raise HTTPException(status_code=404, detail="AudioBook not found")
+
+    file_path = audiobook.file_path
+
+    # Remove associated transcription queue items for any pairs this audiobook is in
+    pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == audiobook_id))
+    pairs = pairs_result.scalars().all()
+    for pair in pairs:
+        queue_result = await db.execute(
+            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
+        )
+        for qi in queue_result.scalars().all():
+            await db.delete(qi)
+
+    # Delete the audiobook (cascades to BookPair → SyncMap, Bookmarks)
+    await db.delete(audiobook)
+    await db.commit()
+
+    # Optionally delete source file
+    if delete_file and file_path:
+        try:
+            os.unlink(file_path)
+            logger.info(f"Deleted source file: {file_path}")
+        except OSError as e:
+            logger.warning(f"Could not delete source file {file_path}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Verify files & cleanup orphans
+# ---------------------------------------------------------------------------
+
+@router.get("/verify")
+async def verify_files(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Check every ebook and audiobook file_path against the filesystem.
+    Returns lists of entries whose source files no longer exist.
+    """
+    orphaned_ebooks = []
+    orphaned_audiobooks = []
+
+    ebooks_result = await db.execute(select(EBook))
+    for ebook in ebooks_result.scalars().all():
+        if ebook.file_path and not os.path.isfile(ebook.file_path):
+            orphaned_ebooks.append({
+                "id": ebook.id,
+                "title": ebook.title,
+                "author": ebook.author,
+                "filename": ebook.filename,
+                "file_path": ebook.file_path,
+                "format": ebook.format,
+            })
+
+    audiobooks_result = await db.execute(select(AudioBook))
+    for ab in audiobooks_result.scalars().all():
+        if ab.file_path and not os.path.isfile(ab.file_path):
+            orphaned_audiobooks.append({
+                "id": ab.id,
+                "title": ab.title,
+                "author": ab.author,
+                "filename": ab.filename,
+                "file_path": ab.file_path,
+                "format": ab.format,
+            })
+
+    return {
+        "orphaned_ebooks": orphaned_ebooks,
+        "orphaned_audiobooks": orphaned_audiobooks,
+    }
+
+
+class CleanupRequest(BaseModel):
+    ebook_ids: List[int] = []
+    audiobook_ids: List[int] = []
+
+
+@router.post("/cleanup")
+async def cleanup_orphans(
+    req: CleanupRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Bulk-delete orphaned ebook/audiobook entries from the database.
+    Does NOT touch the filesystem (these files are already missing).
+    """
+    deleted_ebooks = 0
+    deleted_audiobooks = 0
+
+    for eid in req.ebook_ids:
+        result = await db.execute(select(EBook).where(EBook.id == eid))
+        ebook = result.scalar_one_or_none()
+        if ebook:
+            # Clean up transcription queue items for related pairs
+            pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eid))
+            for pair in pairs_result.scalars().all():
+                qr = await db.execute(
+                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
+                )
+                for qi in qr.scalars().all():
+                    await db.delete(qi)
+            await db.delete(ebook)
+            deleted_ebooks += 1
+
+    for aid in req.audiobook_ids:
+        result = await db.execute(select(AudioBook).where(AudioBook.id == aid))
+        audiobook = result.scalar_one_or_none()
+        if audiobook:
+            pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == aid))
+            for pair in pairs_result.scalars().all():
+                qr = await db.execute(
+                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
+                )
+                for qi in qr.scalars().all():
+                    await db.delete(qi)
+            await db.delete(audiobook)
+            deleted_audiobooks += 1
+
+    await db.commit()
+
+    return {
+        "message": f"Cleaned up {deleted_ebooks} ebook(s) and {deleted_audiobooks} audiobook(s)",
+        "deleted_ebooks": deleted_ebooks,
+        "deleted_audiobooks": deleted_audiobooks,
+    }
