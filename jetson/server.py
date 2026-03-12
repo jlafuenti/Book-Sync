@@ -247,10 +247,21 @@ def _format_duration(seconds: float) -> str:
 # FastAPI application
 # ---------------------------------------------------------------------------
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="BookSync Transcription Server",
     description="faster-whisper transcription API for Jetson Orin Nano",
     version="1.0.0",
+)
+
+# Enable CORS for the frontend "Test Connection" button
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -263,10 +274,18 @@ def startup_event():
 @app.get("/v1/health")
 def health():
     """Health check — returns model info and GPU status."""
-    import torch
+    gpu_available = False
+    gpu_name = None
 
-    gpu_available = torch.cuda.is_available()
-    gpu_name = torch.cuda.get_device_name(0) if gpu_available else None
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+        gpu_name = torch.cuda.get_device_name(0) if gpu_available else None
+    except ImportError:
+        # If torch is missing (e.g. strict CTranslate2 image), 
+        # assume CUDA is available if nvcc or standard Jetson paths exist
+        gpu_available = os.path.exists("/dev/nvhost-gpu") or os.path.exists("/usr/local/cuda")
+        gpu_name = "Jetson GPU (CTranslate2 Mode)" if gpu_available else None
 
     return {
         "status": "healthy",
