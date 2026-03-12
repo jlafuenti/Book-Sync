@@ -169,21 +169,37 @@ def _group_words_into_sentences(segments: list) -> List[TranscribedSentence]:
     return sentences
 
 
+def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 16000):
+    """Load a specific time chunk of audio as a numpy array using ffmpeg."""
+    import subprocess
+    import numpy as np
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-threads", "0",
+        "-ss", str(start_sec),
+        "-i", file,
+        "-t", str(duration_sec),
+        "-f", "s16le",
+        "-ac", "1",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sr),
+        "-"
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg failed: {e.stderr.decode()}")
+        raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
+
+    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+
 def transcribe_audiobook(
     audio_path: str,
     progress_callback: Optional[Callable] = None,
 ) -> List[TranscribedSentence]:
     """
-    Transcribe an audiobook file using Whisper.
-
-    Args:
-        audio_path: Path to the audio file (MP3, M4A, FLAC, WAV, OGG, etc.)
-        progress_callback: Optional callback(fraction, total_duration_sec)
-                          called periodically with transcription progress.
-                          fraction is 0.0-1.0, total_duration_sec is the audio length.
-
-    Returns:
-        List of TranscribedSentence objects with text and timing info.
+    Transcribe an audiobook file using Whisper, processing in chunks to avoid OOM.
     """
     # Step 1: Get audio duration for progress reporting
     total_duration = _get_audio_duration(audio_path)
@@ -191,6 +207,7 @@ def transcribe_audiobook(
         logger.info(f"Audio duration: {_format_duration(total_duration)} ({total_duration:.1f}s)")
     else:
         logger.info("Could not determine audio duration — progress will be estimated")
+        total_duration = 0
 
     # Notify callback of start
     if progress_callback:
@@ -210,51 +227,82 @@ def transcribe_audiobook(
     if progress_callback:
         progress_callback(0.0, total_duration)
 
-    # Step 3: Transcribe with progress tracking
-    # We monkey-patch tqdm.tqdm so Whisper's internal progress bar
-    # reports to our callback instead of printing to console.
-    #
-    # IMPORTANT: Whisper's tqdm is:
-    #   with tqdm.tqdm(total=..., disable=verbose is not False) as pbar:
-    #
-    # So verbose=False → disable=False → tqdm ENABLED (what we want)
-    #    verbose=None  → disable=True  → tqdm DISABLED
+    # Step 3: Transcribe in chunks
     logger.info(f"Transcribing: {audio_path}")
 
-    # Set up thread-local progress callback
-    _progress_callback_local.callback = progress_callback
-    _progress_callback_local.total_duration = total_duration
+    CHUNK_SIZE_SEC = 3600  # 1 hour chunks
+    all_sentences = []
     
-    # Monkey-patch tqdm so whisper uses our progress tracker
-    original_tqdm_class = tqdm_module.tqdm
-    
-    try:
-        # Whisper does `import tqdm` then `tqdm.tqdm(...)`, so patching
-        # tqdm.tqdm at the module level intercepts it.
-        tqdm_module.tqdm = WhisperProgressBar
+    # We use a wrapper function for the chunk's progress callback to map it
+    # accurately to the overall file's progress.
+    for start_sec in range(0, int(total_duration) + 1 if total_duration else CHUNK_SIZE_SEC, CHUNK_SIZE_SEC):
+        logger.info(f"Processing chunk {start_sec}s - {start_sec + CHUNK_SIZE_SEC}s")
+        audio_array = load_audio_chunk(audio_path, start_sec, CHUNK_SIZE_SEC)
         
-        result = model.transcribe(
-            audio_path,
-            word_timestamps=True,
-            # verbose=False ENABLES tqdm progress (disable=False)
-            # verbose=None would DISABLE tqdm (disable=True)  
-            verbose=False,
-        )
-    finally:
-        # Restore original tqdm
-        tqdm_module.tqdm = original_tqdm_class
-        _progress_callback_local.callback = None
-        _progress_callback_local.total_duration = None
+        if len(audio_array) == 0:
+            logger.warning(f"Chunk at {start_sec}s returned no audio data. Ending transcription.")
+            break
 
-    segments = result.get("segments", [])
-    logger.info(f"Whisper produced {len(segments)} segments")
+        # Define a chunk-specific progress callback
+        # NOTE: _start=start_sec binds the current loop value by value (not reference)
+        def _chunk_progress(fraction: float, _unused_duration: float, _start=start_sec):
+            if not progress_callback:
+                return
+            if total_duration > 0:
+                # fraction is 0 to 1 for this chunk
+                chunk_elapsed = fraction * CHUNK_SIZE_SEC
+                # cap it at total duration if this is the last chunk
+                overall_elapsed = min(_start + chunk_elapsed, total_duration)
+                overall_fraction = overall_elapsed / total_duration
+                progress_callback(overall_fraction, total_duration)
+        
+        # Monkey-patch tqdm for this chunk
+        _progress_callback_local.callback = _chunk_progress
+        _progress_callback_local.total_duration = total_duration
+        original_tqdm_class = tqdm_module.tqdm
+        
+        try:
+            tqdm_module.tqdm = WhisperProgressBar
+            result = model.transcribe(
+                audio_array,
+                word_timestamps=True,
+                verbose=False,
+            )
+        finally:
+            tqdm_module.tqdm = original_tqdm_class
+            _progress_callback_local.callback = None
+            _progress_callback_local.total_duration = None
 
-    # Group into sentences
-    sentences = _group_words_into_sentences(segments)
-    logger.info(f"Grouped into {len(sentences)} sentences")
+        segments = result.get("segments", [])
+        logger.info(f"Chunk produced {len(segments)} segments")
+
+        # Offset the timestamps in the raw segments before grouping
+        for seg in segments:
+            seg["start"] += start_sec
+            seg["end"] += start_sec
+            if "words" in seg:
+                for w in seg["words"]:
+                    w["start"] += start_sec
+                    w["end"] += start_sec
+
+        # Group into sentences
+        chunk_sentences = _group_words_into_sentences(segments)
+        logger.info(f"Chunk grouped into {len(chunk_sentences)} sentences")
+        all_sentences.extend(chunk_sentences)
+
+        # If audio array is smaller than chunk size, it was the last chunk
+        expected_samples = CHUNK_SIZE_SEC * 16000
+        if len(audio_array) < expected_samples * 0.99:
+            break
+
+        # Safety break if we couldn't properly read duration initially
+        if total_duration == 0:
+             break
+
+    logger.info(f"Total transcription yielded {len(all_sentences)} sentences")
 
     # Final progress update
     if progress_callback:
         progress_callback(1.0, total_duration)
 
-    return sentences
+    return all_sentences

@@ -150,11 +150,56 @@ def _group_segments_into_sentences(segments_list: list) -> List[TranscribedSente
     return sentences
 
 
+def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 16000):
+    """Load a specific time chunk of audio as a numpy array using ffmpeg."""
+    import subprocess
+    import numpy as np
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-threads", "0",
+        "-ss", str(start_sec),
+        "-i", file,
+        "-t", str(duration_sec),
+        "-f", "s16le",
+        "-ac", "1",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sr),
+        "-"
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg failed: {e.stderr.decode()}")
+        raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
+        
+    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+
+def _get_audio_duration(file: str) -> float:
+    """Get the duration of the audio file using ffprobe."""
+    import subprocess
+    cmd = [
+        "ffprobe", 
+        "-v", "error", 
+        "-show_entries", "format=duration", 
+        "-of", "default=noprint_wrappers=1:nokey=1", 
+        file
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+        return float(out.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        # Fallback to mutagen if ffprobe fails
+        import mutagen
+        fallback = mutagen.File(file)
+        if fallback and fallback.info:
+            return float(fallback.info.length)
+        return 0.0
+
 def _transcribe_file(audio_path: str) -> dict:
     """
-    Run faster-whisper on the given audio file.
-    Updates _job_status with progress as segments are yielded.
-    Returns the response dict.
+    Run faster-whisper on the given audio file using chunking to avoid OOM.
+    Updates _job_status with progress.
     """
     global _job_status
 
@@ -166,48 +211,64 @@ def _transcribe_file(audio_path: str) -> dict:
     with _job_lock:
         _job_status.active = True
         _job_status.progress = 0.0
-        _job_status.message = "Transcribing..."
+        _job_status.message = "Initializing..."
         _job_status.started_at = start_time
 
     try:
-        # Run transcription — faster-whisper returns a generator + info tuple
-        segments_gen, info = model.transcribe(
-            audio_path,
-            word_timestamps=True,
-            vad_filter=VAD_FILTER,
-        )
-
-        total_duration = info.duration  # seconds
+        total_duration = _get_audio_duration(audio_path)
         logger.info(f"  Audio duration: {total_duration:.1f}s")
-
+        
         with _job_lock:
             _job_status.message = f"Transcribing ({_format_duration(total_duration)} of audio)..."
 
-        # Consume the generator, collecting segments and updating progress
-        segments_list = []
-        for segment in segments_gen:
-            segments_list.append(segment)
+        CHUNK_SIZE_SEC = 3600  # 1 hour chunks
+        all_sentences = []
+        
+        for start_sec in range(0, int(total_duration) + 1, CHUNK_SIZE_SEC):
+            logger.info(f"  Processing chunk {start_sec}s - {start_sec + CHUNK_SIZE_SEC}s")
+            audio_array = load_audio_chunk(audio_path, start_sec, CHUNK_SIZE_SEC)
+            
+            if len(audio_array) == 0:
+                logger.warning(f"  Chunk at {start_sec}s returned no audio data. Skipping.")
+                continue
 
-            # Update progress based on how far through the audio we are
-            if total_duration > 0:
-                fraction = min(segment.end / total_duration, 1.0)
-                with _job_lock:
-                    _job_status.progress = round(fraction, 3)
-                    elapsed_audio = _format_duration(segment.end)
-                    total_str = _format_duration(total_duration)
-                    pct = int(fraction * 100)
-                    _job_status.message = (
-                        f"Transcribing: {elapsed_audio} / {total_str} ({pct}%)"
-                    )
+            segments_gen, info = model.transcribe(
+                audio_array,
+                word_timestamps=True,
+                vad_filter=VAD_FILTER,
+            )
 
-        logger.info(f"  Produced {len(segments_list)} raw segments")
+            chunk_segments = []
+            for segment in segments_gen:
+                # Add the segment to our chunk list
+                chunk_segments.append(segment)
 
-        # Group into sentences
-        sentences = _group_segments_into_sentences(segments_list)
-        logger.info(f"  Grouped into {len(sentences)} sentences")
+                # Overall progress = (start_sec + segment.end) / total_duration
+                if total_duration > 0:
+                    overall_time = min(start_sec + segment.end, total_duration)
+                    fraction = min(overall_time / total_duration, 1.0)
+                    with _job_lock:
+                        _job_status.progress = round(fraction, 3)
+                        elapsed_audio = _format_duration(overall_time)
+                        total_str = _format_duration(total_duration)
+                        pct = int(fraction * 100)
+                        _job_status.message = (
+                            f"Transcribing: {elapsed_audio} / {total_str} ({pct}%)"
+                        )
+            
+            # Group the chunk's segments into sentences
+            chunk_sentences = _group_segments_into_sentences(chunk_segments)
+            
+            # Offset the timestamps by the chunk's start time
+            offset_ms = start_sec * 1000
+            for s in chunk_sentences:
+                s.start_ms += offset_ms
+                s.end_ms += offset_ms
+                all_sentences.append(s)
 
         processing_time = time.time() - start_time
         logger.info(f"  Transcription complete in {processing_time:.1f}s")
+        logger.info(f"  Produced {len(all_sentences)} sentences overall")
 
         with _job_lock:
             _job_status.progress = 1.0
@@ -215,7 +276,7 @@ def _transcribe_file(audio_path: str) -> dict:
             _job_status.active = False
 
         return {
-            "sentences": [asdict(s) for s in sentences],
+            "sentences": [asdict(s) for s in all_sentences],
             "duration_seconds": round(total_duration, 2),
             "model": WHISPER_MODEL,
             "processing_time_seconds": round(processing_time, 2),

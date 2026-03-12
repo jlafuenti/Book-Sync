@@ -5,6 +5,7 @@ import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscripti
 function TranscriptionPage({ tab }) {
     const [pairs, setPairs] = useState([])
     const [loading, setLoading] = useState(true)
+    const [searchQuery, setSearchQuery] = useState('')
     const [error, setError] = useState('')
     const [statuses, setStatuses] = useState({})
     const pollingRef = useRef({})
@@ -185,13 +186,24 @@ function TranscriptionPage({ tab }) {
 
     // Only pairs that are matched (not raw unmatched ebooks/audiobooks)
     const matchedPairs = pairs.filter(p => p.status !== 'unmatched')
+    
+    // Filter by search query
+    const filteredPairs = matchedPairs.filter(p => {
+        if (!searchQuery) return true
+        const q = searchQuery.toLowerCase()
+        return (
+            (p.ebook?.title || '').toLowerCase().includes(q) ||
+            (p.audiobook?.title || '').toLowerCase().includes(q) ||
+            (p.ebook?.author || '').toLowerCase().includes(q)
+        )
+    })
 
-    // Categorize pairs into tabs
-    const notTranscribedPairs = matchedPairs.filter(p =>
+    // Categorize filtered pairs into tabs
+    const notTranscribedPairs = filteredPairs.filter(p =>
         ['auto_matched', 'manual_matched', 'error'].includes(p.status)
     )
-    const inProgress = matchedPairs.filter(p => p.status === 'transcribing')
-    const transcribed = matchedPairs.filter(p => p.status === 'synced')
+    const inProgress = filteredPairs.filter(p => p.status === 'transcribing')
+    const transcribed = filteredPairs.filter(p => p.status === 'synced')
 
     const renderPairCard = (pair, showActions = false) => (
         <div key={pair.id} className="card">
@@ -283,6 +295,17 @@ function TranscriptionPage({ tab }) {
                         <div className="stat-label">Transcribed</div>
                     </div>
                 </div>
+            </div>
+
+            <div style={{ marginBottom: '24px' }}>
+                <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Search books by title or author..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border)' }}
+                />
             </div>
 
             {/* ====== Not Transcribed Tab ====== */}
