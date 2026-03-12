@@ -1,12 +1,15 @@
 # Jetson Orin Nano — faster-whisper transcription server
-# Uses dustynv's JetPack 6-compatible base image specifically compiled with CTranslate2 CUDA support for ARM64
-FROM dustynv/faster-whisper:r36.2.0
+# Uses dustynv's JetPack 6-compatible base image with PyTorch and CUDA
+FROM dustynv/whisper:r36.2.0
 
 WORKDIR /app
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# We pull faster-whisper (and its ctranslate2 dependency) specifically from 
+# the dusty-nv repo which has it pre-compiled with GPU/CUDA support for ARM64 JetPack 6.
+RUN pip3 install --no-cache-dir --verbose --extra-index-url https://dusty-nv.github.io/jetson-containers faster-whisper && \
+    pip3 install --no-cache-dir -r requirements.txt
 
 # Download NLTK sentence tokenizer data at build time
 RUN python3 -c "import nltk; nltk.download('punkt_tab', quiet=True)"
