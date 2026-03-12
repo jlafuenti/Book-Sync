@@ -7,6 +7,7 @@ timestamped, sentence-segmented transcription results using faster-whisper.
 Designed to run on a Jetson Orin Nano with GPU acceleration.
 """
 
+import asyncio
 import os
 import time
 import shutil
@@ -401,9 +402,9 @@ async def transcribe(audio_file: UploadFile = File(...)):
 
         logger.info(f"Received file: {audio_file.filename} ({os.path.getsize(tmp.name)} bytes)")
 
-        # Run transcription (synchronous — blocks this worker, which is fine
-        # since we only have one worker and one job at a time)
-        result = _transcribe_file(tmp.name)
+        # Run transcription in a background thread so the event loop
+        # stays free for /v1/status polling requests
+        result = await asyncio.to_thread(_transcribe_file, tmp.name)
         return JSONResponse(content=result)
 
     except HTTPException:
