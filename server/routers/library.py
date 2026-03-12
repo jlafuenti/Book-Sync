@@ -1078,6 +1078,13 @@ async def auto_match_books(db: AsyncSession) -> int:
                 break
         return t
 
+    # Check if auto-transcribe is enabled
+    result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
+    setting = result.scalar_one_or_none()
+    auto_transcribe = False
+    if setting and setting.value:
+        auto_transcribe = setting.value.lower() == "true"
+
     # Get all ebooks that aren't already paired
     paired_ebook_ids = select(BookPair.ebook_id)
     result = await db.execute(
@@ -1094,6 +1101,7 @@ async def auto_match_books(db: AsyncSession) -> int:
 
     matched = 0
     matched_audiobook_ids = set()
+    new_pair_ids = []
 
     for ebook in unpaired_ebooks:
         best_match = None
@@ -1131,6 +1139,12 @@ async def auto_match_books(db: AsyncSession) -> int:
             db.add(pair)
             matched_audiobook_ids.add(best_match.id)
             matched += 1
+            await db.flush() # Flush to get the ID
+            new_pair_ids.append(pair.id)
+
+    if auto_transcribe and new_pair_ids:
+        from services.queue_manager import add_to_queue
+        await add_to_queue(new_pair_ids)
 
     return matched
 
@@ -1328,6 +1342,13 @@ async def create_pair(
     )
     db.add(pair)
     await db.flush()
+
+    # Check auto-transcribe setting
+    setting_result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
+    setting = setting_result.scalar_one_or_none()
+    if setting and setting.value and setting.value.lower() == "true":
+        from services.queue_manager import add_to_queue
+        await add_to_queue([pair.id])
 
     # Reload with relationships
     result = await db.execute(
