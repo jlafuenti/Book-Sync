@@ -174,15 +174,19 @@ async def _run_transcription(pair_id: int):
             if not pair:
                 raise Exception(f"Book pair {pair_id} not found")
 
-            # Step 1: Transcribe audiobook with real-time progress
-            _transcription_jobs[pair_id]["message"] = "Downloading & loading Whisper model (this may take a minute)..."
+            # Step 1: Transcribe audiobook via the configured provider
+            _transcription_jobs[pair_id]["message"] = "Selecting transcription provider..."
             _transcription_jobs[pair_id]["progress"] = 0.02
 
-            from services.transcription import transcribe_audiobook, _format_duration
+            from services.transcription import _format_duration
+            from services.transcription_providers import get_transcription_provider
+
+            provider = await get_transcription_provider()
+            _transcription_jobs[pair_id]["message"] = f"Transcribing via {provider.name()}..."
 
             def on_whisper_progress(fraction: float, total_duration_sec: float):
-                """Called by Whisper progress tracker with real-time progress."""
-                # Map whisper's 0-100% onto our 5-50% range
+                """Called by transcription provider with real-time progress."""
+                # Map provider's 0-100% onto our 5-50% range
                 mapped_progress = 0.05 + (fraction * 0.45)
                 _transcription_jobs[pair_id]["progress"] = round(mapped_progress, 3)
                 
@@ -193,16 +197,15 @@ async def _run_transcription(pair_id: int):
                     total_str = _format_duration(total_duration_sec)
                     pct = int(fraction * 100)
                     _transcription_jobs[pair_id]["message"] = (
-                        f"Transcribing: {elapsed_str} / {total_str} ({pct}%)"
+                        f"Transcribing ({provider.name()}): {elapsed_str} / {total_str} ({pct}%)"
                     )
                 else:
                     pct = int(fraction * 100)
                     _transcription_jobs[pair_id]["message"] = (
-                        f"Transcribing audiobook... ({pct}%)"
+                        f"Transcribing via {provider.name()}... ({pct}%)"
                     )
 
-            whisper_sentences = await asyncio.to_thread(
-                transcribe_audiobook,
+            whisper_sentences = await provider.transcribe(
                 pair.audiobook.file_path,
                 progress_callback=on_whisper_progress,
             )
