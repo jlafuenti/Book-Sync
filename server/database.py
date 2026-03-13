@@ -88,3 +88,6 @@ async def init_db():
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_explicit BOOLEAN"))
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_abridged BOOLEAN"))
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS cover_path VARCHAR(2000)"))
+
+        # Transcription Queue migration
+        await conn.execute(text("ALTER TABLE transcription_queue ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0"))

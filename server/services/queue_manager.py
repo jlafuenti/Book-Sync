@@ -209,24 +209,46 @@ async def _process_next_item():
     try:
         await _run_transcription_pipeline(item_id, pair_id)
     except Exception as e:
-        # Check if the error is exactly about provider availability. Try to import the exception type.
+        # Check if the error is exactly about provider availability.
         from services.transcription_providers.base import ProviderUnavailableError
         if isinstance(e, ProviderUnavailableError):
-            logger.warning(f"Queue item {item_id} paused: Provider unavailable ({e}). Sleeping 30s before retry.")
             async with async_session() as db:
                 result = await db.execute(
                     select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
                 )
                 item = result.scalar_one_or_none()
                 if item:
-                    item.status = "pending"
-                    item.message = "Provider busy/offline. Waiting to retry..."
-                    # Reset started_at so it doesn't look like it's running forever
-                    item.started_at = None
-                    await db.commit()
+                    item.retry_count = (item.retry_count or 0) + 1
+                    MAX_RETRIES = 3
+                    if item.retry_count >= MAX_RETRIES:
+                        logger.error(
+                            f"Queue item {item_id} permanently failed after {item.retry_count} retries: {e}"
+                        )
+                        item.status = "failed"
+                        item.error_message = f"Failed after {item.retry_count} retries: {str(e)}"
+                        item.message = f"Failed after {item.retry_count} retries"
+                        item.completed_at = datetime.datetime.utcnow()
+                        await db.commit()
+
+                        # Also update the BookPair status
+                        result2 = await db.execute(
+                            select(BookPair).where(BookPair.id == pair_id)
+                        )
+                        pair = result2.scalar_one_or_none()
+                        if pair:
+                            pair.status = PairStatus.ERROR
+                            await db.commit()
+                    else:
+                        logger.warning(
+                            f"Queue item {item_id} paused (retry {item.retry_count}/{MAX_RETRIES}): "
+                            f"Provider unavailable ({e}). Sleeping 30s before retry."
+                        )
+                        item.status = "pending"
+                        item.message = f"Provider busy/offline. Retry {item.retry_count}/{MAX_RETRIES}..."
+                        item.started_at = None
+                        await db.commit()
             
-            # Sleep a bit to prevent a tight loop querying an busy/offline server
-            import asyncio
+            # Sleep a bit to prevent a tight loop querying a busy/offline server
             await asyncio.sleep(30)
         else:
             logger.error(f"Queue item {item_id} failed: {e}", exc_info=True)
