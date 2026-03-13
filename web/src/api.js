@@ -281,6 +281,12 @@ export async function updateQueuePriority(itemId, priority) {
     return resp.json();
 }
 
+export async function getQueueHistory(limit = 50, offset = 0) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/history?limit=${limit}&offset=${offset}`);
+    if (!resp.ok) throw new Error('Failed to fetch queue history');
+    return resp.json();
+}
+
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {

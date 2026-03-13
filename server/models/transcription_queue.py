@@ -26,6 +26,9 @@ class TranscriptionQueueItem(Base):
     # Error details if failed
     error_message = Column(Text, nullable=True)
     
+    # Number of times this item has been retried due to provider unavailability
+    retry_count = Column(Integer, default=0, nullable=False)
+    
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

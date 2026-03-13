@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -66,6 +66,7 @@ class JobStatus:
     progress: float = 0.0
     message: str = "Idle"
     started_at: Optional[float] = None  # time.time()
+    current_file: Optional[str] = None  # filename being transcribed
 
 
 # Thread-safe global job status (only one job runs at a time)
@@ -373,7 +374,7 @@ def get_status():
 
 
 @app.post("/v1/transcribe")
-async def transcribe(audio_file: UploadFile = File(...)):
+async def transcribe(request: Request, audio_file: UploadFile = File(...)):
     """
     Transcribe an uploaded audio file.
 
@@ -383,14 +384,36 @@ async def transcribe(audio_file: UploadFile = File(...)):
     Only one transcription can run at a time. If a transcription is already
     in progress, this endpoint returns HTTP 409.
     """
+
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
 
     with _job_lock:
         if _job_status.active:
-            raise HTTPException(
+            running_for = ""
+            if _job_status.started_at:
+                elapsed = time.time() - _job_status.started_at
+                hours = int(elapsed) // 3600
+                mins = (int(elapsed) % 3600) // 60
+                running_for = f"{hours}h {mins}m" if hours else f"{mins}m"
+
+            client_ip = request.client.host if request and request.client else "unknown"
+            logger.warning(
+                f"409 Conflict: Rejected transcribe request for '{audio_file.filename}' "
+                f"from {client_ip}. Currently transcribing '{_job_status.current_file}' "
+                f"({_job_status.message}, running for {running_for})."
+            )
+            return JSONResponse(
                 status_code=409,
-                detail="A transcription is already in progress. Check /v1/status for progress.",
+                content={
+                    "detail": "A transcription is already in progress.",
+                    "current_job": {
+                        "file": _job_status.current_file,
+                        "progress": _job_status.progress,
+                        "message": _job_status.message,
+                        "running_for": running_for,
+                    },
+                },
             )
 
     # Save uploaded file to a temp location
@@ -400,7 +423,16 @@ async def transcribe(audio_file: UploadFile = File(...)):
         shutil.copyfileobj(audio_file.file, tmp)
         tmp.close()
 
-        logger.info(f"Received file: {audio_file.filename} ({os.path.getsize(tmp.name)} bytes)")
+        client_ip = request.client.host if request and request.client else "unknown"
+        file_size_mb = os.path.getsize(tmp.name) / (1024 * 1024)
+        logger.info(
+            f"Received file: {audio_file.filename} ({file_size_mb:.1f} MB) "
+            f"from {client_ip}"
+        )
+
+        # Track current filename for 409 details
+        with _job_lock:
+            _job_status.current_file = audio_file.filename
 
         # Run transcription in a background thread so the event loop
         # stays free for /v1/status polling requests
@@ -418,6 +450,21 @@ async def transcribe(audio_file: UploadFile = File(...)):
             os.unlink(tmp.name)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Suppress noisy /v1/status access log lines
+# ---------------------------------------------------------------------------
+class StatusEndpointFilter(logging.Filter):
+    """Filter out GET /v1/status 200 from uvicorn access logs."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if 'GET /v1/status' in msg and '200' in msg:
+            return False
+        return True
+
+# Apply filter to uvicorn access logger
+logging.getLogger("uvicorn.access").addFilter(StatusEndpointFilter())
 
 
 # ---------------------------------------------------------------------------

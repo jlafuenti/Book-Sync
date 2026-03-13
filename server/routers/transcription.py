@@ -183,6 +183,7 @@ async def get_queue(
             progress=item.progress,
             message=item.message,
             error_message=item.error_message,
+            retry_count=item.retry_count or 0,
             created_at=item.created_at,
             started_at=item.started_at,
             completed_at=item.completed_at,
@@ -220,6 +221,7 @@ async def batch_add_to_queue(
             position=0,
             progress=item.progress,
             message=item.message,
+            retry_count=item.retry_count or 0,
             created_at=item.created_at,
         ))
 
@@ -257,6 +259,54 @@ async def update_queue_priority(
             detail="Cannot update priority. Item may not exist or is not in pending state.",
         )
     return {"status": "updated", "priority": body.priority}
+
+
+@router.get("/queue/history", response_model=List[QueueItemResponse])
+async def get_queue_history(
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Get all historical queue items (completed, failed, cancelled), newest first."""
+    result = await db.execute(
+        select(TranscriptionQueueItem)
+        .where(
+            TranscriptionQueueItem.status.in_(["completed", "failed", "cancelled"])
+        )
+        .order_by(TranscriptionQueueItem.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    items = result.scalars().all()
+
+    responses = []
+    for item in items:
+        pair_result = await db.execute(
+            select(BookPair)
+            .options(selectinload(BookPair.ebook))
+            .where(BookPair.id == item.book_pair_id)
+        )
+        pair = pair_result.scalar_one_or_none()
+        title = pair.ebook.title if pair and pair.ebook else f"Pair #{item.book_pair_id}"
+
+        responses.append(QueueItemResponse(
+            id=item.id,
+            book_pair_id=item.book_pair_id,
+            book_title=title,
+            status=item.status,
+            priority=item.priority,
+            position=0,
+            progress=item.progress,
+            message=item.message,
+            error_message=item.error_message,
+            retry_count=item.retry_count or 0,
+            created_at=item.created_at,
+            started_at=item.started_at,
+            completed_at=item.completed_at,
+        ))
+
+    return responses
 
 
 # ====================================================================
