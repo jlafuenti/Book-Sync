@@ -73,6 +73,10 @@ class JobStatus:
 _job_status = JobStatus()
 _job_lock = threading.Lock()
 
+# Store recent transcription results for 24 hours to allow re-attachment
+_recent_results = {}
+_results_lock = threading.Lock()
+
 # ---------------------------------------------------------------------------
 # Model loading (once at startup)
 # ---------------------------------------------------------------------------
@@ -277,12 +281,25 @@ def _transcribe_file(audio_path: str) -> dict:
             _job_status.message = "Complete"
             _job_status.active = False
 
-        return {
+        result = {
             "sentences": [asdict(s) for s in all_sentences],
             "duration_seconds": round(total_duration, 2),
             "model": WHISPER_MODEL,
             "processing_time_seconds": round(processing_time, 2),
         }
+        
+        # Save result for later retrieval (in case client disconnected)
+        with _results_lock:
+            # Clean up old results (older than 24 hours)
+            now = time.time()
+            to_delete = [k for k, (v, t) in _recent_results.items() if now - t > 86400]
+            for k in to_delete:
+                del _recent_results[k]
+                
+            if _job_status.current_file:
+                _recent_results[_job_status.current_file] = (result, now)
+
+        return result
 
     except Exception as e:
         logger.error(f"Transcription failed: {e}", exc_info=True)
@@ -370,7 +387,18 @@ def get_status():
             "active": _job_status.active,
             "progress": _job_status.progress,
             "message": _job_status.message,
+            "current_file": _job_status.current_file,
         }
+
+@app.get("/v1/result/{filename}")
+def get_result(filename: str):
+    """Get the cached result of a completed transcription job."""
+    with _results_lock:
+        if filename in _recent_results:
+            result, timestamp = _recent_results[filename]
+            return JSONResponse(status_code=200, content=result)
+        
+    raise HTTPException(status_code=404, detail="Result not found or expired")
 
 
 @app.post("/v1/transcribe")

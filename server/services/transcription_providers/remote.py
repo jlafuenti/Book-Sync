@@ -96,9 +96,33 @@ class RemoteWhisperProvider(TranscriptionProvider):
 
                 # Handle response codes
                 if response.status_code == 409:
-                    raise ProviderUnavailableError(
-                        "Remote server is busy with another transcription."
-                    )
+                    # Jetson is busy. Let's see if it's busy with OUR file.
+                    status_resp = await client.get(f"{self.remote_url}/v1/status")
+                    if status_resp.status_code == 200:
+                        status_data = status_resp.json()
+                        if status_data.get("active") and status_data.get("current_file") == filename:
+                            logger.info(f"Re-attaching to ongoing transcription of {filename} on remote server.")
+                            # Enter poll-only mode waiting for it to finish
+                            while status_data.get("active"):
+                                await asyncio.sleep(3)
+                                status_resp = await client.get(f"{self.remote_url}/v1/status")
+                                if status_resp.status_code == 200:
+                                    status_data = status_resp.json()
+                                else:
+                                    raise ProviderUnavailableError("Lost connection to remote server while polling status.")
+                            
+                            # Transcribing finished, grab the cached result
+                            logger.info(f"Transcription of {filename} finished on remote server. Fetching result...")
+                            result_resp = await client.get(f"{self.remote_url}/v1/result/{filename}", timeout=60)
+                            if result_resp.status_code == 200:
+                                data = result_resp.json()
+                            else:
+                                raise TranscriptionError(f"Failed to fetch cached transcription result: {result_resp.status_code} - {result_resp.text}")
+                        else:
+                            raise ProviderUnavailableError("Remote server is busy with another transcription.")
+                    else:
+                        raise ProviderUnavailableError("Remote server is busy and status endpoint is unreachable.")
+                
                 elif response.status_code >= 500:
                     raise ProviderUnavailableError(
                         f"Remote server internal error ({response.status_code}): {response.text}"
@@ -107,9 +131,11 @@ class RemoteWhisperProvider(TranscriptionProvider):
                     raise TranscriptionError(
                         f"Transcription failed ({response.status_code}): {response.text}"
                     )
+                else:
+                    # Success from the original POST
+                    data = response.json()
 
                 # Parse successful response
-                data = response.json()
                 sentences_data = data.get("sentences", [])
                 
                 sentences = []
