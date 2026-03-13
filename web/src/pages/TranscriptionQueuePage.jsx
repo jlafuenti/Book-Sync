@@ -85,8 +85,8 @@ function TranscriptionQueuePage() {
 
     const formatDuration = (startStr, endStr) => {
         if (!startStr || !endStr) return '—'
-        const start = new Date(startStr)
-        const end = new Date(endStr)
+        const start = new Date(startStr.endsWith('Z') ? startStr : `${startStr}Z`)
+        const end = new Date(endStr.endsWith('Z') ? endStr : `${endStr}Z`)
         const diffMs = end - start
         if (diffMs < 0) return '—'
         const totalSec = Math.floor(diffMs / 1000)
@@ -96,6 +96,13 @@ function TranscriptionQueuePage() {
         if (hours > 0) return `${hours}h ${mins}m ${secs}s`
         if (mins > 0) return `${mins}m ${secs}s`
         return `${secs}s`
+    }
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '—'
+        // Append Z to correctly parse as UTC since backend sends naive datetime strings
+        const str = dateStr.endsWith('Z') ? dateStr : `${dateStr}Z`
+        return new Date(str).toLocaleString()
     }
 
     const getStatusBadge = (status) => {
@@ -258,7 +265,7 @@ function TranscriptionQueuePage() {
 
                                 {activeItem.started_at && (
                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>
-                                        Started: {new Date(activeItem.started_at).toLocaleString()}
+                                        Started: {formatDate(activeItem.started_at)}
                                         {activeItem.retry_count > 0 && (
                                             <span style={{ marginLeft: '12px', color: '#e65100' }}>
                                                 🔁 Retry #{activeItem.retry_count}
@@ -309,7 +316,7 @@ function TranscriptionQueuePage() {
                                                         {item.book_title || `Pair #${item.book_pair_id}`}
                                                     </div>
                                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                                        Priority: {item.priority} · Added: {new Date(item.created_at).toLocaleString()}
+                                                        Priority: {item.priority} · Added: {formatDate(item.created_at)}
                                                         {item.retry_count > 0 && (
                                                             <span style={{ marginLeft: '8px', color: '#e65100' }}>
                                                                 🔁 Retry #{item.retry_count}
@@ -424,17 +431,17 @@ function TranscriptionQueuePage() {
                                                 </td>
                                                 <td style={tdStyle}>
                                                     <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                                        {new Date(item.created_at).toLocaleString()}
+                                                        {formatDate(item.created_at)}
                                                     </span>
                                                 </td>
                                                 <td style={tdStyle}>
                                                     <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                                        {item.started_at ? new Date(item.started_at).toLocaleString() : '—'}
+                                                        {formatDate(item.started_at)}
                                                     </span>
                                                 </td>
                                                 <td style={tdStyle}>
                                                     <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                                        {item.completed_at ? new Date(item.completed_at).toLocaleString() : '—'}
+                                                        {formatDate(item.completed_at)}
                                                     </span>
                                                 </td>
                                                 <td style={tdStyle}>
