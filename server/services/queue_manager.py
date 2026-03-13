@@ -199,9 +199,12 @@ async def _process_next_item():
 
         # Mark as in_progress
         item.status = "in_progress"
-        item.started_at = datetime.datetime.utcnow()
+        if item.started_at is None:
+            item.started_at = datetime.datetime.utcnow()
         item.message = "Starting transcription..."
-        item.progress = 0.0
+        # We don't overwrite progress to 0.0 either, to preserve it on restart
+        if item.progress is None:
+            item.progress = 0.0
         await db.commit()
 
     logger.info(f"Processing queue item {item_id} (pair {pair_id})")
