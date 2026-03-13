@@ -27,7 +27,7 @@ DEFAULT_SETTINGS = {
     ],
     "transcription_provider": "remote_with_fallback",
     "transcription_remote_url": "",
-    "transcription_remote_timeout": 7200,
+    "transcription_remote_timeout": 86400,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium"
 }
