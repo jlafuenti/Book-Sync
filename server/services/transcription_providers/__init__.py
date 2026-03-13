@@ -64,7 +64,7 @@ async def get_transcription_provider() -> "TranscriptionProvider":
 
     provider_mode = str(db_settings.get("transcription_provider", "remote_with_fallback"))
     remote_url = str(db_settings.get("transcription_remote_url", ""))
-    remote_timeout = int(db_settings.get("transcription_remote_timeout", 7200))
+    remote_timeout = max(int(db_settings.get("transcription_remote_timeout", 86400)), 86400)
 
     if provider_mode == "local":
         logger.info("Using Local Whisper provider")
