@@ -39,6 +39,14 @@ logging.basicConfig(
         file_handler
     ]
 )
+class EndpointFilter(logging.Filter):
+    """Filter out noisy access logs."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/transcription/queue HTTP" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
