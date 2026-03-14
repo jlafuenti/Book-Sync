@@ -97,6 +97,26 @@ class BookSyncRepository @Inject constructor(
     /** Get downloaded audiobooks as a reactive Flow from local cache. */
     fun getDownloadedAudiobooksFlow(): Flow<List<AudioBookEntity>> = audioBookDao.getDownloadedAudioBooks()
 
+    /** Downloaded audiobooks ordered alphabetically. Used for the Android Auto Library tab. */
+    fun getDownloadedAudiobooksAlphabeticalFlow(): Flow<List<AudioBookEntity>> =
+        audioBookDao.getDownloadedAudioBooksAlphabetical()
+
+    /** Pairs that have audio progress, ordered by most recently listened. Used for Android Auto Continue Listening. */
+    fun getRecentlyPlayedPairsFlow(): Flow<List<BookPairEntity>> =
+        bookPairDao.getRecentlyPlayedPairs()
+
+    /** Standalone audiobooks with audio progress, ordered by most recently played. */
+    fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
+        audioBookDao.getRecentlyPlayedStandaloneAudiobooks()
+
+    /** Get the current bookmark for a pair (single snapshot, not a flow). */
+    suspend fun getBookmark(pairId: Int): com.booksync.data.local.entity.BookmarkEntity? =
+        bookmarkDao.getBookmark(pairId)
+
+    /** Get user progress for a given media item (single snapshot). */
+    suspend fun getProgressOnce(mediaType: String, mediaId: Int): com.booksync.data.local.entity.UserProgressEntity? =
+        userProgressDao.getProgress(mediaType, mediaId)
+
     /** Refresh audiobooks from the server and update local cache. */
     suspend fun refreshAudiobooks() {
         val remoteAudiobooks = api.getAudiobooks()
@@ -112,7 +132,8 @@ class BookSyncRepository @Inject constructor(
                 series = audio.series,
                 seriesIndex = audio.series_index,
                 uploadedAt = audio.uploaded_at,
-                isDownloaded = existing?.isDownloaded ?: false
+                isDownloaded = existing?.isDownloaded ?: false,
+                coverFilename = audio.cover_path ?: existing?.coverFilename
             )
         }
         audioBookDao.upsertAudioBooks(entities)

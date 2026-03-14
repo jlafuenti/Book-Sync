@@ -39,27 +39,32 @@
             android:exported="false"
             android:theme="@style/Theme.BookSync" />
 
-        <!-- Audio Playback Service (foreground service for media) -->
+        <!-- Audio Playback + Android Auto Library Service (single consolidated service) -->
         <service
             android:name=".player.AudioPlayerService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
-        <!-- Android Auto Media Browser Service -->
-        <service
-            android:name=".auto.AutoMediaBrowserService"
-            android:exported="true">
-            <intent-filter>
                 <action android:name="androidx.media3.session.MediaLibraryService" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!-- FileProvider for serving cover art content:// URIs to Android Auto -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
 
         <!-- WorkManager Data Sync Service -->
         <service

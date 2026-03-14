@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exposes filesDir/covers/ for Android Auto cover art via FileProvider -->
+    <files-path name="covers" path="covers/" />
+</paths>

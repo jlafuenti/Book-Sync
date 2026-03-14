@@ -53,7 +53,9 @@ data class AudioBookEntity(
     val series: String?,
     val seriesIndex: Float?,
     val uploadedAt: String,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    // Cover image filename as served by /api/files/covers/{filename}. Null until server provides it.
+    val coverFilename: String? = null
 )
 
 @Entity(tableName = "sync_points")
