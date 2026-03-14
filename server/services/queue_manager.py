@@ -320,68 +320,105 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         ebook_path = pair.ebook.file_path
         audiobook_path = pair.audiobook.file_path
 
-    # Validate EPUB before doing any expensive work
-    import zipfile
-    if not zipfile.is_zipfile(ebook_path):
-        raise Exception(f"EPUB file is invalid or corrupted (not a valid zip): {ebook_path}")
+    # Step 1: Transcription (or load from cache)
+    # Transcript is persisted immediately after completion, linked to the audio file.
+    # EPUB issues cannot cause transcript data to be lost.
+    import json
+    from models.transcript import AudioTranscript
+    from services.transcription import TranscribedSentence as _TranscribedSentence
 
-    # Step 1: Transcription via provider
-    await _update_queue_item(item_id, message="Selecting transcription provider...", progress=0.02)
+    async with async_session() as db:
+        cached_result = await db.execute(
+            select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
+        )
+        cached_transcript = cached_result.scalar_one_or_none()
 
-    # Check cancellation
-    if item_id in _cancel_requested:
-        await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                  completed_at=datetime.datetime.utcnow())
-        return
+    if cached_transcript and cached_transcript.audiobook_path == audiobook_path:
+        logger.info(f"Pair {pair_id}: loading transcript from cache ({cached_transcript.sentence_count} sentences)")
+        raw = json.loads(cached_transcript.sentences_json)
+        whisper_sentences = [_TranscribedSentence(**s) for s in raw]
+        await _update_queue_item(
+            item_id,
+            progress=0.50,
+            message=f"Using cached transcript ({len(whisper_sentences)} sentences). Extracting EPUB text...",
+        )
+    else:
+        await _update_queue_item(item_id, message="Selecting transcription provider...", progress=0.02)
 
-    from services.transcription import _format_duration
-    from services.transcription_providers import get_transcription_provider
+        # Check cancellation
+        if item_id in _cancel_requested:
+            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
+                                      completed_at=datetime.datetime.utcnow())
+            return
 
-    provider = await get_transcription_provider()
-    await _update_queue_item(item_id, message=f"Transcribing via {provider.name()}...")
+        from services.transcription import _format_duration
+        from services.transcription_providers import get_transcription_provider
 
-    # Capture event loop reference for thread-safe progress updates
-    _loop = asyncio.get_running_loop()
+        provider = await get_transcription_provider()
+        await _update_queue_item(item_id, message=f"Transcribing via {provider.name()}...")
 
-    def on_whisper_progress(fraction: float, total_duration_sec: float, message: str = None):
-        """Called by transcription provider with real-time progress."""
-        mapped_progress = 0.05 + (fraction * 0.45)
+        # Capture event loop reference for thread-safe progress updates
+        _loop = asyncio.get_running_loop()
 
-        if message:
-            # If the provider (like Jetson) supplies a detailed message, just use it
-            msg = f"{provider.name()} - {message}"
-        elif total_duration_sec and total_duration_sec > 0:
-            elapsed_sec = fraction * total_duration_sec
-            elapsed_str = _format_duration(elapsed_sec)
-            total_str = _format_duration(total_duration_sec)
-            pct = int(fraction * 100)
-            msg = f"Transcribing ({provider.name()}): {elapsed_str} / {total_str} ({pct}%)"
-        else:
-            pct = int(fraction * 100)
-            msg = f"Transcribing via {provider.name()}... ({pct}%)"
+        def on_whisper_progress(fraction: float, total_duration_sec: float, message: str = None):
+            """Called by transcription provider with real-time progress."""
+            mapped_progress = 0.05 + (fraction * 0.45)
 
-        # Schedule the DB update on the event loop (thread-safe)
-        _loop.call_soon_threadsafe(
-            _loop.create_task,
-            _update_queue_item(item_id, progress=round(mapped_progress, 3), message=msg)
+            if message:
+                # If the provider (like Jetson) supplies a detailed message, just use it
+                msg = f"{provider.name()} - {message}"
+            elif total_duration_sec and total_duration_sec > 0:
+                elapsed_sec = fraction * total_duration_sec
+                elapsed_str = _format_duration(elapsed_sec)
+                total_str = _format_duration(total_duration_sec)
+                pct = int(fraction * 100)
+                msg = f"Transcribing ({provider.name()}): {elapsed_str} / {total_str} ({pct}%)"
+            else:
+                pct = int(fraction * 100)
+                msg = f"Transcribing via {provider.name()}... ({pct}%)"
+
+            # Schedule the DB update on the event loop (thread-safe)
+            _loop.call_soon_threadsafe(
+                _loop.create_task,
+                _update_queue_item(item_id, progress=round(mapped_progress, 3), message=msg)
+            )
+
+        whisper_sentences = await provider.transcribe(
+            audiobook_path,
+            progress_callback=on_whisper_progress,
         )
 
-    whisper_sentences = await provider.transcribe(
-        audiobook_path,
-        progress_callback=on_whisper_progress,
-    )
+        # Check cancellation
+        if item_id in _cancel_requested:
+            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
+                                      completed_at=datetime.datetime.utcnow())
+            return
 
-    # Check cancellation
-    if item_id in _cancel_requested:
-        await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                  completed_at=datetime.datetime.utcnow())
-        return
+        # Persist transcript immediately — before any EPUB work — so it is never lost
+        sentences_data = [
+            {"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
+            for s in whisper_sentences
+        ]
+        async with async_session() as db:
+            if cached_transcript:
+                # Stale cache (different audio file) — replace it
+                stale = await db.get(AudioTranscript, cached_transcript.id)
+                if stale:
+                    await db.delete(stale)
+            db.add(AudioTranscript(
+                pair_id=pair_id,
+                audiobook_path=audiobook_path,
+                sentence_count=len(whisper_sentences),
+                sentences_json=json.dumps(sentences_data),
+            ))
+            await db.commit()
+        logger.info(f"Pair {pair_id}: transcript saved ({len(whisper_sentences)} sentences)")
 
-    await _update_queue_item(
-        item_id,
-        progress=0.50,
-        message=f"Transcription complete ({len(whisper_sentences)} sentences). Extracting EPUB text...",
-    )
+        await _update_queue_item(
+            item_id,
+            progress=0.50,
+            message=f"Transcription complete ({len(whisper_sentences)} sentences). Extracting EPUB text...",
+        )
 
     # Step 2: Extract EPUB text
     from services.epub_parser import extract_epub_sentences
