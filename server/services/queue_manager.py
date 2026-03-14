@@ -320,6 +320,11 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         ebook_path = pair.ebook.file_path
         audiobook_path = pair.audiobook.file_path
 
+    # Validate EPUB before doing any expensive work
+    import zipfile
+    if not zipfile.is_zipfile(ebook_path):
+        raise Exception(f"EPUB file is invalid or corrupted (not a valid zip): {ebook_path}")
+
     # Step 1: Transcription via provider
     await _update_queue_item(item_id, message="Selecting transcription provider...", progress=0.02)
 
