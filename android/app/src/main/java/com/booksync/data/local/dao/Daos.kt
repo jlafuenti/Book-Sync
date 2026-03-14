@@ -42,6 +42,21 @@ interface BookPairDao {
 
     @Query("SELECT * FROM book_pairs ORDER BY ebookTitle")
     suspend fun getAllPairsOnce(): List<BookPairEntity>
+
+    /**
+     * Pairs with audio progress, ordered by most recently listened.
+     * NOTE: bookmarks.updatedAt is stored as a numeric epoch-ms string
+     * (e.g. "1741910592000"). String DESC sort is correct for fixed-length
+     * numeric strings — do not change to ISO datetime format without updating this query.
+     */
+    @Query("""
+        SELECT bp.* FROM book_pairs bp
+        INNER JOIN bookmarks b ON bp.id = b.bookPairId
+        WHERE bp.audiobookDownloaded = 1
+          AND b.audioPositionMs > 0
+        ORDER BY b.updatedAt DESC
+    """)
+    fun getRecentlyPlayedPairs(): Flow<List<BookPairEntity>>
 }
 
 @Dao
@@ -84,6 +99,24 @@ interface AudioBookDao {
 
     @Query("SELECT * FROM audiobooks ORDER BY title")
     suspend fun getAllAudioBooksOnce(): List<AudioBookEntity>
+
+    /** All downloaded audiobooks ordered alphabetically. Used for the Library tab in Android Auto. */
+    @Query("SELECT * FROM audiobooks WHERE isDownloaded = 1 ORDER BY title ASC")
+    fun getDownloadedAudioBooksAlphabetical(): Flow<List<AudioBookEntity>>
+
+    /**
+     * Standalone audiobooks with audio progress, ordered by most recently played.
+     * Joins user_progress; updatedAt is a Long epoch-ms timestamp.
+     */
+    @Query("""
+        SELECT ab.* FROM audiobooks ab
+        INNER JOIN user_progress up ON up.mediaType = 'audiobook' AND up.mediaId = ab.id
+        WHERE ab.isDownloaded = 1
+          AND up.audioPositionMs IS NOT NULL
+          AND up.audioPositionMs > 0
+        ORDER BY up.updatedAt DESC
+    """)
+    fun getRecentlyPlayedStandaloneAudiobooks(): Flow<List<AudioBookEntity>>
 }
 
 @Dao

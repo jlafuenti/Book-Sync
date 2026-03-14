@@ -70,7 +70,8 @@ data class AudioBookResponse(
     val format: String,
     val series: String? = null,
     val series_index: Float? = null,
-    val uploaded_at: String
+    val uploaded_at: String,
+    val cover_path: String? = null
 )
 
 @Serializable
