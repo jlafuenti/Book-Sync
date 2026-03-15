@@ -92,7 +92,6 @@ dependencies {
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
-    implementation("androidx.mediarouter:mediarouter:1.7.0")
 
     // WorkManager (Offline Sync)
     implementation("androidx.work:work-runtime-ktx:2.10.0")

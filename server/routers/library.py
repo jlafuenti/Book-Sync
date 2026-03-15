@@ -622,6 +622,22 @@ def _extract_and_save_cover(filepath: str, book_type: str, book_id: int, book_ti
         
     return None
 
+
+async def _load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
+    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix)."""
+    result = await db.execute(
+        select(SystemSetting).where(
+            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_api_token", "abs_audiobooks_prefix"])
+        )
+    )
+    conf = {s.key: s.value for s in result.scalars().all()}
+    enabled = conf.get("abs_enabled", "false").lower() == "true"
+    url = conf.get("abs_url") or ""
+    token = conf.get("abs_api_token") or ""
+    prefix = conf.get("abs_audiobooks_prefix") or ""
+    return enabled, url, token, prefix
+
+
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
@@ -737,13 +753,9 @@ async def scan_library(
 
     # Build ABS metadata index once before scanning audiobooks
     abs_index = {}
-    if settings.abs_url and settings.abs_api_token:
-        abs_index = await asyncio.to_thread(
-            fetch_abs_index,
-            settings.abs_url,
-            settings.abs_api_token,
-            settings.abs_audiobooks_prefix or "",
-        )
+    _abs_enabled, _abs_url, _abs_token, _abs_prefix = await _load_abs_settings(db)
+    if _abs_enabled and _abs_url and _abs_token:
+        abs_index = await asyncio.to_thread(fetch_abs_index, _abs_url, _abs_token, _abs_prefix)
 
     # Scan audiobook directory
     audiobook_dir = settings.audiobook_dir
@@ -2228,22 +2240,18 @@ async def enrich_library_from_abs(
     Overwrites existing values (unlike the normal scan which only fills gaps).
     Also writes enriched metadata back into each audio file's embedded tags.
     """
-    if not settings.abs_url or not settings.abs_api_token:
+    abs_enabled, abs_url, abs_token, abs_prefix = await _load_abs_settings(db)
+    if not abs_url or not abs_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ABS_URL and ABS_API_TOKEN must be configured to use this endpoint.",
+            detail="Audiobookshelf URL and API token must be configured in Settings.",
         )
 
-    abs_index = await asyncio.to_thread(
-        fetch_abs_index,
-        settings.abs_url,
-        settings.abs_api_token,
-        settings.abs_audiobooks_prefix or "",
-    )
+    abs_index = await asyncio.to_thread(fetch_abs_index, abs_url, abs_token, abs_prefix)
     if not abs_index:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Failed to fetch metadata from Audiobookshelf. Check ABS_URL and ABS_API_TOKEN.",
+            detail="Failed to fetch metadata from Audiobookshelf. Check the URL and API token in Settings.",
         )
 
     result = await db.execute(select(AudioBook))
@@ -2269,8 +2277,7 @@ async def enrich_library_from_abs(
             "is_abridged": ab.is_abridged,
         }
         enriched, changed = enrich_from_abs(
-            file_meta, ab.file_path, abs_index,
-            settings.abs_audiobooks_prefix or "", force=True
+            file_meta, ab.file_path, abs_index, abs_prefix, force=True
         )
         if changed:
             for field in ["title", "author", "series", "series_index", "description",
@@ -2296,10 +2303,11 @@ async def enrich_audiobook_from_abs(
     Force re-enrich a single audiobook from Audiobookshelf metadata.
     Overwrites existing values and writes tags back to the audio file.
     """
-    if not settings.abs_url or not settings.abs_api_token:
+    abs_enabled, abs_url, abs_token, abs_prefix = await _load_abs_settings(db)
+    if not abs_url or not abs_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ABS_URL and ABS_API_TOKEN must be configured to use this endpoint.",
+            detail="Audiobookshelf URL and API token must be configured in Settings.",
         )
 
     result = await db.execute(select(AudioBook).where(AudioBook.id == audiobook_id))
@@ -2307,12 +2315,7 @@ async def enrich_audiobook_from_abs(
     if not ab:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audiobook not found")
 
-    abs_index = await asyncio.to_thread(
-        fetch_abs_index,
-        settings.abs_url,
-        settings.abs_api_token,
-        settings.abs_audiobooks_prefix or "",
-    )
+    abs_index = await asyncio.to_thread(fetch_abs_index, abs_url, abs_token, abs_prefix)
     if not abs_index:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2337,8 +2340,7 @@ async def enrich_audiobook_from_abs(
         "is_abridged": ab.is_abridged,
     }
     enriched, changed = enrich_from_abs(
-        file_meta, ab.file_path, abs_index,
-        settings.abs_audiobooks_prefix or "", force=True
+        file_meta, ab.file_path, abs_index, abs_prefix, force=True
     )
     if changed:
         for field in ["title", "author", "series", "series_index", "description",
