@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles, cleanupOrphans } from '../api'
+import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -779,6 +780,15 @@ function LibraryPage({ tab }) {
                         </div>
                     </div>
                 </div>
+            )}
+            {/* Edit Metadata Modal */}
+            {editingBook && (
+                <EnhancedMetadataModal
+                    book={editingBook}
+                    type={editingType}
+                    onClose={() => { setEditingBook(null); setEditingType(null) }}
+                    onSave={handleSaveMetadata}
+                />
             )}
         </div >
     )

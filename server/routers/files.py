@@ -5,9 +5,11 @@ Supports range requests for audio streaming.
 
 import os
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,6 +24,40 @@ from schemas import SyncMapResponse
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/files", tags=["files"])
+
+
+async def get_user_for_streaming(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    token_query: Optional[str] = Query(None, alias="token"),
+) -> User:
+    """Auth dependency for audio streaming: accepts JWT via Authorization header
+    OR as a ?token= query parameter (required for Chromecast receiver requests)."""
+    # Prefer the Authorization: Bearer header; fall back to query param
+    auth_header = request.headers.get("authorization", "") if request else ""
+    token: Optional[str] = None
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:]
+    elif token_query:
+        token = token_query
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: Optional[str] = payload.get("sub")
+        token_type: Optional[str] = payload.get("type")
+        if user_id is None or token_type != "access":
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.execute(select(User).where(User.id == int(user_id)))
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
 
 # MIME type mapping
 MIME_TYPES = {
@@ -88,7 +124,7 @@ async def download_audiobook(
     audiobook_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_user_for_streaming),
 ):
     """
     Download or stream an audiobook file.

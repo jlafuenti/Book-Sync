@@ -19,6 +19,7 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SERVER_BASE_URL", "\"https://booksync.lafuenti.com\"")
     }
 
     buildTypes {
@@ -45,6 +46,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -90,6 +92,7 @@ dependencies {
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
 
     // WorkManager (Offline Sync)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
