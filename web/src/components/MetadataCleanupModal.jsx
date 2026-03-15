@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getMetadataDiscrepancies, resolveMetadataDiscrepancies } from '../api';
+import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, deletePair } from '../api';
 
 export default function MetadataCleanupModal({ onClose, onComplete }) {
     const [discrepancies, setDiscrepancies] = useState([]);
@@ -76,6 +76,29 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
             setCurrentIndex(prev => prev + 1);
         } else {
             onComplete(); // Done resolving all
+        }
+    };
+
+    const handleUnpair = async () => {
+        const currentPair = discrepancies[currentIndex];
+        if (!currentPair) return;
+
+        setSaving(true);
+        setError('');
+        try {
+            await deletePair(currentPair.pair_id);
+            const updated = discrepancies.filter((_, i) => i !== currentIndex);
+            setDiscrepancies(updated);
+            if (updated.length === 0) {
+                onComplete();
+            } else if (currentIndex >= updated.length) {
+                setCurrentIndex(updated.length - 1);
+            }
+            // else currentIndex stays the same and the next pair slides in
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -166,9 +189,14 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                 </div>
                 {discrepancies.length > 0 && !loading && !error && (
                     <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-                        <button className="btn btn-secondary" onClick={handleNext} disabled={saving}>
-                            Skip
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button className="btn btn-secondary" onClick={handleNext} disabled={saving}>
+                                Skip
+                            </button>
+                            <button className="btn btn-danger" onClick={handleUnpair} disabled={saving}>
+                                {saving ? 'Unpairing...' : '✂️ Unpair'}
+                            </button>
+                        </div>
                         <button
                             className="btn btn-primary"
                             onClick={handleSaveAndNext}
