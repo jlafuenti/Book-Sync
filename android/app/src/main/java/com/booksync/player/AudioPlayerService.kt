@@ -154,7 +154,7 @@ class AudioPlayerService : MediaLibraryService() {
         // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
         // initialized by BookSyncApp; it never re-initializes.
         try {
-            val castContext = CastContext.getSharedInstance()
+            val castContext = CastContext.getSharedInstance() ?: return
             val cast = CastPlayer(castContext)
             cast.addListener(playerListener)
             cast.setSessionAvailabilityListener(object : SessionAvailabilityListener {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 
@@ -39,6 +39,8 @@ function BookDetailPage() {
     const [showEditModal, setShowEditModal] = useState(false)
     const [editModalTab, setEditModalTab] = useState('Details')
     const [rescanning, setRescanning] = useState(false)
+    const [absEnabled, setAbsEnabled] = useState(false)
+    const [enriching, setEnriching] = useState(false)
 
     useEffect(() => {
         setLoading(true)
@@ -53,12 +55,28 @@ function BookDetailPage() {
                 setError(err.message || 'Failed to load book')
                 setLoading(false)
             })
+        if (type === 'audiobook') {
+            getSettings().then(s => setAbsEnabled(s.abs_enabled === true || s.abs_enabled === 'true')).catch(() => {})
+        }
     }, [type, id])
 
     const handleSaveMetadata = async (bookId, data) => {
         const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
         const updatedBook = await updateFunc(bookId, data);
         setBook(updatedBook);
+    }
+
+    const handleEnrichFromAbs = async () => {
+        setEnriching(true)
+        setError(null)
+        try {
+            const updated = await enrichAudiobookFromAbs(id)
+            setBook(updated)
+        } catch (err) {
+            setError(err.message || 'Failed to enrich from Audiobookshelf')
+        } finally {
+            setEnriching(false)
+        }
     }
 
     const handleRescan = async () => {
@@ -186,6 +204,11 @@ function BookDetailPage() {
                         <button className="btn btn-secondary" onClick={handleRescan} disabled={rescanning}>
                             {rescanning ? '🔄 Rescanning...' : '🔄 Rescan File'}
                         </button>
+                        {isAudiobook && absEnabled && (
+                            <button className="btn btn-secondary" onClick={handleEnrichFromAbs} disabled={enriching}>
+                                {enriching ? 'Enriching...' : '✨ Enrich from ABS'}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
