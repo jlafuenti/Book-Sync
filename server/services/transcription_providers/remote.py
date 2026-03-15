@@ -70,6 +70,29 @@ class RemoteWhisperProvider(TranscriptionProvider):
         filename = os.path.basename(audio_path)
         logger.info(f"Preparing to upload {filename} to {self.remote_url} ...")
 
+        # Check if the Orin already has a cached result for this file (e.g. after a server
+        # restart where the previous upload completed but the result was never received).
+        # This avoids re-uploading and re-transcribing a multi-hour job unnecessarily.
+        try:
+            async with httpx.AsyncClient() as check_client:
+                cached_check = await check_client.get(
+                    f"{self.remote_url}/v1/result/{filename}", timeout=10.0
+                )
+            if cached_check.status_code == 200:
+                logger.info(f"Found cached result for {filename} on remote server — skipping upload.")
+                data = cached_check.json()
+                sentences_data = data.get("sentences", [])
+                return [
+                    TranscribedSentence(
+                        text=s.get("text", ""),
+                        start_ms=s.get("start_ms", 0),
+                        end_ms=s.get("end_ms", 0),
+                    )
+                    for s in sentences_data
+                ]
+        except httpx.RequestError as e:
+            logger.debug(f"Pre-flight cached result check failed (will proceed with upload): {e}")
+
         # Start the polling background task if a callback is provided
         stop_polling = asyncio.Event()
         poll_task = None
@@ -96,32 +119,57 @@ class RemoteWhisperProvider(TranscriptionProvider):
 
                 # Handle response codes
                 if response.status_code == 409:
-                    # Jetson is busy. Let's see if it's busy with OUR file.
-                    status_resp = await client.get(f"{self.remote_url}/v1/status")
-                    if status_resp.status_code == 200:
-                        status_data = status_resp.json()
-                        if status_data.get("active") and status_data.get("current_file") == filename:
-                            logger.info(f"Re-attaching to ongoing transcription of {filename} on remote server.")
-                            # Enter poll-only mode waiting for it to finish
-                            while status_data.get("active"):
-                                await asyncio.sleep(3)
-                                status_resp = await client.get(f"{self.remote_url}/v1/status")
-                                if status_resp.status_code == 200:
-                                    status_data = status_resp.json()
-                                else:
-                                    raise ProviderUnavailableError("Lost connection to remote server while polling status.")
-                            
-                            # Transcribing finished, grab the cached result
-                            logger.info(f"Transcription of {filename} finished on remote server. Fetching result...")
-                            result_resp = await client.get(f"{self.remote_url}/v1/result/{filename}", timeout=60)
-                            if result_resp.status_code == 200:
-                                data = result_resp.json()
-                            else:
-                                raise TranscriptionError(f"Failed to fetch cached transcription result: {result_resp.status_code} - {result_resp.text}")
+                    # The 409 body tells us exactly what file the Orin is currently working on.
+                    # Use that directly rather than making a separate status call, which can
+                    # race against state changes between the 409 and the follow-up GET.
+                    try:
+                        conflict_data = response.json()
+                        current_file_on_orin = conflict_data.get("current_job", {}).get("file")
+                    except Exception:
+                        current_file_on_orin = None
+
+                    if current_file_on_orin == filename:
+                        # Orin is already transcribing OUR file (e.g. after a server restart).
+                        # Re-attach by polling until it finishes, then fetch the cached result.
+                        logger.info(
+                            f"Re-attaching to ongoing transcription of {filename} on remote server."
+                        )
+                        # Use a fresh client for polling so the upload client's state doesn't matter.
+                        async with httpx.AsyncClient() as poll_client:
+                            while True:
+                                await asyncio.sleep(10)
+                                try:
+                                    status_resp = await poll_client.get(
+                                        f"{self.remote_url}/v1/status", timeout=10.0
+                                    )
+                                    if status_resp.status_code == 200:
+                                        status_data = status_resp.json()
+                                        if progress_callback:
+                                            progress_callback(
+                                                status_data.get("progress", 0),
+                                                None,
+                                                status_data.get("message"),
+                                            )
+                                        if not status_data.get("active"):
+                                            break
+                                except httpx.RequestError as e:
+                                    logger.debug(f"Status poll error (retrying): {e}")
+
+                        # Transcription finished — fetch the cached result.
+                        logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
+                        async with httpx.AsyncClient() as result_client:
+                            result_resp = await result_client.get(
+                                f"{self.remote_url}/v1/result/{filename}", timeout=60.0
+                            )
+                        if result_resp.status_code == 200:
+                            data = result_resp.json()
                         else:
-                            raise ProviderUnavailableError("Remote server is busy with another transcription.")
+                            raise TranscriptionError(
+                                f"Failed to fetch cached transcription result: "
+                                f"{result_resp.status_code} - {result_resp.text}"
+                            )
                     else:
-                        raise ProviderUnavailableError("Remote server is busy and status endpoint is unreachable.")
+                        raise ProviderUnavailableError("Remote server is busy with another transcription.")
                 
                 elif response.status_code >= 500:
                     raise ProviderUnavailableError(
