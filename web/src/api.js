@@ -383,6 +383,16 @@ export async function enrichLibraryFromAbs() {
     return resp.json();
 }
 
+export async function enrichAudiobookFromAbs(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/enrich-abs`, { method: 'POST' });
+    if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try { const e = await resp.json(); if (e.detail) msg = e.detail; } catch(e) {}
+        throw new Error(msg);
+    }
+    return resp.json();
+}
+
 export async function updateEbookMetadata(bookId, meta) {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${bookId}`, {
         method: 'PATCH',
