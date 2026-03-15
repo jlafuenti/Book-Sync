@@ -357,6 +357,32 @@ export async function testRemoteConnection(url) {
     return resp.json();
 }
 
+export async function testAbsConnection(url, token) {
+    if (!url || !token) throw new Error("URL and token are required");
+    const resp = await fetchWithAuth(
+        `${API_BASE}/settings/test-abs?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`
+    );
+    if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+            const errBody = await resp.json();
+            if (errBody.detail) msg = errBody.detail;
+        } catch(e) {}
+        throw new Error(msg);
+    }
+    return resp.json();
+}
+
+export async function enrichLibraryFromAbs() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/enrich-abs`, { method: 'POST' });
+    if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try { const e = await resp.json(); if (e.detail) msg = e.detail; } catch(e) {}
+        throw new Error(msg);
+    }
+    return resp.json();
+}
+
 export async function updateEbookMetadata(bookId, meta) {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${bookId}`, {
         method: 'PATCH',

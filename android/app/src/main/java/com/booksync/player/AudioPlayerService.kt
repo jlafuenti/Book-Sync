@@ -150,9 +150,11 @@ class AudioPlayerService : MediaLibraryService() {
             .setId("AudioPlayerSession")
             .build()
 
-        // Initialize Cast support (may be unavailable on some devices)
+        // Hook up CastPlayer if Cast SDK was successfully initialized (in BookSyncApp).
+        // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
+        // initialized by BookSyncApp; it never re-initializes.
         try {
-            val castContext = CastContext.getSharedInstance(this)
+            val castContext = CastContext.getSharedInstance()
             val cast = CastPlayer(castContext)
             cast.addListener(playerListener)
             cast.setSessionAvailabilityListener(object : SessionAvailabilityListener {
@@ -191,7 +193,7 @@ class AudioPlayerService : MediaLibraryService() {
         stopAutoPositionSave()
         serviceScope.cancel()
         try {
-            CastContext.getSharedInstance(this).sessionManager
+            CastContext.getSharedInstance().sessionManager
                 .removeSessionManagerListener(castSessionListener, CastSession::class.java)
         } catch (_: Exception) {}
         castPlayer?.setSessionAvailabilityListener(null)

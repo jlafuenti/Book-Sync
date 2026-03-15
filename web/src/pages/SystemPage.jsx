@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getDiskUsage, getSettings, updateSettings, testRemoteConnection } from '../api'
+import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs } from '../api'
 
 function SystemPage() {
     const [stats, setStats] = useState(null)
@@ -80,6 +80,7 @@ function SystemPage() {
 
             <SettingsSection />
             <TranscriptionSettingsSection />
+            <ABSSettingsSection />
 
             <div className="card">
                 <div className="card-header">
@@ -228,6 +229,212 @@ function SettingsSection() {
 }
 
 export default SystemPage
+
+function ABSSettingsSection() {
+    const [enabled, setEnabled] = useState(false)
+    const [url, setUrl] = useState('')
+    const [token, setToken] = useState('')
+    const [prefix, setPrefix] = useState('')
+    const [loading, setLoading] = useState(false)
+    const [msg, setMsg] = useState(null)
+    const [testResult, setTestResult] = useState(null)
+    const [isTesting, setIsTesting] = useState(false)
+    const [isEnriching, setIsEnriching] = useState(false)
+
+    useEffect(() => { loadSettings() }, [])
+
+    const loadSettings = async () => {
+        try {
+            const s = await getSettings()
+            if (s.abs_enabled !== undefined) setEnabled(s.abs_enabled === true || s.abs_enabled === 'true')
+            if (s.abs_url !== undefined) setUrl(s.abs_url || '')
+            if (s.abs_api_token !== undefined) setToken(s.abs_api_token || '')
+            if (s.abs_audiobooks_prefix !== undefined) setPrefix(s.abs_audiobooks_prefix || '')
+        } catch (err) {
+            console.error(err)
+        }
+    }
+
+    const handleSave = async () => {
+        setLoading(true)
+        setMsg(null)
+        try {
+            await updateSettings({
+                abs_enabled: enabled,
+                abs_url: url,
+                abs_api_token: token,
+                abs_audiobooks_prefix: prefix,
+            })
+            setMsg({ type: 'success', text: 'Audiobookshelf settings saved' })
+        } catch (err) {
+            setMsg({ type: 'error', text: 'Failed to save settings' })
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleTest = async () => {
+        if (!url || !token) {
+            setTestResult({ success: false, text: 'Enter a URL and API token first' })
+            return
+        }
+        setIsTesting(true)
+        setTestResult(null)
+        try {
+            const result = await testAbsConnection(url, token)
+            const libs = result.book_libraries?.join(', ') || 'none found'
+            setTestResult({ success: true, text: `Connected! Book libraries: ${libs}` })
+        } catch (err) {
+            setTestResult({ success: false, text: err.message })
+        } finally {
+            setIsTesting(false)
+        }
+    }
+
+    const handleEnrichAll = async () => {
+        setIsEnriching(true)
+        setMsg(null)
+        try {
+            const result = await enrichLibraryFromAbs()
+            setMsg({ type: 'success', text: result.message })
+        } catch (err) {
+            setMsg({ type: 'error', text: `Enrichment failed: ${err.message}` })
+        } finally {
+            setIsEnriching(false)
+        }
+    }
+
+    return (
+        <div className="card" style={{ marginBottom: '24px' }}>
+            <div className="card-header">
+                <h3>Audiobookshelf Integration</h3>
+            </div>
+            <div style={{ padding: '16px' }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Enrich audiobook metadata (descriptions, narrators, series, genres, etc.) from your Audiobookshelf library.
+                    Enriched data is also written back into the audio file's embedded tags so future scans don't need to re-query ABS.
+                </p>
+
+                {/* Enable toggle */}
+                <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <input
+                        type="checkbox"
+                        id="absEnabledToggle"
+                        checked={enabled}
+                        onChange={e => setEnabled(e.target.checked)}
+                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                    />
+                    <div>
+                        <label htmlFor="absEnabledToggle" style={{ fontWeight: 600, cursor: 'pointer', display: 'block' }}>
+                            Enrich metadata with Audiobookshelf
+                        </label>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+                            Automatically enrich audiobooks during library scans.
+                        </p>
+                    </div>
+                </div>
+
+                {/* Conditional fields */}
+                {enabled && (
+                    <div style={{ borderLeft: '2px solid var(--border)', paddingLeft: '16px', marginBottom: '20px' }}>
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+                                Audiobookshelf URL
+                            </label>
+                            <input
+                                type="text"
+                                className="input"
+                                value={url}
+                                onChange={e => setUrl(e.target.value)}
+                                placeholder="http://audiobookshelf:80"
+                                style={{ width: '100%', maxWidth: '400px' }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                Internal Docker hostname (e.g. <code>http://audiobookshelf:80</code>) or LAN IP.
+                            </p>
+                        </div>
+
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+                                API Token
+                            </label>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                                <input
+                                    type="password"
+                                    className="input"
+                                    value={token}
+                                    onChange={e => setToken(e.target.value)}
+                                    placeholder="Paste your ABS API token"
+                                    style={{ flex: '1 1 300px' }}
+                                />
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={handleTest}
+                                    disabled={isTesting}
+                                    style={{ whiteSpace: 'nowrap' }}
+                                >
+                                    {isTesting ? 'Testing...' : 'Test Connection'}
+                                </button>
+                            </div>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                Found in ABS → Settings → Users → your user → API Token.
+                            </p>
+                            {testResult && (
+                                <div style={{
+                                    marginTop: '8px',
+                                    fontSize: '0.85rem',
+                                    color: testResult.success ? 'var(--success)' : 'var(--error)'
+                                }}>
+                                    {testResult.success ? '✅ ' : '❌ '}{testResult.text}
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+                                Audiobooks Path Prefix (ABS internal)
+                            </label>
+                            <input
+                                type="text"
+                                className="input"
+                                value={prefix}
+                                onChange={e => setPrefix(e.target.value)}
+                                placeholder="/audiobooks"
+                                style={{ width: '100%', maxWidth: '400px' }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                The path prefix ABS uses for your audiobook library inside its container (e.g. <code>/audiobooks</code>).
+                                Used to match ABS paths to Book Sync files. Check ABS → Libraries → your library → folder path.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {msg && (
+                    <div className={`alert alert-${msg.type}`} style={{ marginBottom: '16px' }}>
+                        {msg.text}
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
+                        {loading ? 'Saving...' : 'Save Settings'}
+                    </button>
+                    {enabled && (
+                        <button
+                            className="btn btn-secondary"
+                            onClick={handleEnrichAll}
+                            disabled={isEnriching}
+                            title="Force re-enrich all audiobooks from ABS, overwriting existing metadata"
+                        >
+                            {isEnriching ? 'Enriching...' : 'Re-enrich All from ABS'}
+                        </button>
+                    )}
+                </div>
+            </div>
+        </div>
+    )
+}
 
 function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')

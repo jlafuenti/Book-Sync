@@ -29,7 +29,11 @@ DEFAULT_SETTINGS = {
     "transcription_remote_url": "",
     "transcription_remote_timeout": 86400,
     "auto_transcribe_enabled": False,
-    "whisper_model": "medium"
+    "whisper_model": "medium",
+    "abs_enabled": False,
+    "abs_url": "",
+    "abs_api_token": "",
+    "abs_audiobooks_prefix": "",
 }
 
 @router.get("/", response_model=Dict[str, Any])
@@ -90,6 +94,38 @@ async def update_settings(
             
     await db.commit()
     return await get_settings(db)
+
+@router.get("/test-abs")
+async def test_abs_connection(url: str, token: str, _: User = Depends(get_current_user)):
+    """Test the connection to an Audiobookshelf server."""
+    import httpx
+
+    if not url or not token:
+        raise HTTPException(status_code=400, detail="URL and token are required")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(
+                f"{url.rstrip('/')}/api/libraries",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            r.raise_for_status()
+            libraries = r.json().get("libraries", [])
+            book_libs = [lib["name"] for lib in libraries if lib.get("mediaType") == "book"]
+            return {
+                "success": True,
+                "library_count": len(libraries),
+                "book_libraries": book_libs,
+            }
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Connection failed: {str(e)}")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=400, detail="Authentication failed — check your API token")
+        raise HTTPException(status_code=400, detail=f"Server returned HTTP {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @router.get("/test-remote")
 async def test_remote_connection(url: str, _: User = Depends(get_current_user)):
