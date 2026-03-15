@@ -394,10 +394,22 @@ async def extract_metadata(
                         except ValueError:
                             pass
             
+            # If no series found in Calibre meta, try extracting from title
+            if not file_meta.get('series'):
+                title_str = file_meta.get('title', '')
+                s_name, s_idx = extract_series_and_index(title_str)
+                if s_name and s_idx is not None:
+                    file_meta['series'] = s_name
+                    file_meta['series_index'] = s_idx
+
             logger.info(f"[extract_metadata]   EPUB embedded: {file_meta}")
-        
+
         elif file_type == "audiobook":
-            audio = mutagen.File(filepath)
+            try:
+                audio = mutagen.File(filepath)
+            except mutagen.mp4.MP4MetadataError:
+                audio = None
+                logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
             if audio:
                 logger.info(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
                 logger.info(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
@@ -412,13 +424,23 @@ async def extract_metadata(
                         if '\xa9ART' in audio: file_meta["author"] = normalize_author(str(audio['\xa9ART'][0]))
                         
                         series_str = None
-                        if '\xa9grp' in audio: series_str = str(audio['\xa9grp'][0])
-                        elif '\xa9alb' in audio: series_str = str(audio['\xa9alb'][0])
-                        
+                        custom_series = audio.get('----:com.apple.iTunes:SERIES')
+                        if custom_series:
+                            series_str = bytes(custom_series[0]).decode('utf-8', 'replace').strip()
+                        elif '\xa9grp' in audio:
+                            series_str = str(audio['\xa9grp'][0])
+
                         if series_str:
                             s_name, s_idx = extract_series_and_index(series_str)
                             if s_name: file_meta["series"] = s_name
                             if s_idx is not None: file_meta["series_index"] = s_idx
+
+                        custom_series_part = audio.get('----:com.apple.iTunes:SERIES-PART')
+                        if custom_series_part and not file_meta.get('series_index'):
+                            try:
+                                file_meta['series_index'] = float(bytes(custom_series_part[0]).decode('utf-8', 'replace').strip())
+                            except ValueError:
+                                pass
                         
                         if '\xa9des' in audio: file_meta["description"] = md(str(audio['\xa9des'][0])).strip()
                         elif 'desc' in audio: file_meta["description"] = md(str(audio['desc'][0])).strip()
@@ -430,23 +452,17 @@ async def extract_metadata(
                             
                         if '\xa9gen' in audio: file_meta["genres"] = str(audio['\xa9gen'][0])
                         
-                        if '\xa9wrt' in audio: file_meta["narrators"] = str(audio['\xa9wrt'][0])
-                        elif '\xa9com' in audio: file_meta["narrators"] = str(audio['\xa9com'][0])
-                        
+                        custom_narrator = audio.get('----:com.apple.iTunes:NARRATOR')
+                        if custom_narrator:
+                            file_meta["narrators"] = bytes(custom_narrator[0]).decode('utf-8', 'replace').strip()
+                        elif '\xa9wrt' in audio:
+                            file_meta["narrators"] = str(audio['\xa9wrt'][0])
+                        elif '\xa9com' in audio:
+                            file_meta["narrators"] = str(audio['\xa9com'][0])
+
                         if '\xa9pub' in audio: file_meta["publisher"] = str(audio['\xa9pub'][0])
                         elif '----:com.apple.iTunes:publisher' in audio:
                             file_meta["publisher"] = str(audio['----:com.apple.iTunes:publisher'][0], 'utf-8')
-                        
-                        # Track number as series index
-                        if 'trkn' in audio:
-                            try:
-                                track_info = audio['trkn'][0]  # Tuple: (track_number, total_tracks)
-                                if isinstance(track_info, tuple):
-                                    file_meta["series_index"] = float(track_info[0])
-                                else:
-                                    file_meta["series_index"] = float(track_info)
-                            except (ValueError, TypeError, IndexError):
-                                pass
                     elif audio_type in ('MP3', 'FLAC', 'OggVorbis', 'OggOpus'):
                         # ID3 tags (MP3)
                         if 'TIT2' in audio: file_meta["title"] = str(audio['TIT2'])
