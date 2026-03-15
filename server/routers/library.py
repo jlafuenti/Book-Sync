@@ -42,6 +42,8 @@ from schemas import (
     MetadataDiscrepancy, ResolveDiscrepancyRequest, DiscrepantField
 )
 from routers.auth import get_current_user
+from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
+from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -114,55 +116,6 @@ async def get_filename_patterns(db: AsyncSession, pattern_type: str = "ebook") -
     return DEFAULT_SETTINGS.get(key, DEFAULT_SETTINGS["ebook_filename_patterns"])
 
 
-def normalize_author(author: str) -> str:
-    """
-    Normalize author name to 'First Last' format.
-    Handles:
-    - 'Last, First' -> 'First Last'
-    - 'Jim Butcher' -> 'Jim Butcher' (no change)
-    - 'Butcher, Jim' -> 'Jim Butcher'
-    - Extra whitespace is stripped.
-    """
-    if not author: return None
-    author = author.strip()
-    if not author: return None
-    
-    if "," in author:
-        parts = author.split(",", 1)
-        first = parts[1].strip()
-        last = parts[0].strip()
-        if first and last:
-            return f"{first} {last}"
-        return last or first
-    return author
-
-
-def normalize_series(series: str) -> str:
-    """
-    Normalize series name.
-    - 'Dresden Files, The' -> 'The Dresden Files'
-    - 'The Dresden Files' -> 'The Dresden Files' (preserved)
-    - 'Dresden Files' -> 'Dresden Files' (no change, don't guess)
-    - Trailing articles (A, An, The) are moved to the front.
-    """
-    if not series: return None
-    clean = series.strip()
-    if not clean: return None
-    
-    # Handle trailing article: 'Series Name, The' -> 'The Series Name'
-    trailing_articles = [', The', ', A', ', An']
-    for article in trailing_articles:
-        if clean.endswith(article) or clean.lower().endswith(article.lower()):
-            # Extract the article text (e.g., 'The', 'A', 'An')
-            art = clean[-(len(article) - 2):].strip()  # skip the ', '
-            base = clean[:-(len(article))].strip()
-            # Capitalize the article properly
-            return f"{art} {base}"
-    
-    return clean
-
-
-
 def compute_file_hash(filepath: str) -> str:
     """Compute SHA-256 hash of a file (first 10MB for speed on large files)."""
     sha256 = hashlib.sha256()
@@ -171,35 +124,6 @@ def compute_file_hash(filepath: str) -> str:
         data = f.read(10 * 1024 * 1024)
         sha256.update(data)
     return sha256.hexdigest()
-
-def extract_series_and_index(text: str) -> tuple[Optional[str], Optional[float]]:
-    """
-    Given a string like 'The Cinder Spires #2' or 'The Cinder Spires, Book 2',
-    returns the series name and the index.
-    """
-    if not text:
-        return None, None
-    text = text.strip()
-    
-    # Matches "Series Name #2", "Series Name # 2.5"
-    match = re.search(r'#\s*(\d+(?:\.\d+)?)', text)
-    if match:
-        idx = float(match.group(1))
-        series_name = text[:match.start()].strip()
-        # Clean up any trailing punctuation
-        series_name = re.sub(r'[,:\-]\s*$', '', series_name).strip()
-        return normalize_series(series_name), idx
-        
-    # Matches "Series Name, Book 2"
-    match = re.search(r'(?:,\s*|\s+|-?\s*)Book\s+(\d+(?:\.\d+)?)', text, re.IGNORECASE)
-    if match:
-        idx = float(match.group(1))
-        series_name = text[:match.start()].strip()
-        series_name = re.sub(r'[,:\-]\s*$', '', series_name).strip()
-        return normalize_series(series_name), idx
-
-    return normalize_series(text), None
-
 
 def extract_title_from_filename(filename: str) -> str:
     """
@@ -811,6 +735,16 @@ async def scan_library(
                     
                 new_ebooks += 1
 
+    # Build ABS metadata index once before scanning audiobooks
+    abs_index = {}
+    if settings.abs_url and settings.abs_api_token:
+        abs_index = await asyncio.to_thread(
+            fetch_abs_index,
+            settings.abs_url,
+            settings.abs_api_token,
+            settings.abs_audiobooks_prefix or "",
+        )
+
     # Scan audiobook directory
     audiobook_dir = settings.audiobook_dir
     if os.path.isdir(audiobook_dir):
@@ -830,21 +764,30 @@ async def scan_library(
                 if existing_audiobook:
                     # Update metadata if missing
                     meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+
+                    # Enrich from ABS for any still-missing fields
+                    if abs_index:
+                        meta, abs_changed = enrich_from_abs(
+                            meta, filepath, abs_index, audiobook_dir
+                        )
+                        if abs_changed:
+                            await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+
                     updated = False
-                    
+
                     if not existing_audiobook.metadata_source:
                          existing_audiobook.title = meta.get("title") or existing_audiobook.title
                          existing_audiobook.author = meta.get("author") or existing_audiobook.author
                          existing_audiobook.metadata_source = meta.get("_metadata_source")
                          existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
                          updated = True
-                         
+
                     if meta.get("series") and not existing_audiobook.series:
                          existing_audiobook.series = meta["series"]
                          existing_audiobook.series_index = meta.get("series_index")
                          updated = True
-                         
-                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators"]:
+
+                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators", "isbn", "asin"]:
                          if meta.get(f) is not None and getattr(existing_audiobook, f) is None:
                              setattr(existing_audiobook, f, meta.get(f))
                              updated = True
@@ -871,11 +814,30 @@ async def scan_library(
                 
                 meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
 
+                # Enrich from ABS before creating the record
+                if abs_index:
+                    meta, abs_changed = enrich_from_abs(
+                        meta, filepath, abs_index, audiobook_dir
+                    )
+                    if abs_changed:
+                        await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+
                 audiobook = AudioBook(
                     title=meta["title"] or filename,
                     author=meta["author"],
                     series=meta["series"],
                     series_index=meta["series_index"],
+                    description=meta.get("description"),
+                    publisher=meta.get("publisher"),
+                    publish_year=meta.get("publish_year"),
+                    language=meta.get("language"),
+                    genres=meta.get("genres"),
+                    tags=meta.get("tags"),
+                    isbn=meta.get("isbn"),
+                    asin=meta.get("asin"),
+                    narrators=meta.get("narrators"),
+                    is_explicit=meta.get("is_explicit", False),
+                    is_abridged=meta.get("is_abridged", False),
                     metadata_source=meta.get("_metadata_source"),
                     metadata_pattern=meta.get("_metadata_pattern"),
                     filename=filename,
@@ -2254,3 +2216,138 @@ async def cleanup_orphans(
         "deleted_ebooks": deleted_ebooks,
         "deleted_audiobooks": deleted_audiobooks,
     }
+
+
+@router.post("/enrich-abs")
+async def enrich_library_from_abs(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Force re-enrich all audiobooks from Audiobookshelf metadata.
+    Overwrites existing values (unlike the normal scan which only fills gaps).
+    Also writes enriched metadata back into each audio file's embedded tags.
+    """
+    if not settings.abs_url or not settings.abs_api_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ABS_URL and ABS_API_TOKEN must be configured to use this endpoint.",
+        )
+
+    abs_index = await asyncio.to_thread(
+        fetch_abs_index,
+        settings.abs_url,
+        settings.abs_api_token,
+        settings.abs_audiobooks_prefix or "",
+    )
+    if not abs_index:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to fetch metadata from Audiobookshelf. Check ABS_URL and ABS_API_TOKEN.",
+        )
+
+    result = await db.execute(select(AudioBook))
+    audiobooks = result.scalars().all()
+    updated_count = 0
+
+    for ab in audiobooks:
+        file_meta = {
+            "title": ab.title,
+            "author": ab.author,
+            "series": ab.series,
+            "series_index": ab.series_index,
+            "description": ab.description,
+            "publisher": ab.publisher,
+            "publish_year": ab.publish_year,
+            "language": ab.language,
+            "genres": ab.genres,
+            "tags": ab.tags,
+            "isbn": ab.isbn,
+            "asin": ab.asin,
+            "narrators": ab.narrators,
+            "is_explicit": ab.is_explicit,
+            "is_abridged": ab.is_abridged,
+        }
+        enriched, changed = enrich_from_abs(
+            file_meta, ab.file_path, abs_index,
+            settings.abs_audiobooks_prefix or "", force=True
+        )
+        if changed:
+            for field in ["title", "author", "series", "series_index", "description",
+                          "publisher", "publish_year", "language", "genres", "tags",
+                          "isbn", "asin", "narrators", "is_explicit", "is_abridged"]:
+                if enriched.get(field) is not None:
+                    setattr(ab, field, enriched[field])
+            db.add(ab)
+            await asyncio.to_thread(write_metadata_to_file, ab.file_path, enriched)
+            updated_count += 1
+
+    await db.commit()
+    return {"message": f"Enriched {updated_count} audiobook(s) from Audiobookshelf", "updated": updated_count}
+
+
+@router.post("/audiobooks/{audiobook_id}/enrich-abs", response_model=AudioBookResponse)
+async def enrich_audiobook_from_abs(
+    audiobook_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """
+    Force re-enrich a single audiobook from Audiobookshelf metadata.
+    Overwrites existing values and writes tags back to the audio file.
+    """
+    if not settings.abs_url or not settings.abs_api_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ABS_URL and ABS_API_TOKEN must be configured to use this endpoint.",
+        )
+
+    result = await db.execute(select(AudioBook).where(AudioBook.id == audiobook_id))
+    ab = result.scalar_one_or_none()
+    if not ab:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audiobook not found")
+
+    abs_index = await asyncio.to_thread(
+        fetch_abs_index,
+        settings.abs_url,
+        settings.abs_api_token,
+        settings.abs_audiobooks_prefix or "",
+    )
+    if not abs_index:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to fetch metadata from Audiobookshelf.",
+        )
+
+    file_meta = {
+        "title": ab.title,
+        "author": ab.author,
+        "series": ab.series,
+        "series_index": ab.series_index,
+        "description": ab.description,
+        "publisher": ab.publisher,
+        "publish_year": ab.publish_year,
+        "language": ab.language,
+        "genres": ab.genres,
+        "tags": ab.tags,
+        "isbn": ab.isbn,
+        "asin": ab.asin,
+        "narrators": ab.narrators,
+        "is_explicit": ab.is_explicit,
+        "is_abridged": ab.is_abridged,
+    }
+    enriched, changed = enrich_from_abs(
+        file_meta, ab.file_path, abs_index,
+        settings.abs_audiobooks_prefix or "", force=True
+    )
+    if changed:
+        for field in ["title", "author", "series", "series_index", "description",
+                      "publisher", "publish_year", "language", "genres", "tags",
+                      "isbn", "asin", "narrators", "is_explicit", "is_abridged"]:
+            if enriched.get(field) is not None:
+                setattr(ab, field, enriched[field])
+        db.add(ab)
+        await asyncio.to_thread(write_metadata_to_file, ab.file_path, enriched)
+        await db.commit()
+
+    return ab

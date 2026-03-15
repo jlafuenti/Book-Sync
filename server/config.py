@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # External APIs
     google_books_api_key: Optional[str] = Field(default=None, alias="GOOGLE_BOOKS_API_KEY")
 
+    # Audiobookshelf integration
+    abs_url: Optional[str] = Field(default=None, alias="ABS_URL")
+    abs_api_token: Optional[str] = Field(default=None, alias="ABS_API_TOKEN")
+    abs_audiobooks_prefix: Optional[str] = Field(default=None, alias="ABS_AUDIOBOOKS_PREFIX")
+
     # Sync Settings
     default_rewind_seconds: int = 10
 
