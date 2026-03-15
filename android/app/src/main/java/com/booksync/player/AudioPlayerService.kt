@@ -118,6 +118,7 @@ class AudioPlayerService : MediaLibraryService() {
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate — service starting")
         sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val initialSpeed = sharedPrefs.getFloat(PREF_SPEED, 1.0f)
 
@@ -175,6 +176,7 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
+        Log.i(TAG, "onGetSession — pkg=${controllerInfo.packageName}, session=${if (mediaLibrarySession != null) "ok" else "NULL"}")
         return mediaLibrarySession
     }
 
@@ -506,6 +508,8 @@ class AudioPlayerService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<MediaItem>> {
+            // Return the same root for all clients, including Android Auto (which always
+            // sends isRecent=true). Playback resumption is handled by onPlaybackResumption.
             val root = MediaItem.Builder()
                 .setMediaId("[root]")
                 .setMediaMetadata(
