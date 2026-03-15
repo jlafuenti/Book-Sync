@@ -779,7 +779,7 @@ async def scan_library(
 
                     # Enrich from ABS for any still-missing fields
                     if abs_index:
-                        meta, abs_changed = enrich_from_abs(
+                        meta, abs_changed, _ = enrich_from_abs(
                             meta, filepath, abs_index, audiobook_dir
                         )
                         if abs_changed:
@@ -2276,7 +2276,7 @@ async def enrich_library_from_abs(
             "is_explicit": ab.is_explicit,
             "is_abridged": ab.is_abridged,
         }
-        enriched, changed = enrich_from_abs(
+        enriched, changed, _ = enrich_from_abs(
             file_meta, ab.file_path, abs_index, abs_prefix, force=True
         )
         if changed:
@@ -2293,7 +2293,7 @@ async def enrich_library_from_abs(
     return {"message": f"Enriched {updated_count} audiobook(s) from Audiobookshelf", "updated": updated_count}
 
 
-@router.post("/audiobooks/{audiobook_id}/enrich-abs", response_model=AudioBookResponse)
+@router.post("/audiobooks/{audiobook_id}/enrich-abs")
 async def enrich_audiobook_from_abs(
     audiobook_id: int,
     db: AsyncSession = Depends(get_db),
@@ -2339,10 +2339,14 @@ async def enrich_audiobook_from_abs(
         "is_explicit": ab.is_explicit,
         "is_abridged": ab.is_abridged,
     }
-    enriched, changed = enrich_from_abs(
+    enriched, changed, matched = enrich_from_abs(
         file_meta, ab.file_path, abs_index, abs_prefix, force=True
     )
-    if changed:
+
+    if not matched:
+        status_key = "no_match"
+        message = "No matching entry found in Audiobookshelf for this book."
+    elif changed:
         for field in ["title", "author", "series", "series_index", "description",
                       "publisher", "publish_year", "language", "genres", "tags",
                       "isbn", "asin", "narrators", "is_explicit", "is_abridged"]:
@@ -2351,5 +2355,12 @@ async def enrich_audiobook_from_abs(
         db.add(ab)
         await asyncio.to_thread(write_metadata_to_file, ab.file_path, enriched)
         await db.commit()
+        status_key = "enriched"
+        message = "Metadata enriched from Audiobookshelf and written back to file."
+    else:
+        status_key = "already_current"
+        message = "Metadata is already up to date — no changes needed."
 
-    return ab
+    await db.refresh(ab)
+    from schemas import AudioBookResponse
+    return {"status": status_key, "message": message, "book": AudioBookResponse.model_validate(ab)}

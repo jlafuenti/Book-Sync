@@ -81,15 +81,17 @@ def enrich_from_abs(
     abs_index: dict,
     audiobooks_prefix: str,
     force: bool = False,
-) -> tuple[dict, bool]:
+) -> tuple[dict, bool, bool]:
     """
     Merge ABS metadata into file_meta.
 
     - Normal mode (force=False): fills only missing fields.
     - Force mode (force=True): overwrites all enrichable fields.
 
-    Returns (file_meta, changed) where changed=True means at least one field
-    was updated. file_meta is mutated in place and also returned.
+    Returns (file_meta, changed, matched) where:
+      - changed=True means at least one field was updated
+      - matched=True means an ABS entry was found for this book
+    file_meta is mutated in place and also returned.
     """
     rel = _normalize_path(os.path.dirname(file_path), audiobooks_prefix)
     item = abs_index.get(rel)
@@ -117,7 +119,7 @@ def enrich_from_abs(
             pass
 
     if not item:
-        return file_meta, False
+        return file_meta, False, False
 
     meta = item.get("media", {}).get("metadata", {})
     changed = False
@@ -171,7 +173,7 @@ def enrich_from_abs(
     if changed:
         logger.info(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
 
-    return file_meta, changed
+    return file_meta, changed, True
 
 
 def write_metadata_to_file(filepath: str, file_meta: dict) -> bool:

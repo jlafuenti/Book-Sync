@@ -41,6 +41,7 @@ function BookDetailPage() {
     const [rescanning, setRescanning] = useState(false)
     const [absEnabled, setAbsEnabled] = useState(false)
     const [enriching, setEnriching] = useState(false)
+    const [toast, setToast] = useState(null)
 
     useEffect(() => {
         setLoading(true)
@@ -66,14 +67,21 @@ function BookDetailPage() {
         setBook(updatedBook);
     }
 
+    const showToast = (message, type = 'success') => {
+        setToast({ message, type })
+        setTimeout(() => setToast(null), 4000)
+    }
+
     const handleEnrichFromAbs = async () => {
         setEnriching(true)
-        setError(null)
         try {
-            const updated = await enrichAudiobookFromAbs(id)
-            setBook(updated)
+            const result = await enrichAudiobookFromAbs(id)
+            if (result.book) setBook(result.book)
+            const type = result.status === 'enriched' ? 'success'
+                       : result.status === 'no_match' ? 'warning' : 'info'
+            showToast(result.message, type)
         } catch (err) {
-            setError(err.message || 'Failed to enrich from Audiobookshelf')
+            showToast(err.message || 'Failed to enrich from Audiobookshelf', 'error')
         } finally {
             setEnriching(false)
         }
@@ -150,8 +158,28 @@ function BookDetailPage() {
         book.is_abridged != null && { label: 'Abridged', value: book.is_abridged ? 'Yes' : 'No' },
     ].filter(Boolean)
 
+    const toastColors = {
+        success: 'var(--success)',
+        error: 'var(--error)',
+        warning: 'var(--warning)',
+        info: 'var(--accent)',
+    }
+
     return (
         <div className="book-detail-page">
+            {/* Toast notification */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', right: '24px', zIndex: 1000,
+                    background: 'var(--bg-card)', border: `1px solid ${toastColors[toast.type]}`,
+                    borderLeft: `4px solid ${toastColors[toast.type]}`,
+                    borderRadius: '8px', padding: '12px 16px', maxWidth: '360px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)', fontSize: '0.9rem',
+                    color: 'var(--text-primary)',
+                }}>
+                    {toast.message}
+                </div>
+            )}
             {/* Back button */}
             <button
                 className="btn btn-secondary btn-sm"
