@@ -1,7 +1,6 @@
 package com.booksync.cast
 
 import android.content.Context
-import com.google.android.gms.cast.CastMediaControlIntent
 import com.google.android.gms.cast.framework.CastOptions
 import com.google.android.gms.cast.framework.OptionsProvider
 import com.google.android.gms.cast.framework.SessionProvider
@@ -12,9 +11,15 @@ import com.booksync.MainActivity
 
 /**
  * Provides Cast SDK configuration. Registered via AndroidManifest.xml meta-data.
- * Uses Google's Default Media Receiver — no custom receiver app registration needed.
+ * Uses Google's Default Media Receiver (app ID "CC1AD845") —
+ * no custom receiver app registration needed.
  */
 class CastOptionsProvider : OptionsProvider {
+
+    companion object {
+        // Google's Default Media Receiver app ID
+        const val DEFAULT_MEDIA_RECEIVER_APP_ID = "CC1AD845"
+    }
 
     override fun getCastOptions(context: Context): CastOptions {
         val notificationOptions = NotificationOptions.Builder()
@@ -35,7 +40,7 @@ class CastOptionsProvider : OptionsProvider {
             .build()
 
         return CastOptions.Builder()
-            .setReceiverApplicationId(CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APP_ID)
+            .setReceiverApplicationId(DEFAULT_MEDIA_RECEIVER_APP_ID)
             .setCastMediaOptions(castMediaOptions)
             .build()
     }

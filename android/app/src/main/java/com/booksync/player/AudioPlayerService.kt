@@ -113,7 +113,6 @@ class AudioPlayerService : MediaLibraryService() {
         override fun onSessionResumeFailed(session: CastSession, error: Int) {}
         override fun onSessionResuming(session: CastSession, sessionId: String) {}
         override fun onSessionStarting(session: CastSession) {}
-        override fun onSessionSuspending(session: CastSession, reason: Int) {}
     }
 
     @OptIn(UnstableApi::class)
