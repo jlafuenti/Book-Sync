@@ -21,6 +21,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.mediarouter.app.MediaRouteButton
+import com.google.android.gms.cast.framework.CastButtonFactory
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -266,6 +269,7 @@ class PlayerViewModel @Inject constructor(
         }
 
         val mediaItem = MediaItem.Builder()
+            .setMediaId("pair_${pair.id}")
             .setUri(Uri.fromFile(audioFile))
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -696,6 +700,15 @@ fun PlayerScreen(
                     }
                 },
                 actions = {
+                    // Cast button — shows nearby Cast devices and active cast state
+                    AndroidView(
+                        factory = { ctx ->
+                            MediaRouteButton(ctx).also { button ->
+                                CastButtonFactory.setUpMediaRouteButton(ctx, button)
+                            }
+                        },
+                        modifier = Modifier.size(48.dp),
+                    )
                     FilledTonalIconButton(onClick = {
                         viewModel.stopAndSave()
                         onSwitchToReader()

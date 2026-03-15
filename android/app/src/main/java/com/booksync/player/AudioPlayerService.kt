@@ -85,12 +85,36 @@ class AudioPlayerService : MediaLibraryService() {
 
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var coverArtHelper: CoverArtHelper
+    @Inject lateinit var tokenManager: TokenManager
 
     private var mediaLibrarySession: MediaLibrarySession? = null
+    private var castPlayer: CastPlayer? = null
+    private var exoPlayer: ExoPlayer? = null
     private var sleepTimerJob: Job? = null
     private var autoPositionSaveJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
+
+    private val castSessionListener = object : SessionManagerListener<CastSession> {
+        override fun onSessionStarted(session: CastSession, sessionId: String) {
+            castPlayer?.let { switchToPlayer(it, savePosition = true) }
+        }
+        override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            castPlayer?.let { switchToPlayer(it, savePosition = false) }
+        }
+        override fun onSessionEnded(session: CastSession, error: Int) {
+            exoPlayer?.let { switchToPlayer(it, savePosition = true) }
+        }
+        override fun onSessionSuspended(session: CastSession, reason: Int) {
+            exoPlayer?.let { switchToPlayer(it, savePosition = true) }
+        }
+        override fun onSessionStartFailed(session: CastSession, error: Int) {}
+        override fun onSessionEnding(session: CastSession) {}
+        override fun onSessionResumeFailed(session: CastSession, error: Int) {}
+        override fun onSessionResuming(session: CastSession, sessionId: String) {}
+        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionSuspending(session: CastSession, reason: Int) {}
+    }
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -98,7 +122,18 @@ class AudioPlayerService : MediaLibraryService() {
         sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val initialSpeed = sharedPrefs.getFloat(PREF_SPEED, 1.0f)
 
-        val player = ExoPlayer.Builder(this)
+        val playerListener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) {
+                    startAutoPositionSave()
+                } else {
+                    stopAutoPositionSave()
+                    saveCurrentPositionForAuto()
+                }
+            }
+        }
+
+        val localPlayer = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
@@ -108,24 +143,34 @@ class AudioPlayerService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        localPlayer.playbackParameters = localPlayer.playbackParameters.withSpeed(initialSpeed)
+        localPlayer.addListener(playerListener)
+        exoPlayer = localPlayer
 
-        player.playbackParameters = player.playbackParameters.withSpeed(initialSpeed)
-
-        // Drive the Auto position-save loop on play/pause events
-        player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) {
-                    startAutoPositionSave()
-                } else {
-                    stopAutoPositionSave()
-                    saveCurrentPositionForAuto()
-                }
-            }
-        })
-
-        mediaLibrarySession = MediaLibrarySession.Builder(this, player, BrowseCallback())
+        mediaLibrarySession = MediaLibrarySession.Builder(this, localPlayer, BrowseCallback())
             .setId("AudioPlayerSession")
             .build()
+
+        // Initialize Cast support (may be unavailable on some devices)
+        try {
+            val castContext = CastContext.getSharedInstance(this)
+            val cast = CastPlayer(castContext)
+            cast.addListener(playerListener)
+            cast.setSessionAvailabilityListener(object : SessionAvailabilityListener {
+                override fun onCastSessionAvailable() {}
+                override fun onCastSessionUnavailable() {}
+            })
+            castPlayer = cast
+            castContext.sessionManager.addSessionManagerListener(
+                castSessionListener, CastSession::class.java
+            )
+            // If a cast session is already active when the service starts, switch immediately
+            if (castContext.sessionManager.currentCastSession?.isConnected == true) {
+                switchToPlayer(cast, savePosition = false)
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Cast not available: ${e.message}")
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
@@ -146,13 +191,111 @@ class AudioPlayerService : MediaLibraryService() {
         sleepTimerJob?.cancel()
         stopAutoPositionSave()
         serviceScope.cancel()
+        try {
+            CastContext.getSharedInstance(this).sessionManager
+                .removeSessionManagerListener(castSessionListener, CastSession::class.java)
+        } catch (_: Exception) {}
+        castPlayer?.setSessionAvailabilityListener(null)
+        castPlayer?.release()
+        castPlayer = null
         mediaLibrarySession?.run {
             saveLastPosition(player.currentPosition, player.currentMediaItem?.mediaId)
             player.release()
             release()
         }
         mediaLibrarySession = null
+        exoPlayer = null
         super.onDestroy()
+    }
+
+    // =========================================================
+    // Cast player switching
+    // =========================================================
+
+    /**
+     * Switches the active player between ExoPlayer (local) and CastPlayer (Chromecast).
+     * Saves the current position before switching if [savePosition] is true, then
+     * transfers the current media item and position to the new player.
+     */
+    private fun switchToPlayer(newPlayer: Player, savePosition: Boolean) {
+        val session = mediaLibrarySession ?: return
+        val currentPlayer = session.player
+        if (currentPlayer === newPlayer) return
+
+        if (savePosition) saveCurrentPositionForAuto()
+
+        val currentItem = currentPlayer.currentMediaItem
+        val positionMs = currentPlayer.currentPosition
+        val playWhenReady = currentPlayer.playWhenReady
+        val playbackState = currentPlayer.playbackState
+
+        currentPlayer.stop()
+        session.player = newPlayer
+
+        if (currentItem != null) {
+            // Rebuild the item URI to match the target player:
+            //   CastPlayer → server HTTPS URL (Chromecast can't access local files)
+            //   ExoPlayer  → local file:// URI
+            val itemForNewPlayer = if (newPlayer is CastPlayer) {
+                buildCastMediaItem(currentItem) ?: currentItem
+            } else {
+                buildLocalMediaItem(currentItem) ?: currentItem
+            }
+            newPlayer.setMediaItem(itemForNewPlayer, positionMs)
+            newPlayer.prepare()
+            newPlayer.playWhenReady = playWhenReady && playbackState != Player.STATE_ENDED
+        }
+    }
+
+    /**
+     * Rebuilds a MediaItem with an HTTPS server URL suitable for the Cast receiver.
+     * The JWT token is appended as a query parameter so the Chromecast can authenticate.
+     * Returns null if the mediaId is unrecognised.
+     */
+    private fun buildCastMediaItem(original: MediaItem): MediaItem? {
+        val mediaId = original.mediaId
+        val token = runBlocking { tokenManager.getAccessToken().firstOrNull() } ?: ""
+        val baseUrl = com.booksync.BuildConfig.SERVER_BASE_URL.trimEnd('/')
+
+        val streamUrl = when {
+            mediaId.startsWith("pair_") -> {
+                val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
+                val audiobookId = runBlocking { repository.getPairById(pairId)?.audiobookId }
+                    ?: return null
+                "$baseUrl/api/files/audiobook/$audiobookId?token=$token"
+            }
+            mediaId.startsWith("audiobook_") -> {
+                val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
+                "$baseUrl/api/files/audiobook/$audiobookId?token=$token"
+            }
+            else -> return null
+        }
+
+        return original.buildUpon().setUri(streamUrl).build()
+    }
+
+    /**
+     * Rebuilds a MediaItem with a local file:// URI for ExoPlayer.
+     * Used when switching back from Cast to local playback.
+     * Returns null if the mediaId is unrecognised or the file is missing.
+     */
+    private fun buildLocalMediaItem(original: MediaItem): MediaItem? {
+        val mediaId = original.mediaId
+        val audioFile = when {
+            mediaId.startsWith("pair_") -> {
+                val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
+                val pair = runBlocking { repository.getPairById(pairId) } ?: return null
+                File(filesDir, "audiobooks/${pair.audiobookFilename}")
+            }
+            mediaId.startsWith("audiobook_") -> {
+                val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
+                val audio = runBlocking { repository.getAudiobookById(audiobookId) } ?: return null
+                File(filesDir, "audiobooks/${audio.filename}")
+            }
+            else -> return null
+        }
+        if (!audioFile.exists()) return null
+        return original.buildUpon().setUri(Uri.fromFile(audioFile)).build()
     }
 
     // =========================================================

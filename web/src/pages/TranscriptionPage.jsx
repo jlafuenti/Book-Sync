@@ -259,7 +259,9 @@ function TranscriptionPage({ tab }) {
     const renderPairCard = (pair, showActions = false) => (
         <div key={pair.id} className="card">
             <div style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: '8px' }}>
-                {pair.ebook.title}
+                <Link to={`/book/ebook/${pair.ebook.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                    {pair.ebook.title}
+                </Link>
             </div>
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
                 📚 {pair.ebook.format} · 🎧 {pair.audiobook.format}
@@ -380,7 +382,9 @@ function TranscriptionPage({ tab }) {
                                 {/* Title + formats */}
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontWeight: 500, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {pair.ebook.title}
+                                        <Link to={`/book/ebook/${pair.ebook.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                                            {pair.ebook.title}
+                                        </Link>
                                     </div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
                                         📚 {pair.ebook.format} · 🎧 {pair.audiobook.format}
