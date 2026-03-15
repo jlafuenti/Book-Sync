@@ -86,6 +86,10 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.0")
     implementation("androidx.media3:media3-session:1.5.0")
     implementation("androidx.media3:media3-ui:1.5.0")
+    implementation("androidx.media3:media3-cast:1.5.0")
+
+    // Google Cast Framework (Chromecast)
+    implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
 
     // WorkManager (Offline Sync)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
