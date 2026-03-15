@@ -2041,9 +2041,9 @@ async def resolve_metadata_discrepancy(
         
         # Write back to files
         if ebook_changed:
-            _write_ebook_metadata(ebook)
+            _write_ebook_metadata(ebook.file_path, ebook)
         if audio_changed:
-            _write_audiobook_metadata(audiobook)
+            _write_audiobook_metadata(audiobook.file_path, audiobook)
             
     return {"message": "Discrepancies resolved successfully"}
 
