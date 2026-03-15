@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getPairs, startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue } from '../api'
 
@@ -8,6 +8,8 @@ function TranscriptionPage({ tab }) {
     const [searchQuery, setSearchQuery] = useState('')
     const [error, setError] = useState('')
     const [statuses, setStatuses] = useState({})
+    const [viewMode, setViewMode] = useState('series') // 'series' | 'flat'
+    const [expandedSeries, setExpandedSeries] = useState(new Set())
     const pollingRef = useRef({})
 
     const activeTab = tab || 'not-transcribed'
@@ -51,7 +53,6 @@ function TranscriptionPage({ tab }) {
     useEffect(() => {
         loadData()
         return () => {
-            // Clean up polling intervals
             Object.values(pollingRef.current).forEach(clearInterval)
         }
     }, [])
@@ -66,7 +67,6 @@ function TranscriptionPage({ tab }) {
 
                 if (s.status === 'synced' || s.status === 'error') {
                     stopPolling(pairId)
-                    // Refresh main list to update status badges
                     const p = await getPairs()
                     setPairs(p)
                 }
@@ -87,12 +87,9 @@ function TranscriptionPage({ tab }) {
         setError('')
         try {
             await startTranscription(pairId)
-
-            // Optimistically update local pair status
             setPairs(prev => prev.map(p =>
                 p.id === pairId ? { ...p, status: 'transcribing' } : p
             ))
-
             startPolling(pairId)
         } catch (err) {
             setError(err.message)
@@ -105,7 +102,17 @@ function TranscriptionPage({ tab }) {
         try {
             const ids = notTranscribedPairs.map(p => p.id)
             await addToQueue(ids)
-            // Refresh to pick up status changes
+            loadData()
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    const handleQueueSeries = async (seriesPairs) => {
+        setError('')
+        try {
+            const ids = seriesPairs.map(p => p.id)
+            await addToQueue(ids)
             loadData()
         } catch (err) {
             setError(err.message)
@@ -128,7 +135,6 @@ function TranscriptionPage({ tab }) {
                 }
             }))
 
-            // Refresh list to sync state
             loadData()
 
         } catch (err) {
@@ -136,10 +142,20 @@ function TranscriptionPage({ tab }) {
         }
     }
 
+    const toggleSeriesExpanded = (seriesName) => {
+        setExpandedSeries(prev => {
+            const next = new Set(prev)
+            if (next.has(seriesName)) {
+                next.delete(seriesName)
+            } else {
+                next.add(seriesName)
+            }
+            return next
+        })
+    }
+
     const getStatusDisplay = (pair) => {
         const localStatus = statuses[pair.id]
-
-        // If we have a local status update, use it over the prop
         const currentStatus = localStatus?.status || pair.status
         const message = localStatus?.message || (currentStatus === 'synced' ? 'Sync complete' : null)
         const progress = localStatus?.progress
@@ -180,30 +196,65 @@ function TranscriptionPage({ tab }) {
         return ['auto_matched', 'manual_matched', 'error'].includes(pair.status)
     }
 
-    if (loading) {
-        return <div className="loading-page"><div className="spinner"></div> Loading...</div>
-    }
+    const matchedPairs = useMemo(() =>
+        pairs.filter(p => p.status !== 'unmatched'),
+    [pairs])
 
-    // Only pairs that are matched (not raw unmatched ebooks/audiobooks)
-    const matchedPairs = pairs.filter(p => p.status !== 'unmatched')
-    
-    // Filter by search query
-    const filteredPairs = matchedPairs.filter(p => {
+    // Search includes series name in addition to title and author
+    const filteredPairs = useMemo(() => matchedPairs.filter(p => {
         if (!searchQuery) return true
         const q = searchQuery.toLowerCase()
+        const series = (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
         return (
             (p.ebook?.title || '').toLowerCase().includes(q) ||
             (p.audiobook?.title || '').toLowerCase().includes(q) ||
-            (p.ebook?.author || '').toLowerCase().includes(q)
+            (p.ebook?.author || '').toLowerCase().includes(q) ||
+            series.includes(q)
         )
-    })
+    }), [matchedPairs, searchQuery])
 
-    // Categorize filtered pairs into tabs
-    const notTranscribedPairs = filteredPairs.filter(p =>
-        ['auto_matched', 'manual_matched', 'error'].includes(p.status)
-    )
-    const inProgress = filteredPairs.filter(p => p.status === 'transcribing')
-    const transcribed = filteredPairs.filter(p => p.status === 'synced')
+    const notTranscribedPairs = useMemo(() =>
+        filteredPairs.filter(p => ['auto_matched', 'manual_matched', 'error'].includes(p.status)),
+    [filteredPairs])
+
+    const inProgress = useMemo(() =>
+        filteredPairs.filter(p => p.status === 'transcribing'),
+    [filteredPairs])
+
+    const transcribed = useMemo(() =>
+        filteredPairs.filter(p => p.status === 'synced'),
+    [filteredPairs])
+
+    // Series grouping for the Not Transcribed tab (must be before early return)
+    const { seriesGroups, noSeriesPairs } = useMemo(() => {
+        const groups = {}
+        const noSeries = []
+
+        notTranscribedPairs.forEach(pair => {
+            const series = pair.ebook?.series || pair.audiobook?.series
+            const seriesIndex = pair.ebook?.series_index ?? pair.audiobook?.series_index
+            if (series) {
+                if (!groups[series]) groups[series] = { name: series, pairs: [] }
+                groups[series].pairs.push({ ...pair, _seriesIndex: seriesIndex })
+            } else {
+                noSeries.push(pair)
+            }
+        })
+
+        Object.values(groups).forEach(g => {
+            g.pairs.sort((a, b) => (a._seriesIndex ?? 999) - (b._seriesIndex ?? 999))
+        })
+
+        const sortedGroups = Object.values(groups).sort((a, b) =>
+            a.name.localeCompare(b.name)
+        )
+
+        return { seriesGroups: sortedGroups, noSeriesPairs: noSeries }
+    }, [notTranscribedPairs])
+
+    if (loading) {
+        return <div className="loading-page"><div className="spinner"></div> Loading...</div>
+    }
 
     const renderPairCard = (pair, showActions = false) => (
         <div key={pair.id} className="card">
@@ -263,6 +314,102 @@ function TranscriptionPage({ tab }) {
         </div>
     )
 
+    const renderSeriesCard = (seriesName, seriesPairs) => {
+        const isCollapsed = expandedSeries.has(seriesName)
+        const canQueueAny = seriesPairs.some(p => canTranscribe(p))
+
+        return (
+            <div key={seriesName} className="card" style={{ marginBottom: '16px' }}>
+                {/* Series header */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                }}
+                    onClick={() => toggleSeriesExpanded(seriesName)}
+                >
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '1.05rem', fontWeight: 600 }}>📖 {seriesName}</span>
+                        <span style={{
+                            fontSize: '0.78rem',
+                            background: 'var(--border)',
+                            borderRadius: '12px',
+                            padding: '2px 8px',
+                            color: 'var(--text-secondary)',
+                        }}>
+                            {seriesPairs.length} {seriesPairs.length === 1 ? 'book' : 'books'}
+                        </span>
+                    </div>
+                    {canQueueAny && (
+                        <button
+                            className="btn btn-primary btn-sm"
+                            onClick={(e) => { e.stopPropagation(); handleQueueSeries(seriesPairs.filter(p => canTranscribe(p))) }}
+                        >
+                            📋 Queue All {seriesPairs.filter(p => canTranscribe(p)).length}
+                        </button>
+                    )}
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        {isCollapsed ? '▶' : '▼'}
+                    </span>
+                </div>
+
+                {/* Book rows */}
+                {!isCollapsed && (
+                    <div style={{ marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
+                        {seriesPairs.map(pair => (
+                            <div key={pair.id} style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '12px',
+                                padding: '8px 0',
+                                borderBottom: '1px solid var(--border)',
+                            }}>
+                                {/* Series index */}
+                                <div style={{
+                                    width: '28px',
+                                    textAlign: 'center',
+                                    fontSize: '0.8rem',
+                                    color: 'var(--text-muted)',
+                                    flexShrink: 0,
+                                }}>
+                                    {pair._seriesIndex != null ? `#${pair._seriesIndex}` : '—'}
+                                </div>
+
+                                {/* Title + formats */}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontWeight: 500, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {pair.ebook.title}
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                        📚 {pair.ebook.format} · 🎧 {pair.audiobook.format}
+                                    </div>
+                                </div>
+
+                                {/* Status badge */}
+                                <span className={`badge badge-${pair.status}`} style={{ flexShrink: 0 }}>
+                                    {pair.status === 'error' ? '❌ Error' : '⏸️ Ready'}
+                                </span>
+
+                                {/* Action button */}
+                                {canTranscribe(pair) && (
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        style={{ flexShrink: 0 }}
+                                        onClick={() => handleStart(pair.id)}
+                                    >
+                                        📋 {pair.status === 'error' ? 'Retry' : 'Queue'}
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        )
+    }
+
     return (
         <div>
             <div className="page-header">
@@ -301,7 +448,7 @@ function TranscriptionPage({ tab }) {
                 <input
                     type="text"
                     className="form-control"
-                    placeholder="Search books by title or author..."
+                    placeholder="Search by title, author, or series..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     style={{ width: '100%', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border)' }}
@@ -311,16 +458,6 @@ function TranscriptionPage({ tab }) {
             {/* ====== Not Transcribed Tab ====== */}
             {activeTab === 'not-transcribed' && (
                 <div>
-                    {notTranscribedPairs.length > 1 && (
-                        <div style={{ marginBottom: '16px', textAlign: 'right' }}>
-                            <button
-                                className="btn btn-primary"
-                                onClick={handleAddAllToQueue}
-                            >
-                                📋 Add All {notTranscribedPairs.length} to Queue
-                            </button>
-                        </div>
-                    )}
                     {notTranscribedPairs.length === 0 ? (
                         <div className="card">
                             <div className="empty-state">
@@ -334,9 +471,55 @@ function TranscriptionPage({ tab }) {
                             </div>
                         </div>
                     ) : (
-                        <div className="card-grid">
-                            {notTranscribedPairs.map(pair => renderPairCard(pair, true))}
-                        </div>
+                        <>
+                            {/* Controls row */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                                {/* View toggle */}
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button
+                                        className={`btn btn-sm ${viewMode === 'series' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setViewMode('series')}
+                                    >
+                                        📚 By Series
+                                    </button>
+                                    <button
+                                        className={`btn btn-sm ${viewMode === 'flat' ? 'btn-primary' : 'btn-secondary'}`}
+                                        onClick={() => setViewMode('flat')}
+                                    >
+                                        ☰ All Books
+                                    </button>
+                                </div>
+
+                                {/* Queue all */}
+                                {notTranscribedPairs.length > 1 && (
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={handleAddAllToQueue}
+                                    >
+                                        📋 Queue All {notTranscribedPairs.length}
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Series view */}
+                            {viewMode === 'series' && (
+                                <div>
+                                    {seriesGroups.map(group =>
+                                        renderSeriesCard(group.name, group.pairs)
+                                    )}
+                                    {noSeriesPairs.length > 0 &&
+                                        renderSeriesCard('No Series', noSeriesPairs)
+                                    }
+                                </div>
+                            )}
+
+                            {/* Flat view */}
+                            {viewMode === 'flat' && (
+                                <div className="card-grid">
+                                    {notTranscribedPairs.map(pair => renderPairCard(pair, true))}
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             )}
