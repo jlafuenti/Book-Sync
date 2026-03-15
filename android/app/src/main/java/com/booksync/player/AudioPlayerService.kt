@@ -193,8 +193,8 @@ class AudioPlayerService : MediaLibraryService() {
         stopAutoPositionSave()
         serviceScope.cancel()
         try {
-            CastContext.getSharedInstance().sessionManager
-                .removeSessionManagerListener(castSessionListener, CastSession::class.java)
+            CastContext.getSharedInstance()?.sessionManager
+                ?.removeSessionManagerListener(castSessionListener, CastSession::class.java)
         } catch (_: Exception) {}
         castPlayer?.setSessionAvailabilityListener(null)
         castPlayer?.release()

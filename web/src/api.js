@@ -390,6 +390,7 @@ export async function enrichAudiobookFromAbs(id) {
         try { const e = await resp.json(); if (e.detail) msg = e.detail; } catch(e) {}
         throw new Error(msg);
     }
+    // Returns { status, message, book }
     return resp.json();
 }
 
