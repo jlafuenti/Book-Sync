@@ -1069,6 +1069,19 @@ async def auto_match_books(db: AsyncSession) -> int:
                 break
         return t
 
+    def _normalize_author(text: str) -> str:
+        """Normalize author name for comparison.
+        Strips punctuation used in initials/suffixes (L.E. → le, Jr. → jr)
+        so that 'L.E. Modesitt Jr.' and 'L. E. Modesitt, Jr.' compare as equal.
+        """
+        if not text:
+            return ""
+        import re
+        t = text.lower()
+        t = re.sub(r'[.,]', '', t)       # remove periods and commas
+        t = re.sub(r'\s+', ' ', t).strip()
+        return t
+
     # Check if auto-transcribe is enabled
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
     setting = result.scalar_one_or_none()
@@ -1098,7 +1111,7 @@ async def auto_match_books(db: AsyncSession) -> int:
         best_match = None
         best_score = 0
         eb_title = _normalize_for_comparison(ebook.title)
-        eb_author = _normalize_for_comparison(ebook.author)
+        eb_author_norm = _normalize_author(ebook.author)
 
         for audiobook in unpaired_audiobooks:
             if audiobook.id in matched_audiobook_ids:
@@ -1106,15 +1119,23 @@ async def auto_match_books(db: AsyncSession) -> int:
 
             ab_title = _normalize_for_comparison(audiobook.title)
 
+            # Author gate: if both books have authors they must be similar.
+            # token_set_ratio handles initials/punctuation variants well
+            # (e.g. "L.E. Modesitt Jr." matches "L. E. Modesitt, Jr.").
+            if eb_author_norm and audiobook.author:
+                ab_author_norm = _normalize_author(audiobook.author)
+                author_score = fuzz.token_set_ratio(eb_author_norm, ab_author_norm)
+                if author_score < 70:
+                    continue  # Authors too different — don't pair regardless of title
+            else:
+                author_score = 0
+
             # Compare titles using fuzzy matching (token sort handles word order)
             score = fuzz.token_sort_ratio(eb_title, ab_title)
-            
-            # Boost score if authors also match
-            if eb_author and audiobook.author:
-                ab_author = _normalize_for_comparison(audiobook.author)
-                author_score = fuzz.token_sort_ratio(eb_author, ab_author)
-                if author_score >= 80:
-                    score = min(100, score + 10)
+
+            # Boost score if authors also match well
+            if author_score >= 80:
+                score = min(100, score + 10)
 
             if score > best_score and score >= 75:  # 75% similarity threshold
                 best_score = score
