@@ -1669,7 +1669,6 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
         
     except Exception as e:
         logger.error(f"[write-back] Failed to write audio metadata: {e}")
-        raise
 
 @router.patch("/ebooks/{book_id}", response_model=EBookResponse)
 async def update_ebook_metadata(
