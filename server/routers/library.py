@@ -39,7 +39,7 @@ from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
     EBookDetailResponse, AudioBookDetailResponse,
-    MetadataDiscrepancy, ResolveDiscrepancyRequest, DiscrepantField
+    MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField
 )
 from routers.auth import get_current_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
@@ -1951,7 +1951,10 @@ async def get_metadata_discrepancies(
             continue
             
         diffs = []
+        ignored = set(pair.ignored_fields or [])
         for field in FIELDS_TO_COMPARE:
+            if field in ignored:
+                continue
             ebook_val = getattr(pair.ebook, field)
             audio_val = getattr(pair.audiobook, field)
             
@@ -2046,6 +2049,26 @@ async def resolve_metadata_discrepancy(
             _write_audiobook_metadata(audiobook.file_path, audiobook)
             
     return {"message": "Discrepancies resolved successfully"}
+
+
+@router.post("/pairs/{pair_id}/ignore-discrepancies")
+async def ignore_metadata_discrepancies(
+    pair_id: int,
+    req: IgnoreDiscrepancyRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Mark specific metadata fields as permanently ignored for a pair."""
+    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    pair = result.scalar_one_or_none()
+    if not pair:
+        raise HTTPException(status_code=404, detail="Pair not found")
+
+    existing = set(pair.ignored_fields or [])
+    existing.update(req.fields)
+    pair.ignored_fields = list(existing)
+    await db.commit()
+    return {"message": "Fields ignored successfully"}
 
 
 # ---------------------------------------------------------------------------

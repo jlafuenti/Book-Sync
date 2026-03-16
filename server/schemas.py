@@ -386,3 +386,6 @@ class ResolveDiscrepancyRequest(BaseModel):
     # Dictionaries mapping field_name to the resolved value
     ebook_updates: dict[str, Optional[str]]
     audiobook_updates: dict[str, Optional[str]]
+
+class IgnoreDiscrepancyRequest(BaseModel):
+    fields: List[str]

@@ -491,6 +491,16 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
     return resp.json();
 }
 
+export async function ignoreMetadataDiscrepancies(pairId, fields) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}/ignore-discrepancies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+    });
+    if (!resp.ok) throw new Error('Failed to ignore metadata discrepancies');
+    return resp.json();
+}
+
 // ============ Delete & Verify ============
 
 export async function deleteEbook(id, deleteFile = false) {

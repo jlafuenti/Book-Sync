@@ -4,7 +4,7 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float
+from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -121,6 +121,7 @@ class BookPair(Base):
     )
     matched_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    ignored_fields: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
     # Relationships
     ebook = relationship("EBook", back_populates="pairs")
