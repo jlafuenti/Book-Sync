@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, deletePair } from '../api';
+import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, deletePair } from '../api';
 
 export default function MetadataCleanupModal({ onClose, onComplete }) {
     const [discrepancies, setDiscrepancies] = useState([]);
@@ -63,7 +63,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                 audiobook_updates
             });
 
-            handleNext();
+            advance();
         } catch (err) {
             setError(err.message);
         } finally {
@@ -71,11 +71,28 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
         }
     };
 
-    const handleNext = () => {
+    const advance = () => {
         if (currentIndex < discrepancies.length - 1) {
             setCurrentIndex(prev => prev + 1);
         } else {
-            onComplete(); // Done resolving all
+            onComplete();
+        }
+    };
+
+    const handleIgnore = async () => {
+        const currentPair = discrepancies[currentIndex];
+        if (!currentPair) return;
+
+        setSaving(true);
+        setError('');
+        try {
+            const fields = currentPair.discrepancies.map(d => d.field);
+            await ignoreMetadataDiscrepancies(currentPair.pair_id, fields);
+            advance();
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -190,8 +207,8 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                 {discrepancies.length > 0 && !loading && !error && (
                     <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button className="btn btn-secondary" onClick={handleNext} disabled={saving}>
-                                Skip
+                            <button className="btn btn-secondary" onClick={handleIgnore} disabled={saving}>
+                                {saving ? 'Ignoring...' : 'Ignore'}
                             </button>
                             <button className="btn btn-danger" onClick={handleUnpair} disabled={saving}>
                                 {saving ? 'Unpairing...' : '✂️ Unpair'}

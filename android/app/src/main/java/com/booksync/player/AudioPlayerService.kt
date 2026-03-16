@@ -150,6 +150,9 @@ class AudioPlayerService : MediaLibraryService() {
         mediaLibrarySession = MediaLibrarySession.Builder(this, localPlayer, BrowseCallback())
             .setId("AudioPlayerSession")
             .build()
+        // Register the session so the legacy MediaBrowserService path (used by Android Auto)
+        // can find it via getSessions(). onGetSession() alone is not called on the legacy path.
+        addSession(mediaLibrarySession!!)
 
         // Hook up CastPlayer if Cast SDK was successfully initialized (in BookSyncApp).
         // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
