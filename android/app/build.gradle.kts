@@ -85,10 +85,10 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.4")
 
     // Media3 / ExoPlayer (Audio Playback)
-    implementation("androidx.media3:media3-exoplayer:1.5.0")
-    implementation("androidx.media3:media3-session:1.5.0")
-    implementation("androidx.media3:media3-ui:1.5.0")
-    implementation("androidx.media3:media3-cast:1.5.0")
+    implementation("androidx.media3:media3-exoplayer:1.7.1")
+    implementation("androidx.media3:media3-session:1.7.1")
+    implementation("androidx.media3:media3-ui:1.7.1")
+    implementation("androidx.media3:media3-cast:1.7.1")
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
@@ -108,9 +108,6 @@ dependencies {
     
     // HTML Parsing
     implementation("org.jsoup:jsoup:1.17.2")
-
-    // Automotive / Android Auto
-    implementation("androidx.car.app:app:1.4.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

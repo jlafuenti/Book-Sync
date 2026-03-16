@@ -150,9 +150,6 @@ class AudioPlayerService : MediaLibraryService() {
         mediaLibrarySession = MediaLibrarySession.Builder(this, localPlayer, BrowseCallback())
             .setId("AudioPlayerSession")
             .build()
-        // Register the session so the legacy MediaBrowserService path (used by Android Auto)
-        // can find it via getSessions(). onGetSession() alone is not called on the legacy path.
-        addSession(mediaLibrarySession!!)
 
         // Hook up CastPlayer if Cast SDK was successfully initialized (in BookSyncApp).
         // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
@@ -453,7 +450,7 @@ class AudioPlayerService : MediaLibraryService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo
         ): MediaSession.ConnectionResult {
-            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(CMD_SET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SET_SLEEP_TIMER, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_SPEED, Bundle.EMPTY))
@@ -594,17 +591,29 @@ class AudioPlayerService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val item = mediaItems.getOrNull(startIndex)
-            val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
-            // Honour an explicit seek if provided; otherwise resume from last saved position
-            val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
-                startPositionMs
-            } else {
-                resumeMs
+            val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+            serviceScope.launch(Dispatchers.IO) {
+                // Legacy Android Auto path (onPlayFromMediaId) sends MediaItems with only
+                // mediaId set and no URI. Resolve them to full items with file:// URIs.
+                val resolvedItems = mediaItems.map { item ->
+                    if (item.localConfiguration?.uri == null) {
+                        resolveMediaItem(item.mediaId) ?: item
+                    } else {
+                        item
+                    }
+                }
+                val item = resolvedItems.getOrNull(startIndex)
+                val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
+                val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
+                    startPositionMs
+                } else {
+                    resumeMs
+                }
+                future.set(
+                    MediaSession.MediaItemsWithStartPosition(resolvedItems, startIndex, resolvedPosition)
+                )
             }
-            return Futures.immediateFuture(
-                MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, resolvedPosition)
-            )
+            return future
         }
     }
 
