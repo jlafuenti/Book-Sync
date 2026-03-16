@@ -10,6 +10,7 @@ import TranscriptionQueuePage from './pages/TranscriptionQueuePage'
 import SystemPage from './pages/SystemPage'
 import SeriesPage from './pages/SeriesPage'
 import BookDetailPage from './pages/BookDetailPage'
+import UnpairedPage from './pages/UnpairedPage'
 
 function App() {
     const [user, setUser] = useState(null)
@@ -91,6 +92,7 @@ function App() {
                     {isSection('/pairs') && (
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
+                            <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
                             <Link to="/pairs/unpaired-books" className={subNavClass('/pairs/unpaired-books')}>📚 Unpaired Books</Link>
                             <Link to="/pairs/unpaired-audiobooks" className={subNavClass('/pairs/unpaired-audiobooks')}>🎧 Unpaired Audiobooks</Link>
                         </div>
@@ -140,6 +142,7 @@ function App() {
 
                     {/* Book Pairs routes */}
                     <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />
+                    <Route path="/pairs/unpaired" element={<UnpairedPage />} />
                     <Route path="/pairs/unpaired-books" element={<PairsPage tab="unpaired-books" />} />
                     <Route path="/pairs/unpaired-audiobooks" element={<PairsPage tab="unpaired-audiobooks" />} />
 
