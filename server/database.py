@@ -92,3 +92,6 @@ async def init_db():
 
         # Transcription Queue migration
         await conn.execute(text("ALTER TABLE transcription_queue ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0"))
+
+        # Book pairs migration
+        await conn.execute(text("ALTER TABLE book_pairs ADD COLUMN IF NOT EXISTS ignored_fields JSONB NOT NULL DEFAULT '[]'::jsonb"))
