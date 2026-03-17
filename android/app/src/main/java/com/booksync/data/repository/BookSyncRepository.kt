@@ -4,6 +4,8 @@ import android.content.Context
 import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.*
+import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +19,8 @@ import javax.inject.Singleton
  * Implements offline-first pattern: writes go to local + sync queue,
  * reads prefer local cache.
  */
+private const val REPO_TAG = "BookSyncRepository"
+
 @Singleton
 class BookSyncRepository @Inject constructor(
     private val api: BookSyncApi,
@@ -28,7 +32,11 @@ class BookSyncRepository @Inject constructor(
     private val pendingSyncDao: PendingSyncDao,
     private val userProgressDao: UserProgressDao,
     @param:ApplicationContext private val context: Context,
+    private val diagnosticLogger: DiagnosticLogger,
 ) {
+    private fun log(msg: String) = diagnosticLogger.i(LogChannel.APP, REPO_TAG, msg)
+    private fun logW(msg: String) = diagnosticLogger.w(LogChannel.APP, REPO_TAG, msg)
+    private fun logE(msg: String, t: Throwable? = null) = diagnosticLogger.e(LogChannel.APP, REPO_TAG, msg, t)
     // ============ Library ============
 
     /** Get all book pairs as a reactive Flow from local cache. */
@@ -39,6 +47,7 @@ class BookSyncRepository @Inject constructor(
 
     /** Refresh book pairs from the server and update local cache. */
     suspend fun refreshPairs() {
+        log("refreshPairs — fetching from server")
         val remotePairs = api.getPairs()
         val entities = remotePairs.map { pair ->
             val existing = bookPairDao.getPairById(pair.id)
@@ -62,6 +71,9 @@ class BookSyncRepository @Inject constructor(
             )
         }
         bookPairDao.upsertPairs(entities)
+        val remoteIds = remotePairs.map { it.id }
+        if (remoteIds.isEmpty()) bookPairDao.deleteAll() else bookPairDao.deleteOrphansExcept(remoteIds)
+        log("refreshPairs — saved ${entities.size} pairs to cache")
     }
     
     /** Get all ebooks as a reactive Flow from local cache. */
@@ -72,6 +84,7 @@ class BookSyncRepository @Inject constructor(
 
     /** Refresh ebooks from the server and update local cache. */
     suspend fun refreshEbooks() {
+        log("refreshEbooks — fetching from server")
         val remoteEbooks = api.getEbooks()
         val entities = remoteEbooks.map { ebook ->
             val existing = eBookDao.getEBookById(ebook.id)
@@ -89,6 +102,8 @@ class BookSyncRepository @Inject constructor(
             )
         }
         eBookDao.upsertEBooks(entities)
+        val remoteIds = remoteEbooks.map { it.id }
+        if (remoteIds.isEmpty()) eBookDao.deleteAll() else eBookDao.deleteOrphansExcept(remoteIds)
     }
 
     /** Get all audiobooks as a reactive Flow from local cache. */
@@ -119,6 +134,7 @@ class BookSyncRepository @Inject constructor(
 
     /** Refresh audiobooks from the server and update local cache. */
     suspend fun refreshAudiobooks() {
+        log("refreshAudiobooks — fetching from server")
         val remoteAudiobooks = api.getAudiobooks()
         val entities = remoteAudiobooks.map { audio ->
             val existing = audioBookDao.getAudioBookById(audio.id)
@@ -137,6 +153,8 @@ class BookSyncRepository @Inject constructor(
             )
         }
         audioBookDao.upsertAudioBooks(entities)
+        val remoteIds = remoteAudiobooks.map { it.id }
+        if (remoteIds.isEmpty()) audioBookDao.deleteAll() else audioBookDao.deleteOrphansExcept(remoteIds)
     }
 
     // ============ Pairing ============
@@ -185,8 +203,10 @@ class BookSyncRepository @Inject constructor(
 
     /** Download the ebook file for a book pair. */
     suspend fun downloadEbook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
+        log("downloadEbook — pairId=${pair.id} file=${pair.ebookFilename}")
         val response = api.downloadEbook(pair.ebookId)
         if (!response.isSuccessful) {
+            logE("downloadEbook failed — HTTP ${response.code()}")
             throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
         }
         val dir = File(context.filesDir, "ebooks")
@@ -212,6 +232,7 @@ class BookSyncRepository @Inject constructor(
             }
         }
         bookPairDao.setEbookDownloaded(pair.id, true)
+        log("downloadEbook complete — ${file.length() / 1024}KB")
         return file
     }
 
@@ -254,8 +275,10 @@ class BookSyncRepository @Inject constructor(
 
     /** Download the audiobook file for a book pair. */
     suspend fun downloadAudiobook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
+        log("downloadAudiobook — pairId=${pair.id} file=${pair.audiobookFilename}")
         val response = api.downloadAudiobook(pair.audiobookId)
         if (!response.isSuccessful) {
+            logE("downloadAudiobook failed — HTTP ${response.code()}")
             throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
         }
         val dir = File(context.filesDir, "audiobooks")
@@ -286,6 +309,7 @@ class BookSyncRepository @Inject constructor(
             }
         }
         bookPairDao.setAudiobookDownloaded(pair.id, true)
+        log("downloadAudiobook complete — ${file.length() / 1024}KB")
         return file
     }
 
@@ -325,6 +349,7 @@ class BookSyncRepository @Inject constructor(
 
     /** Download the sync map for a book pair. */
     suspend fun downloadSyncMap(pairId: Int) {
+        log("downloadSyncMap — pairId=$pairId")
         val syncMap = api.getSyncMap(pairId)
 
         // Clear old sync points
@@ -343,6 +368,7 @@ class BookSyncRepository @Inject constructor(
         }
         syncPointDao.insertPoints(entities)
         bookPairDao.setSyncMapDownloaded(pairId, true)
+        log("downloadSyncMap complete — ${entities.size} sync points saved")
     }
 
     fun getEbookFile(pair: BookPairEntity): File =
@@ -400,8 +426,8 @@ class BookSyncRepository @Inject constructor(
                     syncedToServer = true,
                 )
             )
-        } catch (_: Exception) {
-            // Offline — use local cache
+        } catch (e: Exception) {
+            logW("refreshBookmark offline — using local cache (${e.message})")
         }
     }
 
@@ -458,8 +484,8 @@ class BookSyncRepository @Inject constructor(
                 )
             )
             bookmarkDao.upsertBookmark(merged.copy(syncedToServer = true))
-        } catch (_: Exception) {
-            // Offline — queue for later sync
+        } catch (e: Exception) {
+            logW("updateBookmark sync failed — queuing for later (${e.message})")
             pendingSyncDao.insert(
                 PendingSyncEntity(
                     bookPairId = pairId,
@@ -719,8 +745,8 @@ class BookSyncRepository @Inject constructor(
 
     /** Process pending sync queue — called by WorkManager. */
     suspend fun processPendingSync() {
-        // ... (Process Bookmarks)
         val pendingBookmarks = pendingSyncDao.getAllPending()
+        if (pendingBookmarks.isNotEmpty()) log("processPendingSync — ${pendingBookmarks.size} pending bookmarks")
         for (sync in pendingBookmarks) {
             try {
                 api.updateBookmark(
@@ -734,8 +760,10 @@ class BookSyncRepository @Inject constructor(
                     )
                 )
                 pendingSyncDao.delete(sync)
-            } catch (_: Exception) {
-                break // Stop processing if still offline
+                log("processPendingSync — bookmark pairId=${sync.bookPairId} synced")
+            } catch (e: Exception) {
+                logW("processPendingSync — still offline, stopping (${e.message})")
+                break
             }
         }
 

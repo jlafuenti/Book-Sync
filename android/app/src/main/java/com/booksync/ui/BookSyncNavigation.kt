@@ -24,6 +24,7 @@ import com.booksync.ui.audiobooks.AudiobooksScreen
 import com.booksync.ui.downloaded.DownloadedScreen
 import com.booksync.ui.settings.SettingsScreen
 import com.booksync.ui.series.SeriesScreen
+import com.booksync.ui.diagnostics.DiagnosticsScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LibraryBooks
@@ -236,8 +237,17 @@ fun BookSyncNavigation() {
 
         composable("settings") {
             SettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onAutoDiagnosticsClick = { navController.navigate("diagnostics/AUTO") },
+                onAppDiagnosticsClick  = { navController.navigate("diagnostics/APP") }
             )
+        }
+
+        composable(
+            "diagnostics/{channel}",
+            arguments = listOf(navArgument("channel") { type = NavType.StringType })
+        ) {
+            DiagnosticsScreen(onBack = { navController.popBackStack() })
         }
 
         composable(

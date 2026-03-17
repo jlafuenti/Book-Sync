@@ -17,6 +17,10 @@ import android.content.Context
 import androidx.work.*
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
+import retrofit2.HttpException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import javax.inject.Inject
 
 /**
@@ -62,6 +66,9 @@ class SeriesViewModel @Inject constructor(
 
     private val _refreshing = MutableStateFlow(false)
     val refreshing = _refreshing.asStateFlow()
+
+    private val _refreshMessage = MutableStateFlow<String?>(null)
+    val refreshMessage = _refreshMessage.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
@@ -124,13 +131,27 @@ class SeriesViewModel @Inject constructor(
         viewModelScope.launch {
             _refreshing.value = true
             try {
-                // Refresh all three
                 repository.refreshPairs()
                 repository.refreshEbooks()
                 repository.refreshAudiobooks()
-            } catch (_: Exception) {}
+                _refreshMessage.value = "Library refreshed"
+            } catch (e: UnknownHostException) {
+                _refreshMessage.value = "Server unreachable: could not resolve host"
+            } catch (e: ConnectException) {
+                _refreshMessage.value = "Server unreachable: connection refused"
+            } catch (e: SocketTimeoutException) {
+                _refreshMessage.value = "Server unreachable: connection timed out"
+            } catch (e: HttpException) {
+                _refreshMessage.value = "Server error: HTTP ${e.code()}"
+            } catch (e: Exception) {
+                _refreshMessage.value = "Refresh failed: ${e.message ?: "unknown error"}"
+            }
             _refreshing.value = false
         }
+    }
+
+    fun clearRefreshMessage() {
+        _refreshMessage.value = null
     }
 
     fun updateSearch(query: String) { _searchQuery.value = query }

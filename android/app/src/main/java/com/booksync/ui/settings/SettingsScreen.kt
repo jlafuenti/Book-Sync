@@ -17,6 +17,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onAutoDiagnosticsClick: () -> Unit = {},
+    onAppDiagnosticsClick: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val autoCleanupEbooks by viewModel.autoCleanupEbooks.collectAsState()
@@ -62,6 +64,27 @@ fun SettingsScreen(
                     checked = autoCleanupAudiobooks,
                     onCheckedChange = { viewModel.setAutoCleanupAudiobooks(it) }
                 )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = "Diagnostics",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                OutlinedButton(
+                    onClick = onAutoDiagnosticsClick,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Android Auto Diagnostics")
+                }
+                OutlinedButton(
+                    onClick = onAppDiagnosticsClick,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("BookSync App Diagnostics")
+                }
             }
         }
     }

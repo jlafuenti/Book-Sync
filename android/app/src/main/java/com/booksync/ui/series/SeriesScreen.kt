@@ -17,6 +17,8 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
 
@@ -27,6 +29,7 @@ fun SeriesScreen(
     viewModel: SeriesViewModel = hiltViewModel(),
 ) {
     val refreshing by viewModel.refreshing.collectAsState()
+    val refreshMessage by viewModel.refreshMessage.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val sortBy by viewModel.sortBy.collectAsState()
     val seriesData by viewModel.seriesData.collectAsState()
@@ -35,6 +38,14 @@ fun SeriesScreen(
     val pairingError by viewModel.pairingError.collectAsState()
 
     val (allGroups, unseriedItems) = seriesData
+
+    val context = LocalContext.current
+    LaunchedEffect(refreshMessage) {
+        if (refreshMessage != null) {
+            Toast.makeText(context, refreshMessage, Toast.LENGTH_SHORT).show()
+            viewModel.clearRefreshMessage()
+        }
+    }
 
     // Manage dialog state
     var selectedItem by remember { mutableStateOf<SeriesItem?>(null) }

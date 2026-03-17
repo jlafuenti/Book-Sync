@@ -24,6 +24,7 @@ import androidx.media3.session.SessionResult
 import com.booksync.auto.CoverArtHelper
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.diagnostics.LogChannel
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
 import com.google.android.gms.cast.framework.CastContext
@@ -86,6 +87,7 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var coverArtHelper: CoverArtHelper
     @Inject lateinit var tokenManager: TokenManager
+    @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
 
     private var mediaLibrarySession: MediaLibrarySession? = null
     private var castPlayer: CastPlayer? = null
@@ -178,6 +180,12 @@ class AudioPlayerService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
         Log.i(TAG, "onGetSession — pkg=${controllerInfo.packageName}, session=${if (mediaLibrarySession != null) "ok" else "NULL"}")
         return mediaLibrarySession
+    }
+
+    override fun onBind(intent: android.content.Intent?): android.os.IBinder? {
+        val pkg = intent?.getStringExtra("android.media.session.CONTROLLER_PACKAGE_NAME") ?: intent?.`package` ?: "unknown"
+        diagnosticLogger.i(LogChannel.AUTO, TAG, "onBind pkg=$pkg action=${intent?.action}")
+        return super.onBind(intent)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -450,6 +458,7 @@ class AudioPlayerService : MediaLibraryService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo
         ): MediaSession.ConnectionResult {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onConnect pkg=${controller.packageName} uid=${controller.uid}")
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(CMD_SET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SET_SLEEP_TIMER, Bundle.EMPTY))
@@ -497,6 +506,7 @@ class AudioPlayerService : MediaLibraryService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo
         ) {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onDisconnected pkg=${controller.packageName}")
             // Save position when any client disconnects (covers Android Auto disconnect on car shutoff)
             saveCurrentPositionForAuto()
         }
@@ -508,6 +518,7 @@ class AudioPlayerService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<MediaItem>> {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onGetLibraryRoot pkg=${browser.packageName} isRecent=${params?.isRecent}")
             // Return the same root for all clients, including Android Auto (which always
             // sends isRecent=true). Playback resumption is handled by onPlaybackResumption.
             val root = MediaItem.Builder()
@@ -532,6 +543,7 @@ class AudioPlayerService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onGetChildren parentId=$parentId page=$page pkg=${browser.packageName}")
             return when (parentId) {
                 "[root]" -> Futures.immediateFuture(
                     LibraryResult.ofItemList(buildRootTabs(), params)
@@ -591,6 +603,7 @@ class AudioPlayerService : MediaLibraryService() {
             startIndex: Int,
             startPositionMs: Long
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems count=${mediaItems.size} startIndex=$startIndex startPos=${startPositionMs}ms pkg=${controller.packageName} ids=${mediaItems.map { it.mediaId }}")
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
             serviceScope.launch(Dispatchers.IO) {
                 // Legacy Android Auto path (onPlayFromMediaId) sends MediaItems with only
