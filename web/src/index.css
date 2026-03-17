@@ -1139,9 +1139,6 @@ tr:hover td {
 .unpaired-global-filter {
     padding: 0 0 16px 0;
     flex-shrink: 0;
-}
-
-.unpaired-global-filter-inner {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -1154,6 +1151,26 @@ tr:hover td {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.unpaired-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.unpaired-filter-bar .form-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.unpaired-filter-select {
+    flex: 0 0 auto !important;
+    width: 160px !important;
+    min-width: 0;
 }
 
 .unpaired-columns {
@@ -1207,10 +1224,6 @@ tr:hover td {
     border-radius: 10px;
 }
 
-.unpaired-local-filter {
-    padding: 7px 12px !important;
-    font-size: 0.82rem !important;
-}
 
 .unpaired-column-list {
     flex: 1;

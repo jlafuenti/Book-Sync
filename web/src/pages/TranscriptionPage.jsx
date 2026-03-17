@@ -113,7 +113,12 @@ function TranscriptionPage({ tab }) {
         try {
             const ids = seriesPairs.map(p => p.id)
             await addToQueue(ids)
-            loadData()
+            // Update local state immediately (same as handleStart does for individual pairs)
+            setPairs(prev => prev.map(p =>
+                ids.includes(p.id) ? { ...p, status: 'transcribing' } : p
+            ))
+            // Start polling for each queued pair
+            ids.forEach(id => startPolling(id))
         } catch (err) {
             setError(err.message)
         }
