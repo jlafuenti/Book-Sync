@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getEbooks, getAudiobooks, getPairs, createPair } from '../api'
+import { getEbooks, getAudiobooks, getPairs, createPair, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 
 /**
  * SeriesPage — Audiobookshelf-inspired series-first library view.
@@ -15,6 +15,13 @@ export default function SeriesPage() {
     const [search, setSearch] = useState('')
     const [sortBy, setSortBy] = useState('name') // 'name' | 'count' | 'recent'
     const [expandedSeries, setExpandedSeries] = useState(new Set())
+
+    // Bulk edit state
+    const [selectMode, setSelectMode] = useState(false)
+    const [selectedKeys, setSelectedKeys] = useState(new Set())
+    const [bulkEditOpen, setBulkEditOpen] = useState(false)
+    const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', publisher: '', published_year: '' })
+    const [bulkSaving, setBulkSaving] = useState(false)
 
     useEffect(() => {
         loadAll()
@@ -186,6 +193,54 @@ export default function SeriesPage() {
         setExpandedSeries(new Set())
     }
 
+    function exitSelectMode() {
+        setSelectMode(false)
+        setSelectedKeys(new Set())
+    }
+
+    function toggleSelectItem(key) {
+        setSelectedKeys(prev => {
+            const next = new Set(prev)
+            next.has(key) ? next.delete(key) : next.add(key)
+            return next
+        })
+    }
+
+    // Collect all visible items for bulk operations
+    const allVisibleItems = useMemo(() => {
+        const items = []
+        filteredSeries.forEach(g => g.items.forEach(i => items.push(i)))
+        filteredUnsorted.forEach(i => items.push(i))
+        return items
+    }, [filteredSeries, filteredUnsorted])
+
+    async function handleBulkEdit() {
+        const patch = {}
+        if (bulkEditFields.author.trim()) patch.author = bulkEditFields.author.trim()
+        if (bulkEditFields.series.trim()) patch.series = bulkEditFields.series.trim()
+        if (bulkEditFields.publisher.trim()) patch.publisher = bulkEditFields.publisher.trim()
+        if (bulkEditFields.published_year.trim()) patch.published_year = parseInt(bulkEditFields.published_year) || null
+        if (Object.keys(patch).length === 0) return
+        setBulkSaving(true)
+        try {
+            const selectedItems = allVisibleItems.filter(i => selectedKeys.has(i.key))
+            await Promise.all(selectedItems.flatMap(item => {
+                const calls = []
+                if (item.ebookId) calls.push(updateEbookMetadata(item.ebookId, patch))
+                if (item.audiobookId) calls.push(updateAudiobookMetadata(item.audiobookId, patch))
+                return calls
+            }))
+            setBulkEditOpen(false)
+            setBulkEditFields({ author: '', series: '', publisher: '', published_year: '' })
+            exitSelectMode()
+            await loadAll()
+        } catch (err) {
+            alert('Bulk edit failed: ' + err.message)
+        } finally {
+            setBulkSaving(false)
+        }
+    }
+
     if (loading) {
         return (
             <div className="page-header">
@@ -227,8 +282,14 @@ export default function SeriesPage() {
                     <option value="count">Most Books</option>
                     <option value="recent">Recently Added</option>
                 </select>
-                <button className="btn btn-secondary btn-sm" onClick={expandAll}>Expand All</button>
-                <button className="btn btn-secondary btn-sm" onClick={collapseAll}>Collapse All</button>
+                <button className="btn btn-secondary btn-sm" onClick={expandAll} disabled={selectMode}>Expand All</button>
+                <button className="btn btn-secondary btn-sm" onClick={collapseAll} disabled={selectMode}>Collapse All</button>
+                <button
+                    className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+                >
+                    {selectMode ? `✕ Cancel${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ''}` : '☑ Bulk Edit'}
+                </button>
             </div>
 
             {/* Series Cards */}
@@ -237,8 +298,11 @@ export default function SeriesPage() {
                     <SeriesCard
                         key={group.name}
                         group={group}
-                        expanded={expandedSeries.has(group.name)}
-                        onToggle={() => toggleSeries(group.name)}
+                        expanded={selectMode || expandedSeries.has(group.name)}
+                        onToggle={() => !selectMode && toggleSeries(group.name)}
+                        selectMode={selectMode}
+                        selectedKeys={selectedKeys}
+                        onToggleItem={toggleSelectItem}
                     />
                 ))}
             </div>
@@ -259,10 +323,81 @@ export default function SeriesPage() {
                         <table className="table" style={{ width: '100%' }}>
                             <tbody>
                                 {filteredUnsorted.map(item => (
-                                    <ItemRow key={item.key} item={item} />
+                                    <ItemRow
+                                        key={item.key}
+                                        item={item}
+                                        selectMode={selectMode}
+                                        selected={selectedKeys.has(item.key)}
+                                        onToggle={() => toggleSelectItem(item.key)}
+                                    />
                                 ))}
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Floating bulk action bar */}
+            {selectMode && selectedKeys.size > 0 && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: '12px', padding: '12px 20px',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    boxShadow: '0 4px 24px rgba(0,0,0,0.5)', zIndex: 100, whiteSpace: 'nowrap'
+                }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {selectedKeys.size} selected
+                    </span>
+                    <button className="btn btn-secondary" onClick={() => setBulkEditOpen(true)}>
+                        ✏️ Edit Metadata
+                    </button>
+                </div>
+            )}
+
+            {/* Bulk Edit Modal */}
+            {bulkEditOpen && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.6)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px', maxWidth: '520px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
+                        <h3 style={{ marginTop: 0 }}>
+                            ✏️ Edit {selectedKeys.size} Item{selectedKeys.size !== 1 ? 's' : ''}
+                        </h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 0 }}>
+                            Leave fields blank to keep existing values. Only filled fields will be updated.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {[
+                                { key: 'author', label: 'Author', type: 'text' },
+                                { key: 'series', label: 'Series', type: 'text' },
+                                { key: 'publisher', label: 'Publisher', type: 'text' },
+                                { key: 'published_year', label: 'Published Year', type: 'number' },
+                            ].map(({ key, label, type }) => (
+                                <div key={key}>
+                                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem', fontWeight: 500 }}>{label}</label>
+                                    <input
+                                        className="form-input"
+                                        type={type}
+                                        placeholder="Leave blank to keep unchanged"
+                                        value={bulkEditFields[key]}
+                                        onChange={e => setBulkEditFields(prev => ({ ...prev, [key]: e.target.value }))}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
+                            <button className="btn btn-secondary" onClick={() => setBulkEditOpen(false)} disabled={bulkSaving}>Cancel</button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleBulkEdit}
+                                disabled={bulkSaving || Object.values(bulkEditFields).every(v => !v.trim())}
+                            >
+                                {bulkSaving ? <><div className="spinner"></div> Saving...</> : `Save to ${selectedKeys.size} Item${selectedKeys.size !== 1 ? 's' : ''}`}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -277,7 +412,7 @@ export default function SeriesPage() {
     )
 }
 
-function SeriesCard({ group, expanded, onToggle }) {
+function SeriesCard({ group, expanded, onToggle, selectMode, selectedKeys, onToggleItem }) {
     const itemCount = group.items.length
     const pairedCount = group.items.filter(i => i.type === 'pair').length
     const ebookOnlyCount = group.items.filter(i => i.type === 'ebook').length
@@ -353,7 +488,14 @@ function SeriesCard({ group, expanded, onToggle }) {
                     <table className="table" style={{ width: '100%' }}>
                         <tbody>
                             {group.items.map(item => (
-                                <ItemRow key={item.key} item={item} showIndex />
+                                <ItemRow
+                                    key={item.key}
+                                    item={item}
+                                    showIndex
+                                    selectMode={selectMode}
+                                    selected={selectedKeys?.has(item.key)}
+                                    onToggle={() => onToggleItem(item.key)}
+                                />
                             ))}
                         </tbody>
                     </table>
@@ -363,13 +505,21 @@ function SeriesCard({ group, expanded, onToggle }) {
     )
 }
 
-function ItemRow({ item, showIndex }) {
+function ItemRow({ item, showIndex, selectMode, selected, onToggle }) {
     const indexStr = item.seriesIndex != null
         ? (item.seriesIndex % 1 === 0 ? `#${Math.floor(item.seriesIndex)}` : `#${item.seriesIndex}`)
         : null
 
     return (
-        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+        <tr
+            style={{ borderBottom: '1px solid var(--border)', background: selectMode && selected ? 'rgba(139,92,246,0.12)' : undefined }}
+            onClick={selectMode ? onToggle : undefined}
+        >
+            {selectMode && (
+                <td style={{ padding: '10px 8px', width: 36 }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={!!selected} onChange={onToggle} />
+                </td>
+            )}
             {showIndex && (
                 <td style={{ padding: '10px 12px', width: 48, textAlign: 'center' }}>
                     {indexStr && (
@@ -386,12 +536,16 @@ function ItemRow({ item, showIndex }) {
             )}
             <td style={{ padding: '10px 12px' }}>
                 <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>
-                    <Link
-                        to={`/book/${item.type === 'audiobook' ? 'audiobook' : 'ebook'}/${item.type === 'audiobook' ? item.audiobookId : item.ebookId}`}
-                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
-                    >
-                        {item.title}
-                    </Link>
+                    {selectMode ? (
+                        <span style={{ cursor: 'pointer' }}>{item.title}</span>
+                    ) : (
+                        <Link
+                            to={`/book/${item.type === 'audiobook' ? 'audiobook' : 'ebook'}/${item.type === 'audiobook' ? item.audiobookId : item.ebookId}`}
+                            style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                        >
+                            {item.title}
+                        </Link>
+                    )}
                 </div>
                 {item.author && (
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{item.author}</div>

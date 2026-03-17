@@ -151,7 +151,7 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
             <div className="modal modal-xl">
                 <div className="modal-header">
                     <h3>Edit {isAudiobook ? 'Audiobook' : 'Ebook'}</h3>
-                    <button className="btn-close" onClick={onClose} type="button">&times;</button>
+                    <button className="btn btn-secondary" onClick={onClose} type="button" style={{ padding: '6px 12px', fontSize: '1rem', lineHeight: 1 }}>✕ Close</button>
                 </div>
 
                 <div className="modal-tabs">

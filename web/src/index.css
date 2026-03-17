@@ -1160,17 +1160,19 @@ tr:hover td {
     gap: 8px;
     flex: 1;
     min-width: 0;
+    flex-wrap: wrap;
 }
 
 .unpaired-filter-bar .form-input {
     flex: 1;
-    min-width: 0;
+    min-width: 80px;
 }
 
 .unpaired-filter-select {
-    flex: 0 0 auto !important;
-    width: 160px !important;
-    min-width: 0;
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 100px !important;
+    max-width: 160px;
 }
 
 .unpaired-columns {
