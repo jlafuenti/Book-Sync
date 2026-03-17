@@ -27,6 +27,10 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -47,8 +51,11 @@ class LibraryViewModel @Inject constructor(
     private val _downloadError = MutableStateFlow<String?>(null)
     val downloadError = _downloadError.asStateFlow()
 
+    private val _refreshMessage = MutableStateFlow<String?>(null)
+    val refreshMessage = _refreshMessage.asStateFlow()
+
     init {
-        refresh()
+        refresh(silent = true)
         observeWorkManager()
     }
 
@@ -91,14 +98,29 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    fun refresh() {
+    fun refresh(silent: Boolean = false) {
         viewModelScope.launch {
             _refreshing.value = true
             try {
                 repository.refreshPairs()
-            } catch (_: Exception) {}
+                if (!silent) _refreshMessage.value = "Library refreshed"
+            } catch (e: UnknownHostException) {
+                _refreshMessage.value = "Server unreachable: could not resolve host"
+            } catch (e: ConnectException) {
+                _refreshMessage.value = "Server unreachable: connection refused"
+            } catch (e: SocketTimeoutException) {
+                _refreshMessage.value = "Server unreachable: connection timed out"
+            } catch (e: HttpException) {
+                _refreshMessage.value = "Server error: HTTP ${e.code()}"
+            } catch (e: Exception) {
+                _refreshMessage.value = "Refresh failed: ${e.message ?: "unknown error"}"
+            }
             _refreshing.value = false
         }
+    }
+
+    fun clearRefreshMessage() {
+        _refreshMessage.value = null
     }
 
     fun clearDownloadError() {
@@ -196,11 +218,19 @@ fun LibraryScreen(
 
     val displayedPairs = if (showSyncedOnly) pairs.filter { it.status == "synced" } else pairs
 
+    val refreshMessage by viewModel.refreshMessage.collectAsState()
+
     val context = LocalContext.current
     LaunchedEffect(downloadError) {
         if (downloadError != null) {
             Toast.makeText(context, "Download failed: $downloadError", Toast.LENGTH_LONG).show()
             viewModel.clearDownloadError()
+        }
+    }
+    LaunchedEffect(refreshMessage) {
+        if (refreshMessage != null) {
+            Toast.makeText(context, refreshMessage, Toast.LENGTH_SHORT).show()
+            viewModel.clearRefreshMessage()
         }
     }
 
