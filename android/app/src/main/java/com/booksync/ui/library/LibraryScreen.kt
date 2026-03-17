@@ -192,6 +192,9 @@ fun LibraryScreen(
     val refreshing by viewModel.refreshing.collectAsState()
     val downloadingProgress by viewModel.downloadingProgress.collectAsState()
     val downloadError by viewModel.downloadError.collectAsState()
+    var showSyncedOnly by remember { mutableStateOf(false) }
+
+    val displayedPairs = if (showSyncedOnly) pairs.filter { it.status == "synced" } else pairs
 
     val context = LocalContext.current
     LaunchedEffect(downloadError) {
@@ -219,55 +222,77 @@ fun LibraryScreen(
             )
         },
     ) { padding ->
-        if (pairs.isEmpty() && !refreshing) {
-            // Empty state
-            Column(
+        Column(modifier = Modifier.padding(padding)) {
+            // Synced-only filter toggle
+            Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
-                Spacer(Modifier.height(16.dp))
                 Text(
-                    "No books yet",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Add book pairs on the web dashboard,\nthen pull to refresh here.",
+                    text = if (showSyncedOnly) "Synced only" else "All pairs",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Switch(
+                    checked = showSyncedOnly,
+                    onCheckedChange = { showSyncedOnly = it },
+                )
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (refreshing) {
-                    item {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                }
 
-                items(pairs) { pair ->
-                    BookPairCard(
-                        pair = pair,
-                        downloadStatus = downloadingProgress[pair.id],
-                        onDownloadAll = { viewModel.downloadAll(pair) },
-                        onDownloadEbook = { viewModel.downloadEbookOnly(pair) },
-                        onDownloadAudiobook = { viewModel.downloadAudiobookOnly(pair) },
-                        onDeleteEbook = { viewModel.deleteEbook(pair) },
-                        onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
-                        onDeletePair = { viewModel.deletePair(pair) },
-                        onReadClick = { onBookSelect(pair.id) },
-                        onListenClick = { onAudioSelect(pair.id) },
+            if (displayedPairs.isEmpty() && !refreshing) {
+                // Empty state
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        if (showSyncedOnly) "No synced pairs" else "No books yet",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (showSyncedOnly)
+                            "No pairs have been synced yet.\nTranscribe audiobooks on the web dashboard first."
+                        else
+                            "Add book pairs on the web dashboard,\nthen pull to refresh here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (refreshing) {
+                        item {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    items(displayedPairs) { pair ->
+                        BookPairCard(
+                            pair = pair,
+                            downloadStatus = downloadingProgress[pair.id],
+                            onDownloadAll = { viewModel.downloadAll(pair) },
+                            onDownloadEbook = { viewModel.downloadEbookOnly(pair) },
+                            onDownloadAudiobook = { viewModel.downloadAudiobookOnly(pair) },
+                            onDeleteEbook = { viewModel.deleteEbook(pair) },
+                            onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
+                            onDeletePair = { viewModel.deletePair(pair) },
+                            onReadClick = { onBookSelect(pair.id) },
+                            onListenClick = { onAudioSelect(pair.id) },
+                        )
+                    }
                 }
             }
         }

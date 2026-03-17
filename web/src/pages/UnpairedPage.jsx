@@ -1,13 +1,55 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { getPairs, getEbooks, getAudiobooks, createPair } from '../api'
 
-function matchesFilter(item, filter) {
-    if (!filter) return true
-    const term = filter.toLowerCase()
+function matchesFilters(item, text, author, series) {
+    if (author && item.author !== author) return false
+    if (series && item.series !== series) return false
+    if (text) {
+        const term = text.toLowerCase()
+        if (
+            !item.title?.toLowerCase().includes(term) &&
+            !item.author?.toLowerCase().includes(term) &&
+            !item.series?.toLowerCase().includes(term)
+        ) return false
+    }
+    return true
+}
+
+function uniqueSorted(items, field) {
+    return [...new Set(items.map(i => i[field]).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: 'base' })
+    )
+}
+
+function FilterBar({ text, onText, author, onAuthor, series, onSeries, authors, seriesList, textPlaceholder, onClear }) {
     return (
-        item.title?.toLowerCase().includes(term) ||
-        item.author?.toLowerCase().includes(term) ||
-        item.series?.toLowerCase().includes(term)
+        <div className="unpaired-filter-bar">
+            <input
+                className="form-input"
+                placeholder={textPlaceholder}
+                value={text}
+                onChange={e => onText(e.target.value)}
+            />
+            <select
+                className="form-input unpaired-filter-select"
+                value={author}
+                onChange={e => onAuthor(e.target.value)}
+            >
+                <option value="">All authors</option>
+                {authors.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <select
+                className="form-input unpaired-filter-select"
+                value={series}
+                onChange={e => onSeries(e.target.value)}
+            >
+                <option value="">All series</option>
+                {seriesList.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {(text || author || series) && (
+                <button className="btn btn-secondary btn-sm" onClick={onClear} style={{ flexShrink: 0 }}>Clear</button>
+            )}
+        </div>
     )
 }
 
@@ -44,9 +86,19 @@ export default function UnpairedPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
 
-    const [globalFilter, setGlobalFilter] = useState('')
-    const [ebookFilter, setEbookFilter] = useState('')
-    const [audiobookFilter, setAudiobookFilter] = useState('')
+    // Global filter (applies to both sides)
+    const [globalText, setGlobalText] = useState('')
+    const [globalAuthor, setGlobalAuthor] = useState('')
+    const [globalSeries, setGlobalSeries] = useState('')
+
+    // Per-side filters (applied on top of global)
+    const [ebookText, setEbookText] = useState('')
+    const [ebookAuthor, setEbookAuthor] = useState('')
+    const [ebookSeries, setEbookSeries] = useState('')
+
+    const [audiobookText, setAudiobookText] = useState('')
+    const [audiobookAuthor, setAudiobookAuthor] = useState('')
+    const [audiobookSeries, setAudiobookSeries] = useState('')
 
     const [selectedEbook, setSelectedEbook] = useState(null)
     const [selectedAudiobook, setSelectedAudiobook] = useState(null)
@@ -71,20 +123,29 @@ export default function UnpairedPage() {
     const pairedEbookIds = useMemo(() => new Set(pairs.map(p => p.ebook.id)), [pairs])
     const pairedAudiobookIds = useMemo(() => new Set(pairs.map(p => p.audiobook.id)), [pairs])
 
+    const unpairedEbooks = useMemo(() => ebooks.filter(e => !pairedEbookIds.has(e.id)), [ebooks, pairedEbookIds])
+    const unpairedAudiobooks = useMemo(() => audiobooks.filter(a => !pairedAudiobookIds.has(a.id)), [audiobooks, pairedAudiobookIds])
+
+    // Dropdown option lists — derived from all unpaired items (not filtered), so options don't disappear while filtering
+    const globalAuthors = useMemo(() => uniqueSorted([...unpairedEbooks, ...unpairedAudiobooks], 'author'), [unpairedEbooks, unpairedAudiobooks])
+    const globalSeriesList = useMemo(() => uniqueSorted([...unpairedEbooks, ...unpairedAudiobooks], 'series'), [unpairedEbooks, unpairedAudiobooks])
+    const ebookAuthors = useMemo(() => uniqueSorted(unpairedEbooks, 'author'), [unpairedEbooks])
+    const ebookSeriesList = useMemo(() => uniqueSorted(unpairedEbooks, 'series'), [unpairedEbooks])
+    const audiobookAuthors = useMemo(() => uniqueSorted(unpairedAudiobooks, 'author'), [unpairedAudiobooks])
+    const audiobookSeriesList = useMemo(() => uniqueSorted(unpairedAudiobooks, 'series'), [unpairedAudiobooks])
+
     const visibleEbooks = useMemo(() =>
-        ebooks
-            .filter(e => !pairedEbookIds.has(e.id))
-            .filter(e => matchesFilter(e, globalFilter))
-            .filter(e => matchesFilter(e, ebookFilter)),
-        [ebooks, pairedEbookIds, globalFilter, ebookFilter]
+        unpairedEbooks
+            .filter(e => matchesFilters(e, globalText, globalAuthor, globalSeries))
+            .filter(e => matchesFilters(e, ebookText, ebookAuthor, ebookSeries)),
+        [unpairedEbooks, globalText, globalAuthor, globalSeries, ebookText, ebookAuthor, ebookSeries]
     )
 
     const visibleAudiobooks = useMemo(() =>
-        audiobooks
-            .filter(a => !pairedAudiobookIds.has(a.id))
-            .filter(a => matchesFilter(a, globalFilter))
-            .filter(a => matchesFilter(a, audiobookFilter)),
-        [audiobooks, pairedAudiobookIds, globalFilter, audiobookFilter]
+        unpairedAudiobooks
+            .filter(a => matchesFilters(a, globalText, globalAuthor, globalSeries))
+            .filter(a => matchesFilters(a, audiobookText, audiobookAuthor, audiobookSeries)),
+        [unpairedAudiobooks, globalText, globalAuthor, globalSeries, audiobookText, audiobookAuthor, audiobookSeries]
     )
 
     const handlePair = async () => {
@@ -125,18 +186,15 @@ export default function UnpairedPage() {
     return (
         <div className="unpaired-page">
             <div className="unpaired-global-filter">
-                <div className="unpaired-global-filter-inner">
-                    <span className="unpaired-filter-label">Global filter</span>
-                    <input
-                        className="form-input"
-                        placeholder="Filter both sides by title, author, or series…"
-                        value={globalFilter}
-                        onChange={e => setGlobalFilter(e.target.value)}
-                    />
-                    {globalFilter && (
-                        <button className="btn btn-secondary btn-sm" onClick={() => setGlobalFilter('')}>Clear</button>
-                    )}
-                </div>
+                <span className="unpaired-filter-label">Global filter</span>
+                <FilterBar
+                    text={globalText} onText={setGlobalText}
+                    author={globalAuthor} onAuthor={setGlobalAuthor}
+                    series={globalSeries} onSeries={setGlobalSeries}
+                    authors={globalAuthors} seriesList={globalSeriesList}
+                    textPlaceholder="Filter both sides by title, author, or series…"
+                    onClear={() => { setGlobalText(''); setGlobalAuthor(''); setGlobalSeries('') }}
+                />
             </div>
 
             <div className="unpaired-columns">
@@ -144,11 +202,13 @@ export default function UnpairedPage() {
                 <div className="unpaired-column">
                     <div className="unpaired-column-header">
                         <h3>📚 Unpaired Ebooks <span className="unpaired-count">{visibleEbooks.length}</span></h3>
-                        <input
-                            className="form-input unpaired-local-filter"
-                            placeholder="Filter ebooks…"
-                            value={ebookFilter}
-                            onChange={e => setEbookFilter(e.target.value)}
+                        <FilterBar
+                            text={ebookText} onText={setEbookText}
+                            author={ebookAuthor} onAuthor={setEbookAuthor}
+                            series={ebookSeries} onSeries={setEbookSeries}
+                            authors={ebookAuthors} seriesList={ebookSeriesList}
+                            textPlaceholder="Filter ebooks…"
+                            onClear={() => { setEbookText(''); setEbookAuthor(''); setEbookSeries('') }}
                         />
                     </div>
                     <div className="unpaired-column-list">
@@ -173,11 +233,13 @@ export default function UnpairedPage() {
                 <div className="unpaired-column">
                     <div className="unpaired-column-header">
                         <h3>🎧 Unpaired Audiobooks <span className="unpaired-count">{visibleAudiobooks.length}</span></h3>
-                        <input
-                            className="form-input unpaired-local-filter"
-                            placeholder="Filter audiobooks…"
-                            value={audiobookFilter}
-                            onChange={e => setAudiobookFilter(e.target.value)}
+                        <FilterBar
+                            text={audiobookText} onText={setAudiobookText}
+                            author={audiobookAuthor} onAuthor={setAudiobookAuthor}
+                            series={audiobookSeries} onSeries={setAudiobookSeries}
+                            authors={audiobookAuthors} seriesList={audiobookSeriesList}
+                            textPlaceholder="Filter audiobooks…"
+                            onClear={() => { setAudiobookText(''); setAudiobookAuthor(''); setAudiobookSeries('') }}
                         />
                     </div>
                     <div className="unpaired-column-list">
