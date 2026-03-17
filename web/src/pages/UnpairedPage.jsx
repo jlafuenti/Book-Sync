@@ -105,6 +105,9 @@ export default function UnpairedPage() {
     const [pairing, setPairing] = useState(false)
     const [pairError, setPairError] = useState('')
 
+    const [ebookSideOpen, setEbookSideOpen] = useState(true)
+    const [audiobookSideOpen, setAudiobookSideOpen] = useState(true)
+
     const loadData = async () => {
         try {
             const [p, e, a] = await Promise.all([getPairs(), getEbooks(), getAudiobooks()])
@@ -199,64 +202,130 @@ export default function UnpairedPage() {
 
             <div className="unpaired-columns">
                 {/* Left: Ebooks */}
-                <div className="unpaired-column">
-                    <div className="unpaired-column-header">
-                        <h3>📚 Unpaired Ebooks <span className="unpaired-count">{visibleEbooks.length}</span></h3>
-                        <FilterBar
-                            text={ebookText} onText={setEbookText}
-                            author={ebookAuthor} onAuthor={setEbookAuthor}
-                            series={ebookSeries} onSeries={setEbookSeries}
-                            authors={ebookAuthors} seriesList={ebookSeriesList}
-                            textPlaceholder="Filter ebooks…"
-                            onClear={() => { setEbookText(''); setEbookAuthor(''); setEbookSeries('') }}
-                        />
+                {ebookSideOpen ? (
+                    <div className="unpaired-column">
+                        <div className="unpaired-column-header">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <h3>📚 Unpaired Ebooks <span className="unpaired-count">{visibleEbooks.length}</span></h3>
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                                    onClick={() => { setEbookSideOpen(false); setSelectedEbook(null) }}
+                                    title="Hide ebooks panel"
+                                >
+                                    ⟨ Hide
+                                </button>
+                            </div>
+                            <FilterBar
+                                text={ebookText} onText={setEbookText}
+                                author={ebookAuthor} onAuthor={setEbookAuthor}
+                                series={ebookSeries} onSeries={setEbookSeries}
+                                authors={ebookAuthors} seriesList={ebookSeriesList}
+                                textPlaceholder="Filter ebooks…"
+                                onClear={() => { setEbookText(''); setEbookAuthor(''); setEbookSeries('') }}
+                            />
+                        </div>
+                        <div className="unpaired-column-list">
+                            {visibleEbooks.length === 0 ? (
+                                <div className="unpaired-empty">No unpaired ebooks match the current filters.</div>
+                            ) : (
+                                visibleEbooks.map(e => (
+                                    <BookRow
+                                        key={e.id}
+                                        item={e}
+                                        selected={selectedEbook?.id === e.id}
+                                        onSelect={setSelectedEbook}
+                                    />
+                                ))
+                            )}
+                        </div>
                     </div>
-                    <div className="unpaired-column-list">
-                        {visibleEbooks.length === 0 ? (
-                            <div className="unpaired-empty">No unpaired ebooks match the current filters.</div>
-                        ) : (
-                            visibleEbooks.map(e => (
-                                <BookRow
-                                    key={e.id}
-                                    item={e}
-                                    selected={selectedEbook?.id === e.id}
-                                    onSelect={setSelectedEbook}
-                                />
-                            ))
-                        )}
+                ) : (
+                    <div
+                        style={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center',
+                            justifyContent: 'center', padding: '24px 12px',
+                            background: 'var(--surface)', border: '1px dashed var(--border)',
+                            borderRadius: '8px', cursor: 'pointer', minWidth: '80px'
+                        }}
+                        onClick={() => setEbookSideOpen(true)}
+                    >
+                        <span style={{ fontSize: '1.5rem' }}>📚</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px', writingMode: 'vertical-rl' }}>
+                            Ebooks hidden
+                        </span>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginTop: '12px', padding: '4px 8px', fontSize: '0.8rem' }}
+                        >
+                            ⟩ Show
+                        </button>
                     </div>
-                </div>
+                )}
 
-                <div className="unpaired-column-divider" />
+                {ebookSideOpen && audiobookSideOpen && <div className="unpaired-column-divider" />}
 
                 {/* Right: Audiobooks */}
-                <div className="unpaired-column">
-                    <div className="unpaired-column-header">
-                        <h3>🎧 Unpaired Audiobooks <span className="unpaired-count">{visibleAudiobooks.length}</span></h3>
-                        <FilterBar
-                            text={audiobookText} onText={setAudiobookText}
-                            author={audiobookAuthor} onAuthor={setAudiobookAuthor}
-                            series={audiobookSeries} onSeries={setAudiobookSeries}
-                            authors={audiobookAuthors} seriesList={audiobookSeriesList}
-                            textPlaceholder="Filter audiobooks…"
-                            onClear={() => { setAudiobookText(''); setAudiobookAuthor(''); setAudiobookSeries('') }}
-                        />
+                {audiobookSideOpen ? (
+                    <div className="unpaired-column">
+                        <div className="unpaired-column-header">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <h3>🎧 Unpaired Audiobooks <span className="unpaired-count">{visibleAudiobooks.length}</span></h3>
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                                    onClick={() => { setAudiobookSideOpen(false); setSelectedAudiobook(null) }}
+                                    title="Hide audiobooks panel"
+                                >
+                                    ⟨ Hide
+                                </button>
+                            </div>
+                            <FilterBar
+                                text={audiobookText} onText={setAudiobookText}
+                                author={audiobookAuthor} onAuthor={setAudiobookAuthor}
+                                series={audiobookSeries} onSeries={setAudiobookSeries}
+                                authors={audiobookAuthors} seriesList={audiobookSeriesList}
+                                textPlaceholder="Filter audiobooks…"
+                                onClear={() => { setAudiobookText(''); setAudiobookAuthor(''); setAudiobookSeries('') }}
+                            />
+                        </div>
+                        <div className="unpaired-column-list">
+                            {visibleAudiobooks.length === 0 ? (
+                                <div className="unpaired-empty">No unpaired audiobooks match the current filters.</div>
+                            ) : (
+                                visibleAudiobooks.map(a => (
+                                    <BookRow
+                                        key={a.id}
+                                        item={a}
+                                        selected={selectedAudiobook?.id === a.id}
+                                        onSelect={setSelectedAudiobook}
+                                    />
+                                ))
+                            )}
+                        </div>
                     </div>
-                    <div className="unpaired-column-list">
-                        {visibleAudiobooks.length === 0 ? (
-                            <div className="unpaired-empty">No unpaired audiobooks match the current filters.</div>
-                        ) : (
-                            visibleAudiobooks.map(a => (
-                                <BookRow
-                                    key={a.id}
-                                    item={a}
-                                    selected={selectedAudiobook?.id === a.id}
-                                    onSelect={setSelectedAudiobook}
-                                />
-                            ))
-                        )}
+                ) : (
+                    <div
+                        style={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center',
+                            justifyContent: 'center', padding: '24px 12px',
+                            background: 'var(--surface)', border: '1px dashed var(--border)',
+                            borderRadius: '8px', cursor: 'pointer', minWidth: '80px'
+                        }}
+                        onClick={() => setAudiobookSideOpen(true)}
+                    >
+                        <span style={{ fontSize: '1.5rem' }}>🎧</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px', writingMode: 'vertical-rl' }}>
+                            Audiobooks hidden
+                        </span>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginTop: '12px', padding: '4px 8px', fontSize: '0.8rem' }}
+                        >
+                            ⟩ Show
+                        </button>
                     </div>
-                </div>
+                )}
             </div>
 
             {/* Bottom pair bar */}
