@@ -93,8 +93,6 @@ function App() {
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
                             <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
-                            <Link to="/pairs/unpaired-books" className={subNavClass('/pairs/unpaired-books')}>📚 Unpaired Books</Link>
-                            <Link to="/pairs/unpaired-audiobooks" className={subNavClass('/pairs/unpaired-audiobooks')}>🎧 Unpaired Audiobooks</Link>
                         </div>
                     )}
 
@@ -143,8 +141,8 @@ function App() {
                     {/* Book Pairs routes */}
                     <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />
                     <Route path="/pairs/unpaired" element={<UnpairedPage />} />
-                    <Route path="/pairs/unpaired-books" element={<PairsPage tab="unpaired-books" />} />
-                    <Route path="/pairs/unpaired-audiobooks" element={<PairsPage tab="unpaired-audiobooks" />} />
+                    <Route path="/pairs/unpaired-books" element={<Navigate to="/pairs/unpaired" replace />} />
+                    <Route path="/pairs/unpaired-audiobooks" element={<Navigate to="/pairs/unpaired" replace />} />
 
                     {/* Transcription routes */}
                     <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />

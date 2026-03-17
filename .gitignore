@@ -18,6 +18,9 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Playwright screenshots from planning/debugging
+*.png
+
 # IDE
 .vscode/
 .idea/

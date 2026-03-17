@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles, cleanupOrphans } from '../api'
+import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles, cleanupOrphans, applyRemoteCover } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import BulkMatchModal from '../components/BulkMatchModal'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -119,6 +120,18 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
+    // Maintenance dropdown
+    const [maintenanceOpen, setMaintenanceOpen] = useState(false)
+    const maintenanceRef = useRef(null)
+
+    // Select mode & bulk actions
+    const [selectMode, setSelectMode] = useState(false)
+    const [selectedIds, setSelectedIds] = useState(new Set())
+    const [bulkEditOpen, setBulkEditOpen] = useState(false)
+    const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
+    const [bulkSaving, setBulkSaving] = useState(false)
+    const [bulkMatchOpen, setBulkMatchOpen] = useState(false)
+
     // Determine which tab to show
     const activeTab = tab || 'ebooks'
 
@@ -176,6 +189,74 @@ function LibraryPage({ tab }) {
     }
 
     useEffect(() => { loadData() }, [])
+
+    // Close maintenance dropdown on outside click
+    useEffect(() => {
+        const handler = (e) => {
+            if (maintenanceRef.current && !maintenanceRef.current.contains(e.target)) {
+                setMaintenanceOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [])
+
+    // Select mode helpers
+    const toggleSelect = (id) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev)
+            next.has(id) ? next.delete(id) : next.add(id)
+            return next
+        })
+    }
+
+    const toggleSelectAll = (books) => {
+        const allSelected = books.length > 0 && books.every(b => selectedIds.has(b.id))
+        setSelectedIds(allSelected ? new Set() : new Set(books.map(b => b.id)))
+    }
+
+    const exitSelectMode = () => {
+        setSelectMode(false)
+        setSelectedIds(new Set())
+    }
+
+    const handleBulkEdit = async () => {
+        const patch = {}
+        if (bulkEditFields.author.trim()) patch.author = bulkEditFields.author.trim()
+        if (bulkEditFields.series.trim()) patch.series = bulkEditFields.series.trim()
+        if (bulkEditFields.series_index.trim()) patch.series_index = parseFloat(bulkEditFields.series_index) || null
+        if (bulkEditFields.publisher.trim()) patch.publisher = bulkEditFields.publisher.trim()
+        if (bulkEditFields.published_year.trim()) patch.published_year = parseInt(bulkEditFields.published_year) || null
+        if (Object.keys(patch).length === 0) return
+        setBulkSaving(true)
+        try {
+            const updateFn = activeTab === 'ebooks' ? updateEbookMetadata : updateAudiobookMetadata
+            const setBooks = activeTab === 'ebooks' ? setEbooks : setAudiobooks
+            await Promise.all([...selectedIds].map(id => updateFn(id, patch)))
+            setBooks(prev => prev.map(b => selectedIds.has(b.id) ? { ...b, ...patch } : b))
+            setBulkEditOpen(false)
+            setBulkEditFields({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
+            exitSelectMode()
+        } catch (err) {
+            alert('Bulk edit failed: ' + err.message)
+        } finally {
+            setBulkSaving(false)
+        }
+    }
+
+    const handleBulkDelete = async () => {
+        const n = selectedIds.size
+        if (!window.confirm(`Delete ${n} book${n !== 1 ? 's' : ''} from BookSync? This will also remove associated pairs, sync maps, and bookmarks.`)) return
+        try {
+            const deleteFn = activeTab === 'ebooks' ? deleteEbook : deleteAudiobook
+            const setBooks = activeTab === 'ebooks' ? setEbooks : setAudiobooks
+            await Promise.all([...selectedIds].map(id => deleteFn(id, false)))
+            setBooks(prev => prev.filter(b => !selectedIds.has(b.id)))
+            exitSelectMode()
+        } catch (err) {
+            alert('Delete failed: ' + err.message)
+        }
+    }
 
     const handleScan = async () => {
         setScanning(true)
@@ -419,40 +500,90 @@ function LibraryPage({ tab }) {
             </div>
 
             {/* Actions */}
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap' }}>
-                <button className="btn btn-primary" onClick={handleScan} disabled={scanning || normalizing || rescanningAll}>
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                    className="btn btn-primary"
+                    onClick={handleScan}
+                    disabled={scanning || normalizing || rescanningAll || selectMode}
+                >
                     {scanning ? <><div className="spinner"></div> Scanning...</> : '🔍 Scan Directories'}
                 </button>
+
+                {activeTab === 'ebooks' && (
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => ebookFileRef.current?.click()}
+                        disabled={uploadingEbook || selectMode}
+                    >
+                        {uploadingEbook ? <><div className="spinner"></div> Uploading...</> : '📄 Upload EBook'}
+                    </button>
+                )}
+                {activeTab === 'audiobooks' && (
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => audiobookFileRef.current?.click()}
+                        disabled={uploadingAudiobook || selectMode}
+                    >
+                        {uploadingAudiobook ? <><div className="spinner"></div> Uploading...</> : '🎵 Upload Audiobook'}
+                    </button>
+                )}
+
+                {/* Maintenance dropdown */}
+                <div style={{ position: 'relative' }} ref={maintenanceRef}>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => setMaintenanceOpen(o => !o)}
+                        disabled={scanning || normalizing || rescanningAll || selectMode}
+                    >
+                        ⚙️ Maintenance ▾
+                    </button>
+                    {maintenanceOpen && (
+                        <div style={{
+                            position: 'absolute', top: '100%', left: 0, marginTop: '4px',
+                            background: 'var(--surface)', border: '1px solid var(--border)',
+                            borderRadius: '8px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+                            zIndex: 200, minWidth: '220px', overflow: 'hidden'
+                        }}>
+                            <button
+                                className="btn btn-secondary"
+                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px' }}
+                                onClick={() => { setMaintenanceOpen(false); handleNormalize() }}
+                                disabled={normalizing}
+                                title="Fix author names like 'Butcher, Jim' → 'Jim Butcher' and series like 'Dresden Files, The' → 'The Dresden Files'"
+                            >
+                                {normalizing ? <><div className="spinner"></div> Normalizing...</> : '🔄 Normalize Metadata'}
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px', color: 'var(--danger, #e74c3c)' }}
+                                onClick={() => { setMaintenanceOpen(false); handleRescanAll() }}
+                                disabled={rescanningAll}
+                                title="Forcefully extract metadata from EVERY file and overwrite the database. Destructive!"
+                            >
+                                {rescanningAll ? <><div className="spinner"></div> Overwriting...</> : '⚠️ Force Rescan All'}
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px' }}
+                                onClick={() => { setMaintenanceOpen(false); handleVerify() }}
+                                disabled={verifying}
+                                title="Check all books against their source files and find orphaned entries"
+                            >
+                                {verifying ? <><div className="spinner"></div> Verifying...</> : '🔎 Verify Files'}
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* Select mode toggle */}
                 <button
-                    className="btn btn-secondary"
-                    onClick={handleNormalize}
-                    disabled={scanning || normalizing || rescanningAll}
-                    title="Fix author names like 'Butcher, Jim' → 'Jim Butcher' and series like 'Dresden Files, The' → 'The Dresden Files'"
+                    className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+                    style={{ marginLeft: 'auto' }}
                 >
-                    {normalizing ? <><div className="spinner"></div> Normalizing...</> : '🔄 Normalize Metadata'}
+                    {selectMode ? `✕ Cancel${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}` : '☑ Select'}
                 </button>
-                <button
-                    className="btn btn-danger"
-                    onClick={handleRescanAll}
-                    disabled={scanning || normalizing || rescanningAll}
-                    title="Forcefully extract metadata from EVERY single file and overwrite the database. Destructive!"
-                >
-                    {rescanningAll ? <><div className="spinner"></div> Overwriting...</> : '⚠️ Force Rescan All'}
-                </button>
-                <button className="btn btn-secondary" onClick={() => ebookFileRef.current?.click()} disabled={uploadingEbook}>
-                    {uploadingEbook ? <><div className="spinner"></div> Uploading...</> : '📄 Upload EBook'}
-                </button>
-                <button className="btn btn-secondary" onClick={() => audiobookFileRef.current?.click()} disabled={uploadingAudiobook}>
-                    {uploadingAudiobook ? <><div className="spinner"></div> Uploading...</> : '🎵 Upload Audiobook'}
-                </button>
-                <button
-                    className="btn btn-secondary"
-                    onClick={handleVerify}
-                    disabled={verifying}
-                    title="Check all books against their source files and find orphaned entries"
-                >
-                    {verifying ? <><div className="spinner"></div> Verifying...</> : '🔎 Verify Files'}
-                </button>
+
                 <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
                 <input ref={audiobookFileRef} type="file" accept=".mp3,.m4a,.m4b,.flac,.ogg,.wav" hidden onChange={handleAudiobookUpload} />
             </div>
@@ -618,22 +749,44 @@ function LibraryPage({ tab }) {
                             <table>
                                 <thead>
                                     <tr>
+                                        {selectMode && (
+                                            <th style={{ width: '36px' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={filteredEbooks.length > 0 && filteredEbooks.every(b => selectedIds.has(b.id))}
+                                                    onChange={() => toggleSelectAll(filteredEbooks)}
+                                                />
+                                            </th>
+                                        )}
                                         <SortableHeader label="Title" column="title" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                         <SortableHeader label="Author" column="author" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                         <SortableHeader label="Series" column="series" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                         <SortableHeader label="Format" column="format" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                         <SortableHeader label="Size" column="file_size" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
                                         <SortableHeader label="Added" column="uploaded_at" sortCol={ebookSort.col} sortDir={ebookSort.dir} onSort={handleEbookSort} />
-                                        <th style={{ width: '60px' }}></th>
+                                        {!selectMode && <th style={{ width: '60px' }}></th>}
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {filteredEbooks.map(book => (
-                                        <tr key={book.id}>
+                                        <tr
+                                            key={book.id}
+                                            style={selectMode && selectedIds.has(book.id) ? { background: 'rgba(139,92,246,0.12)' } : {}}
+                                            onClick={selectMode ? () => toggleSelect(book.id) : undefined}
+                                        >
+                                            {selectMode && (
+                                                <td onClick={e => e.stopPropagation()}>
+                                                    <input type="checkbox" checked={selectedIds.has(book.id)} onChange={() => toggleSelect(book.id)} />
+                                                </td>
+                                            )}
                                             <td style={{ fontWeight: 500 }}>
-                                                <Link to={`/book/ebook/${book.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
-                                                    {book.title}
-                                                </Link>
+                                                {selectMode ? (
+                                                    <span style={{ cursor: 'pointer' }}>{book.title}</span>
+                                                ) : (
+                                                    <Link to={`/book/ebook/${book.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                        {book.title}
+                                                    </Link>
+                                                )}
                                             </td>
                                             <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
                                             <td style={{ color: 'var(--text-secondary)' }}>
@@ -642,24 +795,26 @@ function LibraryPage({ tab }) {
                                             <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                             <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                             <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                            <td style={{ whiteSpace: 'nowrap' }}>
-                                                <button
-                                                    className="btn btn-sm btn-secondary"
-                                                    onClick={() => openEdit(book, 'ebook')}
-                                                    title="Edit metadata"
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
-                                                >
-                                                    ✏️
-                                                </button>
-                                                <button
-                                                    className="btn btn-sm btn-danger"
-                                                    onClick={() => openDeleteModal(book, 'ebook')}
-                                                    title="Delete ebook"
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                >
-                                                    🗑️
-                                                </button>
-                                            </td>
+                                            {!selectMode && (
+                                                <td style={{ whiteSpace: 'nowrap' }}>
+                                                    <button
+                                                        className="btn btn-sm btn-secondary"
+                                                        onClick={() => openEdit(book, 'ebook')}
+                                                        title="Edit metadata"
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-sm btn-danger"
+                                                        onClick={() => openDeleteModal(book, 'ebook')}
+                                                        title="Delete ebook"
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                    >
+                                                        🗑️
+                                                    </button>
+                                                </td>
+                                            )}
                                         </tr>
                                     ))}
                                 </tbody>
@@ -688,22 +843,44 @@ function LibraryPage({ tab }) {
                                 <table>
                                     <thead>
                                         <tr>
+                                            {selectMode && (
+                                                <th style={{ width: '36px' }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={filteredAudiobooks.length > 0 && filteredAudiobooks.every(b => selectedIds.has(b.id))}
+                                                        onChange={() => toggleSelectAll(filteredAudiobooks)}
+                                                    />
+                                                </th>
+                                            )}
                                             <SortableHeader label="Title" column="title" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                             <SortableHeader label="Author" column="author" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                             <SortableHeader label="Series" column="series" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                             <SortableHeader label="Format" column="format" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                             <SortableHeader label="Size" column="file_size" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
                                             <SortableHeader label="Added" column="uploaded_at" sortCol={audiobookSort.col} sortDir={audiobookSort.dir} onSort={handleAudiobookSort} />
-                                            <th style={{ width: '60px' }}></th>
+                                            {!selectMode && <th style={{ width: '60px' }}></th>}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {filteredAudiobooks.map(book => (
-                                            <tr key={book.id}>
+                                            <tr
+                                                key={book.id}
+                                                style={selectMode && selectedIds.has(book.id) ? { background: 'rgba(139,92,246,0.12)' } : {}}
+                                                onClick={selectMode ? () => toggleSelect(book.id) : undefined}
+                                            >
+                                                {selectMode && (
+                                                    <td onClick={e => e.stopPropagation()}>
+                                                        <input type="checkbox" checked={selectedIds.has(book.id)} onChange={() => toggleSelect(book.id)} />
+                                                    </td>
+                                                )}
                                                 <td style={{ fontWeight: 500 }}>
-                                                    <Link to={`/book/audiobook/${book.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
-                                                        {book.title}
-                                                    </Link>
+                                                    {selectMode ? (
+                                                        <span style={{ cursor: 'pointer' }}>{book.title}</span>
+                                                    ) : (
+                                                        <Link to={`/book/audiobook/${book.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                            {book.title}
+                                                        </Link>
+                                                    )}
                                                 </td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>{book.author || '—'}</td>
                                                 <td style={{ color: 'var(--text-secondary)' }}>
@@ -712,24 +889,26 @@ function LibraryPage({ tab }) {
                                                 <td><span className="badge badge-auto_matched">{book.format}</span></td>
                                                 <td style={{ color: 'var(--text-muted)' }}>{formatSize(book.file_size)}</td>
                                                 <td style={{ color: 'var(--text-muted)' }}>{new Date(book.uploaded_at).toLocaleDateString()}</td>
-                                                <td style={{ whiteSpace: 'nowrap' }}>
-                                                    <button
-                                                        className="btn btn-sm btn-secondary"
-                                                        onClick={() => openEdit(book, 'audiobook')}
-                                                        title="Edit metadata"
-                                                        style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
-                                                    >
-                                                        ✏️
-                                                    </button>
-                                                    <button
-                                                        className="btn btn-sm btn-danger"
-                                                        onClick={() => openDeleteModal(book, 'audiobook')}
-                                                        title="Delete audiobook"
-                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                    >
-                                                        🗑️
-                                                    </button>
-                                                </td>
+                                                {!selectMode && (
+                                                    <td style={{ whiteSpace: 'nowrap' }}>
+                                                        <button
+                                                            className="btn btn-sm btn-secondary"
+                                                            onClick={() => openEdit(book, 'audiobook')}
+                                                            title="Edit metadata"
+                                                            style={{ padding: '4px 8px', fontSize: '0.8rem', marginRight: '4px' }}
+                                                        >
+                                                            ✏️
+                                                        </button>
+                                                        <button
+                                                            className="btn btn-sm btn-danger"
+                                                            onClick={() => openDeleteModal(book, 'audiobook')}
+                                                            title="Delete audiobook"
+                                                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                        >
+                                                            🗑️
+                                                        </button>
+                                                    </td>
+                                                )}
                                             </tr>
                                         ))}
                                     </tbody>
@@ -788,6 +967,102 @@ function LibraryPage({ tab }) {
                     type={editingType}
                     onClose={() => { setEditingBook(null); setEditingType(null) }}
                     onSave={handleSaveMetadata}
+                />
+            )}
+
+            {/* Floating bulk action bar */}
+            {selectMode && selectedIds.size > 0 && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'var(--surface)', border: '1px solid var(--border)',
+                    borderRadius: '12px', padding: '12px 20px',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    boxShadow: '0 4px 24px rgba(0,0,0,0.5)', zIndex: 100,
+                    whiteSpace: 'nowrap'
+                }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {selectedIds.size} selected
+                    </span>
+                    <button className="btn btn-secondary" onClick={() => setBulkEditOpen(true)}>
+                        ✏️ Edit Metadata
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => setBulkMatchOpen(true)}>
+                        🔍 Bulk Match
+                    </button>
+                    <button className="btn btn-danger" onClick={handleBulkDelete}>
+                        🗑️ Delete
+                    </button>
+                </div>
+            )}
+
+            {/* Bulk Edit Modal */}
+            {bulkEditOpen && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.6)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                    <div className="card" style={{ padding: '24px', maxWidth: '520px', width: '90%' }}>
+                        <h3 style={{ marginTop: 0 }}>
+                            ✏️ Edit {selectedIds.size} Book{selectedIds.size !== 1 ? 's' : ''}
+                        </h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 0 }}>
+                            Leave fields blank to keep existing values. Only filled fields will be updated.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {[
+                                { key: 'author', label: 'Author', type: 'text' },
+                                { key: 'series', label: 'Series', type: 'text' },
+                                { key: 'series_index', label: 'Series Index', type: 'number' },
+                                { key: 'publisher', label: 'Publisher', type: 'text' },
+                                { key: 'published_year', label: 'Published Year', type: 'number' },
+                            ].map(({ key, label, type }) => (
+                                <div key={key}>
+                                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem', fontWeight: 500 }}>
+                                        {label}
+                                    </label>
+                                    <input
+                                        className="form-input"
+                                        type={type}
+                                        placeholder="Leave blank to keep unchanged"
+                                        value={bulkEditFields[key]}
+                                        onChange={e => setBulkEditFields(prev => ({ ...prev, [key]: e.target.value }))}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setBulkEditOpen(false)}
+                                disabled={bulkSaving}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleBulkEdit}
+                                disabled={bulkSaving || Object.values(bulkEditFields).every(v => !v.trim())}
+                            >
+                                {bulkSaving
+                                    ? <><div className="spinner"></div> Saving...</>
+                                    : `Save to ${selectedIds.size} Book${selectedIds.size !== 1 ? 's' : ''}`}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Bulk Match Modal */}
+            {bulkMatchOpen && (
+                <BulkMatchModal
+                    books={(activeTab === 'ebooks' ? filteredEbooks : filteredAudiobooks).filter(b => selectedIds.has(b.id))}
+                    bookType={activeTab === 'ebooks' ? 'ebook' : 'audiobook'}
+                    onClose={() => setBulkMatchOpen(false)}
+                    onUpdate={(id, patch) => {
+                        if (activeTab === 'ebooks') setEbooks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
+                        else setAudiobooks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
+                    }}
                 />
             )}
         </div >
