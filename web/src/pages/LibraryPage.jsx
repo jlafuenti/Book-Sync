@@ -540,13 +540,14 @@ function LibraryPage({ tab }) {
                     {maintenanceOpen && (
                         <div style={{
                             position: 'absolute', top: '100%', left: 0, marginTop: '4px',
-                            background: 'var(--surface)', border: '1px solid var(--border)',
-                            borderRadius: '8px', boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+                            background: 'var(--bg-card)', border: '1px solid var(--border)',
+                            borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
                             zIndex: 200, minWidth: '220px', overflow: 'hidden'
                         }}>
                             <button
-                                className="btn btn-secondary"
-                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px' }}
+                                style={{ width: '100%', textAlign: 'left', border: 'none', padding: '11px 16px', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.9rem' }}
+                                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                 onClick={() => { setMaintenanceOpen(false); handleNormalize() }}
                                 disabled={normalizing}
                                 title="Fix author names like 'Butcher, Jim' → 'Jim Butcher' and series like 'Dresden Files, The' → 'The Dresden Files'"
@@ -554,8 +555,9 @@ function LibraryPage({ tab }) {
                                 {normalizing ? <><div className="spinner"></div> Normalizing...</> : '🔄 Normalize Metadata'}
                             </button>
                             <button
-                                className="btn btn-secondary"
-                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px', color: 'var(--danger, #e74c3c)' }}
+                                style={{ width: '100%', textAlign: 'left', border: 'none', padding: '11px 16px', background: 'transparent', color: 'var(--error)', cursor: 'pointer', fontSize: '0.9rem' }}
+                                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                 onClick={() => { setMaintenanceOpen(false); handleRescanAll() }}
                                 disabled={rescanningAll}
                                 title="Forcefully extract metadata from EVERY file and overwrite the database. Destructive!"
@@ -563,8 +565,9 @@ function LibraryPage({ tab }) {
                                 {rescanningAll ? <><div className="spinner"></div> Overwriting...</> : '⚠️ Force Rescan All'}
                             </button>
                             <button
-                                className="btn btn-secondary"
-                                style={{ width: '100%', textAlign: 'left', borderRadius: 0, border: 'none', padding: '10px 16px' }}
+                                style={{ width: '100%', textAlign: 'left', border: 'none', padding: '11px 16px', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.9rem' }}
+                                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-card-hover)'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                 onClick={() => { setMaintenanceOpen(false); handleVerify() }}
                                 disabled={verifying}
                                 title="Check all books against their source files and find orphaned entries"
@@ -581,7 +584,7 @@ function LibraryPage({ tab }) {
                     onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
                     style={{ marginLeft: 'auto' }}
                 >
-                    {selectMode ? `✕ Cancel${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}` : '☑ Select'}
+                    {selectMode ? `✕ Cancel${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}` : '☑ Bulk Edit'}
                 </button>
 
                 <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
@@ -1002,7 +1005,7 @@ function LibraryPage({ tab }) {
                     background: 'rgba(0,0,0,0.6)', display: 'flex',
                     alignItems: 'center', justifyContent: 'center', zIndex: 1000
                 }}>
-                    <div className="card" style={{ padding: '24px', maxWidth: '520px', width: '90%' }}>
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px', maxWidth: '520px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
                         <h3 style={{ marginTop: 0 }}>
                             ✏️ Edit {selectedIds.size} Book{selectedIds.size !== 1 ? 's' : ''}
                         </h3>
