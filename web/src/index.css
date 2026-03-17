@@ -1134,6 +1134,8 @@ tr:hover td {
     display: flex;
     flex-direction: column;
     height: calc(100vh - 64px);
+    overflow: hidden;
+    min-width: 0;
 }
 
 .unpaired-global-filter {
@@ -1142,6 +1144,8 @@ tr:hover td {
     display: flex;
     align-items: center;
     gap: 12px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .unpaired-filter-label {

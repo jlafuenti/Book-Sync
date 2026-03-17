@@ -977,10 +977,10 @@ function LibraryPage({ tab }) {
             {selectMode && selectedIds.size > 0 && (
                 <div style={{
                     position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
-                    background: 'var(--surface)', border: '1px solid var(--border)',
+                    background: 'var(--bg-secondary)', border: '1px solid var(--border)',
                     borderRadius: '12px', padding: '12px 20px',
                     display: 'flex', alignItems: 'center', gap: '12px',
-                    boxShadow: '0 4px 24px rgba(0,0,0,0.5)', zIndex: 100,
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100,
                     whiteSpace: 'nowrap'
                 }}>
                     <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -989,7 +989,11 @@ function LibraryPage({ tab }) {
                     <button className="btn btn-secondary" onClick={() => setBulkEditOpen(true)}>
                         ✏️ Edit Metadata
                     </button>
-                    <button className="btn btn-secondary" onClick={() => setBulkMatchOpen(true)}>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={() => setBulkMatchOpen(true)}
+                        title="Cycle through each selected book and search an online metadata provider to fill in missing info (title, author, cover, etc.)"
+                    >
                         🔍 Bulk Match
                     </button>
                     <button className="btn btn-danger" onClick={handleBulkDelete}>
