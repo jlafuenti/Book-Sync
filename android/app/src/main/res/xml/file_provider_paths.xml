@@ -2,4 +2,6 @@
 <paths>
     <!-- Exposes filesDir/covers/ for Android Auto cover art via FileProvider -->
     <files-path name="covers" path="covers/" />
+    <!-- Exposes all of filesDir (including auto_diagnostics.log) for sharing -->
+    <files-path name="diagnostics" path="." />
 </paths>

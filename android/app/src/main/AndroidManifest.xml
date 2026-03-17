@@ -66,6 +66,15 @@
                 android:resource="@xml/file_provider_paths" />
         </provider>
 
+        <!-- Diagnostic log stop action from persistent notification -->
+        <receiver
+            android:name=".diagnostics.DiagnosticsStopReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.booksync.action.STOP_DIAGNOSTICS" />
+            </intent-filter>
+        </receiver>
+
         <!-- WorkManager Data Sync Service -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

@@ -40,6 +40,12 @@ interface BookPairDao {
     @Query("DELETE FROM book_pairs WHERE id = :pairId")
     suspend fun deletePairById(pairId: Int)
 
+    @Query("DELETE FROM book_pairs WHERE id NOT IN (:ids)")
+    suspend fun deleteOrphansExcept(ids: List<Int>)
+
+    @Query("DELETE FROM book_pairs")
+    suspend fun deleteAll()
+
     @Query("SELECT * FROM book_pairs ORDER BY ebookTitle")
     suspend fun getAllPairsOnce(): List<BookPairEntity>
 
@@ -73,6 +79,12 @@ interface EBookDao {
     @Upsert
     suspend fun upsertEBooks(ebooks: List<EBookEntity>)
 
+    @Query("DELETE FROM ebooks WHERE id NOT IN (:ids)")
+    suspend fun deleteOrphansExcept(ids: List<Int>)
+
+    @Query("DELETE FROM ebooks")
+    suspend fun deleteAll()
+
     @Query("UPDATE ebooks SET isDownloaded = :downloaded WHERE id = :ebookId")
     suspend fun setDownloaded(ebookId: Int, downloaded: Boolean)
 
@@ -93,6 +105,12 @@ interface AudioBookDao {
 
     @Upsert
     suspend fun upsertAudioBooks(audiobooks: List<AudioBookEntity>)
+
+    @Query("DELETE FROM audiobooks WHERE id NOT IN (:ids)")
+    suspend fun deleteOrphansExcept(ids: List<Int>)
+
+    @Query("DELETE FROM audiobooks")
+    suspend fun deleteAll()
 
     @Query("UPDATE audiobooks SET isDownloaded = :downloaded WHERE id = :audiobookId")
     suspend fun setDownloaded(audiobookId: Int, downloaded: Boolean)
