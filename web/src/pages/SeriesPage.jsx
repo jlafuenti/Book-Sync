@@ -282,8 +282,8 @@ export default function SeriesPage() {
                     <option value="count">Most Books</option>
                     <option value="recent">Recently Added</option>
                 </select>
-                <button className="btn btn-secondary btn-sm" onClick={expandAll} disabled={selectMode}>Expand All</button>
-                <button className="btn btn-secondary btn-sm" onClick={collapseAll} disabled={selectMode}>Collapse All</button>
+                <button className="btn btn-secondary btn-sm" onClick={expandAll}>Expand All</button>
+                <button className="btn btn-secondary btn-sm" onClick={collapseAll}>Collapse All</button>
                 <button
                     className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
                     onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
@@ -298,8 +298,8 @@ export default function SeriesPage() {
                     <SeriesCard
                         key={group.name}
                         group={group}
-                        expanded={selectMode || expandedSeries.has(group.name)}
-                        onToggle={() => !selectMode && toggleSeries(group.name)}
+                        expanded={expandedSeries.has(group.name)}
+                        onToggle={() => toggleSeries(group.name)}
                         selectMode={selectMode}
                         selectedKeys={selectedKeys}
                         onToggleItem={toggleSelectItem}
