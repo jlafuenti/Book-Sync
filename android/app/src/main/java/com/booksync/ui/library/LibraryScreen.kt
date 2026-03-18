@@ -258,7 +258,7 @@ fun LibraryScreen(
                         tint = Color.Unspecified,
                         modifier = Modifier
                             .padding(start = 8.dp)
-                            .size(36.dp)
+                            .size(40.dp)
                             .clip(RoundedCornerShape(8.dp))
                     )
                 },
@@ -274,7 +274,7 @@ fun LibraryScreen(
                     }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
-                modifier = Modifier.height(52.dp),
+                modifier = Modifier.height(56.dp),
             )
         },
     ) { padding ->
