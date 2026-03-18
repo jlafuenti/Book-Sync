@@ -155,7 +155,7 @@ fun BookSyncNavigation() {
                             }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Bookmarks, contentDescription = "Series") },
+                            icon = { Icon(Icons.Default.Bookmark, contentDescription = "Series") },
                             label = { Text("Series") },
                             selected = currentRoute == "series",
                             onClick = {
