@@ -131,6 +131,9 @@ function LibraryPage({ tab }) {
     const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
     const [bulkSaving, setBulkSaving] = useState(false)
     const [bulkMatchOpen, setBulkMatchOpen] = useState(false)
+    const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+    const [bulkDeleteSourceFile, setBulkDeleteSourceFile] = useState(false)
+    const [bulkDeleting, setBulkDeleting] = useState(false)
 
     // Determine which tab to show
     const activeTab = tab || 'ebooks'
@@ -244,17 +247,24 @@ function LibraryPage({ tab }) {
         }
     }
 
-    const handleBulkDelete = async () => {
-        const n = selectedIds.size
-        if (!window.confirm(`Delete ${n} book${n !== 1 ? 's' : ''} from BookSync? This will also remove associated pairs, sync maps, and bookmarks.`)) return
+    const handleBulkDelete = () => {
+        setBulkDeleteSourceFile(false)
+        setBulkDeleteOpen(true)
+    }
+
+    const executeBulkDelete = async () => {
+        setBulkDeleting(true)
         try {
             const deleteFn = activeTab === 'ebooks' ? deleteEbook : deleteAudiobook
             const setBooks = activeTab === 'ebooks' ? setEbooks : setAudiobooks
-            await Promise.all([...selectedIds].map(id => deleteFn(id, false)))
+            await Promise.all([...selectedIds].map(id => deleteFn(id, bulkDeleteSourceFile)))
             setBooks(prev => prev.filter(b => !selectedIds.has(b.id)))
+            setBulkDeleteOpen(false)
             exitSelectMode()
         } catch (err) {
             alert('Delete failed: ' + err.message)
+        } finally {
+            setBulkDeleting(false)
         }
     }
 
@@ -996,9 +1006,53 @@ function LibraryPage({ tab }) {
                     >
                         🔍 Bulk Match
                     </button>
-                    <button className="btn btn-danger" onClick={handleBulkDelete}>
+                    <button
+                        className="btn btn-danger"
+                        onClick={handleBulkDelete}
+                        title="Remove selected books from BookSync. After confirming, you can optionally also delete the source files from disk."
+                    >
                         🗑️ Delete
                     </button>
+                </div>
+            )}
+
+            {/* Bulk Delete Confirmation Modal */}
+            {bulkDeleteOpen && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.6)', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center', zIndex: 1000
+                }}>
+                    <div className="card" style={{ padding: '24px', maxWidth: '480px', width: '90%' }}>
+                        <h3 style={{ marginTop: 0 }}>🗑️ Confirm Delete</h3>
+                        <p>
+                            Are you sure you want to delete <strong>{selectedIds.size} book{selectedIds.size !== 1 ? 's' : ''}</strong> from BookSync?
+                        </p>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                            This will also remove any associated book pairs, sync maps, and bookmarks.
+                        </p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '16px 0', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={bulkDeleteSourceFile}
+                                onChange={(e) => setBulkDeleteSourceFile(e.target.checked)}
+                            />
+                            <span>Also delete the source files from disk</span>
+                        </label>
+                        {bulkDeleteSourceFile && (
+                            <div className="alert alert-error" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
+                                ⚠️ This will permanently delete {selectedIds.size} file{selectedIds.size !== 1 ? 's' : ''} from your server's filesystem!
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" onClick={() => setBulkDeleteOpen(false)} disabled={bulkDeleting}>
+                                Cancel
+                            </button>
+                            <button className="btn btn-danger" onClick={executeBulkDelete} disabled={bulkDeleting}>
+                                {bulkDeleting ? <><div className="spinner"></div> Deleting...</> : `Delete ${selectedIds.size} Book${selectedIds.size !== 1 ? 's' : ''}`}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 

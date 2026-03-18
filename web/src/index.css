@@ -213,6 +213,10 @@ body {
     flex: 1;
     margin-left: 260px;
     padding: 32px;
+    width: calc(100vw - 260px);
+    max-width: calc(100vw - 260px);
+    box-sizing: border-box;
+    overflow-x: hidden;
 }
 
 .page-header {
