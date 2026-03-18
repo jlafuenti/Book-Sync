@@ -34,7 +34,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
     def __init__(self, remote_url: str, timeout: int = 7200):
         self.remote_url = remote_url.rstrip("/")
         self.timeout = timeout
-        
+
     async def _poll_progress(self, stop_event: asyncio.Event, progress_callback: Callable):
         """Polls the remote server for progress while transcription is running."""
         async with httpx.AsyncClient() as client:
@@ -46,17 +46,44 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         if data.get("active"):
                             progress = data.get("progress", 0.0)
                             message = data.get("message")
-                            # We pass None for duration to the callback, 
+                            # We pass None for duration to the callback,
                             # because the Jetson message already handles the time logic
                             progress_callback(progress, None, message)
                 except httpx.RequestError as e:
                     logger.debug(f"Progress polling failed: {e}")
-                
+
                 # Check 2 times a second
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=0.5)
                 except asyncio.TimeoutError:
                     pass
+
+    async def _wait_for_server_idle(
+        self, blocking_file: str, progress_callback: Optional[Callable]
+    ) -> None:
+        """Poll /v1/status until the remote server is no longer active."""
+        logger.info(
+            f"Remote server busy with '{blocking_file}'. "
+            f"Waiting for it to finish before retrying..."
+        )
+        async with httpx.AsyncClient() as client:
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    resp = await client.get(f"{self.remote_url}/v1/status", timeout=10.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if progress_callback:
+                            progress_callback(
+                                data.get("progress", 0),
+                                None,
+                                f"Waiting: '{blocking_file}' in progress...",
+                            )
+                        if not data.get("active"):
+                            logger.info("Remote server is now free. Retrying upload.")
+                            return
+                except httpx.RequestError as e:
+                    logger.debug(f"Status poll error while waiting: {e}")
 
     async def transcribe(
         self,
@@ -100,22 +127,25 @@ class RemoteWhisperProvider(TranscriptionProvider):
             poll_task = asyncio.create_task(self._poll_progress(stop_polling, progress_callback))
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                with open(audio_path, "rb") as f:
-                    logger.info("Sending POST /v1/transcribe request...")
-                    files = {"audio_file": (filename, f, "audio/mpeg")}
-                    
-                    try:
-                        response = await client.post(
-                            f"{self.remote_url}/v1/transcribe", 
-                            files=files
-                        )
-                    except httpx.ConnectError as e:
-                        raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
-                    except httpx.ReadTimeout as e:
-                        raise ProviderUnavailableError(f"Remote transcription timed out after {self.timeout}s: {e}")
-                    except httpx.RequestError as e:
-                        raise ProviderUnavailableError(f"HTTP request error: {e}")
+            data = None
+            for _attempt in range(10):
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    with open(audio_path, "rb") as f:
+                        attempt_label = f" (attempt {_attempt + 1})" if _attempt > 0 else ""
+                        logger.info(f"Sending POST /v1/transcribe request{attempt_label}...")
+                        files = {"audio_file": (filename, f, "audio/mpeg")}
+
+                        try:
+                            response = await client.post(
+                                f"{self.remote_url}/v1/transcribe",
+                                files=files
+                            )
+                        except httpx.ConnectError as e:
+                            raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
+                        except httpx.ReadTimeout as e:
+                            raise ProviderUnavailableError(f"Remote transcription timed out after {self.timeout}s: {e}")
+                        except httpx.RequestError as e:
+                            raise ProviderUnavailableError(f"HTTP request error: {e}")
 
                 # Handle response codes
                 if response.status_code == 409:
@@ -168,16 +198,22 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                 f"Failed to fetch cached transcription result: "
                                 f"{result_resp.status_code} - {result_resp.text}"
                             )
+                        break
+
                     else:
-                        raise ProviderUnavailableError("Remote server is busy with another transcription.")
-                
+                        # A different file is running. Wait for it to finish, then retry the upload.
+                        await self._wait_for_server_idle(
+                            current_file_on_orin or "unknown", progress_callback
+                        )
+                        continue
+
                 elif response.status_code >= 500:
                     error_body = response.text
                     if any(kw in error_body.lower() for kw in ("out of memory", "oom", "cuda error", "cudaoutofmemory")):
-                        raise TranscriptionError(
-                            f"Remote server ran out of memory transcribing this file. "
-                            f"Consider using a smaller Whisper model (e.g. 'small') or check if the audiobook is unusually large. "
-                            f"Server error: {error_body[:300]}"
+                        # Treat as retriable — the server frees the job lock after OOM and
+                        # accepts new work immediately. ProviderUnavailableError lets the queue retry.
+                        raise ProviderUnavailableError(
+                            f"Remote server ran out of memory (will retry): {error_body[:300]}"
                         )
                     raise ProviderUnavailableError(
                         f"Remote server internal error ({response.status_code}): {error_body}"
@@ -189,24 +225,30 @@ class RemoteWhisperProvider(TranscriptionProvider):
                 else:
                     # Success from the original POST
                     data = response.json()
+                    break
 
-                # Parse successful response
-                sentences_data = data.get("sentences", [])
-                
-                sentences = []
-                for s in sentences_data:
-                    sentences.append(TranscribedSentence(
-                        text=s.get("text", ""),
-                        start_ms=s.get("start_ms", 0),
-                        end_ms=s.get("end_ms", 0),
-                    ))
-                    
-                logger.info(
-                    f"Remote transcription complete: {len(sentences)} sentences in "
-                    f"{data.get('processing_time_seconds', '?')}s processing time "
-                    f"for {data.get('duration_seconds', '?')}s of audio."
+            else:
+                raise ProviderUnavailableError(
+                    "Remote server remained busy after 10 upload attempts."
                 )
-                return sentences
+
+            # Parse successful response
+            sentences_data = data.get("sentences", [])
+
+            sentences = []
+            for s in sentences_data:
+                sentences.append(TranscribedSentence(
+                    text=s.get("text", ""),
+                    start_ms=s.get("start_ms", 0),
+                    end_ms=s.get("end_ms", 0),
+                ))
+
+            logger.info(
+                f"Remote transcription complete: {len(sentences)} sentences in "
+                f"{data.get('processing_time_seconds', '?')}s processing time "
+                f"for {data.get('duration_seconds', '?')}s of audio."
+            )
+            return sentences
 
         finally:
             if poll_task:
