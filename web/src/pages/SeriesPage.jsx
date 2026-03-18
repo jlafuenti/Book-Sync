@@ -20,7 +20,7 @@ export default function SeriesPage() {
     const [selectMode, setSelectMode] = useState(false)
     const [selectedKeys, setSelectedKeys] = useState(new Set())
     const [bulkEditOpen, setBulkEditOpen] = useState(false)
-    const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', publisher: '', published_year: '' })
+    const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
     const [bulkSaving, setBulkSaving] = useState(false)
 
     useEffect(() => {
@@ -218,6 +218,7 @@ export default function SeriesPage() {
         const patch = {}
         if (bulkEditFields.author.trim()) patch.author = bulkEditFields.author.trim()
         if (bulkEditFields.series.trim()) patch.series = bulkEditFields.series.trim()
+        if (bulkEditFields.series_index.trim()) patch.series_index = parseFloat(bulkEditFields.series_index) || null
         if (bulkEditFields.publisher.trim()) patch.publisher = bulkEditFields.publisher.trim()
         if (bulkEditFields.published_year.trim()) patch.published_year = parseInt(bulkEditFields.published_year) || null
         if (Object.keys(patch).length === 0) return
@@ -231,7 +232,7 @@ export default function SeriesPage() {
                 return calls
             }))
             setBulkEditOpen(false)
-            setBulkEditFields({ author: '', series: '', publisher: '', published_year: '' })
+            setBulkEditFields({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
             exitSelectMode()
             await loadAll()
         } catch (err) {
@@ -373,6 +374,7 @@ export default function SeriesPage() {
                             {[
                                 { key: 'author', label: 'Author', type: 'text' },
                                 { key: 'series', label: 'Series', type: 'text' },
+                                { key: 'series_index', label: 'Series Index', type: 'number' },
                                 { key: 'publisher', label: 'Publisher', type: 'text' },
                                 { key: 'published_year', label: 'Published Year', type: 'number' },
                             ].map(({ key, label, type }) => (

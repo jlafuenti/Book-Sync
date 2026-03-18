@@ -144,6 +144,8 @@ class AudioPlayerService : MediaLibraryService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
+            .setSeekBackIncrementMs(10_000)
+            .setSeekForwardIncrementMs(10_000)
             .build()
         localPlayer.playbackParameters = localPlayer.playbackParameters.withSpeed(initialSpeed)
         localPlayer.addListener(playerListener)
@@ -465,9 +467,20 @@ class AudioPlayerService : MediaLibraryService() {
                 .add(SessionCommand(CMD_GET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_CHAPTERS, Bundle.EMPTY))
                 .build()
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+            val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
-                .build()
+            // For Android Auto: replace prev/next track buttons with 10-second rewind/fast-forward.
+            if (controller.packageName == "com.google.android.projection.gearhead") {
+                val playerCommands = Player.Commands.Builder()
+                    .addAllCommands()
+                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
+                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                    .remove(Player.COMMAND_SEEK_TO_NEXT)
+                    .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                    .build()
+                builder.setAvailablePlayerCommands(playerCommands)
+            }
+            return builder.build()
         }
 
         override fun onCustomCommand(
