@@ -741,6 +741,93 @@ class BookSyncRepository @Inject constructor(
         }
     }
 
+    // ============ Startup Bidirectional Sync ============
+
+    /**
+     * Bidirectional sync of bookmarks and audiobook progress for all pairs.
+     * Called on startup after pairs are loaded to recover data lost by DB wipe or
+     * to reconcile progress made on another device.
+     *
+     * - Server newer (or no local): pull from server
+     * - Local newer: push local to server
+     * - Equal / server unreachable: no-op
+     */
+    suspend fun syncAllBookmarksAndProgress(pairs: List<BookPairEntity>) {
+        for (pair in pairs) {
+            // --- Bookmark ---
+            try {
+                val remote = api.getBookmark(pair.id)
+                val local = bookmarkDao.getBookmark(pair.id)
+                val remoteTs = remote.updated_at.toLongOrNull() ?: 0L
+                val localTs  = local?.updatedAt?.toLongOrNull() ?: 0L
+
+                when {
+                    local == null || remoteTs > localTs -> {
+                        bookmarkDao.upsertBookmark(BookmarkEntity(
+                            bookPairId          = pair.id,
+                            source              = remote.source,
+                            epubChapter         = remote.epub_chapter,
+                            epubSentenceIndex   = remote.epub_sentence_index,
+                            audioPositionMs     = remote.audio_position_ms,
+                            epubLocator         = remote.epub_locator ?: local?.epubLocator,
+                            updatedAt           = remote.updated_at,
+                            syncedToServer      = true,
+                        ))
+                        log("syncBookmark pair=${pair.id}: pulled from server ts=$remoteTs")
+                    }
+                    localTs > remoteTs -> {
+                        api.updateBookmark(pair.id, BookmarkUpdateRequest(
+                            source              = local.source,
+                            epub_chapter        = local.epubChapter,
+                            epub_sentence_index = local.epubSentenceIndex,
+                            audio_position_ms   = local.audioPositionMs,
+                            epub_locator        = local.epubLocator,
+                        ))
+                        bookmarkDao.upsertBookmark(local.copy(syncedToServer = true))
+                        log("syncBookmark pair=${pair.id}: pushed local ts=$localTs")
+                    }
+                }
+            } catch (_: Exception) { /* offline or no server record yet — skip */ }
+
+            // --- Audiobook progress ---
+            try {
+                val remote = api.getProgress("audiobook", pair.audiobookId)
+                val local  = userProgressDao.getProgress("audiobook", pair.audiobookId)
+                val remoteTs = remote.updated_at.toLongOrNull() ?: 0L
+                val localTs  = local?.updatedAt ?: 0L
+
+                when {
+                    local == null || remoteTs > localTs -> {
+                        userProgressDao.upsertProgress(UserProgressEntity(
+                            mediaType            = "audiobook",
+                            mediaId              = pair.audiobookId,
+                            bookPairId           = pair.id,
+                            epubCfi              = null,
+                            epubChapter          = null,
+                            epubProgressPercent  = null,
+                            audioPositionMs      = remote.audio_position_ms,
+                            isCompleted          = remote.is_completed,
+                            updatedAt            = remoteTs,
+                            deviceId             = remote.device_id,
+                            syncedToServer       = true,
+                        ))
+                        log("syncProgress audiobook=${pair.audiobookId}: pulled from server ts=$remoteTs")
+                    }
+                    localTs > remoteTs -> {
+                        api.updateProgress("audiobook", pair.audiobookId, ProgressUpdateRequest(
+                            book_pair_id        = local.bookPairId,
+                            audio_position_ms   = local.audioPositionMs,
+                            is_completed        = local.isCompleted,
+                            device_id           = local.deviceId,
+                        ))
+                        userProgressDao.upsertProgress(local.copy(syncedToServer = true))
+                        log("syncProgress audiobook=${pair.audiobookId}: pushed local ts=$localTs")
+                    }
+                }
+            } catch (_: Exception) { /* offline or no server record yet — skip */ }
+        }
+    }
+
     // ============ Offline Sync ============
 
     /** Process pending sync queue — called by WorkManager. */
