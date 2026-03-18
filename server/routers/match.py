@@ -12,7 +12,7 @@ from database import get_db
 from schemas import MatchRequest, MatchResult
 from models.book import EBook, AudioBook
 from models.user import User
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_editor_user
 from routers.library import sanitize_filename
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ class ApplyCoverRequest(BaseModel):
 async def apply_remote_cover(
     req: ApplyCoverRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user)
+    _: User = Depends(get_editor_user)
 ):
     """Download a remote cover URL and apply it to a book."""
     if req.book_type not in ["ebook", "audiobook"]:

@@ -102,17 +102,20 @@ async def download_ebook(
     )
 
 @router.get("/covers/{filename}")
-async def get_cover(filename: str):
-    """Serve a cover image by filename."""
+async def get_cover(
+    filename: str,
+    _: User = Depends(get_user_for_streaming),
+):
+    """Serve a cover image by filename. Requires auth via header or ?token= query param."""
     covers_dir = Path(settings.covers_dir)
     file_path = covers_dir / filename
-    
+
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Cover not found")
-        
+
     ext = file_path.suffix.lower()
     media_type = MIME_TYPES.get(ext, "image/jpeg")
-    
+
     return FileResponse(
         path=file_path,
         media_type=media_type,

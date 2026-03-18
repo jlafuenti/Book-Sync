@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getPairs, getEbooks, getAudiobooks, createPair, deletePair } from '../api'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
+import { useAuth } from '../contexts/AuthContext'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -31,6 +32,8 @@ function SortableHeader({ label, column, sortCol, sortDir, onSort, style }) {
 }
 
 function PairsPage({ tab }) {
+    const { hasMinRole } = useAuth()
+    const canEdit = hasMinRole('editor')
     const [pairs, setPairs] = useState([])
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
@@ -230,13 +233,15 @@ function PairsPage({ tab }) {
                                 >
                                     Clear
                                 </button>
-                                <button
-                                    className="btn btn-primary"
-                                    style={{ marginLeft: '10px' }}
-                                    onClick={() => setShowCleanupModal(true)}
-                                >
-                                    🧹 Clean Up Metadata
-                                </button>
+                                {canEdit && (
+                                    <button
+                                        className="btn btn-primary"
+                                        style={{ marginLeft: '10px' }}
+                                        onClick={() => setShowCleanupModal(true)}
+                                    >
+                                        🧹 Clean Up Metadata
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -287,14 +292,16 @@ function PairsPage({ tab }) {
                                                 </td>
                                                 <td>{statusBadge(pair.status)}</td>
                                                 <td>
-                                                    <button
-                                                        className="btn btn-sm btn-danger"
-                                                        onClick={() => handleDeletePair(pair.id)}
-                                                        title="Delete pair"
-                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                    >
-                                                        🗑️
-                                                    </button>
+                                                    {canEdit && (
+                                                        <button
+                                                            className="btn btn-sm btn-danger"
+                                                            onClick={() => handleDeletePair(pair.id)}
+                                                            title="Delete pair"
+                                                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                        >
+                                                            🗑️
+                                                        </button>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}
@@ -357,14 +364,16 @@ function PairsPage({ tab }) {
                                                 </td>
                                                 <td><span className="badge badge-auto_matched">{ebook.format}</span></td>
                                                 <td>
-                                                    <button
-                                                        className="btn btn-sm btn-primary"
-                                                        onClick={() => openPairModal(ebook, 'pair-ebook')}
-                                                        disabled={unpairedAudiobooks.length === 0}
-                                                        title={unpairedAudiobooks.length === 0 ? 'No unpaired audiobooks available' : 'Pair with an audiobook'}
-                                                    >
-                                                        🎧 Pair
-                                                    </button>
+                                                    {canEdit && (
+                                                        <button
+                                                            className="btn btn-sm btn-primary"
+                                                            onClick={() => openPairModal(ebook, 'pair-ebook')}
+                                                            disabled={unpairedAudiobooks.length === 0}
+                                                            title={unpairedAudiobooks.length === 0 ? 'No unpaired audiobooks available' : 'Pair with an audiobook'}
+                                                        >
+                                                            🎧 Pair
+                                                        </button>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}
@@ -427,14 +436,16 @@ function PairsPage({ tab }) {
                                                 </td>
                                                 <td><span className="badge badge-auto_matched">{ab.format}</span></td>
                                                 <td>
-                                                    <button
-                                                        className="btn btn-sm btn-primary"
-                                                        onClick={() => openPairModal(ab, 'pair-audiobook')}
-                                                        disabled={unpairedEbooks.length === 0}
-                                                        title={unpairedEbooks.length === 0 ? 'No unpaired ebooks available' : 'Pair with an ebook'}
-                                                    >
-                                                        📚 Pair
-                                                    </button>
+                                                    {canEdit && (
+                                                        <button
+                                                            className="btn btn-sm btn-primary"
+                                                            onClick={() => openPairModal(ab, 'pair-audiobook')}
+                                                            disabled={unpairedEbooks.length === 0}
+                                                            title={unpairedEbooks.length === 0 ? 'No unpaired ebooks available' : 'Pair with an ebook'}
+                                                        >
+                                                            📚 Pair
+                                                        </button>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))}
@@ -447,7 +458,7 @@ function PairsPage({ tab }) {
             )}
 
             {/* Pairing Modal */}
-            {showModal && selectedItem && (
+            {canEdit && showModal && selectedItem && (
                 <div className="modal-overlay" onClick={() => setShowModal(false)}>
                     <div className="modal" onClick={e => e.stopPropagation()}>
                         <h3>
