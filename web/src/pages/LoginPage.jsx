@@ -46,7 +46,12 @@ function LoginPage({ onLogin }) {
     return (
         <div className="login-page">
             <div className="login-card">
-                <h1>📖 BookSync</h1>
+                <h1>
+                    <svg viewBox="0 0 24 24" width="32" height="32" style={{ verticalAlign: 'middle', marginRight: '8px', marginBottom: '2px' }}>
+                        <path fill="var(--accent)" d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                    Tandem
+                </h1>
                 <p className="subtitle">
                     {isRegistering ? 'Request an account' : 'Sign in to your account'}
                 </p>

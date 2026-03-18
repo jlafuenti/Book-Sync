@@ -1,5 +1,5 @@
 /* ============================================================
-   BookSync — Global Styles
+   Tandem — Global Styles
    Modern dark theme with vibrant accents
    ============================================================ */
 
@@ -23,6 +23,7 @@
     --accent-hover: #6d28d9;
     --accent-light: rgba(124, 58, 237, 0.15);
     --accent-glow: rgba(124, 58, 237, 0.4);
+    --accent-secondary: #a78bfa;
 
     --success: #10b981;
     --success-bg: rgba(16, 185, 129, 0.12);
@@ -90,7 +91,7 @@ body {
 .sidebar-logo h1 {
     font-size: 1.5rem;
     font-weight: 700;
-    background: linear-gradient(135deg, #7c3aed, #a78bfa);
+    background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -159,12 +160,12 @@ body {
 
 .nav-sub-link:hover {
     color: var(--text-secondary);
-    background: rgba(124, 58, 237, 0.06);
+    background: var(--accent-light);
 }
 
 .nav-sub-link.active {
     color: var(--accent);
-    background: rgba(124, 58, 237, 0.10);
+    background: var(--accent-light);
 }
 
 .sidebar-footer {
@@ -612,7 +613,7 @@ tr:hover td {
 
 .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), #a78bfa);
+    background: linear-gradient(90deg, var(--accent), var(--accent-secondary));
     border-radius: 100px;
     transition: width 0.5s ease;
 }
@@ -656,7 +657,7 @@ tr:hover td {
     justify-content: center;
     background: var(--bg-primary);
     background-image:
-        radial-gradient(ellipse at 20% 50%, rgba(124, 58, 237, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 20% 50%, var(--accent-light) 0%, transparent 50%),
         radial-gradient(ellipse at 80% 50%, rgba(59, 130, 246, 0.06) 0%, transparent 50%);
 }
 
@@ -675,7 +676,7 @@ tr:hover td {
     font-weight: 700;
     text-align: center;
     margin-bottom: 8px;
-    background: linear-gradient(135deg, #7c3aed, #a78bfa);
+    background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -944,7 +945,7 @@ tr:hover td {
 
 .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), #a855f7);
+    background: linear-gradient(90deg, var(--accent), var(--accent-secondary));
     border-radius: 4px;
     transition: width 0.5s ease;
 }
@@ -983,7 +984,7 @@ tr:hover td {
 .book-detail-cover-placeholder {
     width: 100%;
     height: 100%;
-    background: linear-gradient(135deg, var(--accent), #4f46e5);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1488,4 +1489,34 @@ tr:hover td {
 .unpaired-bar-error {
     font-size: 0.8rem;
     color: var(--error);
+}
+
+/* ============ Theme Picker ============ */
+
+.theme-picker {
+    display: flex;
+    gap: 7px;
+    padding: 10px 20px 6px;
+}
+
+.theme-swatch {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--swatch-color);
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: var(--transition);
+    flex-shrink: 0;
+}
+
+.theme-swatch:hover {
+    transform: scale(1.2);
+    border-color: var(--text-secondary);
+}
+
+.theme-swatch.active {
+    border-color: var(--text-primary);
+    box-shadow: 0 0 0 2px var(--swatch-color);
 }

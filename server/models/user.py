@@ -25,6 +25,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)  # Legacy, kept for migration
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    theme: Mapped[str] = mapped_column(String(50), nullable=False, default="blueprint")
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
