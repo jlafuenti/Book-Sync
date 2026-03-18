@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.settings import SystemSetting
 from database import get_db
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_admin_user
 from models.user import User
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -71,9 +71,9 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
 
 @router.put("/", response_model=Dict[str, Any])
 async def update_settings(
-    new_settings: Dict[str, Any], 
-    db: AsyncSession = Depends(get_db), 
-    _: User = Depends(get_current_user)
+    new_settings: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user)
 ):
     """Update system settings."""
     for key, value in new_settings.items():
@@ -96,7 +96,7 @@ async def update_settings(
     return await get_settings(db)
 
 @router.get("/test-abs")
-async def test_abs_connection(url: str, token: str, _: User = Depends(get_current_user)):
+async def test_abs_connection(url: str, token: str, _: User = Depends(get_admin_user)):
     """Test the connection to an Audiobookshelf server."""
     import httpx
 
@@ -128,7 +128,7 @@ async def test_abs_connection(url: str, token: str, _: User = Depends(get_curren
 
 
 @router.get("/test-remote")
-async def test_remote_connection(url: str, _: User = Depends(get_current_user)):
+async def test_remote_connection(url: str, _: User = Depends(get_admin_user)):
     """
     Test the connection to a remote transcription server from the backend.
     This avoids CORS and VPN routing issues where the frontend browser

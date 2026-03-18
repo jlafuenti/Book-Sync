@@ -6,7 +6,7 @@ Loads settings from environment variables with sensible defaults.
 
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from typing import Optional
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     # Server
     server_host: str = "0.0.0.0"
     server_port: int = 8000
+
+    # CORS — comma-separated list of allowed origins; defaults to wildcard for dev
+    cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS_ORIGINS into a list. '*' means allow all."""
+        if self.cors_origins.strip() == "*":
+            return ["*"]
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     # External APIs
     google_books_api_key: Optional[str] = Field(default=None, alias="GOOGLE_BOOKS_API_KEY")
