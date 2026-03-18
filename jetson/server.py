@@ -227,20 +227,19 @@ def _transcribe_file(audio_path: str) -> dict:
         with _job_lock:
             _job_status.message = f"Transcribing ({_format_duration(total_duration)} of audio)..."
 
-        CHUNK_SIZE_SEC = 3600  # 1 hour chunks
+        CHUNK_SIZE_SEC = 1800  # 30 minute chunks — reduces peak memory usage
         all_sentences = []
-        
+
         for start_sec in range(0, int(total_duration) + 1, CHUNK_SIZE_SEC):
             logger.info(f"  Processing chunk {start_sec}s - {start_sec + CHUNK_SIZE_SEC}s")
             audio_array = load_audio_chunk(audio_path, start_sec, CHUNK_SIZE_SEC)
-            
+
             if len(audio_array) == 0:
                 logger.warning(f"  Chunk at {start_sec}s returned no audio data. Skipping.")
                 continue
 
             segments_gen, info = model.transcribe(
                 audio_array,
-                word_timestamps=True,
                 vad_filter=VAD_FILTER,
             )
 
@@ -261,16 +260,24 @@ def _transcribe_file(audio_path: str) -> dict:
                         _job_status.message = (
                             f"Transcribing: {elapsed_audio} / {total_str} ({pct}%)"
                         )
-            
+
             # Group the chunk's segments into sentences
             chunk_sentences = _group_segments_into_sentences(chunk_segments)
-            
+
             # Offset the timestamps by the chunk's start time
             offset_ms = start_sec * 1000
             for s in chunk_sentences:
                 s.start_ms += offset_ms
                 s.end_ms += offset_ms
                 all_sentences.append(s)
+
+            # Release cached CUDA memory between chunks to prevent gradual accumulation
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
         processing_time = time.time() - start_time
         logger.info(f"  Transcription complete in {processing_time:.1f}s")

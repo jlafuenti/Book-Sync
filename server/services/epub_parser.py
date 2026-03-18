@@ -82,7 +82,10 @@ def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
     """
     logger.info(f"Parsing EPUB: {epub_path}")
 
-    book = epub.read_epub(epub_path)
+    try:
+        book = epub.read_epub(epub_path)
+    except Exception as e:
+        raise RuntimeError(f"Failed to open EPUB '{epub_path}': {e}") from e
     sentences = []
     chapter_index = 0
 
