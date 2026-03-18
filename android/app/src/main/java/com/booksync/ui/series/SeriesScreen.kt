@@ -54,13 +54,19 @@ fun SeriesScreen(
     var showUnlinkConfirm by remember { mutableStateOf(false) }
 
     // Client-side filter
-    val filteredGroups = remember(allGroups, searchQuery, sortBy) {
+    val filteredGroups = remember(allGroups, searchQuery, sortBy, showSyncedOnly) {
         val q = searchQuery.lowercase()
-        val filtered = if (q.isBlank()) allGroups else {
+        var filtered = if (q.isBlank()) allGroups else {
             allGroups.filter { g ->
                 g.name.lowercase().contains(q) ||
                 g.author?.lowercase()?.contains(q) == true ||
                 g.items.any { it.title.lowercase().contains(q) }
+            }
+        }
+        if (showSyncedOnly) {
+            filtered = filtered.mapNotNull { g ->
+                val syncedItems = g.items.filter { it.isPaired && it.status == "synced" }
+                if (syncedItems.isEmpty()) null else g.copy(items = syncedItems)
             }
         }
         val prefixRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
@@ -70,14 +76,17 @@ fun SeriesScreen(
         }
     }
 
-    val filteredUnsorted = remember(unseriedItems, searchQuery) {
+    val filteredUnsorted = remember(unseriedItems, searchQuery, showSyncedOnly) {
         val q = searchQuery.lowercase()
-        if (q.isBlank()) unseriedItems
+        val result = if (q.isBlank()) unseriedItems
         else unseriedItems.filter {
             it.title.lowercase().contains(q) ||
             it.author?.lowercase()?.contains(q) == true
         }
+        if (showSyncedOnly) result.filter { it.isPaired && it.status == "synced" } else result
     }
+
+    var showSyncedOnly by remember { mutableStateOf(false) }
 
     // Track expanded state
     var expandedSeries by remember { mutableStateOf(setOf<String>()) }
@@ -343,7 +352,7 @@ fun SeriesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("📖 Series", fontWeight = FontWeight.Bold) },
+                title = { Text("Series", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
@@ -372,6 +381,27 @@ fun SeriesScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
+            }
+
+            // Synced-only toggle
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 0.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = if (showSyncedOnly) "Synced only" else "All series",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Switch(
+                        checked = showSyncedOnly,
+                        onCheckedChange = { showSyncedOnly = it },
+                    )
+                }
             }
 
             // Sort row
@@ -441,8 +471,11 @@ fun SeriesScreen(
                         Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            if (searchQuery.isNotBlank()) "No series matching \"$searchQuery\""
-                            else "No books yet",
+                            when {
+                                searchQuery.isNotBlank() -> "No series matching \"$searchQuery\""
+                                showSyncedOnly -> "No synced series"
+                                else -> "No books yet"
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
