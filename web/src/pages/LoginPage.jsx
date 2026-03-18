@@ -7,23 +7,28 @@ function LoginPage({ onLogin }) {
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [error, setError] = useState('')
+    const [success, setSuccess] = useState('')
     const [loading, setLoading] = useState(false)
 
     const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
+        setSuccess('')
         setLoading(true)
 
         try {
             if (isRegistering) {
-                await register(username, email, password)
-                // Auto-login after registration
-                await login(username, password)
+                const data = await register(username, email, password)
+                setSuccess(data.message || 'Access request submitted. An admin must approve your account before you can sign in.')
+                setUsername('')
+                setEmail('')
+                setPassword('')
+                setIsRegistering(false)
             } else {
                 await login(username, password)
+                const user = await getMe()
+                onLogin(user)
             }
-            const user = await getMe()
-            onLogin(user)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -31,15 +36,23 @@ function LoginPage({ onLogin }) {
         }
     }
 
+    const switchMode = (e) => {
+        e.preventDefault()
+        setIsRegistering(!isRegistering)
+        setError('')
+        setSuccess('')
+    }
+
     return (
         <div className="login-page">
             <div className="login-card">
                 <h1>📖 BookSync</h1>
                 <p className="subtitle">
-                    {isRegistering ? 'Create your account' : 'Sign in to your account'}
+                    {isRegistering ? 'Request an account' : 'Sign in to your account'}
                 </p>
 
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
+                {success && <div className="alert alert-success">✓ {success}</div>}
 
                 <form onSubmit={handleSubmit} action="#" method="POST">
                     <div className="form-group">
@@ -82,7 +95,7 @@ function LoginPage({ onLogin }) {
                             type="password"
                             className="form-input"
                             placeholder="Enter password"
-                            autoComplete={isRegistering ? "new-password" : "current-password"}
+                            autoComplete={isRegistering ? 'new-password' : 'current-password'}
                             value={password}
                             onChange={e => setPassword(e.target.value)}
                             required
@@ -95,20 +108,22 @@ function LoginPage({ onLogin }) {
                         style={{ width: '100%', justifyContent: 'center', marginBottom: '16px' }}
                         disabled={loading}
                     >
-                        {loading ? <div className="spinner"></div> : (isRegistering ? 'Create Account' : 'Sign In')}
+                        {loading ? <div className="spinner"></div> : (isRegistering ? 'Request Access' : 'Sign In')}
                     </button>
                 </form>
 
                 <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    {isRegistering ? 'Already have an account? ' : "Don't have an account? "}
-                    <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setIsRegistering(!isRegistering); setError('') }}
-                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
-                    >
-                        {isRegistering ? 'Sign In' : 'Register'}
+                    {isRegistering ? 'Already have an account? ' : "Need an account? "}
+                    <a href="#" onClick={switchMode} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                        {isRegistering ? 'Sign In' : 'Request Access'}
                     </a>
                 </p>
+
+                {isRegistering && (
+                    <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                        Account requests must be approved by an admin before you can sign in.
+                    </p>
+                )}
             </div>
         </div>
     )

@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs } from '../api'
+import { useAuth } from '../contexts/AuthContext'
 
 function SystemPage() {
+    const { hasMinRole } = useAuth()
+    const canAdmin = hasMinRole('admin')
     const [stats, setStats] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -216,13 +219,19 @@ function SettingsSection() {
                     </div>
                 )}
 
-                <button
-                    className="btn btn-primary"
-                    onClick={handleSave}
-                    disabled={loading}
-                >
-                    {loading ? 'Saving...' : 'Save Settings'}
-                </button>
+                {canAdmin ? (
+                    <button
+                        className="btn btn-primary"
+                        onClick={handleSave}
+                        disabled={loading}
+                    >
+                        {loading ? 'Saving...' : 'Save Settings'}
+                    </button>
+                ) : (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                        Admin role required to change settings.
+                    </p>
+                )}
             </div>
         </div>
     )

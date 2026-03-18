@@ -41,7 +41,7 @@ from schemas import (
     EBookDetailResponse, AudioBookDetailResponse,
     MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField
 )
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 
@@ -484,7 +484,7 @@ async def extract_metadata(
 @router.post("/normalize")
 async def normalize_library_metadata(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Re-normalize all author and series fields in the database.
@@ -641,7 +641,7 @@ async def _load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Scan the ebook and audiobook directories for new files.
@@ -889,7 +889,7 @@ async def scan_library(
 @router.post("/rescan-all")
 async def rescan_all_files(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user)
+    _: User = Depends(get_editor_user)
 ):
     """
     Force a rescan of EVERY file in the library to extract metadata.
@@ -989,7 +989,7 @@ async def rescan_book_file(
     book_type: str,
     book_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user)
+    _: User = Depends(get_editor_user)
 ):
     """
     Force a rescan of a single file to extract metadata from its tags/filename.
@@ -1321,7 +1321,7 @@ async def list_pairs(
 async def create_pair(
     pair_data: BookPairCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Manually create a book pair (match an ebook with an audiobook)."""
     # Verify ebook exists
@@ -1375,10 +1375,9 @@ async def create_pair(
 async def delete_pair(
     pair_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Delete a book pair."""
-    # Allow any authenticated user to delete pairs for now
     result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
     pair = result.scalar_one_or_none()
     if not pair:
@@ -1390,7 +1389,7 @@ async def delete_pair(
 async def upload_ebook(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Upload an ebook file to the library."""
     ext = Path(file.filename).suffix.lower()
@@ -1432,7 +1431,7 @@ async def upload_ebook(
 async def upload_audiobook(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Upload an audiobook file to the library."""
     ext = Path(file.filename).suffix.lower()
@@ -1696,7 +1695,7 @@ async def update_ebook_metadata(
     book_id: int,
     meta: MetadataUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Manually update ebook metadata and write changes back to the file."""
     result = await db.execute(select(EBook).where(EBook.id == book_id))
@@ -1735,7 +1734,7 @@ async def upload_ebook_cover(
     book_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Upload a new cover image for an ebook."""
     result = await db.execute(select(EBook).where(EBook.id == book_id))
@@ -1764,7 +1763,7 @@ async def update_audiobook_metadata(
     book_id: int,
     meta: MetadataUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Manually update audiobook metadata and write changes back to the file."""
     result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
@@ -1803,7 +1802,7 @@ async def upload_audiobook_cover(
     book_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Upload a new cover image for an audiobook."""
     result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
@@ -2010,7 +2009,7 @@ async def resolve_metadata_discrepancy(
     pair_id: int,
     req: ResolveDiscrepancyRequest,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Apply resolutions to mismatched metadata fields on a pair."""
     result = await db.execute(
@@ -2076,7 +2075,7 @@ async def ignore_metadata_discrepancies(
     pair_id: int,
     req: IgnoreDiscrepancyRequest,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Mark specific metadata fields as permanently ignored for a pair."""
     result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
@@ -2100,7 +2099,7 @@ async def delete_ebook(
     ebook_id: int,
     delete_file: bool = Query(False, description="Also delete the source file from disk"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Delete an ebook from the database.  Optionally delete the source file."""
     result = await db.execute(select(EBook).where(EBook.id == ebook_id))
@@ -2138,7 +2137,7 @@ async def delete_audiobook(
     audiobook_id: int,
     delete_file: bool = Query(False, description="Also delete the source file from disk"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """Delete an audiobook from the database.  Optionally delete the source file."""
     result = await db.execute(select(AudioBook).where(AudioBook.id == audiobook_id))
@@ -2226,7 +2225,7 @@ class CleanupRequest(BaseModel):
 async def cleanup_orphans(
     req: CleanupRequest,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Bulk-delete orphaned ebook/audiobook entries from the database.
@@ -2276,7 +2275,7 @@ async def cleanup_orphans(
 @router.post("/enrich-abs")
 async def enrich_library_from_abs(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Force re-enrich all audiobooks from Audiobookshelf metadata.
@@ -2340,7 +2339,7 @@ async def enrich_library_from_abs(
 async def enrich_audiobook_from_abs(
     audiobook_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Force re-enrich a single audiobook from Audiobookshelf metadata.

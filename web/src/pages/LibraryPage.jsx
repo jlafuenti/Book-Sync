@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary, normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata, rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles, cleanupOrphans, applyRemoteCover } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
+import { useAuth } from '../contexts/AuthContext'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
 function nextSortDir(current) {
@@ -80,6 +81,8 @@ function SortableHeader({ label, column, sortCol, sortDir, onSort, style }) {
 }
 
 function LibraryPage({ tab }) {
+    const { hasMinRole } = useAuth()
+    const canEdit = hasMinRole('editor')
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
     const [loading, setLoading] = useState(true)
@@ -511,15 +514,17 @@ function LibraryPage({ tab }) {
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <button
-                    className="btn btn-primary"
-                    onClick={handleScan}
-                    disabled={scanning || normalizing || rescanningAll || selectMode}
-                >
-                    {scanning ? <><div className="spinner"></div> Scanning...</> : '🔍 Scan Directories'}
-                </button>
+                {canEdit && (
+                    <button
+                        className="btn btn-primary"
+                        onClick={handleScan}
+                        disabled={scanning || normalizing || rescanningAll || selectMode}
+                    >
+                        {scanning ? <><div className="spinner"></div> Scanning...</> : '🔍 Scan Directories'}
+                    </button>
+                )}
 
-                {activeTab === 'ebooks' && (
+                {canEdit && activeTab === 'ebooks' && (
                     <button
                         className="btn btn-secondary"
                         onClick={() => ebookFileRef.current?.click()}
@@ -528,7 +533,7 @@ function LibraryPage({ tab }) {
                         {uploadingEbook ? <><div className="spinner"></div> Uploading...</> : '📄 Upload EBook'}
                     </button>
                 )}
-                {activeTab === 'audiobooks' && (
+                {canEdit && activeTab === 'audiobooks' && (
                     <button
                         className="btn btn-secondary"
                         onClick={() => audiobookFileRef.current?.click()}
@@ -538,8 +543,8 @@ function LibraryPage({ tab }) {
                     </button>
                 )}
 
-                {/* Maintenance dropdown */}
-                <div style={{ position: 'relative' }} ref={maintenanceRef}>
+                {/* Maintenance dropdown — editor+ only */}
+                {canEdit && <div style={{ position: 'relative' }} ref={maintenanceRef}>
                     <button
                         className="btn btn-secondary"
                         onClick={() => setMaintenanceOpen(o => !o)}
@@ -586,16 +591,18 @@ function LibraryPage({ tab }) {
                             </button>
                         </div>
                     )}
-                </div>
+                </div>}
 
-                {/* Select mode toggle */}
-                <button
-                    className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
-                    style={{ marginLeft: 'auto' }}
-                >
-                    {selectMode ? `✕ Cancel${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}` : '☑ Bulk Edit'}
-                </button>
+                {/* Select mode toggle — editor+ only */}
+                {canEdit && (
+                    <button
+                        className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+                        style={{ marginLeft: 'auto' }}
+                    >
+                        {selectMode ? `✕ Cancel${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}` : '☑ Bulk Edit'}
+                    </button>
+                )}
 
                 <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
                 <input ref={audiobookFileRef} type="file" accept=".mp3,.m4a,.m4b,.flac,.ogg,.wav" hidden onChange={handleAudiobookUpload} />
