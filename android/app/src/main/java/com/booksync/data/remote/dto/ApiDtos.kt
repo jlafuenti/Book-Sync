@@ -41,7 +41,13 @@ data class UserResponse(
     val email: String,
     val is_admin: Boolean,
     val is_active: Boolean,
+    val theme: String = "blueprint",
     val created_at: String
+)
+
+@Serializable
+data class UpdateMeRequest(
+    val theme: String? = null
 )
 
 // ============ Library ============

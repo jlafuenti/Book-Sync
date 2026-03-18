@@ -23,6 +23,9 @@ interface BookSyncApi {
     @GET("api/auth/me")
     suspend fun getMe(): UserResponse
 
+    @PUT("api/auth/me")
+    suspend fun updateMe(@Body request: UpdateMeRequest): UserResponse
+
     // ============ Library ============
 
     @GET("api/library/ebooks")

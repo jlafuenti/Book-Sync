@@ -30,10 +30,15 @@ class UserResponse(BaseModel):
     email: str
     is_admin: bool
     is_active: bool
+    theme: str = "blueprint"
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserUpdateRequest(BaseModel):
+    theme: Optional[str] = None
 
 
 class TokenResponse(BaseModel):

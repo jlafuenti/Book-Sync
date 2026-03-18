@@ -1,22 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tandem launcher icon foreground — Ember theme (static)
+    Bookmark split: left = amber text lines, right = orange waveform bars
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
-    android:viewportHeight="108"
-    android:tint="#FFFFFF">
-    <!-- Book icon (Material Design book icon simplified) -->
+    android:viewportHeight="108">
+
+    <!-- Bookmark shape fill -->
     <path
-        android:fillColor="@android:color/white"
-        android:pathData="M38,18h-4c-1.1,0 -2,0.9 -2,2v44c0,1.1 0.9,2 2,2h4V18z"/>
+        android:fillColor="#2A1A08"
+        android:pathData="M28,12 H80 V86 L54,100 L28,86 Z"/>
+
+    <!-- Left half: text lines (amber) -->
+    <path android:fillColor="#FBBF24" android:pathData="M33,22 H51 Q53,22 53,24 Q53,26 51,26 H33 Q31,26 31,24 Q31,22 33,22 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,31 H48 Q50,31 50,33 Q50,35 48,35 H33 Q31,35 31,33 Q31,31 33,31 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,40 H50 Q52,40 52,42 Q52,44 50,44 H33 Q31,44 31,42 Q31,40 33,40 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,49 H46 Q48,49 48,51 Q48,53 46,53 H33 Q31,53 31,51 Q31,49 33,49 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,58 H51 Q53,58 53,60 Q53,62 51,62 H33 Q31,62 31,60 Q31,58 33,58 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,67 H47 Q49,67 49,69 Q49,71 47,71 H33 Q31,71 31,69 Q31,67 33,67 Z"/>
+    <path android:fillColor="#FBBF24" android:pathData="M33,76 H44 Q46,76 46,78 Q46,80 44,80 H33 Q31,80 31,78 Q31,76 33,76 Z"/>
+
+    <!-- Center divider -->
     <path
-        android:fillColor="@android:color/white"
-        android:pathData="M42,18v48h28c1.1,0 2,-0.9 2,-2V20c0,-1.1 -0.9,-2 -2,-2H42zM66,46H48v-4h18v4zM66,38H48v-4h18v4zM66,30H48v-4h18v4z"/>
-    <!-- Sync arrows -->
+        android:fillColor="#1A1208"
+        android:pathData="M53,12 H55 V100 H53 Z"/>
+
+    <!-- Right half: waveform bars (orange), centred vertically -->
+    <!-- bar 1 x=57: height 18, centred at y=56 -->
+    <path android:fillColor="#F97316" android:pathData="M57,47 H62 Q64,47 64,50 V62 Q64,65 62,65 H57 Q55,65 55,62 V50 Q55,47 57,47 Z"/>
+    <!-- bar 2 x=65: height 30, centred at y=56 -->
+    <path android:fillColor="#F97316" android:pathData="M65,41 H70 Q72,41 72,44 V68 Q72,71 70,71 H65 Q63,71 63,68 V44 Q63,41 65,41 Z"/>
+    <!-- bar 3 x=73: height 22, centred at y=56 -->
+    <path android:fillColor="#F97316" android:pathData="M73,45 H78 Q80,45 80,48 V64 Q80,67 78,67 H73 Q71,67 71,64 V48 Q71,45 73,45 Z"/>
+
+    <!-- Bookmark border -->
     <path
-        android:fillColor="@android:color/white"
-        android:pathData="M54,72l-6,6l6,6v-4c4.42,0 8,-3.58 8,-8h-3c0,2.76 -2.24,5 -5,5v-5z"/>
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M54,96v-5c-4.42,0 -8,-3.58 -8,-8h3c0,2.76 2.24,5 5,5v-4l6,6l-6,6z"/>
+        android:strokeColor="#4A3020"
+        android:strokeWidth="1.5"
+        android:fillColor="#00000000"
+        android:pathData="M28,12 H80 V86 L54,100 L28,86 Z"/>
+
 </vector>

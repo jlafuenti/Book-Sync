@@ -1,6 +1,10 @@
 package com.booksync.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -9,9 +13,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.ui.theme.TandemTheme
+
+// Accent colours for each theme swatch
+private val themeSwatchColors = mapOf(
+    TandemTheme.BLUEPRINT    to Color(0xFF7C3AED),
+    TandemTheme.FOREST_NIGHT to Color(0xFF22C55E),
+    TandemTheme.EMBER        to Color(0xFFF59E0B),
+    TandemTheme.AURORA       to Color(0xFF06B6D4),
+    TandemTheme.SLATE        to Color(0xFF38BDF8),
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,6 +39,7 @@ fun SettingsScreen(
 ) {
     val autoCleanupEbooks by viewModel.autoCleanupEbooks.collectAsState()
     val autoCleanupAudiobooks by viewModel.autoCleanupAudiobooks.collectAsState()
+    val appTheme by viewModel.appTheme.collectAsState()
 
     Scaffold(
         topBar = {
@@ -43,6 +60,37 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            // ── Colour Theme ─────────────────────────────────────
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Colour Theme",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TandemTheme.values().forEach { theme ->
+                        ThemeSwatch(
+                            color = themeSwatchColors[theme] ?: Color.Gray,
+                            label = theme.label,
+                            selected = theme == appTheme,
+                            onClick = { viewModel.setTheme(theme) }
+                        )
+                    }
+                }
+                Text(
+                    text = "Current: ${appTheme.label}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            HorizontalDivider()
+
+            // ── Storage Management ────────────────────────────────
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     text = "Storage Management",
@@ -66,6 +114,7 @@ fun SettingsScreen(
                 )
             }
 
+            // ── Diagnostics ───────────────────────────────────────
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     text = "Diagnostics",
@@ -83,9 +132,39 @@ fun SettingsScreen(
                     onClick = onAppDiagnosticsClick,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("BookSync App Diagnostics")
+                    Text("Tandem App Diagnostics")
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun ThemeSwatch(
+    color: Color,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(color)
+            .then(
+                if (selected) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                else Modifier.border(2.dp, Color.Transparent, CircleShape)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) {
+            Text(
+                text = "✓",
+                color = if (color.luminance() > 0.4f) Color.Black else Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

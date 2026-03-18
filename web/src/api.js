@@ -1,27 +1,35 @@
 /**
- * BookSync API Client
- * 
+ * Tandem API Client
+ *
  * Handles all HTTP communication with the FastAPI server,
  * including JWT token management.
  */
 
 const API_BASE = '/api';
 
-let accessToken = localStorage.getItem('booksync_token');
-let refreshToken = localStorage.getItem('booksync_refresh');
+// Migrate old booksync_* keys on first load
+if (!localStorage.getItem('tandem_token') && localStorage.getItem('booksync_token')) {
+    localStorage.setItem('tandem_token', localStorage.getItem('booksync_token'));
+    localStorage.setItem('tandem_refresh', localStorage.getItem('booksync_refresh'));
+    localStorage.removeItem('booksync_token');
+    localStorage.removeItem('booksync_refresh');
+}
+
+let accessToken = localStorage.getItem('tandem_token');
+let refreshToken = localStorage.getItem('tandem_refresh');
 
 function setTokens(access, refresh) {
     accessToken = access;
     refreshToken = refresh;
-    localStorage.setItem('booksync_token', access);
-    localStorage.setItem('booksync_refresh', refresh);
+    localStorage.setItem('tandem_token', access);
+    localStorage.setItem('tandem_refresh', refresh);
 }
 
 function clearTokens() {
     accessToken = null;
     refreshToken = null;
-    localStorage.removeItem('booksync_token');
-    localStorage.removeItem('booksync_refresh');
+    localStorage.removeItem('tandem_token');
+    localStorage.removeItem('tandem_refresh');
 }
 
 async function fetchWithAuth(url, options = {}) {
@@ -93,6 +101,15 @@ export function logout() {
 
 export function isLoggedIn() {
     return !!accessToken;
+}
+
+export async function updateMe(data) {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/me`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error('Failed to update profile');
+    return resp.json();
 }
 
 // ============ Library ============
