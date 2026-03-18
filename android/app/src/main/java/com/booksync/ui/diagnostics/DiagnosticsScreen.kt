@@ -222,7 +222,7 @@ fun DiagnosticsScreen(
 @Composable
 private fun AutoTipContent() {
     Text(
-        "If BookSync doesn't appear in your car:",
+        "If Tandem doesn't appear in your car:",
         style = MaterialTheme.typography.titleSmall,
         fontWeight = FontWeight.Bold
     )
@@ -231,7 +231,7 @@ private fun AutoTipContent() {
         "Tap the Android Auto title 10 times quickly — you should see a \"Developer settings unlocked\" toast.",
         "Go to Settings → Allow apps from unknown sources → toggle ON.",
         "Unplug and re-plug the USB cable to the car to restart Android Auto.",
-        "BookSync should now appear in the car launcher."
+        "Tandem should now appear in the car launcher."
     )
     steps.forEachIndexed { i, step ->
         Text("${i + 1}. $step", style = MaterialTheme.typography.bodySmall)
