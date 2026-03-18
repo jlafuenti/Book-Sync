@@ -24,8 +24,10 @@ import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import java.net.ConnectException
@@ -103,6 +105,11 @@ class LibraryViewModel @Inject constructor(
             _refreshing.value = true
             try {
                 repository.refreshPairs()
+                // After pairs are in the DB, bidirectionally sync bookmarks & progress
+                val pairs = repository.getPairsFlow().first()
+                viewModelScope.launch(Dispatchers.IO) {
+                    repository.syncAllBookmarksAndProgress(pairs)
+                }
                 if (!silent) _refreshMessage.value = "Library refreshed"
             } catch (e: UnknownHostException) {
                 _refreshMessage.value = "Server unreachable: could not resolve host"
