@@ -314,6 +314,13 @@ def _transcribe_file(audio_path: str) -> dict:
             _job_status.active = False
             _job_status.progress = 0.0
             _job_status.message = f"Error: {str(e)}"
+        # Free GPU memory so the next job isn't penalized by this failure
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
         raise
 
 
