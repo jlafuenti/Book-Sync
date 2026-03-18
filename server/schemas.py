@@ -28,8 +28,10 @@ class UserResponse(BaseModel):
     id: int
     username: str
     email: str
+    role: str
     is_admin: bool
     is_active: bool
+    must_reset_password: bool = False
     created_at: datetime
 
     class Config:
@@ -44,6 +46,27 @@ class TokenResponse(BaseModel):
 
 class TokenRefresh(BaseModel):
     refresh_token: str
+
+
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=6)
+
+
+class UserCreateAdmin(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    role: str = Field(default="user")
+
+
+class UserUpdateAdmin(BaseModel):
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class UserPasswordReset(BaseModel):
+    new_password: str = Field(..., min_length=6)
 
 
 # ============================================================

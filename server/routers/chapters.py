@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models.user import User
 from models.book import AudioBook
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_editor_user
 from schemas import Chapter
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ async def update_audiobook_chapters(
     book_id: int,
     chapters: List[Chapter],
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Update chapters in an audiobook file using ffmpeg meta injection.

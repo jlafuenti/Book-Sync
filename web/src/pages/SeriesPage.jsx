@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getEbooks, getAudiobooks, getPairs, createPair, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import { useAuth } from '../contexts/AuthContext'
 
 /**
  * SeriesPage — Audiobookshelf-inspired series-first library view.
  * Groups all ebooks, audiobooks, and pairs by series name into collapsible cards.
  */
 export default function SeriesPage() {
+    const { hasMinRole } = useAuth()
+    const canEdit = hasMinRole('editor')
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
     const [pairs, setPairs] = useState([])
@@ -285,12 +288,14 @@ export default function SeriesPage() {
                 </select>
                 <button className="btn btn-secondary btn-sm" onClick={expandAll}>Expand All</button>
                 <button className="btn btn-secondary btn-sm" onClick={collapseAll}>Collapse All</button>
-                <button
-                    className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
-                    onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
-                >
-                    {selectMode ? `✕ Cancel${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ''}` : '☑ Bulk Edit'}
-                </button>
+                {canEdit && (
+                    <button
+                        className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => selectMode ? exitSelectMode() : setSelectMode(true)}
+                    >
+                        {selectMode ? `✕ Cancel${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ''}` : '☑ Bulk Edit'}
+                    </button>
+                )}
             </div>
 
             {/* Series Cards */}
@@ -339,7 +344,7 @@ export default function SeriesPage() {
             )}
 
             {/* Floating bulk action bar */}
-            {selectMode && selectedKeys.size > 0 && (
+            {canEdit && selectMode && selectedKeys.size > 0 && (
                 <div style={{
                     position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
                     background: 'var(--bg-card)', border: '1px solid var(--border)',
@@ -357,7 +362,7 @@ export default function SeriesPage() {
             )}
 
             {/* Bulk Edit Modal */}
-            {bulkEditOpen && (
+            {canEdit && bulkEditOpen && (
                 <div style={{
                     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
                     background: 'rgba(0,0,0,0.6)', display: 'flex',

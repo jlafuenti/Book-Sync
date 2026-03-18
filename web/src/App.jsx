@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
 import { isLoggedIn, getMe, logout } from './api'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
+import ChangePasswordPage from './pages/ChangePasswordPage'
 import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
 import TranscriptionPage from './pages/TranscriptionPage'
@@ -11,52 +13,25 @@ import SystemPage from './pages/SystemPage'
 import SeriesPage from './pages/SeriesPage'
 import BookDetailPage from './pages/BookDetailPage'
 import UnpairedPage from './pages/UnpairedPage'
+import UserManagementPage from './pages/UserManagementPage'
 
-function App() {
-    const [user, setUser] = useState(null)
-    const [loading, setLoading] = useState(true)
+function AppShell({ user, setUser }) {
     const location = useLocation()
-
-    useEffect(() => {
-        if (isLoggedIn()) {
-            getMe().then(u => {
-                setUser(u)
-                setLoading(false)
-            }).catch(() => {
-                setLoading(false)
-            })
-        } else {
-            setLoading(false)
-        }
-    }, [])
-
-    if (loading) {
-        return (
-            <div className="loading-page">
-                <div className="spinner"></div>
-                <span>Loading BookSync...</span>
-            </div>
-        )
-    }
-
-    if (!user) {
-        return <LoginPage onLogin={setUser} />
-    }
+    const { hasMinRole } = useAuth()
 
     const handleLogout = () => {
         logout()
         setUser(null)
     }
 
-    // Check if current path starts with a given prefix
     const isSection = (prefix) => location.pathname.startsWith(prefix)
     const isExact = (path) => location.pathname === path
-
-    // Main nav link class — active if any sub-route matches
     const navClass = (prefix) => isSection(prefix) ? 'nav-link active' : 'nav-link'
-
-    // Sub-nav link class
     const subNavClass = (path) => isExact(path) ? 'nav-sub-link active' : 'nav-sub-link'
+
+    const roleLabel = user.role
+        ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+        : 'User'
 
     return (
         <div className="app-layout">
@@ -115,13 +90,21 @@ function App() {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         System
                     </Link>
+
+                    {/* Users — admin/superadmin only */}
+                    {hasMinRole('admin') && (
+                        <Link to="/admin/users" className={navClass('/admin/users')}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                            Users
+                        </Link>
+                    )}
                 </nav>
                 <div className="sidebar-footer">
                     <div className="sidebar-user">
                         <div className="avatar">{user.username[0].toUpperCase()}</div>
                         <div className="info">
                             <div className="name">{user.username}</div>
-                            <div className="role">{user.is_admin ? 'Admin' : 'User'}</div>
+                            <div className="role">{roleLabel}</div>
                         </div>
                         <button className="btn btn-icon btn-secondary" onClick={handleLogout} title="Logout">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
@@ -157,6 +140,11 @@ function App() {
                     {/* Book Detail */}
                     <Route path="/book/:type/:id" element={<BookDetailPage />} />
 
+                    {/* Admin routes */}
+                    {hasMinRole('admin') && (
+                        <Route path="/admin/users" element={<UserManagementPage />} />
+                    )}
+
                     {/* Redirects */}
                     <Route path="/" element={<Navigate to="/library/ebooks" replace />} />
                     <Route path="/library" element={<Navigate to="/library/ebooks" replace />} />
@@ -166,6 +154,48 @@ function App() {
                 </Routes>
             </main>
         </div>
+    )
+}
+
+function App() {
+    const [user, setUser] = useState(null)
+    const [loading, setLoading] = useState(true)
+
+    useEffect(() => {
+        if (isLoggedIn()) {
+            getMe().then(u => {
+                setUser(u)
+                setLoading(false)
+            }).catch(() => {
+                setLoading(false)
+            })
+        } else {
+            setLoading(false)
+        }
+    }, [])
+
+    if (loading) {
+        return (
+            <div className="loading-page">
+                <div className="spinner"></div>
+                <span>Loading BookSync...</span>
+            </div>
+        )
+    }
+
+    if (!user) {
+        return <LoginPage onLogin={setUser} />
+    }
+
+    // Force password reset before entering the app
+    if (user.must_reset_password) {
+        return <ChangePasswordPage onPasswordChanged={setUser} />
+    }
+
+    return (
+        <AuthProvider user={user}>
+            <AppShell user={user} setUser={setUser} />
+        </AuthProvider>
     )
 }
 

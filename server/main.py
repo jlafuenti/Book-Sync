@@ -12,10 +12,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from rate_limit import limiter
 
-from database import init_db
+from database import init_db, bootstrap_superadmin
 from config import settings
-from routers import auth, library, sync, files, transcription, stats, chapters, match
+from routers import auth, library, sync, files, transcription, stats, chapters, match, users
 from routers import settings as settings_router
 
 # Configure logging
@@ -56,6 +59,11 @@ async def lifespan(app: FastAPI):
     logger.info("BookSync server starting up...")
     await init_db()
     logger.info("Database initialized")
+    await bootstrap_superadmin()
+
+    # JWT secret key warning
+    if settings.jwt_secret_key == "dev-secret-change-me":
+        logger.warning("WARNING: Using default JWT secret key. Set JWT_SECRET_KEY environment variable for production!")
     
     # Reset any stale transcription jobs (legacy)
     from routers.transcription import reset_stale_transcriptions
@@ -82,17 +90,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow all origins for development; tighten for production
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS — controlled by CORS_ORIGINS env var (comma-separated); defaults to * for dev
+_cors_origins = settings.cors_origins_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Register routers
 app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(library.router)
 app.include_router(sync.router)
 app.include_router(files.router)
