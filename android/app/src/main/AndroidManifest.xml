@@ -14,15 +14,15 @@
         android:name=".BookSyncApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="BookSync"
+        android:label="Tandem"
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
-        android:theme="@style/Theme.BookSync">
+        android:theme="@style/Theme.Tandem">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.BookSync">
+            android:theme="@style/Theme.Tandem">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -37,7 +37,7 @@
         <activity
             android:name=".ui.reader.ReaderActivity"
             android:exported="false"
-            android:theme="@style/Theme.BookSync" />
+            android:theme="@style/Theme.Tandem" />
 
         <!-- Audio Playback + Android Auto Library Service (single consolidated service) -->
         <service
