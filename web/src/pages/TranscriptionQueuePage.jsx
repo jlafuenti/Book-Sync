@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { getTranscriptionQueue, getQueueHistory, removeFromQueue, cancelTranscription, updateQueuePriority } from '../api'
+import { useAuth } from '../contexts/AuthContext'
 
 function TranscriptionQueuePage() {
+    const { hasMinRole } = useAuth()
+    const canManageQueue = hasMinRole('admin')
     const [queue, setQueue] = useState([])
     const [history, setHistory] = useState([])
     const [loading, setLoading] = useState(true)
@@ -326,34 +329,36 @@ function TranscriptionQueuePage() {
                                                 </div>
                                             </div>
 
-                                            <div style={{ display: 'flex', gap: '4px' }}>
-                                                <button
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => handleMovePriority(item.id, 'up')}
-                                                    title="Move up (higher priority)"
-                                                    disabled={idx === 0}
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                >
-                                                    ⬆️
-                                                </button>
-                                                <button
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => handleMovePriority(item.id, 'down')}
-                                                    title="Move down (lower priority)"
-                                                    disabled={idx === pendingItems.length - 1}
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                                >
-                                                    ⬇️
-                                                </button>
-                                                <button
-                                                    className="btn btn-danger btn-sm"
-                                                    onClick={() => handleRemove(item.id)}
-                                                    title="Remove from queue"
-                                                    style={{ padding: '4px 8px', fontSize: '0.8rem', backgroundColor: '#ffebee', color: '#d32f2f', border: '1px solid #ffcdd2' }}
-                                                >
-                                                    ✕
-                                                </button>
-                                            </div>
+                                            {canManageQueue && (
+                                                <div style={{ display: 'flex', gap: '4px' }}>
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        onClick={() => handleMovePriority(item.id, 'up')}
+                                                        title="Move up (higher priority)"
+                                                        disabled={idx === 0}
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                    >
+                                                        ⬆️
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        onClick={() => handleMovePriority(item.id, 'down')}
+                                                        title="Move down (lower priority)"
+                                                        disabled={idx === pendingItems.length - 1}
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem' }}
+                                                    >
+                                                        ⬇️
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-danger btn-sm"
+                                                        onClick={() => handleRemove(item.id)}
+                                                        title="Remove from queue"
+                                                        style={{ padding: '4px 8px', fontSize: '0.8rem', backgroundColor: '#ffebee', color: '#d32f2f', border: '1px solid #ffcdd2' }}
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}

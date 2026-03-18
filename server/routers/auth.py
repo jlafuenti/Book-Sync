@@ -1,11 +1,12 @@
 """
 Authentication router: register, login, refresh tokens, get current user.
+Includes role-based access control dependencies.
 """
 
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
@@ -14,8 +15,12 @@ from fastapi.security import OAuth2PasswordBearer
 
 from database import get_db
 from config import settings
-from models.user import User
-from schemas import UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh
+from models.user import User, ROLE_HIERARCHY
+from schemas import (
+    UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
+    PasswordChange,
+)
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -57,6 +62,10 @@ def create_refresh_token(user_id: int) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Auth dependencies
+# ---------------------------------------------------------------------------
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
@@ -85,21 +94,66 @@ async def get_current_user(
     return user
 
 
-async def get_admin_user(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """FastAPI dependency: require admin privileges."""
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-    return current_user
+def require_role(minimum_role: str):
+    """Factory that returns a FastAPI dependency requiring at least `minimum_role`."""
+    async def dependency(current_user: User = Depends(get_current_user)) -> User:
+        user_level = ROLE_HIERARCHY.get(current_user.role, 0)
+        required_level = ROLE_HIERARCHY.get(minimum_role, 0)
+        if user_level < required_level:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires {minimum_role} role or higher",
+            )
+        return current_user
+    return dependency
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
-    """Register a new user account."""
+# Convenience aliases
+get_admin_user = require_role("admin")
+get_editor_user = require_role("editor")
+
+
+# ---------------------------------------------------------------------------
+# Audit log helper
+# ---------------------------------------------------------------------------
+
+async def log_audit(
+    db: AsyncSession,
+    action: str,
+    user_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
+    details: Optional[str] = None,
+    ip_address: Optional[str] = None,
+):
+    """Record a security-relevant event in the audit log."""
+    from models.audit_log import AuditLog
+    entry = AuditLog(
+        user_id=user_id,
+        action=action,
+        target_user_id=target_user_id,
+        details=details,
+        ip_address=ip_address,
+    )
+    db.add(entry)
+    await db.flush()
+
+
+def get_client_ip(request: Request) -> str:
+    """Extract client IP from request, respecting X-Forwarded-For."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
+async def register(user_data: UserCreate, request: Request, db: AsyncSession = Depends(get_db)):
+    """Submit an access request. Account must be approved by an admin before login."""
     # Check for existing username
     result = await db.execute(select(User).where(User.username == user_data.username))
     if result.scalar_one_or_none():
@@ -116,20 +170,30 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
             detail="Email already registered",
         )
 
-    # Create user
+    # Create user as inactive (pending approval)
     user = User(
         username=user_data.username,
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
+        role="user",
+        is_active=False,
     )
     db.add(user)
     await db.flush()
     await db.refresh(user)
-    return user
+
+    await log_audit(
+        db, "register_request", user_id=user.id,
+        details=f"Access request from '{user.username}'",
+        ip_address=get_client_ip(request),
+    )
+
+    return {"message": "Access request submitted. An admin must approve your account before you can sign in."}
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     """Authenticate a user and return JWT tokens."""
     result = await db.execute(
         select(User).where(User.username == credentials.username)
@@ -137,6 +201,12 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(credentials.password, user.hashed_password):
+        # Log failed attempt
+        await log_audit(
+            db, "login_failed",
+            details=f"Failed login for username '{credentials.username}'",
+            ip_address=get_client_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -145,8 +215,14 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled",
+            detail="Your account is pending admin approval",
         )
+
+    await log_audit(
+        db, "login", user_id=user.id,
+        details=f"Successful login",
+        ip_address=get_client_ip(request),
+    )
 
     return TokenResponse(
         access_token=create_access_token(user.id),
@@ -203,3 +279,30 @@ async def update_me(
     await db.flush()
     await db.refresh(current_user)
     return current_user
+
+
+@router.post("/change-password")
+async def change_password(
+    body: PasswordChange,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the current user's password. Clears must_reset_password flag."""
+    if not verify_password(body.old_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+
+    current_user.hashed_password = hash_password(body.new_password)
+    current_user.must_reset_password = False
+    await db.flush()
+
+    await log_audit(
+        db, "password_changed", user_id=current_user.id,
+        details="User changed their own password",
+        ip_address=get_client_ip(request),
+    )
+
+    return {"message": "Password changed successfully"}

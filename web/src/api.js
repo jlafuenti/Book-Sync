@@ -112,6 +112,80 @@ export async function updateMe(data) {
     return resp.json();
 }
 
+export function getAccessToken() {
+    return accessToken;
+}
+
+export async function changePassword(oldPassword, newPassword) {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/change-password`, {
+        method: 'POST',
+        body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to change password');
+    return resp.json();
+}
+
+// ============ User Management (Admin) ============
+
+export async function getUsers(filter) {
+    const params = filter ? `?filter=${filter}` : '';
+    const resp = await fetchWithAuth(`${API_BASE}/users/${params}`);
+    if (!resp.ok) throw new Error('Failed to fetch users');
+    return resp.json();
+}
+
+export async function createUser(data) {
+    const resp = await fetchWithAuth(`${API_BASE}/users/`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to create user');
+    return resp.json();
+}
+
+export async function updateUser(id, data) {
+    const resp = await fetchWithAuth(`${API_BASE}/users/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to update user');
+    return resp.json();
+}
+
+export async function approveUser(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/users/${id}/approve`, {
+        method: 'POST',
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to approve user');
+    return resp.json();
+}
+
+export async function resetUserPassword(id, newPassword) {
+    const resp = await fetchWithAuth(`${API_BASE}/users/${id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ new_password: newPassword }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to reset password');
+    return resp.json();
+}
+
+export async function deleteUser(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/users/${id}`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to delete user');
+    return resp.json();
+}
+
+export async function getAuditLog(page = 1, limit = 50, action, userId) {
+    let params = `?page=${page}&limit=${limit}`;
+    if (action) params += `&action=${action}`;
+    if (userId) params += `&user_id=${userId}`;
+    const resp = await fetchWithAuth(`${API_BASE}/users/audit-log${params}`);
+    if (!resp.ok) throw new Error('Failed to fetch audit log');
+    return resp.json();
+}
+
 // ============ Library ============
 
 export async function scanLibrary() {

@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import { useAuth } from '../contexts/AuthContext'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -31,6 +32,8 @@ function formatDate(iso) {
 }
 
 function BookDetailPage() {
+    const { hasMinRole } = useAuth()
+    const canEdit = hasMinRole('editor')
     const { type, id } = useParams()
     const navigate = useNavigate()
     const [book, setBook] = useState(null)
@@ -218,21 +221,27 @@ function BookDetailPage() {
                         </div>
                     )}
                     <div className="book-detail-actions">
-                        <button className="btn btn-primary" onClick={() => { setEditModalTab('Details'); setShowEditModal(true); }}>
-                            ✏️ Edit Metadata
-                        </button>
-                        {isAudiobook && (
+                        {canEdit && (
+                            <button className="btn btn-primary" onClick={() => { setEditModalTab('Details'); setShowEditModal(true); }}>
+                                ✏️ Edit Metadata
+                            </button>
+                        )}
+                        {canEdit && isAudiobook && (
                             <button className="btn btn-secondary" onClick={() => { setEditModalTab('Chapters'); setShowEditModal(true); }}>
                                 📑 Edit Chapters
                             </button>
                         )}
-                        <button className="btn btn-secondary" onClick={() => { setEditModalTab('Match'); setShowEditModal(true); }}>
-                            🔍 Match
-                        </button>
-                        <button className="btn btn-secondary" onClick={handleRescan} disabled={rescanning}>
-                            {rescanning ? '🔄 Rescanning...' : '🔄 Rescan File'}
-                        </button>
-                        {isAudiobook && absEnabled && (
+                        {canEdit && (
+                            <button className="btn btn-secondary" onClick={() => { setEditModalTab('Match'); setShowEditModal(true); }}>
+                                🔍 Match
+                            </button>
+                        )}
+                        {canEdit && (
+                            <button className="btn btn-secondary" onClick={handleRescan} disabled={rescanning}>
+                                {rescanning ? '🔄 Rescanning...' : '🔄 Rescan File'}
+                            </button>
+                        )}
+                        {canEdit && isAudiobook && absEnabled && (
                             <button className="btn btn-secondary" onClick={handleEnrichFromAbs} disabled={enriching}>
                                 {enriching ? 'Enriching...' : '✨ Enrich from ABS'}
                             </button>

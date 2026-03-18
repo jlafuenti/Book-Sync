@@ -32,7 +32,7 @@ from schemas import (
     QueueAddRequest,
     QueuePriorityUpdate,
 )
-from routers.auth import get_current_user, get_admin_user
+from routers.auth import get_current_user, get_admin_user, get_editor_user
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
 
@@ -196,7 +196,7 @@ async def get_queue(
 async def batch_add_to_queue(
     body: QueueAddRequest,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_admin_user),
 ):
     """Add multiple book pairs to the transcription queue at once."""
     from services.queue_manager import add_to_queue
@@ -231,7 +231,7 @@ async def batch_add_to_queue(
 @router.delete("/queue/{item_id}")
 async def remove_from_queue(
     item_id: int,
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_admin_user),
 ):
     """Remove a queue item (only if not in_progress)."""
     from services.queue_manager import remove_item
@@ -248,7 +248,7 @@ async def remove_from_queue(
 async def update_queue_priority(
     item_id: int,
     body: QueuePriorityUpdate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_admin_user),
 ):
     """Update the priority of a pending queue item."""
     from services.queue_manager import update_priority
@@ -318,7 +318,7 @@ async def update_transcription_text(
     pair_id: int,
     update_data: SyncMapTextUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Update transcription text for specific sync points without altering timestamps.
