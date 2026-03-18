@@ -97,6 +97,9 @@ async def init_db():
         # Book pairs migration
         await conn.execute(text("ALTER TABLE book_pairs ADD COLUMN IF NOT EXISTS ignored_fields JSONB NOT NULL DEFAULT '[]'::jsonb"))
 
+        # User theme preference migration
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR(50) NOT NULL DEFAULT 'blueprint'"))
+
         # RBAC migration
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT false"))

@@ -17,7 +17,7 @@ from database import get_db
 from config import settings
 from models.user import User, ROLE_HIERARCHY
 from schemas import (
-    UserCreate, UserLogin, UserResponse, TokenResponse, TokenRefresh,
+    UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
     PasswordChange,
 )
 from rate_limit import limiter
@@ -259,6 +259,25 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get the currently authenticated user's profile."""
+    return current_user
+
+
+VALID_THEMES = {"blueprint", "forest-night", "ember", "aurora", "slate"}
+
+
+@router.put("/me", response_model=UserResponse)
+async def update_me(
+    body: UserUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the current user's profile preferences."""
+    if body.theme is not None:
+        if body.theme not in VALID_THEMES:
+            raise HTTPException(status_code=400, detail="Invalid theme")
+        current_user.theme = body.theme
+    await db.flush()
+    await db.refresh(current_user)
     return current_user
 
 

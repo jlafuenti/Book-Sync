@@ -3,10 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BookSync — Admin Dashboard</title>
-    <link rel="icon" type="image/svg+xml" href="/booksync-logo.svg">
+    <title>Tandem</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon-blueprint.svg" id="favicon">
 </head>
 <body>
+    <script>
+        (function(){
+            var t = localStorage.getItem('tandem_theme') || 'blueprint';
+            var bgs = {
+                'blueprint': '#0f0f1a',
+                'forest-night': '#080f0a',
+                'ember': '#0f0905',
+                'aurora': '#07060f',
+                'slate': '#0c0e12'
+            };
+            document.documentElement.style.setProperty('--bg-primary', bgs[t] || '#0f0f1a');
+        })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
 </body>

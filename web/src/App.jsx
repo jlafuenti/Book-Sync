@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
 import { isLoggedIn, getMe, logout } from './api'
+import { useTheme } from './ThemeContext'
+import { DEFAULT_THEME } from './themes'
+import { ThemePicker } from './components/ThemePicker'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
@@ -37,8 +40,13 @@ function AppShell({ user, setUser }) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-logo">
-                    <h1>📖 BookSync</h1>
-                    <span>Audio &amp; Text Synchronizer</span>
+                    <svg viewBox="0 0 24 24" width="28" height="28" style={{ flexShrink: 0 }}>
+                        <path fill="var(--accent)" d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
+                    </svg>
+                    <div>
+                        <h1>Tandem</h1>
+                        <span>Audio &amp; Text Synchronizer</span>
+                    </div>
                 </div>
                 <nav>
                     {/* Library */}
@@ -110,6 +118,7 @@ function AppShell({ user, setUser }) {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
                         </button>
                     </div>
+                    <ThemePicker />
                 </div>
             </aside>
             <main className="main-content">
@@ -160,10 +169,12 @@ function AppShell({ user, setUser }) {
 function App() {
     const [user, setUser] = useState(null)
     const [loading, setLoading] = useState(true)
+    const { setTheme } = useTheme()
 
     useEffect(() => {
         if (isLoggedIn()) {
             getMe().then(u => {
+                if (u) setTheme(u.theme || DEFAULT_THEME)
                 setUser(u)
                 setLoading(false)
             }).catch(() => {
@@ -172,19 +183,22 @@ function App() {
         } else {
             setLoading(false)
         }
-    }, [])
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
     if (loading) {
         return (
             <div className="loading-page">
                 <div className="spinner"></div>
-                <span>Loading BookSync...</span>
+                <span>Loading Tandem...</span>
             </div>
         )
     }
 
     if (!user) {
-        return <LoginPage onLogin={setUser} />
+        return <LoginPage onLogin={(u) => {
+            setTheme(u.theme || DEFAULT_THEME)
+            setUser(u)
+        }} />
     }
 
     // Force password reset before entering the app
