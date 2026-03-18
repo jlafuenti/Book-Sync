@@ -172,8 +172,15 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         raise ProviderUnavailableError("Remote server is busy with another transcription.")
                 
                 elif response.status_code >= 500:
+                    error_body = response.text
+                    if any(kw in error_body.lower() for kw in ("out of memory", "oom", "cuda error", "cudaoutofmemory")):
+                        raise TranscriptionError(
+                            f"Remote server ran out of memory transcribing this file. "
+                            f"Consider using a smaller Whisper model (e.g. 'small') or check if the audiobook is unusually large. "
+                            f"Server error: {error_body[:300]}"
+                        )
                     raise ProviderUnavailableError(
-                        f"Remote server internal error ({response.status_code}): {response.text}"
+                        f"Remote server internal error ({response.status_code}): {error_body}"
                     )
                 elif response.status_code != 200:
                     raise TranscriptionError(

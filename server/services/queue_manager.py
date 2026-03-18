@@ -10,6 +10,7 @@ Started at application lifespan and runs as an asyncio background task.
 import asyncio
 import logging
 import datetime
+import zipfile
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -422,7 +423,14 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
 
     # Step 2: Extract EPUB text
     from services.epub_parser import extract_epub_sentences
-    epub_sentences = await _asyncio.to_thread(extract_epub_sentences, ebook_path)
+    from services.transcription_providers.base import TranscriptionError
+    try:
+        epub_sentences = await _asyncio.to_thread(extract_epub_sentences, ebook_path)
+    except zipfile.BadZipFile as e:
+        raise TranscriptionError(
+            f"EPUB file appears corrupted (bad zip): {ebook_path}. "
+            f"Please re-add the ebook file. Original error: {e}"
+        ) from e
 
     await _update_queue_item(
         item_id,
