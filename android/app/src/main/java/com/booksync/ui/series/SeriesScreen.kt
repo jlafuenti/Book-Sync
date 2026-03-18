@@ -47,6 +47,8 @@ fun SeriesScreen(
         }
     }
 
+    var showSyncedOnly by remember { mutableStateOf(false) }
+
     // Manage dialog state
     var selectedItem by remember { mutableStateOf<SeriesItem?>(null) }
     var showPairSheet by remember { mutableStateOf(false) }
@@ -85,8 +87,6 @@ fun SeriesScreen(
         }
         if (showSyncedOnly) result.filter { it.isPaired && it.status == "synced" } else result
     }
-
-    var showSyncedOnly by remember { mutableStateOf(false) }
 
     // Track expanded state
     var expandedSeries by remember { mutableStateOf(setOf<String>()) }
