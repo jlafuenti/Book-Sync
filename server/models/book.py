@@ -55,6 +55,9 @@ class EBook(Base):
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
 
+    # New-items inbox: cleared once user acknowledges or pairs this item
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
 
@@ -98,6 +101,9 @@ class AudioBook(Base):
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
 
+    # New-items inbox: cleared once user acknowledges or pairs this item
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")
 
@@ -122,6 +128,9 @@ class BookPair(Base):
     matched_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     ignored_fields: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    # New-pairs inbox: cleared once user resolves/skips all discrepancies or manually acknowledges
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Relationships
     ebook = relationship("EBook", back_populates="pairs")
