@@ -582,6 +582,38 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
     return resp.json();
 }
 
+// ============ New Items / New Pairs Inbox ============
+
+export async function getNewItems() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items`);
+    if (!resp.ok) throw new Error('Failed to get new items');
+    return resp.json();
+}
+
+export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new items');
+    return resp.json();
+}
+
+export async function getNewPairs() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs`);
+    if (!resp.ok) throw new Error('Failed to get new pairs');
+    return resp.json();
+}
+
+export async function acknowledgeNewPairs(pairIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ pair_ids: pairIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new pairs');
+    return resp.json();
+}
+
 export async function ignoreMetadataDiscrepancies(pairId, fields) {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}/ignore-discrepancies`, {
         method: 'POST',
