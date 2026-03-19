@@ -61,7 +61,6 @@ function AppShell({ user, setUser }) {
                             <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
                             <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
                             <Link to="/library/new-items" className={subNavClass('/library/new-items')}>🆕 New Items</Link>
-                            <Link to="/library/new-pairs" className={subNavClass('/library/new-pairs')}>🔗 New Pairs</Link>
                         </div>
                     )}
 
@@ -80,6 +79,7 @@ function AppShell({ user, setUser }) {
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
                             <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
+                            <Link to="/pairs/new-pairs" className={subNavClass('/pairs/new-pairs')}>🆕 New Pairs</Link>
                         </div>
                     )}
 
@@ -131,7 +131,7 @@ function AppShell({ user, setUser }) {
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
                     <Route path="/library/new-items" element={<NewItemsPage />} />
-                    <Route path="/library/new-pairs" element={<NewPairsPage />} />
+                    <Route path="/pairs/new-pairs" element={<NewPairsPage />} />
 
                     {/* Series routes */}
                     <Route path="/series" element={<SeriesPage />} />
