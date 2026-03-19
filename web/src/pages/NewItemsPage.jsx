@@ -292,7 +292,7 @@ export default function NewItemsPage() {
             {editModal && (
                 <EnhancedMetadataModal
                     book={editModal.book}
-                    bookType={editModal.type}
+                    type={editModal.type}
                     onClose={() => setEditModal(null)}
                     onSave={async (bookId, meta) => {
                         const fn = editModal.type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
