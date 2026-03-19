@@ -87,38 +87,7 @@ data class BookPairResponse(
     val audiobook: AudioBookResponse,
     val status: String,
     val matched_at: String? = null,
-    val synced_at: String? = null,
-    val acknowledged: Boolean = false
-)
-
-// ============ New Items / New Pairs Inbox ============
-
-@Serializable
-data class NewItemsResponse(
-    val ebooks: List<EBookResponse>,
-    val audiobooks: List<AudioBookResponse>
-)
-
-@Serializable
-data class AcknowledgeItemsRequest(
-    val ebook_ids: List<Int> = emptyList(),
-    val audiobook_ids: List<Int> = emptyList()
-)
-
-@Serializable
-data class AcknowledgeItemsResponse(
-    val acknowledged_ebooks: Int,
-    val acknowledged_audiobooks: Int
-)
-
-@Serializable
-data class AcknowledgePairsRequest(
-    val pair_ids: List<Int>
-)
-
-@Serializable
-data class AcknowledgePairsResponse(
-    val acknowledged_pairs: Int
+    val synced_at: String? = null
 )
 
 @Serializable

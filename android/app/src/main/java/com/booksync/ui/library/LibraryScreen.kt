@@ -17,7 +17,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.style.TextOverflow
 import com.booksync.R
 import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
@@ -223,7 +222,6 @@ fun LibraryScreen(
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
-    newItemsViewModel: NewItemsViewModel = hiltViewModel(),
 ) {
     val pairs by viewModel.pairs.collectAsState(initial = emptyList())
     val refreshing by viewModel.refreshing.collectAsState()
@@ -234,11 +232,6 @@ fun LibraryScreen(
     val displayedPairs = if (showSyncedOnly) pairs.filter { it.status == "synced" } else pairs
 
     val refreshMessage by viewModel.refreshMessage.collectAsState()
-
-    val newItemCount by newItemsViewModel.newItemCount.collectAsState()
-    val newPairCount by newItemsViewModel.newPairCount.collectAsState()
-
-    var selectedTab by remember { mutableIntStateOf(0) }
 
     val context = LocalContext.current
     LaunchedEffect(downloadError) {
@@ -286,149 +279,76 @@ fun LibraryScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Pairs", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = {
-                        BadgedBox(
-                            badge = {
-                                if (newItemCount > 0) Badge { Text("$newItemCount") }
-                            }
-                        ) {
-                            Text("New Items", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    },
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = {
-                        BadgedBox(
-                            badge = {
-                                if (newPairCount > 0) Badge { Text("$newPairCount") }
-                            }
-                        ) {
-                            Text("New Pairs", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    },
-                )
-            }
-
-            when (selectedTab) {
-                0 -> PairsTabContent(
-                    displayedPairs = displayedPairs,
-                    refreshing = refreshing,
-                    showSyncedOnly = showSyncedOnly,
-                    onSyncedOnlyChange = { showSyncedOnly = it },
-                    downloadingProgress = downloadingProgress,
-                    onDownloadAll = { viewModel.downloadAll(it) },
-                    onDownloadEbook = { viewModel.downloadEbookOnly(it) },
-                    onDownloadAudiobook = { viewModel.downloadAudiobookOnly(it) },
-                    onDeleteEbook = { viewModel.deleteEbook(it) },
-                    onDeleteAudiobook = { viewModel.deleteAudiobook(it) },
-                    onDeletePair = { viewModel.deletePair(it) },
-                    onBookSelect = onBookSelect,
-                    onAudioSelect = onAudioSelect,
-                )
-                1 -> NewItemsTab(viewModel = newItemsViewModel)
-                2 -> NewPairsTab(viewModel = newItemsViewModel)
-            }
-        }
-    }
-}
-
-@Composable
-private fun PairsTabContent(
-    displayedPairs: List<com.booksync.data.local.entity.BookPairEntity>,
-    refreshing: Boolean,
-    showSyncedOnly: Boolean,
-    onSyncedOnlyChange: (Boolean) -> Unit,
-    downloadingProgress: Map<Int, String>,
-    onDownloadAll: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onDownloadEbook: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onDownloadAudiobook: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onDeleteEbook: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onDeleteAudiobook: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onDeletePair: (com.booksync.data.local.entity.BookPairEntity) -> Unit,
-    onBookSelect: (Int) -> Unit,
-    onAudioSelect: (Int) -> Unit,
-) {
-    Column {
-        // Synced-only filter toggle
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = if (showSyncedOnly) "Synced only" else "All pairs",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Switch(
-                checked = showSyncedOnly,
-                onCheckedChange = onSyncedOnlyChange,
-            )
-        }
-
-        if (displayedPairs.isEmpty() && !refreshing) {
-            // Empty state
-            Column(
+            // Synced-only filter toggle
+            Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
-                Spacer(Modifier.height(16.dp))
                 Text(
-                    if (showSyncedOnly) "No synced pairs" else "No books yet",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (showSyncedOnly)
-                        "No pairs have been synced yet.\nTranscribe audiobooks on the web dashboard first."
-                    else
-                        "Add book pairs on the web dashboard,\nthen pull to refresh here.",
+                    text = if (showSyncedOnly) "Synced only" else "All pairs",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Switch(
+                    checked = showSyncedOnly,
+                    onCheckedChange = { showSyncedOnly = it },
+                )
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (refreshing) {
-                    item {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                }
 
-                items(displayedPairs) { pair ->
-                    BookPairCard(
-                        pair = pair,
-                        downloadStatus = downloadingProgress[pair.id],
-                        onDownloadAll = { onDownloadAll(pair) },
-                        onDownloadEbook = { onDownloadEbook(pair) },
-                        onDownloadAudiobook = { onDownloadAudiobook(pair) },
-                        onDeleteEbook = { onDeleteEbook(pair) },
-                        onDeleteAudiobook = { onDeleteAudiobook(pair) },
-                        onDeletePair = { onDeletePair(pair) },
-                        onReadClick = { onBookSelect(pair.id) },
-                        onListenClick = { onAudioSelect(pair.id) },
+            if (displayedPairs.isEmpty() && !refreshing) {
+                // Empty state
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("📚", fontSize = MaterialTheme.typography.displayLarge.fontSize)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        if (showSyncedOnly) "No synced pairs" else "No books yet",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (showSyncedOnly)
+                            "No pairs have been synced yet.\nTranscribe audiobooks on the web dashboard first."
+                        else
+                            "Add book pairs on the web dashboard,\nthen pull to refresh here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (refreshing) {
+                        item {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+
+                    items(displayedPairs) { pair ->
+                        BookPairCard(
+                            pair = pair,
+                            downloadStatus = downloadingProgress[pair.id],
+                            onDownloadAll = { viewModel.downloadAll(pair) },
+                            onDownloadEbook = { viewModel.downloadEbookOnly(pair) },
+                            onDownloadAudiobook = { viewModel.downloadAudiobookOnly(pair) },
+                            onDeleteEbook = { viewModel.deleteEbook(pair) },
+                            onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
+                            onDeletePair = { viewModel.deletePair(pair) },
+                            onReadClick = { onBookSelect(pair.id) },
+                            onListenClick = { onAudioSelect(pair.id) },
+                        )
+                    }
                 }
             }
         }

@@ -93,12 +93,6 @@ data class PendingSyncEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "acknowledged_items", primaryKeys = ["itemId", "itemType"])
-data class AcknowledgedItemEntity(
-    val itemId: Int,
-    val itemType: String  // "ebook", "audiobook", "pair"
-)
-
 @Entity(tableName = "user_progress", primaryKeys = ["mediaType", "mediaId"])
 data class UserProgressEntity(
     val mediaType: String,

@@ -31,7 +31,6 @@ class BookSyncRepository @Inject constructor(
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
     private val userProgressDao: UserProgressDao,
-    private val acknowledgedItemDao: AcknowledgedItemDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
 ) {
@@ -73,15 +72,7 @@ class BookSyncRepository @Inject constructor(
         }
         bookPairDao.upsertPairs(entities)
         val remoteIds = remotePairs.map { it.id }
-        if (remoteIds.isEmpty()) {
-            bookPairDao.deleteAll()
-            acknowledgedItemDao.remove(emptyList<Int>().also { /* nothing to remove */ }, "pair")
-        } else {
-            val allLocalIds = bookPairDao.getAllPairsOnce().map { it.id }
-            val deletedIds = allLocalIds.filterNot { it in remoteIds }
-            if (deletedIds.isNotEmpty()) acknowledgedItemDao.remove(deletedIds, "pair")
-            bookPairDao.deleteOrphansExcept(remoteIds)
-        }
+        if (remoteIds.isEmpty()) bookPairDao.deleteAll() else bookPairDao.deleteOrphansExcept(remoteIds)
         log("refreshPairs — saved ${entities.size} pairs to cache")
     }
     
@@ -112,14 +103,7 @@ class BookSyncRepository @Inject constructor(
         }
         eBookDao.upsertEBooks(entities)
         val remoteIds = remoteEbooks.map { it.id }
-        if (remoteIds.isEmpty()) {
-            eBookDao.deleteAll()
-        } else {
-            val allLocalIds = eBookDao.getAllEBooksOnce().map { it.id }
-            val deletedIds = allLocalIds.filterNot { it in remoteIds }
-            if (deletedIds.isNotEmpty()) acknowledgedItemDao.remove(deletedIds, "ebook")
-            eBookDao.deleteOrphansExcept(remoteIds)
-        }
+        if (remoteIds.isEmpty()) eBookDao.deleteAll() else eBookDao.deleteOrphansExcept(remoteIds)
     }
 
     /** Get all audiobooks as a reactive Flow from local cache. */
@@ -170,38 +154,7 @@ class BookSyncRepository @Inject constructor(
         }
         audioBookDao.upsertAudioBooks(entities)
         val remoteIds = remoteAudiobooks.map { it.id }
-        if (remoteIds.isEmpty()) {
-            audioBookDao.deleteAll()
-        } else {
-            val allLocalIds = audioBookDao.getAllAudioBooksOnce().map { it.id }
-            val deletedIds = allLocalIds.filterNot { it in remoteIds }
-            if (deletedIds.isNotEmpty()) acknowledgedItemDao.remove(deletedIds, "audiobook")
-            audioBookDao.deleteOrphansExcept(remoteIds)
-        }
-    }
-
-    // ============ New Items (Inbox) ============
-
-    fun getNewEbooksFlow(): Flow<List<EBookEntity>> = acknowledgedItemDao.getNewEbooks()
-    fun getNewAudiobooksFlow(): Flow<List<AudioBookEntity>> = acknowledgedItemDao.getNewAudiobooks()
-    fun getNewPairsFlow(): Flow<List<BookPairEntity>> = acknowledgedItemDao.getNewPairs()
-    fun getNewEbookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewEbookCount()
-    fun getNewAudiobookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewAudiobookCount()
-    fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount()
-
-    suspend fun acknowledgeItems(ids: List<Int>, type: String) {
-        // Update local DB for offline tracking
-        acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
-        // Sync to server (best-effort)
-        try {
-            when (type) {
-                "ebook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(ebook_ids = ids))
-                "audiobook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(audiobook_ids = ids))
-                "pair" -> api.acknowledgeNewPairs(AcknowledgePairsRequest(pair_ids = ids))
-            }
-        } catch (e: Exception) {
-            logW("acknowledgeItems — server sync failed (type=$type): ${e.message}")
-        }
+        if (remoteIds.isEmpty()) audioBookDao.deleteAll() else audioBookDao.deleteOrphansExcept(remoteIds)
     }
 
     // ============ Pairing ============

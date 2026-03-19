@@ -37,20 +37,6 @@ interface BookSyncApi {
     @GET("api/library/pairs")
     suspend fun getPairs(): List<BookPairResponse>
 
-    // ============ New Items / New Pairs Inbox ============
-
-    @GET("api/library/new-items")
-    suspend fun getNewItems(): NewItemsResponse
-
-    @POST("api/library/new-items/acknowledge")
-    suspend fun acknowledgeNewItems(@Body request: AcknowledgeItemsRequest): AcknowledgeItemsResponse
-
-    @GET("api/library/new-pairs")
-    suspend fun getNewPairs(): List<BookPairResponse>
-
-    @POST("api/library/new-pairs/acknowledge")
-    suspend fun acknowledgeNewPairs(@Body request: AcknowledgePairsRequest): AcknowledgePairsResponse
-
     @POST("api/library/scan")
     suspend fun scanLibrary(): Response<Unit>
 
