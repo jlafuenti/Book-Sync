@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, coverSrc } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
@@ -39,19 +39,9 @@ export default function NewPairsPage() {
     // Metadata cleanup modal
     const [showCleanupModal, setShowCleanupModal] = useState(false)
 
-    // Fixed toolbar height tracking
-    const toolbarRef = useRef(null)
-    const [toolbarHeight, setToolbarHeight] = useState(0)
-    useLayoutEffect(() => {
-        const el = toolbarRef.current
-        if (!el) return
-        const ro = new ResizeObserver(() => setToolbarHeight(el.offsetHeight))
-        ro.observe(el)
-        return () => ro.disconnect()
-    }, [])
-
-    // Multi-select
+    // Multi-select + shift+click range selection
     const [selected, setSelected] = useState(new Set())
+    const lastClickedRef = useRef(null)
 
     // Inline resolve state: pairId → { field → 'ebook'|'audiobook'|null }
     const [resolveState, setResolveState] = useState({})
@@ -66,12 +56,12 @@ export default function NewPairsPage() {
                 getMetadataDiscrepancies(),
             ])
             setPairs(pairsData)
-            // Build a map from pairId → discrepancy fields
             const map = {}
             discData.forEach(d => { map[d.pair_id] = d })
             setDiscrepancyMap(map)
             setSelected(new Set())
             setExpandedPairId(null)
+            lastClickedRef.current = null
         } catch (e) {
             setError(e.message)
         } finally {
@@ -81,13 +71,49 @@ export default function NewPairsPage() {
 
     useEffect(() => { load() }, [load])
 
-    function toggle(id) {
-        setSelected(prev => {
-            const next = new Set(prev)
-            if (next.has(id)) next.delete(id)
-            else next.add(id)
-            return next
-        })
+    const cleanPairs = pairs.filter(p => !discrepancyMap[p.id] || discrepancyMap[p.id].discrepancies.length === 0)
+    const mismatchPairs = pairs.filter(p => discrepancyMap[p.id]?.discrepancies.length > 0)
+    const visiblePairs = filter === 'clean' ? cleanPairs : filter === 'mismatches' ? mismatchPairs : pairs
+    const visibleIds = visiblePairs.map(p => p.id)
+
+    const allVisibleSelected = visiblePairs.length > 0 && visiblePairs.every(p => selected.has(p.id))
+
+    function toggleAllVisible() {
+        if (allVisibleSelected) {
+            setSelected(prev => {
+                const next = new Set(prev)
+                visiblePairs.forEach(p => next.delete(p.id))
+                return next
+            })
+        } else {
+            setSelected(prev => new Set([...prev, ...visibleIds]))
+        }
+        lastClickedRef.current = null
+    }
+
+    function handleCheck(id, event) {
+        if (event.shiftKey && lastClickedRef.current !== null) {
+            const idx1 = visibleIds.indexOf(lastClickedRef.current)
+            const idx2 = visibleIds.indexOf(id)
+            if (idx1 !== -1 && idx2 !== -1) {
+                const [start, end] = [Math.min(idx1, idx2), Math.max(idx1, idx2)]
+                const rangeIds = visibleIds.slice(start, end + 1)
+                const shouldCheck = !selected.has(id)
+                setSelected(prev => {
+                    const next = new Set(prev)
+                    rangeIds.forEach(k => shouldCheck ? next.add(k) : next.delete(k))
+                    return next
+                })
+            }
+        } else {
+            setSelected(prev => {
+                const next = new Set(prev)
+                if (next.has(id)) next.delete(id)
+                else next.add(id)
+                return next
+            })
+        }
+        lastClickedRef.current = id
     }
 
     async function acknowledgeSelected() {
@@ -105,9 +131,15 @@ export default function NewPairsPage() {
         await load()
     }
 
+    async function acknowledgeAllClean() {
+        const ids = cleanPairs.map(p => p.id)
+        if (ids.length === 0) return
+        await acknowledgeNewPairs(ids)
+        await load()
+    }
+
     function toggleExpand(pairId) {
         setExpandedPairId(prev => prev === pairId ? null : pairId)
-        // Initialize resolve state for this pair if needed
         setResolveState(prev => {
             if (prev[pairId]) return prev
             return { ...prev, [pairId]: {} }
@@ -155,31 +187,6 @@ export default function NewPairsPage() {
         await load()
     }
 
-    const cleanPairs = pairs.filter(p => !discrepancyMap[p.id] || discrepancyMap[p.id].discrepancies.length === 0)
-    const mismatchPairs = pairs.filter(p => discrepancyMap[p.id]?.discrepancies.length > 0)
-    const visiblePairs = filter === 'clean' ? cleanPairs : filter === 'mismatches' ? mismatchPairs : pairs
-
-    const allVisibleSelected = visiblePairs.length > 0 && visiblePairs.every(p => selected.has(p.id))
-
-    function toggleAllVisible() {
-        if (allVisibleSelected) {
-            setSelected(prev => {
-                const next = new Set(prev)
-                visiblePairs.forEach(p => next.delete(p.id))
-                return next
-            })
-        } else {
-            setSelected(prev => new Set([...prev, ...visiblePairs.map(p => p.id)]))
-        }
-    }
-
-    async function acknowledgeAllClean() {
-        const ids = cleanPairs.map(p => p.id)
-        if (ids.length === 0) return
-        await acknowledgeNewPairs(ids)
-        await load()
-    }
-
     function formatDate(dt) {
         if (!dt) return '—'
         return new Date(dt).toLocaleDateString()
@@ -203,15 +210,10 @@ export default function NewPairsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Fixed filter + bulk actions — flush with viewport top */}
-                    <div ref={toolbarRef} style={{
-                        position: 'fixed', top: 0, left: 260, right: 0, zIndex: 50,
-                        background: 'var(--bg-primary)',
-                        padding: '0.5rem 32px',
-                        borderBottom: '1px solid var(--border)',
-                    }}>
+                    {/* Inline top controls: filter tabs, select-all, bulk actions */}
+                    <div style={{ marginBottom: '1rem' }}>
                         {/* Filter tabs */}
-                        <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
                             {[
                                 { key: 'all', label: `All (${pairs.length})` },
                                 { key: 'mismatches', label: `⚠️ Has mismatches (${mismatchPairs.length})` },
@@ -220,7 +222,7 @@ export default function NewPairsPage() {
                                 <button
                                     key={f.key}
                                     className={`btn btn-sm ${filter === f.key ? 'btn-primary' : 'btn-secondary'}`}
-                                    onClick={() => { setFilter(f.key); setSelected(new Set()) }}
+                                    onClick={() => { setFilter(f.key); setSelected(new Set()); lastClickedRef.current = null }}
                                 >
                                     {f.label}
                                 </button>
@@ -230,31 +232,25 @@ export default function NewPairsPage() {
                                     className="btn btn-sm btn-primary"
                                     onClick={acknowledgeAllClean}
                                     style={{ marginLeft: 'auto' }}
-                                    title="Acknowledge all pairs with no metadata mismatches"
                                 >
                                     Acknowledge all clean ({cleanPairs.length})
                                 </button>
                             )}
                         </div>
 
-                        {/* Bulk actions */}
+                        {/* Select-all + right-side actions */}
                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
                                 <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
                                 Select all visible ({visiblePairs.length})
                             </label>
-                            {selected.size > 0 && canEdit && (
-                                <button className="btn btn-secondary" onClick={acknowledgeSelected}>
-                                    Acknowledge selected ({selected.size})
-                                </button>
-                            )}
                             <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
                                 {canEdit && mismatchPairs.length > 0 && (
                                     <button className="btn btn-secondary" onClick={() => setShowCleanupModal(true)}>
                                         🧹 Clean Up Metadata
                                     </button>
                                 )}
-                                {canEdit && pairs.length > 0 && (
+                                {canEdit && (
                                     <button className="btn btn-secondary" onClick={acknowledgeAll}>
                                         Acknowledge all
                                     </button>
@@ -262,8 +258,6 @@ export default function NewPairsPage() {
                             </div>
                         </div>
                     </div>
-                    {/* Spacer so fixed toolbar doesn't overlap content */}
-                    <div style={{ height: toolbarHeight }} />
 
                     {visiblePairs.length === 0 && (
                         <div className="empty-state"><p>No pairs match this filter.</p></div>
@@ -291,7 +285,11 @@ export default function NewPairsPage() {
                                 >
                                     {/* Row header */}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem', background: 'var(--surface)' }}>
-                                        <input type="checkbox" checked={selected.has(pair.id)} onChange={() => toggle(pair.id)} />
+                                        <input
+                                            type="checkbox"
+                                            checked={selected.has(pair.id)}
+                                            onChange={(e) => handleCheck(pair.id, e)}
+                                        />
 
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{ fontWeight: 600 }}>{pair.ebook?.title || pair.audiobook?.title || 'Unknown'}</div>
@@ -349,59 +347,53 @@ export default function NewPairsPage() {
                                                 <thead>
                                                     <tr>
                                                         <th style={{ textAlign: 'left', paddingBottom: '0.4rem' }}>Field</th>
-                                                        <th style={{ textAlign: 'left', paddingBottom: '0.4rem' }}>
-                                                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                                                                Ebook value
-                                                            </label>
-                                                        </th>
-                                                        <th style={{ textAlign: 'left', paddingBottom: '0.4rem' }}>
-                                                            Audiobook value
-                                                        </th>
+                                                        <th style={{ textAlign: 'left', paddingBottom: '0.4rem' }}>Ebook value</th>
+                                                        <th style={{ textAlign: 'left', paddingBottom: '0.4rem' }}>Audiobook value</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
                                                     {disc.discrepancies.map(d => {
                                                         const isCover = d.field === 'cover_path'
                                                         return (
-                                                        <tr key={d.field}>
-                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', whiteSpace: 'nowrap', color: 'var(--text-muted)', verticalAlign: 'top' }}>
-                                                                {FIELDS_LABEL[d.field] || d.field}
-                                                            </td>
-                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', verticalAlign: 'top' }}>
-                                                                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`${pair.id}-${d.field}`}
-                                                                        checked={choices[d.field] === 'ebook'}
-                                                                        onChange={() => setFieldChoice(pair.id, d.field, 'ebook')}
-                                                                        style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
-                                                                    />
-                                                                    {isCover
-                                                                        ? (d.ebook_value
-                                                                            ? <img src={coverSrc(d.ebook_value)} alt="Ebook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
-                                                                            : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
-                                                                        : <span style={{ wordBreak: 'break-word' }}>{d.ebook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
-                                                                    }
-                                                                </label>
-                                                            </td>
-                                                            <td style={{ paddingTop: '0.5rem', verticalAlign: 'top' }}>
-                                                                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`${pair.id}-${d.field}`}
-                                                                        checked={choices[d.field] === 'audiobook'}
-                                                                        onChange={() => setFieldChoice(pair.id, d.field, 'audiobook')}
-                                                                        style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
-                                                                    />
-                                                                    {isCover
-                                                                        ? (d.audiobook_value
-                                                                            ? <img src={coverSrc(d.audiobook_value)} alt="Audiobook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
-                                                                            : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
-                                                                        : <span style={{ wordBreak: 'break-word' }}>{d.audiobook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
-                                                                    }
-                                                                </label>
-                                                            </td>
-                                                        </tr>
+                                                            <tr key={d.field}>
+                                                                <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', whiteSpace: 'nowrap', color: 'var(--text-muted)', verticalAlign: 'top' }}>
+                                                                    {FIELDS_LABEL[d.field] || d.field}
+                                                                </td>
+                                                                <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', verticalAlign: 'top' }}>
+                                                                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
+                                                                        <input
+                                                                            type="radio"
+                                                                            name={`${pair.id}-${d.field}`}
+                                                                            checked={choices[d.field] === 'ebook'}
+                                                                            onChange={() => setFieldChoice(pair.id, d.field, 'ebook')}
+                                                                            style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
+                                                                        />
+                                                                        {isCover
+                                                                            ? (d.ebook_value
+                                                                                ? <img src={coverSrc(d.ebook_value)} alt="Ebook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                                : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
+                                                                            : <span style={{ wordBreak: 'break-word' }}>{d.ebook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
+                                                                        }
+                                                                    </label>
+                                                                </td>
+                                                                <td style={{ paddingTop: '0.5rem', verticalAlign: 'top' }}>
+                                                                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
+                                                                        <input
+                                                                            type="radio"
+                                                                            name={`${pair.id}-${d.field}`}
+                                                                            checked={choices[d.field] === 'audiobook'}
+                                                                            onChange={() => setFieldChoice(pair.id, d.field, 'audiobook')}
+                                                                            style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
+                                                                        />
+                                                                        {isCover
+                                                                            ? (d.audiobook_value
+                                                                                ? <img src={coverSrc(d.audiobook_value)} alt="Audiobook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                                : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
+                                                                            : <span style={{ wordBreak: 'break-word' }}>{d.audiobook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
+                                                                        }
+                                                                    </label>
+                                                                </td>
+                                                            </tr>
                                                         )
                                                     })}
                                                 </tbody>
@@ -430,6 +422,25 @@ export default function NewPairsPage() {
                         })}
                     </div>
                 </>
+            )}
+
+            {/* Floating bottom bar — appears when anything is selected */}
+            {selected.size > 0 && canEdit && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                    borderRadius: '12px', padding: '12px 20px',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100,
+                    whiteSpace: 'nowrap',
+                }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {selected.size} selected
+                    </span>
+                    <button className="btn btn-primary" onClick={acknowledgeSelected}>
+                        Acknowledge selected
+                    </button>
+                </div>
             )}
 
             {showCleanupModal && (
