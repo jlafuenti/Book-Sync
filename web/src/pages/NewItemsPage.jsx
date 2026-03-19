@@ -178,7 +178,7 @@ export default function NewItemsPage() {
                     <div style={{
                         display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap',
                         position: 'sticky', top: 0, zIndex: 10,
-                        background: 'var(--background, #fff)',
+                        background: 'var(--bg-primary)',
                         padding: '0.5rem 0',
                         marginBottom: '0.5rem',
                         borderBottom: '1px solid var(--border)',

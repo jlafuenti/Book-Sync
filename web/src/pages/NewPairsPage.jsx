@@ -195,7 +195,7 @@ export default function NewPairsPage() {
                     {/* Sticky filter + bulk actions */}
                     <div style={{
                         position: 'sticky', top: 0, zIndex: 10,
-                        background: 'var(--background, #fff)',
+                        background: 'var(--bg-primary)',
                         paddingTop: '0.5rem',
                         paddingBottom: '0.5rem',
                         marginBottom: '0.75rem',
