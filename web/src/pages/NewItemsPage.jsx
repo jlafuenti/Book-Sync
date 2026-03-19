@@ -17,6 +17,9 @@ function formatDate(dt) {
 
 // Defined outside so React never sees it as a new component type on re-render
 function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {
+    // Capture shiftKey on click (fires before onChange) so onChange can read it
+    const shiftRef = React.useRef(false)
+
     return (
         <div className="table-wrapper">
             <table>
@@ -41,8 +44,8 @@ function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {
                                 <input
                                     type="checkbox"
                                     checked={selected.has(`${type}:${book.id}`)}
-                                    onChange={() => {}} // controlled — onClick handles the logic
-                                    onClick={(e) => { e.preventDefault(); onCheck(type, book.id, e) }}
+                                    onClick={(e) => { shiftRef.current = e.shiftKey }}
+                                    onChange={() => onCheck(type, book.id, shiftRef.current)}
                                 />
                             </td>
                             <td>
@@ -126,11 +129,10 @@ export default function NewItemsPage() {
         lastClickedRef.current = null
     }
 
-    // onClick-based so e.shiftKey is reliably set; e.preventDefault() stops the
-    // browser's native toggle so React's checked prop is the single source of truth
-    const handleCheck = useCallback((type, id, e) => {
+    // shiftKey captured via onClick ref; browser handles the visual toggle natively
+    const handleCheck = useCallback((type, id, shiftKey) => {
         const key = `${type}:${id}`
-        if (e.shiftKey && lastClickedRef.current) {
+        if (shiftKey && lastClickedRef.current) {
             const allK = [
                 ...ebooks.map(eb => `ebook:${eb.id}`),
                 ...audiobooks.map(ab => `audiobook:${ab.id}`),
