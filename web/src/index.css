@@ -218,6 +218,8 @@ body {
     max-width: calc(100vw - 260px);
     box-sizing: border-box;
     overflow-x: hidden;
+    height: 100vh;
+    overflow-y: auto;
 }
 
 .page-header {
