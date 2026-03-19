@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getNewItems, acknowledgeNewItems, uploadEbookCover, uploadAudiobookCover, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import { useAuth } from '../contexts/AuthContext'
@@ -30,16 +30,8 @@ export default function NewItemsPage() {
     const ebooksRef = useRef(null)
     const audiobooksRef = useRef(null)
 
-    // Fixed toolbar height tracking (ResizeObserver keeps spacer in sync)
-    const toolbarRef = useRef(null)
-    const [toolbarHeight, setToolbarHeight] = useState(0)
-    useLayoutEffect(() => {
-        const el = toolbarRef.current
-        if (!el) return
-        const ro = new ResizeObserver(() => setToolbarHeight(el.offsetHeight))
-        ro.observe(el)
-        return () => ro.disconnect()
-    }, [])
+    // Shift+click range selection: track last clicked key
+    const lastClickedRef = useRef(null)
 
     const load = useCallback(async () => {
         try {
@@ -48,6 +40,7 @@ export default function NewItemsPage() {
             setEbooks(data.ebooks || [])
             setAudiobooks(data.audiobooks || [])
             setSelected(new Set())
+            lastClickedRef.current = null
         } catch (e) {
             setError(e.message)
         } finally {
@@ -66,16 +59,34 @@ export default function NewItemsPage() {
     function toggleAll() {
         if (allSelected) setSelected(new Set())
         else setSelected(new Set(allKeys))
+        lastClickedRef.current = null
     }
 
-    function toggle(type, id) {
+    function handleCheck(type, id, event) {
         const key = `${type}:${id}`
-        setSelected(prev => {
-            const next = new Set(prev)
-            if (next.has(key)) next.delete(key)
-            else next.add(key)
-            return next
-        })
+        if (event.shiftKey && lastClickedRef.current) {
+            const idx1 = allKeys.indexOf(lastClickedRef.current)
+            const idx2 = allKeys.indexOf(key)
+            if (idx1 !== -1 && idx2 !== -1) {
+                const [start, end] = [Math.min(idx1, idx2), Math.max(idx1, idx2)]
+                const rangeKeys = allKeys.slice(start, end + 1)
+                // If the clicked item is being checked, check the whole range; otherwise uncheck
+                const shouldCheck = !selected.has(key)
+                setSelected(prev => {
+                    const next = new Set(prev)
+                    rangeKeys.forEach(k => shouldCheck ? next.add(k) : next.delete(k))
+                    return next
+                })
+            }
+        } else {
+            setSelected(prev => {
+                const next = new Set(prev)
+                if (next.has(key)) next.delete(key)
+                else next.add(key)
+                return next
+            })
+        }
+        lastClickedRef.current = key
     }
 
     async function acknowledgeSelected() {
@@ -92,7 +103,6 @@ export default function NewItemsPage() {
 
     function jumpTo(ref, collapsed, setCollapsed) {
         if (collapsed) setCollapsed(false)
-        // Small delay so section expands before scrolling
         setTimeout(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
     }
 
@@ -139,7 +149,7 @@ export default function NewItemsPage() {
                                     <input
                                         type="checkbox"
                                         checked={selected.has(`${type}:${book.id}`)}
-                                        onChange={() => toggle(type, book.id)}
+                                        onChange={(e) => handleCheck(type, book.id, e)}
                                     />
                                 </td>
                                 <td>
@@ -185,52 +195,36 @@ export default function NewItemsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Toolbar: select-all, jump buttons, bulk actions — fixed so it's always flush with viewport top */}
-                    <div ref={toolbarRef} style={{
-                        display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap',
-                        position: 'fixed', top: 0, left: 260, right: 0, zIndex: 50,
-                        background: 'var(--bg-primary)',
-                        padding: '0.5rem 32px',
-                        borderBottom: '1px solid var(--border)',
-                    }}>
+                    {/* Inline top controls: select-all, jump buttons, acknowledge all */}
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                             Select all ({total})
                         </label>
 
-                        {/* Jump buttons */}
                         {ebooks.length > 0 && audiobooks.length > 0 && (
                             <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.5rem' }}>
                                 <button
                                     className="btn btn-sm btn-secondary"
                                     onClick={() => jumpTo(ebooksRef, ebooksCollapsed, setEbooksCollapsed)}
-                                    title="Jump to Ebooks section"
                                 >
                                     📚 Ebooks ({ebooks.length})
                                 </button>
                                 <button
                                     className="btn btn-sm btn-secondary"
                                     onClick={() => jumpTo(audiobooksRef, audiobooksCollapsed, setAudiobooksCollapsed)}
-                                    title="Jump to Audiobooks section"
                                 >
                                     🎧 Audiobooks ({audiobooks.length})
                                 </button>
                             </div>
                         )}
 
-                        {selectedCount > 0 && canEdit && (
-                            <button className="btn btn-secondary" onClick={acknowledgeSelected}>
-                                Acknowledge selected ({selectedCount})
-                            </button>
-                        )}
-                        {canEdit && total > 0 && (
+                        {canEdit && (
                             <button className="btn btn-secondary" onClick={acknowledgeAll} style={{ marginLeft: 'auto' }}>
                                 Acknowledge all
                             </button>
                         )}
                     </div>
-                    {/* Spacer so fixed toolbar doesn't overlap content */}
-                    <div style={{ height: toolbarHeight }} />
 
                     {/* Ebooks */}
                     {ebooks.length > 0 && (
@@ -278,6 +272,25 @@ export default function NewItemsPage() {
                 </>
             )}
 
+            {/* Floating bottom bar — appears when anything is selected */}
+            {selectedCount > 0 && canEdit && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                    borderRadius: '12px', padding: '12px 20px',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100,
+                    whiteSpace: 'nowrap',
+                }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {selectedCount} selected
+                    </span>
+                    <button className="btn btn-primary" onClick={acknowledgeSelected}>
+                        Acknowledge selected
+                    </button>
+                </div>
+            )}
+
             {/* Metadata edit modal — saving or applying a match auto-acknowledges the item */}
             {editModal && (
                 <EnhancedMetadataModal
@@ -287,7 +300,6 @@ export default function NewItemsPage() {
                     onSave={async (bookId, meta) => {
                         const fn = editModal.type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
                         await fn(bookId, meta)
-                        // Auto-acknowledge: saving details (or after applying a match) clears from inbox
                         if (editModal.type === 'ebook') await acknowledgeNewItems([bookId], [])
                         else await acknowledgeNewItems([], [bookId])
                         setEditModal(null)
