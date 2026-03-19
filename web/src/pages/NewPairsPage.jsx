@@ -188,49 +188,59 @@ export default function NewPairsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Filter tabs */}
-                    <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
-                        {[
-                            { key: 'all', label: `All (${pairs.length})` },
-                            { key: 'mismatches', label: `⚠️ Has mismatches (${mismatchPairs.length})` },
-                            { key: 'clean', label: `✓ No mismatches (${cleanPairs.length})` },
-                        ].map(f => (
-                            <button
-                                key={f.key}
-                                className={`btn btn-sm ${filter === f.key ? 'btn-primary' : 'btn-secondary'}`}
-                                onClick={() => { setFilter(f.key); setSelected(new Set()) }}
-                            >
-                                {f.label}
-                            </button>
-                        ))}
-                        {filter === 'clean' && cleanPairs.length > 0 && canEdit && (
-                            <button
-                                className="btn btn-sm btn-primary"
-                                onClick={acknowledgeAllClean}
-                                style={{ marginLeft: 'auto' }}
-                                title="Acknowledge all pairs with no metadata mismatches"
-                            >
-                                Acknowledge all clean ({cleanPairs.length})
-                            </button>
-                        )}
-                    </div>
+                    {/* Sticky filter + bulk actions */}
+                    <div style={{
+                        position: 'sticky', top: 0, zIndex: 10,
+                        background: 'var(--background, #fff)',
+                        paddingTop: '0.5rem',
+                        paddingBottom: '0.5rem',
+                        marginBottom: '0.75rem',
+                        borderBottom: '1px solid var(--border)',
+                    }}>
+                        {/* Filter tabs */}
+                        <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                            {[
+                                { key: 'all', label: `All (${pairs.length})` },
+                                { key: 'mismatches', label: `⚠️ Has mismatches (${mismatchPairs.length})` },
+                                { key: 'clean', label: `✓ No mismatches (${cleanPairs.length})` },
+                            ].map(f => (
+                                <button
+                                    key={f.key}
+                                    className={`btn btn-sm ${filter === f.key ? 'btn-primary' : 'btn-secondary'}`}
+                                    onClick={() => { setFilter(f.key); setSelected(new Set()) }}
+                                >
+                                    {f.label}
+                                </button>
+                            ))}
+                            {filter === 'clean' && cleanPairs.length > 0 && canEdit && (
+                                <button
+                                    className="btn btn-sm btn-primary"
+                                    onClick={acknowledgeAllClean}
+                                    style={{ marginLeft: 'auto' }}
+                                    title="Acknowledge all pairs with no metadata mismatches"
+                                >
+                                    Acknowledge all clean ({cleanPairs.length})
+                                </button>
+                            )}
+                        </div>
 
-                    {/* Bulk actions */}
-                    <div className="bulk-actions" style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
-                            Select all visible ({visiblePairs.length})
-                        </label>
-                        {selected.size > 0 && canEdit && (
-                            <button className="btn btn-secondary" onClick={acknowledgeSelected}>
-                                Acknowledge selected ({selected.size})
-                            </button>
-                        )}
-                        {canEdit && pairs.length > 0 && (
-                            <button className="btn btn-secondary" onClick={acknowledgeAll} style={{ marginLeft: 'auto' }}>
-                                Acknowledge all
-                            </button>
-                        )}
+                        {/* Bulk actions */}
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
+                                <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
+                                Select all visible ({visiblePairs.length})
+                            </label>
+                            {selected.size > 0 && canEdit && (
+                                <button className="btn btn-secondary" onClick={acknowledgeSelected}>
+                                    Acknowledge selected ({selected.size})
+                                </button>
+                            )}
+                            {canEdit && pairs.length > 0 && (
+                                <button className="btn btn-secondary" onClick={acknowledgeAll} style={{ marginLeft: 'auto' }}>
+                                    Acknowledge all
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     {visiblePairs.length === 0 && (

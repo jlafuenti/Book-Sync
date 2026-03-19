@@ -175,7 +175,14 @@ export default function NewItemsPage() {
             ) : (
                 <>
                     {/* Toolbar: select-all, jump buttons, bulk actions */}
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                    <div style={{
+                        display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap',
+                        position: 'sticky', top: 0, zIndex: 10,
+                        background: 'var(--background, #fff)',
+                        padding: '0.5rem 0',
+                        marginBottom: '0.5rem',
+                        borderBottom: '1px solid var(--border)',
+                    }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                             Select all ({total})
