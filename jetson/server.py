@@ -211,6 +211,13 @@ def _transcribe_file(audio_path: str) -> dict:
 
     start_time = time.time()
 
+    # Capture current_file NOW before the job starts.  We use this local variable
+    # when saving the result so we don't accidentally read a stale/overwritten value
+    # from _job_status after the job marks itself inactive (race condition: a new POST
+    # could overwrite current_file between active=False and the result-save below).
+    with _job_lock:
+        captured_filename = _job_status.current_file
+
     logger.info(f"Starting transcription: {audio_path}")
     logger.info(f"  Model: {WHISPER_MODEL}, Compute: {WHISPER_COMPUTE_TYPE}, VAD: {VAD_FILTER}")
 
@@ -227,11 +234,28 @@ def _transcribe_file(audio_path: str) -> dict:
         with _job_lock:
             _job_status.message = f"Transcribing ({_format_duration(total_duration)} of audio)..."
 
-        CHUNK_SIZE_SEC = 1800  # 30 minute chunks — reduces peak memory usage
+        CHUNK_SIZE_SEC = 900  # 15 minute chunks — smaller chunks reduce peak VRAM per chunk
         all_sentences = []
 
         for start_sec in range(0, int(total_duration) + 1, CHUNK_SIZE_SEC):
             logger.info(f"  Processing chunk {start_sec}s - {start_sec + CHUNK_SIZE_SEC}s")
+
+            # Log GPU memory before loading this chunk
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    free_before, total_gpu = torch.cuda.mem_get_info()
+                    allocated_before = torch.cuda.memory_allocated()
+                    reserved_before = torch.cuda.memory_reserved()
+                    logger.info(
+                        f"  [VRAM before chunk] free={free_before/1e6:.0f}MB "
+                        f"allocated={allocated_before/1e6:.0f}MB "
+                        f"reserved={reserved_before/1e6:.0f}MB "
+                        f"total={total_gpu/1e6:.0f}MB"
+                    )
+            except (ImportError, Exception) as mem_err:
+                logger.debug(f"  VRAM pre-chunk read failed: {mem_err}")
+
             audio_array = load_audio_chunk(audio_path, start_sec, CHUNK_SIZE_SEC)
 
             if len(audio_array) == 0:
@@ -271,13 +295,30 @@ def _transcribe_file(audio_path: str) -> dict:
                 s.end_ms += offset_ms
                 all_sentences.append(s)
 
-            # Release cached CUDA memory between chunks to prevent gradual accumulation
+            # Explicitly release audio array so Python GC can free it before we
+            # clear the CUDA cache — without this the numpy buffer may still be
+            # referenced and the allocator won't reclaim the backing memory.
+            del audio_array
+
+            # Release cached CUDA memory between chunks to prevent gradual accumulation.
+            # synchronize() ensures all queued CUDA ops have finished before we free.
             try:
                 import torch
                 if torch.cuda.is_available():
+                    torch.cuda.synchronize()
                     torch.cuda.empty_cache()
-            except ImportError:
-                pass
+                    free_after, _ = torch.cuda.mem_get_info()
+                    allocated_after = torch.cuda.memory_allocated()
+                    reserved_after = torch.cuda.memory_reserved()
+                    freed_mb = (reserved_before - reserved_after) / 1e6
+                    logger.info(
+                        f"  [VRAM after cleanup] free={free_after/1e6:.0f}MB "
+                        f"allocated={allocated_after/1e6:.0f}MB "
+                        f"reserved={reserved_after/1e6:.0f}MB "
+                        f"(freed {freed_mb:.0f}MB reserved)"
+                    )
+            except (ImportError, Exception) as mem_err:
+                logger.debug(f"  VRAM post-chunk cleanup failed: {mem_err}")
 
         processing_time = time.time() - start_time
         logger.info(f"  Transcription complete in {processing_time:.1f}s")
@@ -295,16 +336,19 @@ def _transcribe_file(audio_path: str) -> dict:
             "processing_time_seconds": round(processing_time, 2),
         }
         
-        # Save result for later retrieval (in case client disconnected)
+        # Save result for later retrieval (in case client disconnected).
+        # Use captured_filename (snapshotted at job start) — NOT _job_status.current_file,
+        # which may have already been overwritten by a new incoming request.
         with _results_lock:
             # Clean up old results (older than 24 hours)
             now = time.time()
             to_delete = [k for k, (v, t) in _recent_results.items() if now - t > 86400]
             for k in to_delete:
                 del _recent_results[k]
-                
-            if _job_status.current_file:
-                _recent_results[_job_status.current_file] = (result, now)
+
+            if captured_filename:
+                _recent_results[captured_filename] = (result, now)
+                logger.info(f"  Cached result for '{captured_filename}' (available via /v1/result/)")
 
         return result
 
@@ -318,9 +362,19 @@ def _transcribe_file(audio_path: str) -> dict:
         try:
             import torch
             if torch.cuda.is_available():
+                allocated_before_cleanup = torch.cuda.memory_allocated()
+                reserved_before_cleanup = torch.cuda.memory_reserved()
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
-        except ImportError:
-            pass
+                allocated_after_cleanup = torch.cuda.memory_allocated()
+                reserved_after_cleanup = torch.cuda.memory_reserved()
+                logger.info(
+                    f"  [VRAM after error cleanup] "
+                    f"allocated={allocated_after_cleanup/1e6:.0f}MB (was {allocated_before_cleanup/1e6:.0f}MB), "
+                    f"reserved={reserved_after_cleanup/1e6:.0f}MB (was {reserved_before_cleanup/1e6:.0f}MB)"
+                )
+        except Exception as mem_err:
+            logger.debug(f"  VRAM error-cleanup failed: {mem_err}")
         raise
 
 
