@@ -3,6 +3,76 @@ import { getNewItems, acknowledgeNewItems, uploadEbookCover, uploadAudiobookCove
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import { useAuth } from '../contexts/AuthContext'
 
+function formatSize(bytes) {
+    if (!bytes) return '—'
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+    return (bytes / 1024).toFixed(0) + ' KB'
+}
+
+function formatDate(dt) {
+    if (!dt) return '—'
+    return new Date(dt).toLocaleDateString()
+}
+
+// Defined outside so React never sees it as a new component type on re-render
+function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {
+    return (
+        <div className="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th style={{ width: 36 }}></th>
+                        <th>Title</th>
+                        <th>Author</th>
+                        <th>Series</th>
+                        <th>Format</th>
+                        <th>Size</th>
+                        <th>Added</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {items.map(book => (
+                        <tr
+                            key={book.id}
+                            className={selected.has(`${type}:${book.id}`) ? 'row-selected' : ''}
+                        >
+                            <td>
+                                <input
+                                    type="checkbox"
+                                    checked={selected.has(`${type}:${book.id}`)}
+                                    onChange={() => {}} // controlled — onClick handles the logic
+                                    onClick={(e) => { e.preventDefault(); onCheck(type, book.id, e) }}
+                                />
+                            </td>
+                            <td>
+                                {canEdit ? (
+                                    <button
+                                        style={{
+                                            background: 'none', border: 'none', padding: 0,
+                                            color: 'var(--accent)', cursor: 'pointer',
+                                            textAlign: 'left', fontWeight: 500, fontSize: 'inherit',
+                                        }}
+                                        onClick={() => onEdit({ book, type })}
+                                        title="Click to edit metadata"
+                                    >
+                                        {book.title}
+                                    </button>
+                                ) : book.title}
+                            </td>
+                            <td>{book.author || '—'}</td>
+                            <td>{book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}</td>
+                            <td>{book.format?.toUpperCase()}</td>
+                            <td>{formatSize(book.file_size)}</td>
+                            <td>{formatDate(book.uploaded_at)}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    )
+}
+
 /**
  * New Items inbox — shows unacknowledged ebooks and audiobooks.
  * Items disappear once acknowledged or once paired.
@@ -16,21 +86,15 @@ export default function NewItemsPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
-    // Multi-select: Set of "ebook:id" or "audiobook:id" strings
     const [selected, setSelected] = useState(new Set())
 
-    // Collapsible sections
     const [ebooksCollapsed, setEbooksCollapsed] = useState(false)
     const [audiobooksCollapsed, setAudiobooksCollapsed] = useState(false)
 
-    // Metadata edit modal
-    const [editModal, setEditModal] = useState(null)  // { book, type }
+    const [editModal, setEditModal] = useState(null)
 
-    // Refs for jump-to scroll
     const ebooksRef = useRef(null)
     const audiobooksRef = useRef(null)
-
-    // Shift+click range selection: track last clicked key
     const lastClickedRef = useRef(null)
 
     const load = useCallback(async () => {
@@ -62,32 +126,37 @@ export default function NewItemsPage() {
         lastClickedRef.current = null
     }
 
-    function handleCheck(type, id, event) {
+    // onClick-based so e.shiftKey is reliably set; e.preventDefault() stops the
+    // browser's native toggle so React's checked prop is the single source of truth
+    const handleCheck = useCallback((type, id, e) => {
         const key = `${type}:${id}`
-        if (event.shiftKey && lastClickedRef.current) {
-            const idx1 = allKeys.indexOf(lastClickedRef.current)
-            const idx2 = allKeys.indexOf(key)
+        if (e.shiftKey && lastClickedRef.current) {
+            const allK = [
+                ...ebooks.map(eb => `ebook:${eb.id}`),
+                ...audiobooks.map(ab => `audiobook:${ab.id}`),
+            ]
+            const idx1 = allK.indexOf(lastClickedRef.current)
+            const idx2 = allK.indexOf(key)
             if (idx1 !== -1 && idx2 !== -1) {
                 const [start, end] = [Math.min(idx1, idx2), Math.max(idx1, idx2)]
-                const rangeKeys = allKeys.slice(start, end + 1)
-                // If the clicked item is being checked, check the whole range; otherwise uncheck
+                const range = allK.slice(start, end + 1)
                 const shouldCheck = !selected.has(key)
                 setSelected(prev => {
                     const next = new Set(prev)
-                    rangeKeys.forEach(k => shouldCheck ? next.add(k) : next.delete(k))
+                    range.forEach(k => shouldCheck ? next.add(k) : next.delete(k))
                     return next
                 })
+                lastClickedRef.current = key
+                return
             }
-        } else {
-            setSelected(prev => {
-                const next = new Set(prev)
-                if (next.has(key)) next.delete(key)
-                else next.add(key)
-                return next
-            })
         }
+        setSelected(prev => {
+            const next = new Set(prev)
+            if (next.has(key)) next.delete(key); else next.add(key)
+            return next
+        })
         lastClickedRef.current = key
-    }
+    }, [ebooks, audiobooks, selected])
 
     async function acknowledgeSelected() {
         const ebookIds = [...selected].filter(k => k.startsWith('ebook:')).map(k => parseInt(k.split(':')[1]))
@@ -106,79 +175,10 @@ export default function NewItemsPage() {
         setTimeout(() => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
     }
 
-    function formatSize(bytes) {
-        if (!bytes) return '—'
-        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
-        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-        return (bytes / 1024).toFixed(0) + ' KB'
-    }
-
-    function formatDate(dt) {
-        if (!dt) return '—'
-        return new Date(dt).toLocaleDateString()
-    }
-
     if (loading) return <div className="page-content"><p>Loading new items…</p></div>
     if (error) return <div className="page-content"><p className="error">{error}</p></div>
 
     const total = ebooks.length + audiobooks.length
-    const selectedCount = selected.size
-
-    function BookTable({ items, type }) {
-        return (
-            <div className="table-wrapper">
-                <table>
-                    <thead>
-                        <tr>
-                            <th style={{ width: 36 }}></th>
-                            <th>Title</th>
-                            <th>Author</th>
-                            <th>Series</th>
-                            <th>Format</th>
-                            <th>Size</th>
-                            <th>Added</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {items.map(book => (
-                            <tr
-                                key={book.id}
-                                className={selected.has(`${type}:${book.id}`) ? 'row-selected' : ''}
-                            >
-                                <td>
-                                    <input
-                                        type="checkbox"
-                                        checked={selected.has(`${type}:${book.id}`)}
-                                        onChange={(e) => handleCheck(type, book.id, e)}
-                                    />
-                                </td>
-                                <td>
-                                    {canEdit ? (
-                                        <button
-                                            style={{
-                                                background: 'none', border: 'none', padding: 0,
-                                                color: 'var(--accent)', cursor: 'pointer',
-                                                textAlign: 'left', fontWeight: 500, fontSize: 'inherit',
-                                            }}
-                                            onClick={() => setEditModal({ book, type })}
-                                            title="Click to edit metadata"
-                                        >
-                                            {book.title}
-                                        </button>
-                                    ) : book.title}
-                                </td>
-                                <td>{book.author || '—'}</td>
-                                <td>{book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '—'}</td>
-                                <td>{book.format?.toUpperCase()}</td>
-                                <td>{formatSize(book.file_size)}</td>
-                                <td>{formatDate(book.uploaded_at)}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        )
-    }
 
     return (
         <div className="page-content">
@@ -195,7 +195,6 @@ export default function NewItemsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Inline top controls: select-all, jump buttons, acknowledge all */}
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={allSelected} onChange={toggleAll} />
@@ -204,16 +203,10 @@ export default function NewItemsPage() {
 
                         {ebooks.length > 0 && audiobooks.length > 0 && (
                             <div style={{ display: 'flex', gap: '0.25rem', marginLeft: '0.5rem' }}>
-                                <button
-                                    className="btn btn-sm btn-secondary"
-                                    onClick={() => jumpTo(ebooksRef, ebooksCollapsed, setEbooksCollapsed)}
-                                >
+                                <button className="btn btn-sm btn-secondary" onClick={() => jumpTo(ebooksRef, ebooksCollapsed, setEbooksCollapsed)}>
                                     📚 Ebooks ({ebooks.length})
                                 </button>
-                                <button
-                                    className="btn btn-sm btn-secondary"
-                                    onClick={() => jumpTo(audiobooksRef, audiobooksCollapsed, setAudiobooksCollapsed)}
-                                >
+                                <button className="btn btn-sm btn-secondary" onClick={() => jumpTo(audiobooksRef, audiobooksCollapsed, setAudiobooksCollapsed)}>
                                     🎧 Audiobooks ({audiobooks.length})
                                 </button>
                             </div>
@@ -226,7 +219,6 @@ export default function NewItemsPage() {
                         )}
                     </div>
 
-                    {/* Ebooks */}
                     {ebooks.length > 0 && (
                         <section ref={ebooksRef} style={{ marginBottom: '2rem' }}>
                             <button
@@ -239,16 +231,19 @@ export default function NewItemsPage() {
                                     color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600,
                                 }}
                             >
-                                <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>
-                                    {ebooksCollapsed ? '▶' : '▼'}
-                                </span>
+                                <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>{ebooksCollapsed ? '▶' : '▼'}</span>
                                 📚 Ebooks ({ebooks.length})
                             </button>
-                            {!ebooksCollapsed && <BookTable items={ebooks} type="ebook" />}
+                            {!ebooksCollapsed && (
+                                <BookTable
+                                    items={ebooks} type="ebook"
+                                    selected={selected} onCheck={handleCheck}
+                                    canEdit={canEdit} onEdit={setEditModal}
+                                />
+                            )}
                         </section>
                     )}
 
-                    {/* Audiobooks */}
                     {audiobooks.length > 0 && (
                         <section ref={audiobooksRef}>
                             <button
@@ -261,19 +256,23 @@ export default function NewItemsPage() {
                                     color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600,
                                 }}
                             >
-                                <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>
-                                    {audiobooksCollapsed ? '▶' : '▼'}
-                                </span>
+                                <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>{audiobooksCollapsed ? '▶' : '▼'}</span>
                                 🎧 Audiobooks ({audiobooks.length})
                             </button>
-                            {!audiobooksCollapsed && <BookTable items={audiobooks} type="audiobook" />}
+                            {!audiobooksCollapsed && (
+                                <BookTable
+                                    items={audiobooks} type="audiobook"
+                                    selected={selected} onCheck={handleCheck}
+                                    canEdit={canEdit} onEdit={setEditModal}
+                                />
+                            )}
                         </section>
                     )}
                 </>
             )}
 
-            {/* Floating bottom bar — appears when anything is selected */}
-            {selectedCount > 0 && canEdit && (
+            {/* Floating bottom bar */}
+            {selected.size > 0 && canEdit && (
                 <div style={{
                     position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
                     background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -282,16 +281,12 @@ export default function NewItemsPage() {
                     boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100,
                     whiteSpace: 'nowrap',
                 }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        {selectedCount} selected
-                    </span>
-                    <button className="btn btn-primary" onClick={acknowledgeSelected}>
-                        Acknowledge selected
-                    </button>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{selected.size} selected</span>
+                    <button className="btn btn-primary" onClick={acknowledgeSelected}>Acknowledge selected</button>
+                    <button className="btn btn-secondary" onClick={() => { setSelected(new Set()); lastClickedRef.current = null }}>Cancel</button>
                 </div>
             )}
 
-            {/* Metadata edit modal — saving or applying a match auto-acknowledges the item */}
             {editModal && (
                 <EnhancedMetadataModal
                     book={editModal.book}

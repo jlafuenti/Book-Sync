@@ -91,8 +91,9 @@ export default function NewPairsPage() {
         lastClickedRef.current = null
     }
 
-    function handleCheck(id, event) {
-        if (event.shiftKey && lastClickedRef.current !== null) {
+    // onClick-based so e.shiftKey is reliably set
+    function handleCheck(id, e) {
+        if (e.shiftKey && lastClickedRef.current !== null) {
             const idx1 = visibleIds.indexOf(lastClickedRef.current)
             const idx2 = visibleIds.indexOf(id)
             if (idx1 !== -1 && idx2 !== -1) {
@@ -104,15 +105,15 @@ export default function NewPairsPage() {
                     rangeIds.forEach(k => shouldCheck ? next.add(k) : next.delete(k))
                     return next
                 })
+                lastClickedRef.current = id
+                return
             }
-        } else {
-            setSelected(prev => {
-                const next = new Set(prev)
-                if (next.has(id)) next.delete(id)
-                else next.add(id)
-                return next
-            })
         }
+        setSelected(prev => {
+            const next = new Set(prev)
+            if (next.has(id)) next.delete(id); else next.add(id)
+            return next
+        })
         lastClickedRef.current = id
     }
 
@@ -288,7 +289,8 @@ export default function NewPairsPage() {
                                         <input
                                             type="checkbox"
                                             checked={selected.has(pair.id)}
-                                            onChange={(e) => handleCheck(pair.id, e)}
+                                            onChange={() => {}}
+                                            onClick={(e) => { e.preventDefault(); handleCheck(pair.id, e) }}
                                         />
 
                                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -437,9 +439,8 @@ export default function NewPairsPage() {
                     <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
                         {selected.size} selected
                     </span>
-                    <button className="btn btn-primary" onClick={acknowledgeSelected}>
-                        Acknowledge selected
-                    </button>
+                    <button className="btn btn-primary" onClick={acknowledgeSelected}>Acknowledge selected</button>
+                    <button className="btn btn-secondary" onClick={() => { setSelected(new Set()); lastClickedRef.current = null }}>Cancel</button>
                 </div>
             )}
 
