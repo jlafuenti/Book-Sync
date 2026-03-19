@@ -32,6 +32,16 @@ function clearTokens() {
     localStorage.removeItem('tandem_refresh');
 }
 
+/**
+ * Append ?token= to a cover_path URL so the browser <img> tag
+ * can authenticate against the /api/files/covers/ endpoint.
+ * Returns null/undefined as-is so callers can still check falsiness.
+ */
+export function coverSrc(path) {
+    if (!path) return path;
+    return `${path}${path.includes('?') ? '&' : '?'}token=${accessToken || ''}`;
+}
+
 async function fetchWithAuth(url, options = {}) {
     const headers = { ...options.headers };
     if (accessToken) {
@@ -579,6 +589,38 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
         body: JSON.stringify(resolutions)
     });
     if (!resp.ok) throw new Error('Failed to resolve metadata discrepancies');
+    return resp.json();
+}
+
+// ============ New Items / New Pairs Inbox ============
+
+export async function getNewItems() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items`);
+    if (!resp.ok) throw new Error('Failed to get new items');
+    return resp.json();
+}
+
+export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new items');
+    return resp.json();
+}
+
+export async function getNewPairs() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs`);
+    if (!resp.ok) throw new Error('Failed to get new pairs');
+    return resp.json();
+}
+
+export async function acknowledgeNewPairs(pairIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ pair_ids: pairIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new pairs');
     return resp.json();
 }
 
