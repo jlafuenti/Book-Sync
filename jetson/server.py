@@ -8,6 +8,7 @@ Designed to run on a Jetson Orin Nano with GPU acceleration.
 """
 
 import asyncio
+import gc
 import os
 import time
 import shutil
@@ -202,6 +203,51 @@ def _get_audio_duration(file: str) -> float:
             return float(fallback.info.length)
         return 0.0
 
+def _read_sys_mem_mb() -> dict:
+    """Read MemAvailable and MemTotal from /proc/meminfo (always works on Linux, no torch needed)."""
+    try:
+        vals = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                key = key.strip()
+                if key in ("MemTotal", "MemFree", "MemAvailable"):
+                    vals[key] = int(rest.strip().split()[0]) // 1024  # kB → MB
+        return vals
+    except Exception:
+        return {}
+
+
+def _reload_ct2_model() -> None:
+    """
+    Unload and reload the CTranslate2 model weights to flush its internal
+    memory allocator.  This is the only reliable way to reclaim GPU/unified
+    memory between chunks on the Jetson (torch is not installed; ctranslate2
+    4.x has no cache-flush API).  The unload/load cycle keeps the Python
+    WhisperModel object alive so no other state is lost.
+    """
+    try:
+        mem_before = _read_sys_mem_mb()
+        logger.info(
+            f"  [mem reload] Unloading CT2 model weights... "
+            f"(sys avail={mem_before.get('MemAvailable','?')}MB)"
+        )
+        t0 = time.time()
+        model.model.unload_model()
+        gc.collect()
+        model.model.load_model()
+        elapsed = time.time() - t0
+        mem_after = _read_sys_mem_mb()
+        recovered = mem_after.get("MemAvailable", 0) - mem_before.get("MemAvailable", 0)
+        logger.info(
+            f"  [mem reload] Model reloaded in {elapsed:.1f}s — "
+            f"sys avail={mem_after.get('MemAvailable','?')}MB "
+            f"(+{recovered}MB recovered)"
+        )
+    except Exception as e:
+        logger.warning(f"  [mem reload] CT2 model reload failed (non-fatal): {e}")
+
+
 def _transcribe_file(audio_path: str) -> dict:
     """
     Run faster-whisper on the given audio file using chunking to avoid OOM.
@@ -220,6 +266,12 @@ def _transcribe_file(audio_path: str) -> dict:
 
     logger.info(f"Starting transcription: {audio_path}")
     logger.info(f"  Model: {WHISPER_MODEL}, Compute: {WHISPER_COMPUTE_TYPE}, VAD: {VAD_FILTER}")
+    mem = _read_sys_mem_mb()
+    logger.info(
+        f"  [mem start] sys total={mem.get('MemTotal','?')}MB  "
+        f"avail={mem.get('MemAvailable','?')}MB  "
+        f"free={mem.get('MemFree','?')}MB"
+    )
 
     with _job_lock:
         _job_status.active = True
@@ -230,36 +282,30 @@ def _transcribe_file(audio_path: str) -> dict:
     try:
         total_duration = _get_audio_duration(audio_path)
         logger.info(f"  Audio duration: {total_duration:.1f}s")
-        
+
         with _job_lock:
             _job_status.message = f"Transcribing ({_format_duration(total_duration)} of audio)..."
 
-        CHUNK_SIZE_SEC = 900  # 15 minute chunks — smaller chunks reduce peak VRAM per chunk
+        # 15 minute chunks — smaller chunks reduce peak memory per inference pass.
+        # NOTE: torch is not installed in this image; all memory management goes
+        # through ctranslate2 directly (del + gc.collect + periodic model reload).
+        CHUNK_SIZE_SEC = 900
+        # Reload the CT2 model weights every N chunks to flush its internal allocator
+        # pool.  At 900 s/chunk that is every ~6.25 hours of audio.
+        MODEL_RELOAD_EVERY_N_CHUNKS = 25
         all_sentences = []
+        chunk_index = 0
 
         for start_sec in range(0, int(total_duration) + 1, CHUNK_SIZE_SEC):
             logger.info(f"  Processing chunk {start_sec}s - {start_sec + CHUNK_SIZE_SEC}s")
-
-            # Log GPU memory before loading this chunk
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    free_before, total_gpu = torch.cuda.mem_get_info()
-                    allocated_before = torch.cuda.memory_allocated()
-                    reserved_before = torch.cuda.memory_reserved()
-                    logger.info(
-                        f"  [VRAM before chunk] free={free_before/1e6:.0f}MB "
-                        f"allocated={allocated_before/1e6:.0f}MB "
-                        f"reserved={reserved_before/1e6:.0f}MB "
-                        f"total={total_gpu/1e6:.0f}MB"
-                    )
-            except (ImportError, Exception) as mem_err:
-                logger.debug(f"  VRAM pre-chunk read failed: {mem_err}")
+            mem = _read_sys_mem_mb()
+            logger.info(f"  [mem] avail={mem.get('MemAvailable','?')}MB  free={mem.get('MemFree','?')}MB")
 
             audio_array = load_audio_chunk(audio_path, start_sec, CHUNK_SIZE_SEC)
 
             if len(audio_array) == 0:
                 logger.warning(f"  Chunk at {start_sec}s returned no audio data. Skipping.")
+                chunk_index += 1
                 continue
 
             segments_gen, info = model.transcribe(
@@ -269,7 +315,6 @@ def _transcribe_file(audio_path: str) -> dict:
 
             chunk_segments = []
             for segment in segments_gen:
-                # Add the segment to our chunk list
                 chunk_segments.append(segment)
 
                 # Overall progress = (start_sec + segment.end) / total_duration
@@ -295,30 +340,21 @@ def _transcribe_file(audio_path: str) -> dict:
                 s.end_ms += offset_ms
                 all_sentences.append(s)
 
-            # Explicitly release audio array so Python GC can free it before we
-            # clear the CUDA cache — without this the numpy buffer may still be
-            # referenced and the allocator won't reclaim the backing memory.
-            del audio_array
+            # --- Memory cleanup ---
+            # Release all references to ctranslate2 objects from this chunk so
+            # Python's GC can decrement their ref-counts before the next chunk.
+            # Without explicit del, segments_gen/info live until the next loop
+            # iteration's reassignment — one chunk behind, holding extra memory.
+            del audio_array, segments_gen, info, chunk_segments
+            gc.collect()
 
-            # Release cached CUDA memory between chunks to prevent gradual accumulation.
-            # synchronize() ensures all queued CUDA ops have finished before we free.
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                    torch.cuda.empty_cache()
-                    free_after, _ = torch.cuda.mem_get_info()
-                    allocated_after = torch.cuda.memory_allocated()
-                    reserved_after = torch.cuda.memory_reserved()
-                    freed_mb = (reserved_before - reserved_after) / 1e6
-                    logger.info(
-                        f"  [VRAM after cleanup] free={free_after/1e6:.0f}MB "
-                        f"allocated={allocated_after/1e6:.0f}MB "
-                        f"reserved={reserved_after/1e6:.0f}MB "
-                        f"(freed {freed_mb:.0f}MB reserved)"
-                    )
-            except (ImportError, Exception) as mem_err:
-                logger.debug(f"  VRAM post-chunk cleanup failed: {mem_err}")
+            chunk_index += 1
+
+            # Periodically reload the CT2 model to flush its internal allocator
+            # pool.  This is the only reliable way to reclaim memory on the Jetson
+            # since ctranslate2 4.x has no cache-flush API and torch is absent.
+            if chunk_index % MODEL_RELOAD_EVERY_N_CHUNKS == 0:
+                _reload_ct2_model()
 
         processing_time = time.time() - start_time
         logger.info(f"  Transcription complete in {processing_time:.1f}s")
@@ -335,7 +371,7 @@ def _transcribe_file(audio_path: str) -> dict:
             "model": WHISPER_MODEL,
             "processing_time_seconds": round(processing_time, 2),
         }
-        
+
         # Save result for later retrieval (in case client disconnected).
         # Use captured_filename (snapshotted at job start) — NOT _job_status.current_file,
         # which may have already been overwritten by a new incoming request.
@@ -358,23 +394,12 @@ def _transcribe_file(audio_path: str) -> dict:
             _job_status.active = False
             _job_status.progress = 0.0
             _job_status.message = f"Error: {str(e)}"
-        # Free GPU memory so the next job isn't penalized by this failure
-        try:
-            import torch
-            if torch.cuda.is_available():
-                allocated_before_cleanup = torch.cuda.memory_allocated()
-                reserved_before_cleanup = torch.cuda.memory_reserved()
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-                allocated_after_cleanup = torch.cuda.memory_allocated()
-                reserved_after_cleanup = torch.cuda.memory_reserved()
-                logger.info(
-                    f"  [VRAM after error cleanup] "
-                    f"allocated={allocated_after_cleanup/1e6:.0f}MB (was {allocated_before_cleanup/1e6:.0f}MB), "
-                    f"reserved={reserved_after_cleanup/1e6:.0f}MB (was {reserved_before_cleanup/1e6:.0f}MB)"
-                )
-        except Exception as mem_err:
-            logger.debug(f"  VRAM error-cleanup failed: {mem_err}")
+
+        # After a failed transcription the CT2 allocator pool may be in a
+        # fragmented/enlarged state.  Reload the model to flush it so the next
+        # job doesn't start with less memory than it should have.
+        logger.info("  Reloading CT2 model after failure to reset allocator state...")
+        _reload_ct2_model()
         raise
 
 
