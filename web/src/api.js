@@ -32,6 +32,16 @@ function clearTokens() {
     localStorage.removeItem('tandem_refresh');
 }
 
+/**
+ * Append ?token= to a cover_path URL so the browser <img> tag
+ * can authenticate against the /api/files/covers/ endpoint.
+ * Returns null/undefined as-is so callers can still check falsiness.
+ */
+export function coverSrc(path) {
+    if (!path) return path;
+    return `${path}${path.includes('?') ? '&' : '?'}token=${accessToken || ''}`;
+}
+
 async function fetchWithAuth(url, options = {}) {
     const headers = { ...options.headers };
     if (accessToken) {
