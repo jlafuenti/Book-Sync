@@ -190,7 +190,18 @@ class BookSyncRepository @Inject constructor(
     fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount()
 
     suspend fun acknowledgeItems(ids: List<Int>, type: String) {
+        // Update local DB for offline tracking
         acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
+        // Sync to server (best-effort)
+        try {
+            when (type) {
+                "ebook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(ebook_ids = ids))
+                "audiobook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(audiobook_ids = ids))
+                "pair" -> api.acknowledgeNewPairs(AcknowledgePairsRequest(pair_ids = ids))
+            }
+        } catch (e: Exception) {
+            logW("acknowledgeItems — server sync failed (type=$type): ${e.message}")
+        }
     }
 
     // ============ Pairing ============
