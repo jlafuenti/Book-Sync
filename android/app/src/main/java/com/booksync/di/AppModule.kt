@@ -107,6 +107,9 @@ object AppModule {
     fun provideUserProgressDao(db: BookSyncDatabase): UserProgressDao = db.userProgressDao()
 
     @Provides
+    fun provideAcknowledgedItemDao(db: BookSyncDatabase): AcknowledgedItemDao = db.acknowledgedItemDao()
+
+    @Provides
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
         context.dataStore
