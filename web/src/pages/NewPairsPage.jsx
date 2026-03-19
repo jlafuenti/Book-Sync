@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import MetadataCleanupModal from '../components/MetadataCleanupModal'
 
 const FIELDS_LABEL = {
     title: 'Title',
@@ -34,6 +35,9 @@ export default function NewPairsPage() {
 
     // Filter: 'all' | 'mismatches' | 'clean'
     const [filter, setFilter] = useState('all')
+
+    // Metadata cleanup modal
+    const [showCleanupModal, setShowCleanupModal] = useState(false)
 
     // Multi-select
     const [selected, setSelected] = useState(new Set())
@@ -235,11 +239,18 @@ export default function NewPairsPage() {
                                     Acknowledge selected ({selected.size})
                                 </button>
                             )}
-                            {canEdit && pairs.length > 0 && (
-                                <button className="btn btn-secondary" onClick={acknowledgeAll} style={{ marginLeft: 'auto' }}>
-                                    Acknowledge all
-                                </button>
-                            )}
+                            <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
+                                {canEdit && mismatchPairs.length > 0 && (
+                                    <button className="btn btn-secondary" onClick={() => setShowCleanupModal(true)}>
+                                        🧹 Clean Up Metadata
+                                    </button>
+                                )}
+                                {canEdit && pairs.length > 0 && (
+                                    <button className="btn btn-secondary" onClick={acknowledgeAll}>
+                                        Acknowledge all
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
 
@@ -408,6 +419,16 @@ export default function NewPairsPage() {
                         })}
                     </div>
                 </>
+            )}
+
+            {showCleanupModal && (
+                <MetadataCleanupModal
+                    onClose={() => setShowCleanupModal(false)}
+                    onComplete={() => {
+                        setShowCleanupModal(false)
+                        load()
+                    }}
+                />
             )}
         </div>
     )
