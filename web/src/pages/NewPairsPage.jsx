@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, coverSrc } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
@@ -38,6 +38,17 @@ export default function NewPairsPage() {
 
     // Metadata cleanup modal
     const [showCleanupModal, setShowCleanupModal] = useState(false)
+
+    // Fixed toolbar height tracking
+    const toolbarRef = useRef(null)
+    const [toolbarHeight, setToolbarHeight] = useState(0)
+    useLayoutEffect(() => {
+        const el = toolbarRef.current
+        if (!el) return
+        const ro = new ResizeObserver(() => setToolbarHeight(el.offsetHeight))
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
 
     // Multi-select
     const [selected, setSelected] = useState(new Set())
@@ -192,13 +203,11 @@ export default function NewPairsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Sticky filter + bulk actions */}
-                    <div style={{
-                        position: 'sticky', top: 0, zIndex: 10,
+                    {/* Fixed filter + bulk actions — flush with viewport top */}
+                    <div ref={toolbarRef} style={{
+                        position: 'fixed', top: 0, left: 260, right: 0, zIndex: 50,
                         background: 'var(--bg-primary)',
-                        paddingTop: '0.5rem',
-                        paddingBottom: '0.5rem',
-                        marginBottom: '0.75rem',
+                        padding: '0.5rem 32px',
                         borderBottom: '1px solid var(--border)',
                     }}>
                         {/* Filter tabs */}
@@ -253,6 +262,8 @@ export default function NewPairsPage() {
                             </div>
                         </div>
                     </div>
+                    {/* Spacer so fixed toolbar doesn't overlap content */}
+                    <div style={{ height: toolbarHeight }} />
 
                     {visiblePairs.length === 0 && (
                         <div className="empty-state"><p>No pairs match this filter.</p></div>

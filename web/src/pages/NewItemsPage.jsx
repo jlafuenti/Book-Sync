@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import { getNewItems, acknowledgeNewItems, uploadEbookCover, uploadAudiobookCover, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import { useAuth } from '../contexts/AuthContext'
@@ -29,6 +29,17 @@ export default function NewItemsPage() {
     // Refs for jump-to scroll
     const ebooksRef = useRef(null)
     const audiobooksRef = useRef(null)
+
+    // Fixed toolbar height tracking (ResizeObserver keeps spacer in sync)
+    const toolbarRef = useRef(null)
+    const [toolbarHeight, setToolbarHeight] = useState(0)
+    useLayoutEffect(() => {
+        const el = toolbarRef.current
+        if (!el) return
+        const ro = new ResizeObserver(() => setToolbarHeight(el.offsetHeight))
+        ro.observe(el)
+        return () => ro.disconnect()
+    }, [])
 
     const load = useCallback(async () => {
         try {
@@ -174,13 +185,12 @@ export default function NewItemsPage() {
                 </div>
             ) : (
                 <>
-                    {/* Toolbar: select-all, jump buttons, bulk actions */}
-                    <div style={{
+                    {/* Toolbar: select-all, jump buttons, bulk actions — fixed so it's always flush with viewport top */}
+                    <div ref={toolbarRef} style={{
                         display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap',
-                        position: 'sticky', top: 0, zIndex: 10,
+                        position: 'fixed', top: 0, left: 260, right: 0, zIndex: 50,
                         background: 'var(--bg-primary)',
-                        padding: '0.5rem 0',
-                        marginBottom: '0.5rem',
+                        padding: '0.5rem 32px',
                         borderBottom: '1px solid var(--border)',
                     }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
@@ -219,6 +229,8 @@ export default function NewItemsPage() {
                             </button>
                         )}
                     </div>
+                    {/* Spacer so fixed toolbar doesn't overlap content */}
+                    <div style={{ height: toolbarHeight }} />
 
                     {/* Ebooks */}
                     {ebooks.length > 0 && (
