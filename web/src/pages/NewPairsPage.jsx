@@ -32,6 +32,9 @@ export default function NewPairsPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
+    // Filter: 'all' | 'mismatches' | 'clean'
+    const [filter, setFilter] = useState('all')
+
     // Multi-select
     const [selected, setSelected] = useState(new Set())
 
@@ -62,13 +65,6 @@ export default function NewPairsPage() {
     }, [])
 
     useEffect(() => { load() }, [load])
-
-    const allSelected = pairs.length > 0 && pairs.every(p => selected.has(p.id))
-
-    function toggleAll() {
-        if (allSelected) setSelected(new Set())
-        else setSelected(new Set(pairs.map(p => p.id)))
-    }
 
     function toggle(id) {
         setSelected(prev => {
@@ -144,6 +140,31 @@ export default function NewPairsPage() {
         await load()
     }
 
+    const cleanPairs = pairs.filter(p => !discrepancyMap[p.id] || discrepancyMap[p.id].discrepancies.length === 0)
+    const mismatchPairs = pairs.filter(p => discrepancyMap[p.id]?.discrepancies.length > 0)
+    const visiblePairs = filter === 'clean' ? cleanPairs : filter === 'mismatches' ? mismatchPairs : pairs
+
+    const allVisibleSelected = visiblePairs.length > 0 && visiblePairs.every(p => selected.has(p.id))
+
+    function toggleAllVisible() {
+        if (allVisibleSelected) {
+            setSelected(prev => {
+                const next = new Set(prev)
+                visiblePairs.forEach(p => next.delete(p.id))
+                return next
+            })
+        } else {
+            setSelected(prev => new Set([...prev, ...visiblePairs.map(p => p.id)]))
+        }
+    }
+
+    async function acknowledgeAllClean() {
+        const ids = cleanPairs.map(p => p.id)
+        if (ids.length === 0) return
+        await acknowledgeNewPairs(ids)
+        await load()
+    }
+
     function formatDate(dt) {
         if (!dt) return '—'
         return new Date(dt).toLocaleDateString()
@@ -167,11 +188,38 @@ export default function NewPairsPage() {
                 </div>
             ) : (
                 <>
+                    {/* Filter tabs */}
+                    <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+                        {[
+                            { key: 'all', label: `All (${pairs.length})` },
+                            { key: 'mismatches', label: `⚠️ Has mismatches (${mismatchPairs.length})` },
+                            { key: 'clean', label: `✓ No mismatches (${cleanPairs.length})` },
+                        ].map(f => (
+                            <button
+                                key={f.key}
+                                className={`btn btn-sm ${filter === f.key ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => { setFilter(f.key); setSelected(new Set()) }}
+                            >
+                                {f.label}
+                            </button>
+                        ))}
+                        {filter === 'clean' && cleanPairs.length > 0 && canEdit && (
+                            <button
+                                className="btn btn-sm btn-primary"
+                                onClick={acknowledgeAllClean}
+                                style={{ marginLeft: 'auto' }}
+                                title="Acknowledge all pairs with no metadata mismatches"
+                            >
+                                Acknowledge all clean ({cleanPairs.length})
+                            </button>
+                        )}
+                    </div>
+
                     {/* Bulk actions */}
                     <div className="bulk-actions" style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer' }}>
-                            <input type="checkbox" checked={allSelected} onChange={toggleAll} />
-                            Select all ({pairs.length})
+                            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
+                            Select all visible ({visiblePairs.length})
                         </label>
                         {selected.size > 0 && canEdit && (
                             <button className="btn btn-secondary" onClick={acknowledgeSelected}>
@@ -185,14 +233,18 @@ export default function NewPairsPage() {
                         )}
                     </div>
 
-                    {/* Pairs table */}
+                    {visiblePairs.length === 0 && (
+                        <div className="empty-state"><p>No pairs match this filter.</p></div>
+                    )}
+
+                    {/* Pairs list */}
                     <div className="pairs-inbox">
-                        {pairs.map(pair => {
+                        {visiblePairs.map(pair => {
                             const disc = discrepancyMap[pair.id]
                             const hasDisc = disc && disc.discrepancies.length > 0
                             const isExpanded = expandedPairId === pair.id
                             const choices = resolveState[pair.id] || {}
-                            const allChosen = hasDisc && disc.discrepancies.every(d => choices[d.field])
+                            const anyChosen = hasDisc && disc.discrepancies.some(d => choices[d.field])
 
                             return (
                                 <div
@@ -276,46 +328,60 @@ export default function NewPairsPage() {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {disc.discrepancies.map(d => (
+                                                    {disc.discrepancies.map(d => {
+                                                        const isCover = d.field === 'cover_path'
+                                                        return (
                                                         <tr key={d.field}>
-                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.3rem', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', whiteSpace: 'nowrap', color: 'var(--text-muted)', verticalAlign: 'top' }}>
                                                                 {FIELDS_LABEL[d.field] || d.field}
                                                             </td>
-                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.3rem' }}>
+                                                            <td style={{ paddingRight: '1rem', paddingTop: '0.5rem', verticalAlign: 'top' }}>
                                                                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
                                                                     <input
                                                                         type="radio"
                                                                         name={`${pair.id}-${d.field}`}
                                                                         checked={choices[d.field] === 'ebook'}
                                                                         onChange={() => setFieldChoice(pair.id, d.field, 'ebook')}
-                                                                        style={{ marginTop: 3 }}
+                                                                        style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
                                                                     />
-                                                                    <span style={{ wordBreak: 'break-word' }}>{d.ebook_value ?? '(empty)'}</span>
+                                                                    {isCover
+                                                                        ? (d.ebook_value
+                                                                            ? <img src={d.ebook_value} alt="Ebook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                            : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
+                                                                        : <span style={{ wordBreak: 'break-word' }}>{d.ebook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
+                                                                    }
                                                                 </label>
                                                             </td>
-                                                            <td style={{ paddingTop: '0.3rem' }}>
+                                                            <td style={{ paddingTop: '0.5rem', verticalAlign: 'top' }}>
                                                                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: 6, cursor: 'pointer' }}>
                                                                     <input
                                                                         type="radio"
                                                                         name={`${pair.id}-${d.field}`}
                                                                         checked={choices[d.field] === 'audiobook'}
                                                                         onChange={() => setFieldChoice(pair.id, d.field, 'audiobook')}
-                                                                        style={{ marginTop: 3 }}
+                                                                        style={{ marginTop: isCover ? 0 : 3, flexShrink: 0 }}
                                                                     />
-                                                                    <span style={{ wordBreak: 'break-word' }}>{d.audiobook_value ?? '(empty)'}</span>
+                                                                    {isCover
+                                                                        ? (d.audiobook_value
+                                                                            ? <img src={d.audiobook_value} alt="Audiobook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                            : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
+                                                                        : <span style={{ wordBreak: 'break-word' }}>{d.audiobook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
+                                                                    }
                                                                 </label>
                                                             </td>
                                                         </tr>
-                                                    ))}
+                                                        )
+                                                    })}
                                                 </tbody>
                                             </table>
                                             <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
                                                 <button
                                                     className="btn btn-primary btn-sm"
                                                     onClick={() => saveResolutions(pair.id)}
-                                                    disabled={!allChosen || saving}
+                                                    disabled={!anyChosen || saving}
+                                                    title="Save whichever fields you've chosen — unselected fields stay as mismatches"
                                                 >
-                                                    {saving ? 'Saving…' : 'Save resolutions'}
+                                                    {saving ? 'Saving…' : 'Save selected resolutions'}
                                                 </button>
                                                 <button
                                                     className="btn btn-secondary btn-sm"
