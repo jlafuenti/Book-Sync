@@ -223,7 +223,7 @@ async def _process_next_item():
                 item = result.scalar_one_or_none()
                 if item:
                     item.retry_count = (item.retry_count or 0) + 1
-                    MAX_RETRIES = 3
+                    MAX_RETRIES = 5
                     if item.retry_count >= MAX_RETRIES:
                         logger.error(
                             f"Queue item {item_id} permanently failed after {item.retry_count} retries: {e}"
