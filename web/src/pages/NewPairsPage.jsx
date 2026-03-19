@@ -42,6 +42,7 @@ export default function NewPairsPage() {
     // Multi-select + shift+click range selection
     const [selected, setSelected] = useState(new Set())
     const lastClickedRef = useRef(null)
+    const pairShiftRef = useRef(false)  // captures shiftKey from onClick before onChange fires
 
     // Inline resolve state: pairId → { field → 'ebook'|'audiobook'|null }
     const [resolveState, setResolveState] = useState({})
@@ -91,9 +92,9 @@ export default function NewPairsPage() {
         lastClickedRef.current = null
     }
 
-    // onClick-based so e.shiftKey is reliably set
-    function handleCheck(id, e) {
-        if (e.shiftKey && lastClickedRef.current !== null) {
+    // shiftKey is captured via onClick ref before onChange fires
+    function handleCheck(id, shiftKey) {
+        if (shiftKey && lastClickedRef.current !== null) {
             const idx1 = visibleIds.indexOf(lastClickedRef.current)
             const idx2 = visibleIds.indexOf(id)
             if (idx1 !== -1 && idx2 !== -1) {
@@ -289,8 +290,8 @@ export default function NewPairsPage() {
                                         <input
                                             type="checkbox"
                                             checked={selected.has(pair.id)}
-                                            onChange={() => {}}
-                                            onClick={(e) => { e.preventDefault(); handleCheck(pair.id, e) }}
+                                            onClick={(e) => { pairShiftRef.current = e.shiftKey }}
+                                            onChange={() => handleCheck(pair.id, pairShiftRef.current)}
                                         />
 
                                         <div style={{ flex: 1, minWidth: 0 }}>
