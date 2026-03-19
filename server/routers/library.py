@@ -828,7 +828,7 @@ async def scan_library(
 
                 # Enrich from ABS before creating the record
                 if abs_index:
-                    meta, abs_changed = enrich_from_abs(
+                    meta, abs_changed, _ = enrich_from_abs(
                         meta, filepath, abs_index, audiobook_dir
                     )
                     if abs_changed:
