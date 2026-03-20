@@ -16,6 +16,7 @@ services:
       - "9000:9000"
     volumes:
       - whisper_models:/root/.cache/huggingface/hub # Persist downloaded models
+      - booksync_checkpoints:/tmp/booksync_checkpoints # Persist transcription checkpoints across restarts
     environment:
       - WHISPER_MODEL=medium
       - WHISPER_COMPUTE_TYPE=float16
@@ -31,3 +32,4 @@ services:
 
 volumes:
   whisper_models:
+  booksync_checkpoints:
