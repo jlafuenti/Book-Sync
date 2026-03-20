@@ -12,7 +12,7 @@ function TranscriptionQueuePage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [error, setError] = useState('')
     const [activeTab, setActiveTab] = useState('queue')
-    const [historySortCol, setHistorySortCol] = useState('created_at')
+    const [historySortCol, setHistorySortCol] = useState('started_at')
     const [historySortDir, setHistorySortDir] = useState('desc')
     const pollingRef = useRef(null)
 
