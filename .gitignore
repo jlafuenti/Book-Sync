@@ -33,6 +33,9 @@ web/build/
 
 # Data directories (runtime)
 data/
+# But allow Android source files that live under a 'data' package path
+!android/app/src/**/data/
+!android/app/src/**/data/**
 
 # Android Gradle cache
 android/.gradle/
