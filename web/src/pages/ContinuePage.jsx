@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, updateProgress, getProgress, getBookmark, getAccessToken } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, getAccessToken } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -27,10 +27,11 @@ function ContinuePage() {
 
     const loadData = useCallback(async () => {
         try {
-            const [progress, ebooks, audiobooks] = await Promise.all([
+            const [progress, ebooks, audiobooks, pairs] = await Promise.all([
                 getAllProgress(),
                 getEbooks(),
                 getAudiobooks(),
+                getPairs(),
             ])
 
             const ebookMap = {}
@@ -38,11 +39,15 @@ function ContinuePage() {
             const abMap = {}
             audiobooks.forEach(a => { abMap[a.id] = a })
 
-            // Build a lookup: book_pair_id → { ebookId, audiobookId } from progress records
+            // Build a lookup: book_pair_id → { ebookId, audiobookId } from pairs list (authoritative)
             const pairMediaMap = {}
+            pairs.forEach(pair => {
+                pairMediaMap[pair.id] = { ebookId: pair.ebook.id, audiobookId: pair.audiobook.id }
+            })
+            // Also fill in from progress for unpaired standalone items
             progress.forEach(p => {
-                if (p.book_pair_id) {
-                    if (!pairMediaMap[p.book_pair_id]) pairMediaMap[p.book_pair_id] = {}
+                if (p.book_pair_id && !pairMediaMap[p.book_pair_id]) {
+                    pairMediaMap[p.book_pair_id] = {}
                     if (p.media_type === 'ebook') pairMediaMap[p.book_pair_id].ebookId = p.ebook_id
                     if (p.media_type === 'audiobook') pairMediaMap[p.book_pair_id].audiobookId = p.audiobook_id
                 }
@@ -132,7 +137,7 @@ function ContinuePage() {
                 navigate(`/book/ebook/${item.mediaId}`)
             }
         } else {
-            audioPlayer.play(item.mediaId, item.book, item.audio_position_ms || 0, item.pairedEbookId)
+            audioPlayer.play(item.mediaId, { ...item.book, pair_id: item.book_pair_id }, item.audio_position_ms || 0, item.pairedEbookId)
             setPlayerOpen(true)
         }
     }
