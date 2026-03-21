@@ -57,7 +57,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
         : null
 
     const coverUrl = currentAudiobook.coverPath
-        ? `/api/files/covers/${currentAudiobook.coverPath}?token=${getAccessToken()}`
+        ? `${currentAudiobook.coverPath}?token=${getAccessToken()}`
         : null
 
     return (
@@ -274,7 +274,7 @@ export function MiniPlayer({ onExpand }) {
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     const coverUrl = currentAudiobook.coverPath
-        ? `/api/files/covers/${currentAudiobook.coverPath}?token=${getAccessToken()}`
+        ? `${currentAudiobook.coverPath}?token=${getAccessToken()}`
         : null
 
     return (
