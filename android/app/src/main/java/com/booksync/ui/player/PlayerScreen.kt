@@ -509,6 +509,15 @@ class PlayerViewModel @Inject constructor(
                     source = "audiobook",
                     audioPositionMs = posMs,
                 )
+                // Also write to UserProgress so the Continue section can track this
+                _pair.value?.audiobookId?.let { audiobookId ->
+                    repository.updateProgress(
+                        mediaType = "audiobook",
+                        mediaId = audiobookId,
+                        bookPairId = pairId,
+                        audioPositionMs = posMs,
+                    )
+                }
             } catch (_: Exception) {}
         }
     }
