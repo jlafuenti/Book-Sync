@@ -43,6 +43,8 @@ function ContinuePage() {
 
             // Build pair lookup from pairs list (authoritative source for paired IDs)
             const pairMediaMap = {}
+            const ebookToPairId = {}
+            const audiobookToPairId = {}
             pairs.forEach(pair => {
                 pairMediaMap[pair.id] = {
                     ebookId: pair.ebook.id,
@@ -50,6 +52,8 @@ function ContinuePage() {
                     ebook: pair.ebook,
                     audiobook: pair.audiobook,
                 }
+                if (pair.ebook?.id) ebookToPairId[pair.ebook.id] = pair.id
+                if (pair.audiobook?.id) audiobookToPairId[pair.audiobook.id] = pair.id
             })
 
             // Build progress items (only items with actual progress)
@@ -74,9 +78,16 @@ function ContinuePage() {
             const standaloneItems = []
 
             progressItems.forEach(p => {
-                if (p.book_pair_id && pairMediaMap[p.book_pair_id]) {
-                    if (!pairGroups[p.book_pair_id]) pairGroups[p.book_pair_id] = []
-                    pairGroups[p.book_pair_id].push(p)
+                // Resolve pair ID from book_pair_id or via reverse lookup from media ID
+                let resolvedPairId = p.book_pair_id
+                if (!resolvedPairId) {
+                    if (p.media_type === 'ebook' && p.ebook_id) resolvedPairId = ebookToPairId[p.ebook_id]
+                    if (p.media_type === 'audiobook' && p.audiobook_id) resolvedPairId = audiobookToPairId[p.audiobook_id]
+                }
+
+                if (resolvedPairId && pairMediaMap[resolvedPairId]) {
+                    if (!pairGroups[resolvedPairId]) pairGroups[resolvedPairId] = []
+                    pairGroups[resolvedPairId].push(p)
                 } else {
                     standaloneItems.push({
                         ...p,
