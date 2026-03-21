@@ -17,7 +17,9 @@ const SLEEP_OPTIONS = [15, 30, 45, 60]
 
 function formatDate(iso) {
     if (!iso) return ''
-    const d = new Date(iso)
+    // Append Z if no timezone info present so browser treats it as UTC
+    const utcIso = iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z'
+    const d = new Date(utcIso)
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
         d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
