@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, updateProgress, getAccessToken } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, updateProgress, getBookmark, getAccessToken } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -38,6 +38,16 @@ function ContinuePage() {
             const abMap = {}
             audiobooks.forEach(a => { abMap[a.id] = a })
 
+            // Build a lookup: book_pair_id → { ebookId, audiobookId } from progress records
+            const pairMediaMap = {}
+            progress.forEach(p => {
+                if (p.book_pair_id) {
+                    if (!pairMediaMap[p.book_pair_id]) pairMediaMap[p.book_pair_id] = {}
+                    if (p.media_type === 'ebook') pairMediaMap[p.book_pair_id].ebookId = p.ebook_id
+                    if (p.media_type === 'audiobook') pairMediaMap[p.book_pair_id].audiobookId = p.audiobook_id
+                }
+            })
+
             const continueItems = progress
                 .filter(p => {
                     if (p.is_completed) return false
@@ -50,10 +60,13 @@ function ContinuePage() {
                         ? ebookMap[p.ebook_id]
                         : abMap[p.audiobook_id]
                     if (!book) return null
+                    const pairInfo = p.book_pair_id ? pairMediaMap[p.book_pair_id] : null
                     return {
                         ...p,
                         book,
                         mediaId: p.media_type === 'ebook' ? p.ebook_id : p.audiobook_id,
+                        pairedEbookId: pairInfo?.ebookId || null,
+                        pairedAudiobookId: pairInfo?.audiobookId || null,
                     }
                 })
                 .filter(Boolean)
@@ -110,16 +123,22 @@ function ContinuePage() {
                     ebookId: item.mediaId,
                     pairId: item.book_pair_id || null,
                     cfi: item.epub_cfi || null,
+                    chapter: item.epub_chapter || null,
                     title: item.book.title,
+                    pairedAudiobookId: item.pairedAudiobookId,
+                    pairedAudiobook: item.pairedAudiobookId ? abMap[item.pairedAudiobookId] : null,
                 })
             } else {
                 navigate(`/book/ebook/${item.mediaId}`)
             }
         } else {
-            audioPlayer.play(item.mediaId, item.book, item.audio_position_ms || 0)
+            audioPlayer.play(item.mediaId, item.book, item.audio_position_ms || 0, item.pairedEbookId)
             setPlayerOpen(true)
         }
     }
+
+    // Keep abMap accessible for handleContinue — build it once items are loaded
+    const abMap = Object.fromEntries(items.map(i => i.media_type === 'audiobook' ? [i.mediaId, i.book] : []).filter(e => e.length))
 
     // Close click-away for menus
     useEffect(() => {
@@ -135,15 +154,46 @@ function ContinuePage() {
             <EbookReader
                 ebookId={readerOpen.ebookId}
                 pairId={readerOpen.pairId}
-                initialCfi={readerOpen.cfi}
+                initialCfi={readerOpen.cfi || null}
+                initialChapter={!readerOpen.cfi && readerOpen.chapter > 0 ? readerOpen.chapter : null}
                 bookTitle={readerOpen.title}
                 onClose={() => { setReaderOpen(null); loadData() }}
+                onSwitchToAudio={readerOpen.pairedAudiobookId ? async () => {
+                    const bm = await getBookmark(readerOpen.pairId).catch(() => null)
+                    setReaderOpen(null)
+                    audioPlayer.play(
+                        readerOpen.pairedAudiobookId,
+                        readerOpen.pairedAudiobook,
+                        bm?.audio_position_ms || 0,
+                        readerOpen.ebookId
+                    )
+                    setPlayerOpen(true)
+                } : null}
             />
         )
     }
 
     if (playerOpen && audioPlayer.currentAudiobook) {
-        return <AudioPlayerView onClose={() => setPlayerOpen(false)} />
+        return (
+            <AudioPlayerView
+                onClose={() => setPlayerOpen(false)}
+                onSwitchToEbook={audioPlayer.pairedEbookId ? async (pairId) => {
+                    const bm = await getBookmark(pairId).catch(() => null)
+                    audioPlayer.pause()
+                    setPlayerOpen(false)
+                    const ebookBook = items.find(i => i.media_type === 'ebook' && i.mediaId === audioPlayer.pairedEbookId)
+                    setReaderOpen({
+                        ebookId: audioPlayer.pairedEbookId,
+                        pairId,
+                        cfi: null,
+                        chapter: bm?.epub_chapter ?? null,
+                        title: ebookBook?.book?.title || 'Reading',
+                        pairedAudiobookId: audioPlayer.currentAudiobook.id,
+                        pairedAudiobook: audioPlayer.currentAudiobook,
+                    })
+                } : null}
+            />
+        )
     }
 
     if (loading) {

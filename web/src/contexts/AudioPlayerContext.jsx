@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updateProgress, getAccessToken } from '../api'
+import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken } from '../api'
 
 const AudioPlayerContext = createContext(null)
 
@@ -12,7 +12,8 @@ export function AudioPlayerProvider({ children }) {
     const saveIntervalRef = useRef(null)
     const sleepTimerRef = useRef(null)
 
-    const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId }
+    const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
+    const [pairedEbookId, setPairedEbookId] = useState(null)
     const [playing, setPlaying] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
     const [duration, setDuration] = useState(0)
@@ -65,10 +66,18 @@ export function AudioPlayerProvider({ children }) {
             saveIntervalRef.current = setInterval(() => {
                 const audio = audioRef.current
                 if (audio && currentAudiobook) {
+                    const posMs = Math.floor(audio.currentTime * 1000)
                     updateProgress('audiobook', currentAudiobook.id, {
-                        audio_position_ms: Math.floor(audio.currentTime * 1000),
+                        audio_position_ms: posMs,
+                        book_pair_id: currentAudiobook.pairId || undefined,
                         device_id: 'web',
                     }).catch(() => {})
+                    if (currentAudiobook.pairId) {
+                        updateBookmark(currentAudiobook.pairId, {
+                            source: 'audiobook',
+                            audio_position_ms: posMs,
+                        }).catch(() => {})
+                    }
                 }
             }, 5000)
         }
@@ -78,7 +87,8 @@ export function AudioPlayerProvider({ children }) {
         }
     }, [playing, currentAudiobook])
 
-    const play = useCallback((audiobookId, audiobook, positionMs = 0) => {
+    const play = useCallback((audiobookId, audiobook, positionMs = 0, pairedEbookIdArg = null) => {
+        setPairedEbookId(pairedEbookIdArg)
         const audio = audioRef.current
         if (!audio) return
 
@@ -118,10 +128,18 @@ export function AudioPlayerProvider({ children }) {
         audioRef.current?.pause()
         // Save position immediately on pause
         if (currentAudiobook && audioRef.current) {
+            const posMs = Math.floor(audioRef.current.currentTime * 1000)
             updateProgress('audiobook', currentAudiobook.id, {
-                audio_position_ms: Math.floor(audioRef.current.currentTime * 1000),
+                audio_position_ms: posMs,
+                book_pair_id: currentAudiobook.pairId || undefined,
                 device_id: 'web',
             }).catch(() => {})
+            if (currentAudiobook.pairId) {
+                updateBookmark(currentAudiobook.pairId, {
+                    source: 'audiobook',
+                    audio_position_ms: posMs,
+                }).catch(() => {})
+            }
         }
     }, [currentAudiobook])
 
@@ -184,6 +202,7 @@ export function AudioPlayerProvider({ children }) {
 
     const value = {
         currentAudiobook,
+        pairedEbookId,
         playing,
         currentTime,
         duration,

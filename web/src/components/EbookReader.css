@@ -69,6 +69,22 @@
     color: var(--accent);
 }
 
+.ebook-toolbar .switch-format-btn {
+    display: flex;
+    align-items: center;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    gap: 2px;
+}
+
+.ebook-toolbar .switch-format-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
 .ebook-book-title {
     font-size: 14px;
     font-weight: 500;

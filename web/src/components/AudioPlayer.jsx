@@ -16,7 +16,7 @@ const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const SLEEP_OPTIONS = [15, 30, 45, 60]
 
 // ---- Full Player View ----
-export function AudioPlayerView({ onClose }) {
+export function AudioPlayerView({ onClose, onSwitchToEbook }) {
     const player = useAudioPlayer()
     const [chapters, setChapters] = useState([])
     const [showSleepMenu, setShowSleepMenu] = useState(false)
@@ -32,7 +32,7 @@ export function AudioPlayerView({ onClose }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, playing, currentTime, duration, speed, sleepMinutes } = player
+    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     const currentChapter = chapters.length > 0
@@ -52,6 +52,19 @@ export function AudioPlayerView({ onClose }) {
                     </svg>
                 </button>
                 <span className="audio-player-title">Now Playing</span>
+                {onSwitchToEbook && currentAudiobook.pairId && (
+                    <button
+                        className="btn-icon switch-format-btn"
+                        onClick={() => onSwitchToEbook(currentAudiobook.pairId, pairedEbookId)}
+                        title="Switch to Ebook"
+                    >
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                        </svg>
+                        <span style={{ fontSize: 12, marginLeft: 4 }}>Read</span>
+                    </button>
+                )}
                 <button className="btn-icon" onClick={() => setShowChapters(!showChapters)} title="Toggle chapters">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
                         <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
