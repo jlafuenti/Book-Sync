@@ -244,7 +244,7 @@ function ContinuePage() {
                             : formatTime(item.audio_position_ms)
 
                         const coverUrl = item.book.cover_path
-                            ? `/api/files/covers/${item.book.cover_path}?token=${getAccessToken()}`
+                            ? `${item.book.cover_path}?token=${getAccessToken()}`
                             : null
 
                         return (
