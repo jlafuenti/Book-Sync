@@ -124,6 +124,28 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
         audioBookDao.getRecentlyPlayedStandaloneAudiobooks()
 
+    /** Ebooks with reading progress, ordered by most recently read. */
+    fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
+        eBookDao.getRecentlyReadEbooks()
+
+    /** Mark a media item as completed. */
+    suspend fun markComplete(mediaType: String, mediaId: Int) {
+        updateProgress(mediaType, mediaId, isCompleted = true)
+    }
+
+    /** Reset progress for a media item (sets to 0, not completed). */
+    suspend fun resetMediaProgress(mediaType: String, mediaId: Int) {
+        updateProgress(
+            mediaType = mediaType,
+            mediaId = mediaId,
+            epubCfi = "",
+            epubChapter = 0,
+            epubProgressPercent = 0f,
+            audioPositionMs = 0,
+            isCompleted = false
+        )
+    }
+
     /** Get the current bookmark for a pair (single snapshot, not a flow). */
     suspend fun getBookmark(pairId: Int): com.booksync.data.local.entity.BookmarkEntity? =
         bookmarkDao.getBookmark(pairId)

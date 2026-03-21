@@ -98,6 +98,8 @@ fun DownloadedScreen(
                             onDeleteAudiobook = { viewModel.deleteAudiobook(pair) },
                             onReadClick = { onPairBookSelect(pair.id) },
                             onListenClick = { onPairAudioSelect(pair.id) },
+                            onMarkComplete = { viewModel.markComplete(pair) },
+                            onResetProgress = { viewModel.resetProgress(pair) },
                         )
                     }
                 }

@@ -535,6 +535,22 @@ class PlayerViewModel @Inject constructor(
             _history.value = repository.getBookmarkHistory(pairId)
         }
     }
+
+    fun markComplete() {
+        viewModelScope.launch {
+            val p = _pair.value ?: return@launch
+            p.audiobookId?.let { repository.markComplete("audiobook", it) }
+            p.ebookId?.let { repository.markComplete("ebook", it) }
+        }
+    }
+
+    fun resetProgress() {
+        viewModelScope.launch {
+            val p = _pair.value ?: return@launch
+            p.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
+            p.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -559,6 +575,7 @@ fun PlayerScreen(
     var showSleepTimerDialog by remember { mutableStateOf(false) }
     var showChaptersDialog by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
 
     // Not downloaded warning
     val isDownloaded = pair?.audiobookDownloaded == true
@@ -714,6 +731,31 @@ fun PlayerScreen(
                         onSwitchToReader()
                     }) {
                         Icon(Icons.Default.AutoStories, "Switch to Reader")
+                    }
+                    Box {
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "More options")
+                        }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Mark Complete") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewModel.markComplete()
+                                    onBack()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Reset Progress") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewModel.resetProgress()
+                                },
+                            )
+                        }
                     }
                 },
             )

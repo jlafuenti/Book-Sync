@@ -396,6 +396,12 @@ export async function getDiskUsage() {
 
 // ============ Progress ============
 
+export async function getAllProgress() {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/progress`);
+    if (!resp.ok) throw new Error('Failed to fetch all progress');
+    return resp.json();
+}
+
 export async function getProgress(mediaType, mediaId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`);
     if (!resp.ok) throw new Error('Failed to fetch progress');
@@ -409,6 +415,35 @@ export async function updateProgress(mediaType, mediaId, progressData) {
     });
     if (!resp.ok) throw new Error('Failed to update progress');
     return resp.json();
+}
+
+// ============ Bookmarks ============
+
+export async function getBookmark(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`);
+    if (!resp.ok) throw new Error('Failed to fetch bookmark');
+    return resp.json();
+}
+
+export async function updateBookmark(pairId, data) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error('Failed to update bookmark');
+    return resp.json();
+}
+
+// ============ File Access ============
+
+export async function fetchEbookBlob(ebookId) {
+    const resp = await fetchWithAuth(`${API_BASE}/files/ebook/${ebookId}`);
+    if (!resp.ok) throw new Error('Failed to fetch ebook file');
+    return resp.arrayBuffer();
+}
+
+export function getAudiobookStreamUrl(audiobookId) {
+    return `${API_BASE}/files/audiobook/${audiobookId}?token=${accessToken}`;
 }
 
 // ============ Settings ============

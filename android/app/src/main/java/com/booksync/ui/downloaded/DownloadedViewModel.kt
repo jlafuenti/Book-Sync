@@ -115,4 +115,18 @@ class DownloadedViewModel @Inject constructor(
     fun deleteAudiobook(pair: BookPairEntity) = viewModelScope.launch { repository.deleteAudiobook(pair) }
     fun deleteStandaloneEbook(ebook: EBookEntity) = viewModelScope.launch { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity) = viewModelScope.launch { repository.deleteStandaloneAudiobook(audio) }
+
+    fun markComplete(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.markComplete("audiobook", it) }
+            pair.ebookId?.let { repository.markComplete("ebook", it) }
+        }
+    }
+
+    fun resetProgress(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
+            pair.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+        }
+    }
 }
