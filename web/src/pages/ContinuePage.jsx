@@ -20,9 +20,10 @@ function ContinuePage() {
     const audioPlayer = useAudioPlayer()
 
     const [items, setItems] = useState([])
+    const [mediaLookup, setMediaLookup] = useState({ ebooks: {}, audiobooks: {} })
     const [loading, setLoading] = useState(true)
-    const [menuOpen, setMenuOpen] = useState(null) // item id
-    const [readerOpen, setReaderOpen] = useState(null) // { ebookId, pairId, cfi, title }
+    const [menuOpen, setMenuOpen] = useState(null)
+    const [readerOpen, setReaderOpen] = useState(null)
     const [playerOpen, setPlayerOpen] = useState(false)
 
     const loadData = useCallback(async () => {
@@ -38,22 +39,21 @@ function ContinuePage() {
             ebooks.forEach(e => { ebookMap[e.id] = e })
             const abMap = {}
             audiobooks.forEach(a => { abMap[a.id] = a })
+            setMediaLookup({ ebooks: ebookMap, audiobooks: abMap })
 
-            // Build a lookup: book_pair_id → { ebookId, audiobookId } from pairs list (authoritative)
+            // Build pair lookup from pairs list (authoritative source for paired IDs)
             const pairMediaMap = {}
             pairs.forEach(pair => {
-                pairMediaMap[pair.id] = { ebookId: pair.ebook.id, audiobookId: pair.audiobook.id }
-            })
-            // Also fill in from progress for unpaired standalone items
-            progress.forEach(p => {
-                if (p.book_pair_id && !pairMediaMap[p.book_pair_id]) {
-                    pairMediaMap[p.book_pair_id] = {}
-                    if (p.media_type === 'ebook') pairMediaMap[p.book_pair_id].ebookId = p.ebook_id
-                    if (p.media_type === 'audiobook') pairMediaMap[p.book_pair_id].audiobookId = p.audiobook_id
+                pairMediaMap[pair.id] = {
+                    ebookId: pair.ebook.id,
+                    audiobookId: pair.audiobook.id,
+                    ebook: pair.ebook,
+                    audiobook: pair.audiobook,
                 }
             })
 
-            const continueItems = progress
+            // Build progress items (only items with actual progress)
+            const progressItems = progress
                 .filter(p => {
                     if (p.is_completed) return false
                     if (p.media_type === 'ebook' && (p.epub_progress_percent > 0 || p.epub_chapter > 0)) return true
@@ -65,19 +65,65 @@ function ContinuePage() {
                         ? ebookMap[p.ebook_id]
                         : abMap[p.audiobook_id]
                     if (!book) return null
-                    const pairInfo = p.book_pair_id ? pairMediaMap[p.book_pair_id] : null
-                    return {
-                        ...p,
-                        book,
-                        mediaId: p.media_type === 'ebook' ? p.ebook_id : p.audiobook_id,
-                        pairedEbookId: pairInfo?.ebookId || null,
-                        pairedAudiobookId: pairInfo?.audiobookId || null,
-                    }
+                    return { ...p, book }
                 })
                 .filter(Boolean)
+
+            // Consolidate: merge ebook + audiobook progress for the same pair into one item
+            const pairGroups = {}
+            const standaloneItems = []
+
+            progressItems.forEach(p => {
+                if (p.book_pair_id && pairMediaMap[p.book_pair_id]) {
+                    if (!pairGroups[p.book_pair_id]) pairGroups[p.book_pair_id] = []
+                    pairGroups[p.book_pair_id].push(p)
+                } else {
+                    standaloneItems.push({
+                        ...p,
+                        itemId: `${p.media_type}_${p.id}`,
+                        itemType: p.media_type,
+                        mediaId: p.media_type === 'ebook' ? p.ebook_id : p.audiobook_id,
+                    })
+                }
+            })
+
+            const mergedPairItems = Object.entries(pairGroups).map(([pairIdStr, pItems]) => {
+                const pairId = Number(pairIdStr)
+                const pairInfo = pairMediaMap[pairId]
+                const ebookProg = pItems.find(p => p.media_type === 'ebook')
+                const audioProg = pItems.find(p => p.media_type === 'audiobook')
+
+                // Default to whichever format was used most recently
+                const ebookTime = ebookProg ? new Date(ebookProg.updated_at).getTime() : 0
+                const audioTime = audioProg ? new Date(audioProg.updated_at).getTime() : 0
+                const lastFormat = ebookTime > audioTime ? 'ebook' : 'audiobook'
+                const primary = lastFormat === 'ebook' ? ebookProg : audioProg
+                const book = primary?.book || ebookProg?.book || audioProg?.book
+
+                return {
+                    itemId: `pair_${pairId}`,
+                    itemType: 'pair',
+                    book_pair_id: pairId,
+                    lastFormat,
+                    book,
+                    ebookId: pairInfo.ebookId,
+                    audiobookId: pairInfo.audiobookId,
+                    ebookProgress: ebookProg ? {
+                        percent: ebookProg.epub_progress_percent || 0,
+                        cfi: ebookProg.epub_cfi || null,
+                        chapter: ebookProg.epub_chapter || 0,
+                    } : null,
+                    audioProgress: audioProg ? {
+                        positionMs: audioProg.audio_position_ms || 0,
+                    } : null,
+                    updated_at: primary?.updated_at || ebookProg?.updated_at || audioProg?.updated_at,
+                }
+            })
+
+            const allItems = [...mergedPairItems, ...standaloneItems]
                 .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
 
-            setItems(continueItems)
+            setItems(allItems)
         } catch (err) {
             console.error('Failed to load continue data:', err)
         } finally {
@@ -87,14 +133,20 @@ function ContinuePage() {
 
     useEffect(() => { loadData() }, [loadData])
 
+    // --- Actions ---
+
     const handleMarkComplete = async (item) => {
         setMenuOpen(null)
         try {
-            await updateProgress(item.media_type, item.mediaId, {
-                is_completed: true,
-                device_id: 'web',
-            })
-            setItems(prev => prev.filter(i => i.id !== item.id))
+            if (item.itemType === 'pair') {
+                await Promise.all([
+                    item.ebookId ? updateProgress('ebook', item.ebookId, { is_completed: true, device_id: 'web' }).catch(() => {}) : null,
+                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, { is_completed: true, device_id: 'web' }).catch(() => {}) : null,
+                ].filter(Boolean))
+            } else {
+                await updateProgress(item.itemType, item.mediaId, { is_completed: true, device_id: 'web' })
+            }
+            setItems(prev => prev.filter(i => i.itemId !== item.itemId))
         } catch (err) {
             console.error('Failed to mark complete:', err)
         }
@@ -103,47 +155,89 @@ function ContinuePage() {
     const handleResetProgress = async (item) => {
         setMenuOpen(null)
         try {
-            const resetData = {
-                is_completed: false,
-                device_id: 'web',
-            }
-            if (item.media_type === 'ebook') {
-                resetData.epub_progress_percent = 0
-                resetData.epub_cfi = ''
-                resetData.epub_chapter = 0
+            if (item.itemType === 'pair') {
+                await Promise.all([
+                    item.ebookId ? updateProgress('ebook', item.ebookId, {
+                        is_completed: false, device_id: 'web',
+                        epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
+                    }).catch(() => {}) : null,
+                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, {
+                        is_completed: false, device_id: 'web',
+                        audio_position_ms: 0,
+                    }).catch(() => {}) : null,
+                ].filter(Boolean))
+            } else if (item.itemType === 'ebook') {
+                await updateProgress('ebook', item.mediaId, {
+                    is_completed: false, device_id: 'web',
+                    epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
+                })
             } else {
-                resetData.audio_position_ms = 0
+                await updateProgress('audiobook', item.mediaId, {
+                    is_completed: false, device_id: 'web',
+                    audio_position_ms: 0,
+                })
             }
-            await updateProgress(item.media_type, item.mediaId, resetData)
-            setItems(prev => prev.filter(i => i.id !== item.id))
+            setItems(prev => prev.filter(i => i.itemId !== item.itemId))
         } catch (err) {
             console.error('Failed to reset progress:', err)
         }
     }
 
+    // --- Navigation helpers ---
+
+    const openReader = (ebookId, pairId, cfi, chapter, title, audiobookId) => {
+        const audiobook = mediaLookup.audiobooks[audiobookId] || null
+        setReaderOpen({
+            ebookId,
+            pairId: pairId || null,
+            cfi: cfi || null,
+            chapter: chapter || null,
+            title,
+            pairedAudiobookId: audiobookId || null,
+            pairedAudiobook: audiobook ? { ...audiobook, pair_id: pairId } : null,
+        })
+    }
+
+    const openPlayer = (audiobookId, pairId, positionMs, ebookId) => {
+        const audiobook = mediaLookup.audiobooks[audiobookId]
+        if (!audiobook) return
+        audioPlayer.play(audiobookId, { ...audiobook, pair_id: pairId }, positionMs || 0, ebookId || null)
+        setPlayerOpen(true)
+    }
+
     const handleContinue = (item) => {
-        if (item.media_type === 'ebook') {
+        if (item.itemType === 'pair') {
+            if (item.lastFormat === 'ebook' && item.ebookId) {
+                const eb = item.ebookProgress
+                openReader(item.ebookId, item.book_pair_id, eb?.cfi, eb?.chapter, item.book.title, item.audiobookId)
+            } else if (item.audiobookId) {
+                openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
+            }
+        } else if (item.itemType === 'ebook') {
             if (item.book.format === 'epub') {
-                setReaderOpen({
-                    ebookId: item.mediaId,
-                    pairId: item.book_pair_id || null,
-                    cfi: item.epub_cfi || null,
-                    chapter: item.epub_chapter || null,
-                    title: item.book.title,
-                    pairedAudiobookId: item.pairedAudiobookId,
-                    pairedAudiobook: item.pairedAudiobookId ? abMap[item.pairedAudiobookId] : null,
-                })
+                openReader(item.mediaId, item.book_pair_id, item.epub_cfi, item.epub_chapter, item.book.title, null)
             } else {
                 navigate(`/book/ebook/${item.mediaId}`)
             }
         } else {
-            audioPlayer.play(item.mediaId, { ...item.book, pair_id: item.book_pair_id }, item.audio_position_ms || 0, item.pairedEbookId)
-            setPlayerOpen(true)
+            openPlayer(item.mediaId, item.book_pair_id, item.audio_position_ms, null)
         }
     }
 
-    // Keep abMap accessible for handleContinue — build it once items are loaded
-    const abMap = Object.fromEntries(items.map(i => i.media_type === 'audiobook' ? [i.mediaId, i.book] : []).filter(e => e.length))
+    const handleRead = (item) => {
+        setMenuOpen(null)
+        if (item.ebookId) {
+            const eb = item.ebookProgress
+            openReader(item.ebookId, item.book_pair_id, eb?.cfi, eb?.chapter, item.book.title, item.audiobookId)
+        }
+    }
+
+    const handleListen = (item) => {
+        setMenuOpen(null)
+        if (item.audiobookId) {
+            openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
+        }
+    }
 
     // Close click-away for menus
     useEffect(() => {
@@ -153,6 +247,8 @@ function ContinuePage() {
             return () => window.removeEventListener('click', handler)
         }
     }, [menuOpen])
+
+    // --- Overlay views ---
 
     if (readerOpen) {
         return (
@@ -171,13 +267,7 @@ function ContinuePage() {
                         audioPositionMs = prog?.audio_position_ms || 0
                     }
                     setReaderOpen(null)
-                    audioPlayer.play(
-                        readerOpen.pairedAudiobookId,
-                        readerOpen.pairedAudiobook,
-                        audioPositionMs,
-                        readerOpen.ebookId
-                    )
-                    setPlayerOpen(true)
+                    openPlayer(readerOpen.pairedAudiobookId, readerOpen.pairId, audioPositionMs, readerOpen.ebookId)
                 } : null}
             />
         )
@@ -186,25 +276,27 @@ function ContinuePage() {
     if (playerOpen && audioPlayer.currentAudiobook) {
         return (
             <AudioPlayerView
-                onClose={() => setPlayerOpen(false)}
+                onClose={() => { setPlayerOpen(false); loadData() }}
                 onSwitchToEbook={audioPlayer.pairedEbookId ? async (pairId) => {
                     const bm = await getBookmark(pairId).catch(() => null)
                     audioPlayer.pause()
                     setPlayerOpen(false)
-                    const ebookBook = items.find(i => i.media_type === 'ebook' && i.mediaId === audioPlayer.pairedEbookId)
+                    const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
                     setReaderOpen({
                         ebookId: audioPlayer.pairedEbookId,
                         pairId,
                         cfi: null,
                         chapter: bm?.epub_chapter ?? null,
-                        title: ebookBook?.book?.title || 'Reading',
+                        title: ebookBook?.title || 'Reading',
                         pairedAudiobookId: audioPlayer.currentAudiobook.id,
-                        pairedAudiobook: audioPlayer.currentAudiobook,
+                        pairedAudiobook: { ...audioPlayer.currentAudiobook, pair_id: pairId },
                     })
                 } : null}
             />
         )
     }
+
+    // --- Main view ---
 
     if (loading) {
         return (
@@ -233,32 +325,56 @@ function ContinuePage() {
             ) : (
                 <div className="continue-grid">
                     {items.map(item => {
-                        const isEbook = item.media_type === 'ebook'
-                        const progressValue = isEbook
-                            ? (item.epub_progress_percent || 0)
-                            : (item.book.duration_seconds
-                                ? ((item.audio_position_ms / 1000) / item.book.duration_seconds) * 100
-                                : 0)
-                        const progressLabel = isEbook
-                            ? `${Math.round(item.epub_progress_percent || 0)}%`
-                            : formatTime(item.audio_position_ms)
+                        const isPair = item.itemType === 'pair'
+                        const isEbook = item.itemType === 'ebook'
+
+                        let progressValue, progressLabel
+                        if (isPair) {
+                            if (item.lastFormat === 'audiobook' && item.audioProgress) {
+                                const durSec = mediaLookup.audiobooks[item.audiobookId]?.duration_seconds
+                                progressValue = durSec ? ((item.audioProgress.positionMs / 1000) / durSec) * 100 : 0
+                                progressLabel = formatTime(item.audioProgress.positionMs)
+                            } else if (item.ebookProgress) {
+                                progressValue = item.ebookProgress.percent
+                                progressLabel = `${Math.round(item.ebookProgress.percent)}%`
+                            } else if (item.audioProgress) {
+                                const durSec = mediaLookup.audiobooks[item.audiobookId]?.duration_seconds
+                                progressValue = durSec ? ((item.audioProgress.positionMs / 1000) / durSec) * 100 : 0
+                                progressLabel = formatTime(item.audioProgress.positionMs)
+                            } else {
+                                progressValue = 0
+                                progressLabel = ''
+                            }
+                        } else if (isEbook) {
+                            progressValue = item.epub_progress_percent || 0
+                            progressLabel = `${Math.round(item.epub_progress_percent || 0)}%`
+                        } else {
+                            const durSec = item.book.duration_seconds
+                            progressValue = durSec ? ((item.audio_position_ms / 1000) / durSec) * 100 : 0
+                            progressLabel = formatTime(item.audio_position_ms)
+                        }
 
                         const coverUrl = item.book.cover_path
                             ? `${item.book.cover_path}?token=${getAccessToken()}`
                             : null
 
                         return (
-                            <div key={item.id} className="continue-card" onClick={() => handleContinue(item)}>
+                            <div key={item.itemId} className="continue-card" onClick={() => handleContinue(item)}>
                                 <div className="continue-card-cover">
                                     {coverUrl ? (
                                         <img src={coverUrl} alt={item.book.title} />
                                     ) : (
                                         <div className="continue-card-cover-placeholder">
-                                            <span>{isEbook ? '📚' : '🎧'}</span>
+                                            <span>{isPair ? '📖' : isEbook ? '📚' : '🎧'}</span>
                                         </div>
                                     )}
                                     <div className="continue-card-badge">
-                                        {isEbook ? '📚' : '🎧'}
+                                        {isPair ? (
+                                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                                                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                                            </svg>
+                                        ) : isEbook ? '📚' : '🎧'}
                                     </div>
                                 </div>
                                 <div className="continue-card-info">
@@ -276,20 +392,27 @@ function ContinuePage() {
                                         <span className="continue-card-progress-label">{progressLabel}</span>
                                     </div>
                                 </div>
-                                <div className="continue-card-menu" onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === item.id ? null : item.id) }}>
+                                <div className="continue-card-menu" onClick={e => { e.stopPropagation(); setMenuOpen(menuOpen === item.itemId ? null : item.itemId) }}>
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                                         <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
                                     </svg>
-                                    {menuOpen === item.id && (
+                                    {menuOpen === item.itemId && (
                                         <div className="continue-card-dropdown">
+                                            {isPair && item.ebookId && (
+                                                <button onClick={(e) => { e.stopPropagation(); handleRead(item) }}>
+                                                    Read
+                                                </button>
+                                            )}
+                                            {isPair && item.audiobookId && (
+                                                <button onClick={(e) => { e.stopPropagation(); handleListen(item) }}>
+                                                    Listen
+                                                </button>
+                                            )}
                                             <button onClick={(e) => { e.stopPropagation(); handleMarkComplete(item) }}>
                                                 Mark Complete
                                             </button>
                                             <button onClick={(e) => { e.stopPropagation(); handleResetProgress(item) }}>
                                                 Reset Progress
-                                            </button>
-                                            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(null); navigate(`/book/${item.media_type}/${item.mediaId}`) }}>
-                                                View Details
                                             </button>
                                         </div>
                                     )}

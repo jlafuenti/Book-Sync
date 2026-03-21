@@ -17,6 +17,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const [progressPercent, setProgressPercent] = useState(0)
     const [currentChapter, setCurrentChapter] = useState('')
     const [fontSize, setFontSize] = useState(100)
+    const fontSizeRef = useRef(100)
     const [savedIndicator, setSavedIndicator] = useState(false)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
 
@@ -94,10 +95,14 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                     '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
                 })
 
-                // Apply initial font size directly to iframe content (avoids blob URL MIME rejection)
+                // Inject font size via <style> tag (avoids blob URL MIME rejection)
                 rendition.hooks.content.register(contents => {
-                    const el = contents.document?.documentElement
-                    if (el) el.style.fontSize = `${fontSize}%`
+                    if (contents.document) {
+                        const style = contents.document.createElement('style')
+                        style.id = 'tandem-font-size'
+                        style.textContent = `html { font-size: ${fontSizeRef.current}% !important; }`
+                        contents.document.head.appendChild(style)
+                    }
                 })
 
                 // Load TOC
@@ -192,12 +197,19 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
         return () => window.removeEventListener('keydown', handleKey)
     }, [onClose])
 
-    // Font size changes — inject directly into iframe document to avoid blob URL MIME rejection
+    // Font size changes — inject via <style> tag to avoid blob URL MIME rejection
     useEffect(() => {
+        fontSizeRef.current = fontSize
         if (renditionRef.current) {
             renditionRef.current.getContents().forEach(c => {
-                if (c.document?.documentElement) {
-                    c.document.documentElement.style.fontSize = `${fontSize}%`
+                if (c.document) {
+                    let style = c.document.getElementById('tandem-font-size')
+                    if (!style) {
+                        style = c.document.createElement('style')
+                        style.id = 'tandem-font-size'
+                        c.document.head.appendChild(style)
+                    }
+                    style.textContent = `html { font-size: ${fontSize}% !important; }`
                 }
             })
         }
