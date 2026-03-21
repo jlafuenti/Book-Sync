@@ -17,6 +17,19 @@ import SeriesPage from './pages/SeriesPage'
 import BookDetailPage from './pages/BookDetailPage'
 import UnpairedPage from './pages/UnpairedPage'
 import UserManagementPage from './pages/UserManagementPage'
+import ContinuePage from './pages/ContinuePage'
+import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
+import { MiniPlayer } from './components/AudioPlayer'
+import { AudioPlayerView } from './components/AudioPlayer'
+
+function AppMiniPlayer() {
+    const player = useAudioPlayer()
+    const [showFullPlayer, setShowFullPlayer] = useState(false)
+
+    if (!player.currentAudiobook) return null
+    if (showFullPlayer) return <AudioPlayerView onClose={() => setShowFullPlayer(false)} />
+    return <MiniPlayer onExpand={() => setShowFullPlayer(true)} />
+}
 
 function AppShell({ user, setUser }) {
     const location = useLocation()
@@ -49,6 +62,12 @@ function AppShell({ user, setUser }) {
                     </div>
                 </div>
                 <nav>
+                    {/* Continue */}
+                    <Link to="/continue" className={isExact('/continue') ? 'nav-link active' : 'nav-link'}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+                        Continue
+                    </Link>
+
                     {/* Library */}
                     <Link to="/library/ebooks" className={navClass('/library')}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
@@ -123,6 +142,9 @@ function AppShell({ user, setUser }) {
             </aside>
             <main className="main-content">
                 <Routes>
+                    {/* Continue */}
+                    <Route path="/continue" element={<ContinuePage />} />
+
                     {/* Library routes */}
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
@@ -155,13 +177,14 @@ function AppShell({ user, setUser }) {
                     )}
 
                     {/* Redirects */}
-                    <Route path="/" element={<Navigate to="/library/ebooks" replace />} />
+                    <Route path="/" element={<Navigate to="/continue" replace />} />
                     <Route path="/library" element={<Navigate to="/library/ebooks" replace />} />
                     <Route path="/pairs" element={<Navigate to="/pairs/paired" replace />} />
                     <Route path="/transcription" element={<Navigate to="/transcription/not-transcribed" replace />} />
-                    <Route path="*" element={<Navigate to="/library/ebooks" replace />} />
+                    <Route path="*" element={<Navigate to="/continue" replace />} />
                 </Routes>
             </main>
+            <AppMiniPlayer />
         </div>
     )
 }
@@ -208,7 +231,9 @@ function App() {
 
     return (
         <AuthProvider user={user}>
-            <AppShell user={user} setUser={setUser} />
+            <AudioPlayerProvider>
+                <AppShell user={user} setUser={setUser} />
+            </AudioPlayerProvider>
         </AuthProvider>
     )
 }

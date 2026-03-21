@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import EbookReader from '../components/EbookReader'
+import { AudioPlayerView } from '../components/AudioPlayer'
 import { useAuth } from '../contexts/AuthContext'
+import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -45,6 +48,10 @@ function BookDetailPage() {
     const [absEnabled, setAbsEnabled] = useState(false)
     const [enriching, setEnriching] = useState(false)
     const [toast, setToast] = useState(null)
+    const [progress, setProgress] = useState(null)
+    const [readerOpen, setReaderOpen] = useState(false)
+    const [playerOpen, setPlayerOpen] = useState(false)
+    const audioPlayer = useAudioPlayer()
 
     useEffect(() => {
         setLoading(true)
@@ -62,6 +69,8 @@ function BookDetailPage() {
         if (type === 'audiobook') {
             getSettings().then(s => setAbsEnabled(s.abs_enabled === true || s.abs_enabled === 'true')).catch(() => {})
         }
+        // Fetch reading/listening progress
+        getProgress(type, id).then(setProgress).catch(() => setProgress(null))
     }, [type, id])
 
     const handleSaveMetadata = async (bookId, data) => {
@@ -220,7 +229,72 @@ function BookDetailPage() {
                             <ReactMarkdown>{book.description}</ReactMarkdown>
                         </div>
                     )}
+                    {/* Progress display */}
+                    {progress && !progress.is_completed && (
+                        <div className="book-detail-progress-section">
+                            <div className="book-detail-progress-bar">
+                                <div className="book-detail-progress-fill" style={{
+                                    width: `${isAudiobook
+                                        ? (book.duration_seconds ? ((progress.audio_position_ms / 1000) / book.duration_seconds) * 100 : 0)
+                                        : (progress.epub_progress_percent || 0)}%`
+                                }} />
+                            </div>
+                            <span className="book-detail-progress-label">
+                                {isAudiobook
+                                    ? `${formatDuration(Math.floor((progress.audio_position_ms || 0) / 1000))} / ${formatDuration(book.duration_seconds)}`
+                                    : `${Math.round(progress.epub_progress_percent || 0)}%`
+                                }
+                            </span>
+                        </div>
+                    )}
+                    {progress?.is_completed && (
+                        <div className="book-detail-progress-section" style={{ background: 'var(--success-bg)' }}>
+                            <span className="book-detail-progress-label" style={{ color: 'var(--success)' }}>Completed</span>
+                        </div>
+                    )}
+
                     <div className="book-detail-actions">
+                        {/* Read / Listen buttons */}
+                        {!isAudiobook && book.format === 'epub' && (
+                            <button className="btn btn-primary" onClick={() => setReaderOpen(true)}>
+                                {progress && !progress.is_completed && progress.epub_progress_percent > 0
+                                    ? `Continue Reading (${Math.round(progress.epub_progress_percent)}%)`
+                                    : 'Read'}
+                            </button>
+                        )}
+                        {isAudiobook && (
+                            <button className="btn btn-primary" onClick={() => {
+                                audioPlayer.play(Number(id), book, progress?.audio_position_ms || 0)
+                                setPlayerOpen(true)
+                            }}>
+                                {progress && !progress.is_completed && progress.audio_position_ms > 0
+                                    ? `Continue Listening (${formatDuration(Math.floor(progress.audio_position_ms / 1000))})`
+                                    : 'Listen'}
+                            </button>
+                        )}
+                        {/* Mark Complete / Reset Progress */}
+                        {progress && !progress.is_completed && (
+                            <button className="btn btn-secondary" onClick={async () => {
+                                await updateProgress(type, id, { is_completed: true, device_id: 'web' })
+                                setProgress(p => ({ ...p, is_completed: true }))
+                                showToast('Marked as complete')
+                            }}>
+                                Mark Complete
+                            </button>
+                        )}
+                        {progress && (progress.is_completed || progress.epub_progress_percent > 0 || progress.audio_position_ms > 0) && (
+                            <button className="btn btn-secondary" onClick={async () => {
+                                const resetData = { is_completed: false, device_id: 'web' }
+                                if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = null; resetData.epub_chapter = 0 }
+                                else { resetData.audio_position_ms = 0 }
+                                await updateProgress(type, id, resetData)
+                                setProgress(null)
+                                showToast('Progress reset')
+                            }}>
+                                Reset Progress
+                            </button>
+                        )}
+
                         {canEdit && (
                             <button className="btn btn-primary" onClick={() => { setEditModalTab('Details'); setShowEditModal(true); }}>
                                 ✏️ Edit Metadata
@@ -318,6 +392,25 @@ function BookDetailPage() {
                     onClose={() => setShowEditModal(false)}
                     onSave={handleSaveMetadata}
                 />
+            )}
+
+            {/* Ebook Reader Overlay */}
+            {readerOpen && (
+                <EbookReader
+                    ebookId={Number(id)}
+                    pairId={book.pair_id || null}
+                    initialCfi={progress?.epub_cfi || null}
+                    bookTitle={book.title}
+                    onClose={() => {
+                        setReaderOpen(false)
+                        getProgress(type, id).then(setProgress).catch(() => {})
+                    }}
+                />
+            )}
+
+            {/* Audiobook Player Overlay */}
+            {playerOpen && audioPlayer.currentAudiobook && (
+                <AudioPlayerView onClose={() => setPlayerOpen(false)} />
             )}
         </div>
     )
