@@ -91,7 +91,7 @@ function ContinuePage() {
             }
             if (item.media_type === 'ebook') {
                 resetData.epub_progress_percent = 0
-                resetData.epub_cfi = null
+                resetData.epub_cfi = ''
                 resetData.epub_chapter = 0
             } else {
                 resetData.audio_position_ms = 0
