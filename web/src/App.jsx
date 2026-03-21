@@ -21,6 +21,7 @@ import UserManagementPage from './pages/UserManagementPage'
 function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
+    const { theme } = useTheme()
 
     const handleLogout = () => {
         logout()
@@ -40,9 +41,7 @@ function AppShell({ user, setUser }) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-logo">
-                    <svg viewBox="0 0 24 24" width="28" height="28" style={{ flexShrink: 0 }}>
-                        <path fill="var(--accent)" d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
-                    </svg>
+                    <img src={`/favicon-${theme}.svg`} width="32" height="32" alt="Tandem" style={{ flexShrink: 0 }} />
                     <div>
                         <h1>Tandem</h1>
                         <span>Audio &amp; Text Synchronizer</span>
