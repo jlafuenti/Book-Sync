@@ -40,7 +40,7 @@ function AppShell({ user, setUser }) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-logo">
-                    <svg viewBox="0 0 512 512" width="44" height="44" style={{ flexShrink: 0 }}>
+                    <svg viewBox="0 0 512 512" width="60" height="60" style={{ flexShrink: 0 }}>
                         <defs>
                             <clipPath id="bm-logo">
                                 <path d="M 136,64 H 376 V 424 L 256,484 L 136,424 Z"/>
