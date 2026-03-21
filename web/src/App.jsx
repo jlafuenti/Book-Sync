@@ -21,7 +21,6 @@ import UserManagementPage from './pages/UserManagementPage'
 function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
-    const { theme } = useTheme()
 
     const handleLogout = () => {
         logout()
@@ -41,7 +40,38 @@ function AppShell({ user, setUser }) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-logo">
-                    <img src={`/favicon-${theme}.svg`} width="32" height="32" alt="Tandem" style={{ flexShrink: 0 }} />
+                    <svg viewBox="0 0 512 512" width="44" height="44" style={{ flexShrink: 0 }}>
+                        <defs>
+                            <clipPath id="bm-logo">
+                                <path d="M 136,64 H 376 V 424 L 256,484 L 136,424 Z"/>
+                            </clipPath>
+                        </defs>
+                        <path d="M 136,64 H 376 V 424 L 256,484 L 136,424 Z" fill="var(--bg-card)" stroke="var(--border-light)" strokeWidth="6"/>
+                        <g clipPath="url(#bm-logo)">
+                            <rect x="152" y="100" width="88" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="123" width="70" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="146" width="82" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="169" width="64" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="192" width="86" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="215" width="74" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="238" width="80" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="261" width="68" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="284" width="84" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="307" width="62" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="330" width="76" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="353" width="58" height="8" rx="4" fill="var(--accent)"/>
+                            <rect x="152" y="376" width="72" height="8" rx="4" fill="var(--accent)"/>
+                        </g>
+                        <rect x="253" y="64" width="6" height="420" fill="var(--bg-primary)"/>
+                        <g clipPath="url(#bm-logo)">
+                            <rect x="259" y="220" width="14" height="90"  rx="7" fill="var(--accent-secondary)"/>
+                            <rect x="279" y="185" width="14" height="160" rx="7" fill="var(--accent-secondary)"/>
+                            <rect x="299" y="215" width="14" height="100" rx="7" fill="var(--accent-secondary)"/>
+                            <rect x="319" y="172" width="14" height="186" rx="7" fill="var(--accent-secondary)"/>
+                            <rect x="339" y="200" width="14" height="130" rx="7" fill="var(--accent-secondary)"/>
+                            <rect x="359" y="225" width="14" height="80"  rx="7" fill="var(--accent-secondary)"/>
+                        </g>
+                    </svg>
                     <div>
                         <h1>Tandem</h1>
                         <span>Audio &amp; Text Synchronizer</span>
