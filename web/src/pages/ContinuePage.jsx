@@ -226,16 +226,20 @@ function ContinuePage() {
 
     const handleRead = (item) => {
         setMenuOpen(null)
-        if (item.ebookId) {
+        if (item.itemType === 'pair') {
             const eb = item.ebookProgress
             openReader(item.ebookId, item.book_pair_id, eb?.cfi, eb?.chapter, item.book.title, item.audiobookId)
+        } else if (item.itemType === 'ebook') {
+            openReader(item.mediaId, item.book_pair_id, item.epub_cfi, item.epub_chapter, item.book.title, null)
         }
     }
 
     const handleListen = (item) => {
         setMenuOpen(null)
-        if (item.audiobookId) {
+        if (item.itemType === 'pair') {
             openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
+        } else if (item.itemType === 'audiobook') {
+            openPlayer(item.mediaId, item.book_pair_id, item.audio_position_ms, null)
         }
     }
 
@@ -398,14 +402,14 @@ function ContinuePage() {
                                     </svg>
                                     {menuOpen === item.itemId && (
                                         <div className="continue-card-dropdown">
-                                            {isPair && item.ebookId && (
+                                            {(isPair ? !!item.ebookId : isEbook) && (
                                                 <button onClick={(e) => { e.stopPropagation(); handleRead(item) }}>
-                                                    Read
+                                                    Continue Reading
                                                 </button>
                                             )}
-                                            {isPair && item.audiobookId && (
+                                            {(isPair ? !!item.audiobookId : !isEbook) && (
                                                 <button onClick={(e) => { e.stopPropagation(); handleListen(item) }}>
-                                                    Listen
+                                                    Continue Listening
                                                 </button>
                                             )}
                                             <button onClick={(e) => { e.stopPropagation(); handleMarkComplete(item) }}>
@@ -413,6 +417,9 @@ function ContinuePage() {
                                             </button>
                                             <button onClick={(e) => { e.stopPropagation(); handleResetProgress(item) }}>
                                                 Reset Progress
+                                            </button>
+                                            <button onClick={(e) => { e.stopPropagation(); setMenuOpen(null); navigate(isEbook || isPair ? `/book/ebook/${item.ebookId || item.mediaId}` : `/book/audiobook/${item.mediaId}`) }}>
+                                                View Details
                                             </button>
                                         </div>
                                     )}
