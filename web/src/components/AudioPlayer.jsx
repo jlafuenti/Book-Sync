@@ -39,13 +39,15 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
         }
     }, [player.currentAudiobook?.id])
 
+    const pairIdForHistory = player.currentAudiobook?.pairId || null
+
     useEffect(() => {
-        if (showHistory && player.currentAudiobook?.pairId) {
-            getBookmarkLog(player.currentAudiobook.pairId)
+        if (showHistory && pairIdForHistory) {
+            getBookmarkLog(pairIdForHistory)
                 .then(setHistoryLog)
                 .catch(() => setHistoryLog([]))
         }
-    }, [showHistory, player.currentAudiobook?.pairId])
+    }, [showHistory, pairIdForHistory])
 
     if (!player.currentAudiobook) return null
 
@@ -69,7 +71,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                     </svg>
                 </button>
                 <span className="audio-player-title">Now Playing</span>
-                {onSwitchToEbook && currentAudiobook.pairId && (
+                {onSwitchToEbook && (
                     <button
                         className="btn-icon switch-format-btn"
                         onClick={() => onSwitchToEbook(currentAudiobook.pairId, pairedEbookId)}
@@ -87,7 +89,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                         <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
                     </svg>
                 </button>
-                {currentAudiobook.pairId && (
+                {(currentAudiobook.pairId || pairedEbookId) && (
                     <button className={`btn-icon${showHistory ? ' active' : ''}`} onClick={() => { setShowHistory(!showHistory); setShowChapters(false) }} title="Session history">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
                             <circle cx="12" cy="12" r="10" />
