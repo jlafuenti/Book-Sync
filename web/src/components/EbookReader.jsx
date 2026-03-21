@@ -3,7 +3,7 @@ import ePub from 'epubjs'
 import { fetchEbookBlob, updateProgress, updateBookmark } from '../api'
 import './EbookReader.css'
 
-function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
+function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, bookTitle, onSwitchToAudio }) {
     const viewerRef = useRef(null)
     const bookRef = useRef(null)
     const renditionRef = useRef(null)
@@ -18,19 +18,24 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
     const [currentChapter, setCurrentChapter] = useState('')
     const [fontSize, setFontSize] = useState(100)
     const [savedIndicator, setSavedIndicator] = useState(false)
+    const currentSpineIndexRef = useRef(initialChapter ?? 0)
 
-    const doSave = useCallback(async (cfi, percent) => {
+    const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
+        const chapter = spineIndex ?? currentSpineIndexRef.current
         try {
             await updateProgress('ebook', ebookId, {
                 epub_cfi: cfi,
+                epub_chapter: chapter,
                 epub_progress_percent: Math.round(percent * 100) / 100,
+                book_pair_id: pairId || undefined,
                 device_id: 'web',
             })
             if (pairId) {
                 await updateBookmark(pairId, {
                     source: 'ebook',
-                    epub_locator: JSON.stringify({ cfi }),
+                    epub_chapter: chapter,
+                    epub_sentence_index: 0,
                 }).catch(() => {})
             }
         } catch (e) {
@@ -97,9 +102,11 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
                     setToc(nav.toc || [])
                 }
 
-                // Display at saved position or start
+                // Display at saved position or chapter, or start
                 if (initialCfi) {
                     await rendition.display(initialCfi)
+                } else if (initialChapter > 0 && book.spine.items[initialChapter]) {
+                    await rendition.display(book.spine.items[initialChapter].href)
                 } else {
                     await rendition.display()
                 }
@@ -115,7 +122,16 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
                         : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
                     setCurrentCfi(cfi)
                     setProgressPercent(percent)
-                    saveProgress(cfi, percent)
+
+                    // Track spine index for bookmark syncing
+                    const spineIndex = book.spine.items.findIndex(item =>
+                        item.href && (location.start.href === item.href ||
+                        location.start.href.endsWith('/' + item.href) ||
+                        item.href.endsWith('/' + location.start.href))
+                    )
+                    if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
+
+                    saveProgress(cfi, percent, spineIndex >= 0 ? spineIndex : undefined)
 
                     // Find current chapter
                     const currentSection = book.spine.get(location.start.href)
@@ -207,6 +223,20 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
                     )}
                 </div>
                 <div className="ebook-toolbar-right">
+                    {onSwitchToAudio && pairId && (
+                        <button
+                            className="btn-icon switch-format-btn"
+                            onClick={onSwitchToAudio}
+                            title="Switch to Audiobook"
+                        >
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z" />
+                                <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                            </svg>
+                            <span style={{ fontSize: 12, marginLeft: 4 }}>Listen</span>
+                        </button>
+                    )}
                     <div className="font-size-controls">
                         <button onClick={() => setFontSize(s => Math.max(60, s - 10))} title="Decrease font">A-</button>
                         <button onClick={() => setFontSize(s => Math.min(200, s + 10))} title="Increase font">A+</button>

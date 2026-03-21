@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -50,6 +50,7 @@ function BookDetailPage() {
     const [toast, setToast] = useState(null)
     const [progress, setProgress] = useState(null)
     const [readerOpen, setReaderOpen] = useState(false)
+    const [readerInitialChapter, setReaderInitialChapter] = useState(null)
     const [playerOpen, setPlayerOpen] = useState(false)
     const audioPlayer = useAudioPlayer()
 
@@ -272,7 +273,7 @@ function BookDetailPage() {
                         )}
                         {isAudiobook && (
                             <button className="btn btn-primary" onClick={() => {
-                                audioPlayer.play(Number(id), book, progress?.audio_position_ms || 0)
+                                audioPlayer.play(Number(id), book, progress?.audio_position_ms || 0, book.paired_with?.id || null)
                                 setPlayerOpen(true)
                             }}>
                                 {progress && !progress.is_completed && progress.audio_position_ms > 0
@@ -408,17 +409,35 @@ function BookDetailPage() {
                     ebookId={Number(id)}
                     pairId={book.pair_id || null}
                     initialCfi={progress?.epub_cfi || null}
+                    initialChapter={readerInitialChapter}
                     bookTitle={book.title}
                     onClose={() => {
                         setReaderOpen(false)
+                        setReaderInitialChapter(null)
                         getProgress(type, id).then(setProgress).catch(() => {})
                     }}
+                    onSwitchToAudio={book.pair_id && book.paired_with ? async () => {
+                        const bm = await getBookmark(book.pair_id).catch(() => null)
+                        setReaderOpen(false)
+                        setReaderInitialChapter(null)
+                        audioPlayer.play(book.paired_with.id, book.paired_with, bm?.audio_position_ms || 0, Number(id))
+                        setPlayerOpen(true)
+                    } : null}
                 />
             )}
 
             {/* Audiobook Player Overlay */}
             {playerOpen && audioPlayer.currentAudiobook && (
-                <AudioPlayerView onClose={() => setPlayerOpen(false)} />
+                <AudioPlayerView
+                    onClose={() => setPlayerOpen(false)}
+                    onSwitchToEbook={book.pair_id && book.paired_with ? async (pairId, ebookId) => {
+                        audioPlayer.pause()
+                        const bm = await getBookmark(pairId).catch(() => null)
+                        setPlayerOpen(false)
+                        setReaderInitialChapter(bm?.epub_chapter ?? null)
+                        setReaderOpen(true)
+                    } : null}
+                />
             )}
         </div>
     )
