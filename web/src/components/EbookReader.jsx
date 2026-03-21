@@ -17,28 +17,40 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
     const [progressPercent, setProgressPercent] = useState(0)
     const [currentChapter, setCurrentChapter] = useState('')
     const [fontSize, setFontSize] = useState(100)
+    const [savedIndicator, setSavedIndicator] = useState(false)
 
-    // Debounced progress save
+    const doSave = useCallback(async (cfi, percent) => {
+        if (!cfi) return
+        try {
+            await updateProgress('ebook', ebookId, {
+                epub_cfi: cfi,
+                epub_progress_percent: Math.round(percent * 100) / 100,
+                device_id: 'web',
+            })
+            if (pairId) {
+                await updateBookmark(pairId, {
+                    source: 'ebook',
+                    epub_locator: JSON.stringify({ cfi }),
+                }).catch(() => {})
+            }
+        } catch (e) {
+            console.warn('Failed to save reading progress:', e)
+        }
+    }, [ebookId, pairId])
+
+    // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = setTimeout(async () => {
-            try {
-                await updateProgress('ebook', ebookId, {
-                    epub_cfi: cfi,
-                    epub_progress_percent: Math.round(percent * 100) / 100,
-                    device_id: 'web',
-                })
-                if (pairId) {
-                    await updateBookmark(pairId, {
-                        source: 'ebook',
-                        epub_locator: JSON.stringify({ cfi }),
-                    }).catch(() => {})
-                }
-            } catch (e) {
-                console.warn('Failed to save reading progress:', e)
-            }
-        }, 2000)
-    }, [ebookId, pairId])
+        saveTimerRef.current = setTimeout(() => doSave(cfi, percent), 2000)
+    }, [doSave])
+
+    // Manual immediate save
+    const saveNow = useCallback(async () => {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+        await doSave(currentCfi, progressPercent)
+        setSavedIndicator(true)
+        setTimeout(() => setSavedIndicator(false), 1500)
+    }, [doSave, currentCfi, progressPercent])
 
     // Initialize epub
     useEffect(() => {
@@ -56,21 +68,25 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
                     width: '100%',
                     height: '100%',
                     flow: 'paginated',
-                    spread: 'auto',
+                    spread: 'none',
                 })
                 renditionRef.current = rendition
 
                 // Apply dark theme
                 rendition.themes.default({
                     'body': {
-                        'background': 'var(--bg-primary, #0f0f1a) !important',
-                        'color': 'var(--text-primary, #e8e8f0) !important',
-                        'font-family': 'Inter, -apple-system, BlinkMacSystemFont, sans-serif !important',
+                        'background': '#0f0f1a !important',
+                        'color': '#e8e8f0 !important',
+                        'font-family': 'Georgia, "Times New Roman", serif !important',
+                        'padding': '0 48px !important',
+                        'max-width': '100% !important',
+                        'box-sizing': 'border-box !important',
                     },
-                    'a': { 'color': 'var(--accent-secondary, #a78bfa) !important' },
-                    'h1, h2, h3, h4, h5, h6': { 'color': 'var(--text-primary, #e8e8f0) !important' },
-                    'p, span, div, li, td, th': { 'color': 'var(--text-primary, #e8e8f0) !important' },
+                    'a': { 'color': '#a78bfa !important' },
+                    'h1, h2, h3, h4, h5, h6': { 'color': '#e8e8f0 !important' },
+                    'p, span, div, li, td, th': { 'color': '#e8e8f0 !important' },
                     'img': { 'max-width': '100% !important' },
+                    '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
                 })
 
                 rendition.themes.fontSize(`${fontSize}%`)
@@ -196,6 +212,21 @@ function EbookReader({ ebookId, pairId, initialCfi, onClose, bookTitle }) {
                         <button onClick={() => setFontSize(s => Math.min(200, s + 10))} title="Increase font">A+</button>
                     </div>
                     <span className="ebook-progress-text">{progressPercent.toFixed(1)}%</span>
+                    <button
+                        className={`btn-icon${savedIndicator ? ' saved' : ''}`}
+                        onClick={saveNow}
+                        title="Save position"
+                    >
+                        {savedIndicator ? (
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                        ) : (
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                            </svg>
+                        )}
+                    </button>
                 </div>
             </div>
 

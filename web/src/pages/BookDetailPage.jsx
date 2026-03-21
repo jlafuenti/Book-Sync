@@ -232,19 +232,27 @@ function BookDetailPage() {
                     {/* Progress display */}
                     {progress && !progress.is_completed && (
                         <div className="book-detail-progress-section">
-                            <div className="book-detail-progress-bar">
-                                <div className="book-detail-progress-fill" style={{
-                                    width: `${isAudiobook
-                                        ? (book.duration_seconds ? ((progress.audio_position_ms / 1000) / book.duration_seconds) * 100 : 0)
-                                        : (progress.epub_progress_percent || 0)}%`
-                                }} />
-                            </div>
-                            <span className="book-detail-progress-label">
-                                {isAudiobook
-                                    ? `${formatDuration(Math.floor((progress.audio_position_ms || 0) / 1000))} / ${formatDuration(book.duration_seconds)}`
-                                    : `${Math.round(progress.epub_progress_percent || 0)}%`
-                                }
-                            </span>
+                            {isAudiobook && !book.duration_seconds ? (
+                                <span className="book-detail-progress-label">
+                                    {formatDuration(Math.floor((progress.audio_position_ms || 0) / 1000))} listened
+                                </span>
+                            ) : (
+                                <>
+                                    <div className="book-detail-progress-bar">
+                                        <div className="book-detail-progress-fill" style={{
+                                            width: `${isAudiobook
+                                                ? ((progress.audio_position_ms / 1000) / book.duration_seconds) * 100
+                                                : (progress.epub_progress_percent || 0)}%`
+                                        }} />
+                                    </div>
+                                    <span className="book-detail-progress-label">
+                                        {isAudiobook
+                                            ? `${formatDuration(Math.floor((progress.audio_position_ms || 0) / 1000))} / ${formatDuration(book.duration_seconds)}`
+                                            : `${Math.round(progress.epub_progress_percent || 0)}%`
+                                        }
+                                    </span>
+                                </>
+                            )}
                         </div>
                     )}
                     {progress?.is_completed && (
@@ -285,7 +293,7 @@ function BookDetailPage() {
                         {progress && (progress.is_completed || progress.epub_progress_percent > 0 || progress.audio_position_ms > 0) && (
                             <button className="btn btn-secondary" onClick={async () => {
                                 const resetData = { is_completed: false, device_id: 'web' }
-                                if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = null; resetData.epub_chapter = 0 }
+                                if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = ''; resetData.epub_chapter = 0 }
                                 else { resetData.audio_position_ms = 0 }
                                 await updateProgress(type, id, resetData)
                                 setProgress(null)
