@@ -100,6 +100,7 @@ fun DownloadedScreen(
                             onListenClick = { onPairAudioSelect(pair.id) },
                             onMarkComplete = { viewModel.markComplete(pair) },
                             onResetProgress = { viewModel.resetProgress(pair) },
+                            onRefreshSyncData = { viewModel.refreshSyncData(pair) },
                         )
                     }
                 }

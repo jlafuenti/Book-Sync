@@ -385,6 +385,7 @@ fun BookPairCard(
     onListenClick: () -> Unit,
     onMarkComplete: () -> Unit = {},
     onResetProgress: () -> Unit = {},
+    onRefreshSyncData: () -> Unit = {},
 ) {
     var showManageDialog by remember { mutableStateOf(false) }
     var showUnlinkConfirm by remember { mutableStateOf(false) }
@@ -439,6 +440,13 @@ fun BookPairCard(
                         Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Reset Progress")
+                    }
+                    if (pair.status == "synced") {
+                        TextButton(onClick = { onRefreshSyncData(); showManageDialog = false }) {
+                            Icon(Icons.Default.Sync, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Refresh Sync Data")
+                        }
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     TextButton(
