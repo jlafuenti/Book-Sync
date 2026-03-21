@@ -452,6 +452,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                 segments_gen, info = model.transcribe(
                     audio_array,
                     vad_filter=VAD_FILTER,
+                    condition_on_previous_text=False,
                 )
 
                 chunk_segments = []
