@@ -434,6 +434,12 @@ export async function updateBookmark(pairId, data) {
     return resp.json();
 }
 
+export async function getBookmarkLog(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}/log`);
+    if (!resp.ok) throw new Error('Failed to fetch bookmark log');
+    return resp.json();
+}
+
 // ============ File Access ============
 
 export async function fetchEbookBlob(ebookId) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
-import { getAudiobookChapters, getAccessToken } from '../api'
+import { getAudiobookChapters, getBookmarkLog, getAccessToken } from '../api'
 import './AudioPlayer.css'
 
 function formatTime(seconds) {
@@ -15,12 +15,21 @@ function formatTime(seconds) {
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const SLEEP_OPTIONS = [15, 30, 45, 60]
 
+function formatDate(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+        d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
 // ---- Full Player View ----
 export function AudioPlayerView({ onClose, onSwitchToEbook }) {
     const player = useAudioPlayer()
     const [chapters, setChapters] = useState([])
     const [showSleepMenu, setShowSleepMenu] = useState(false)
     const [showChapters, setShowChapters] = useState(true)
+    const [showHistory, setShowHistory] = useState(false)
+    const [historyLog, setHistoryLog] = useState([])
 
     useEffect(() => {
         if (player.currentAudiobook?.id) {
@@ -29,6 +38,14 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                 .catch(() => setChapters([]))
         }
     }, [player.currentAudiobook?.id])
+
+    useEffect(() => {
+        if (showHistory && player.currentAudiobook?.pairId) {
+            getBookmarkLog(player.currentAudiobook.pairId)
+                .then(setHistoryLog)
+                .catch(() => setHistoryLog([]))
+        }
+    }, [showHistory, player.currentAudiobook?.pairId])
 
     if (!player.currentAudiobook) return null
 
@@ -70,6 +87,14 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                         <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
                     </svg>
                 </button>
+                {currentAudiobook.pairId && (
+                    <button className={`btn-icon${showHistory ? ' active' : ''}`} onClick={() => { setShowHistory(!showHistory); setShowChapters(false) }} title="Session history">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                    </button>
+                )}
             </div>
 
             <div className="audio-player-body">
@@ -176,6 +201,34 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                         </div>
                     </div>
                 </div>
+
+                {/* History panel */}
+                {showHistory && (
+                    <div className="audio-chapters-panel">
+                        <div className="audio-chapters-header">
+                            <span>Session History</span>
+                            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{historyLog.length}</span>
+                        </div>
+                        <div className="audio-chapters-list">
+                            {historyLog.length === 0 ? (
+                                <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 13, textAlign: 'center' }}>
+                                    No history yet
+                                </div>
+                            ) : historyLog.map((entry, i) => (
+                                <button
+                                    key={i}
+                                    className="audio-chapter-item"
+                                    onClick={() => player.seekTo((entry.new_audio_position_ms || 0) / 1000)}
+                                >
+                                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {formatDate(entry.changed_at)}
+                                    </span>
+                                    <span className="audio-chapter-time">{formatTime((entry.new_audio_position_ms || 0) / 1000)}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Chapter list */}
                 {showChapters && chapters.length > 0 && (
