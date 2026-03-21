@@ -94,7 +94,11 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                     '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
                 })
 
-                rendition.themes.fontSize(`${fontSize}%`)
+                // Apply initial font size directly to iframe content (avoids blob URL MIME rejection)
+                rendition.hooks.content.register(contents => {
+                    const el = contents.document?.documentElement
+                    if (el) el.style.fontSize = `${fontSize}%`
+                })
 
                 // Load TOC
                 const nav = await book.loaded.navigation
@@ -188,10 +192,14 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
         return () => window.removeEventListener('keydown', handleKey)
     }, [onClose])
 
-    // Font size changes
+    // Font size changes — inject directly into iframe document to avoid blob URL MIME rejection
     useEffect(() => {
         if (renditionRef.current) {
-            renditionRef.current.themes.fontSize(`${fontSize}%`)
+            renditionRef.current.getContents().forEach(c => {
+                if (c.document?.documentElement) {
+                    c.document.documentElement.style.fontSize = `${fontSize}%`
+                }
+            })
         }
     }, [fontSize])
 
