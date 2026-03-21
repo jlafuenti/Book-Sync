@@ -369,6 +369,11 @@ class BookSyncRepository @Inject constructor(
         return file
     }
 
+    /** Reset the syncMapDownloaded flag so a re-download is triggered. */
+    suspend fun resetSyncMapDownloaded(pairId: Int) {
+        bookPairDao.setSyncMapDownloaded(pairId, false)
+    }
+
     /** Download the sync map for a book pair. */
     suspend fun downloadSyncMap(pairId: Int) {
         log("downloadSyncMap — pairId=$pairId")
