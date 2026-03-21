@@ -43,6 +43,10 @@
     background: var(--bg-card);
 }
 
+.audio-player-toolbar .btn-icon.active {
+    color: var(--accent);
+}
+
 .audio-player-title {
     font-size: 14px;
     font-weight: 500;

@@ -418,9 +418,14 @@ function BookDetailPage() {
                     }}
                     onSwitchToAudio={book.pair_id && book.paired_with ? async () => {
                         const bm = await getBookmark(book.pair_id).catch(() => null)
+                        let audioPositionMs = bm?.audio_position_ms || 0
+                        if (!audioPositionMs) {
+                            const prog = await getProgress('audiobook', book.paired_with.id).catch(() => null)
+                            audioPositionMs = prog?.audio_position_ms || 0
+                        }
                         setReaderOpen(false)
                         setReaderInitialChapter(null)
-                        audioPlayer.play(book.paired_with.id, book.paired_with, bm?.audio_position_ms || 0, Number(id))
+                        audioPlayer.play(book.paired_with.id, book.paired_with, audioPositionMs, Number(id))
                         setPlayerOpen(true)
                     } : null}
                 />
