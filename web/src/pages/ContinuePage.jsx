@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, getAccessToken } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, updateBookmark, getAccessToken } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -293,8 +293,10 @@ function ContinuePage() {
             <AudioPlayerView
                 onClose={() => { setPlayerOpen(false); loadData() }}
                 onSwitchToEbook={audioPlayer.pairedEbookId ? async (pairId) => {
-                    const bm = await getBookmark(pairId).catch(() => null)
                     audioPlayer.pause()
+                    const posMs = Math.floor(audioPlayer.currentTime * 1000)
+                    await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(() => {})
+                    const bm = await getBookmark(pairId).catch(() => null)
                     setPlayerOpen(false)
                     const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
                     setReaderOpen({
