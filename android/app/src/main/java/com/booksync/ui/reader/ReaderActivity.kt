@@ -462,7 +462,7 @@ class ReaderActivity : AppCompatActivity() {
             .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
             .trim()
         // Strip book title from start (Jsoup includes <title> text at top of chapter)
-        val bookTitle = pair?.title
+        val bookTitle = pair?.ebookTitle
         if (!bookTitle.isNullOrEmpty()) {
             val titlePattern = Regex("^${Regex.escape(bookTitle)}\\s*", RegexOption.IGNORE_CASE)
             text = titlePattern.replace(text, "") // Remove first occurrence
