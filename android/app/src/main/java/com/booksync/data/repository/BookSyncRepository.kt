@@ -536,7 +536,11 @@ class BookSyncRepository @Inject constructor(
     /** Normalize text for comparison: lowercase, convert ALL whitespace to spaces, strip punctuation */
     private fun normalizeForSearch(text: String): String {
         return text.lowercase()
-            // Convert ALL Unicode whitespace variants to regular spaces FIRST
+            // Convert newlines and tabs to spaces FIRST (before stripping non-alphanumeric)
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace('\t', ' ')
+            // Convert Unicode whitespace variants to regular spaces
             .replace('\u00A0', ' ')  // non-breaking space (very common in epubs)
             .replace('\u2002', ' ')  // en space
             .replace('\u2003', ' ')  // em space

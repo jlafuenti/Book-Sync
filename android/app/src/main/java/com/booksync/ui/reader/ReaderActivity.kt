@@ -1,6 +1,5 @@
 package com.booksync.ui.reader
 
-import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
@@ -56,7 +55,6 @@ class ReaderActivity : AppCompatActivity() {
         private const val NAV_FRAGMENT_TAG = "EpubNavigatorFragment"
         private const val SAVE_INTERVAL_MS = 5000L
         private const val PREFS_NAME = "reader_display"
-        private const val SYNC_PREFS_NAME = "sync_calibration"
         private const val KEY_FONT_SIZE = "font_size"
         private const val KEY_THEME = "theme"
         private const val KEY_FONT_FAMILY = "font_family"
@@ -73,7 +71,6 @@ class ReaderActivity : AppCompatActivity() {
     private var positionSaveJob: Job? = null
     private var isBarVisible = false
     private var isSeeking = false
-    private var syncChapterOffset = 0 // Offset between SyncMap epub_chapter and Readium spine index
     private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
     /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
     private var sentenceSyncPending = false
@@ -210,8 +207,6 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Publication opened: ${pub.metadata.title}, readingOrder=${pub.readingOrder.size} items")
                 publication = pub
 
-                calibrateSyncOffset()
-
                 val initialLocator = getInitialLocator(pub)
                 Log.d(TAG, "Initial locator: $initialLocator")
 
@@ -247,65 +242,8 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun calibrateSyncOffset() {
-        if (pair?.audiobookDownloaded != true) return
-        
-        // Check for cached calibration first (avoids expensive startup scan)
-        val syncPrefs = getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
-        val cachedOffset = syncPrefs.getInt("sync_offset_$pairId", Int.MIN_VALUE)
-        if (cachedOffset != Int.MIN_VALUE) {
-            syncChapterOffset = cachedOffset
-            Log.d(TAG, "Using cached sync offset: $syncChapterOffset for pairId=$pairId")
-            return
-        }
-        
-        val points = repository.getSyncPoints(pairId)
-        
-        // Only use points whose preview clearly starts with a chapter heading
-        // This reliably excludes front matter (praise, copyright, dedication, etc.)
-        val chapterPattern = Regex("^(CHAPTER\\s+\\d+|PROLOGUE)", RegexOption.IGNORE_CASE)
-        val validPoints = points.filter { 
-            val preview = it.epubTextPreview ?: ""
-            preview.length > 60 && chapterPattern.containsMatchIn(preview.trim())
-        }
-        Log.d(TAG, "calibrateSyncOffset: ${validPoints.size} valid content chapter points out of ${points.size} total")
-        if (validPoints.isEmpty()) return
-        
-        val pub = publication ?: return
-        
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            val offsets = mutableListOf<Int>()
-            val sampledPoints = validPoints.groupBy { it.epubChapter }
-                .values.map { it.first() }.take(10)
-            
-            for (targetPoint in sampledPoints) {
-                val rawPreview = targetPoint.epubTextPreview!!.trim()
-                val cleanPreview = rawPreview.replace(Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE), "").take(60).trim()
-                if (cleanPreview.length < 20) continue
-                val searchText = cleanPreview.replace("\n", " ").replace(Regex("\\s+"), " ")
-                
-                for (i in pub.readingOrder.indices) {
-                    val plainText = getChapterPlainText(i) ?: continue
-                    if (plainText.contains(searchText, ignoreCase = true)) {
-                        val offset = i - targetPoint.epubChapter
-                        offsets.add(offset)
-                        Log.d(TAG, "calibrateSyncOffset sample: syncCh=${targetPoint.epubChapter} → spine=$i, offset=$offset, text='${searchText.take(40)}'")
-                        break
-                    }
-                }
-            }
-            
-            if (offsets.isNotEmpty()) {
-                syncChapterOffset = offsets.groupingBy { it }.eachCount().maxByOrNull { it.value }!!.key
-                Log.d(TAG, "Calibrated sync offset: $syncChapterOffset (from ${offsets.size} samples: $offsets)")
-                // Persist for future launches
-                syncPrefs.edit().putInt("sync_offset_$pairId", syncChapterOffset).apply()
-            }
-        }
-    }
-
     /** Find which spine index contains the given text preview.
-     *  Searches outward from hintIdx (syncChapter + offset) to prefer nearby matches. */
+     *  Searches outward from hintIdx to prefer nearby matches. */
     private suspend fun findSpineIndexForText(previewText: String, hintIdx: Int = -1): Int? {
         val pub = publication ?: return null
         if (previewText.isEmpty()) return null
@@ -487,10 +425,9 @@ class ReaderActivity : AppCompatActivity() {
                 val (syncChapter, previewText) = repository.audioToEpubText(pairId, bookmark.audioPositionMs)
                 Log.d(TAG, "getInitialLocator: audioPos=${bookmark.audioPositionMs}ms => syncChapter=$syncChapter, preview='${previewText.take(60)}'")
                 // Find correct spine index via text search, searching near expected chapter
-                val hintIdx = syncChapter + syncChapterOffset
-                val chapterIdx = findSpineIndexForText(previewText, hintIdx)
-                    ?: hintIdx.takeIf { it in pub.readingOrder.indices }
-                Log.d(TAG, "getInitialLocator: hintIdx=$hintIdx, resolved chapterIdx=$chapterIdx")
+                val chapterIdx = findSpineIndexForText(previewText, syncChapter)
+                    ?: syncChapter.takeIf { it in pub.readingOrder.indices }
+                Log.d(TAG, "getInitialLocator: syncChapter=$syncChapter, resolved chapterIdx=$chapterIdx")
                 if (chapterIdx != null && chapterIdx in pub.readingOrder.indices) {
                     val link = pub.readingOrder[chapterIdx]
                     val baseLocator = pub.locatorFromLink(link)
@@ -511,34 +448,45 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /** Extract a text preview from a chapter at a given progression, stripping headings and book title. */
+    private suspend fun extractTextPreview(chapterIndex: Int, progression: Double): String {
+        val plainText = getChapterPlainText(chapterIndex) ?: return ""
+        val charIndex = (plainText.length * progression).toInt()
+        val startIndex = maxOf(0, charIndex - 20)
+        val endIndex = minOf(charIndex + 200, plainText.length)
+        // Extract a focused window, strip chapter headings
+        // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines)
+        var text = plainText.substring(startIndex, endIndex)
+            .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
+            .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
+            .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
+            .trim()
+        // Strip book title from start (Jsoup includes <title> text at top of chapter)
+        val bookTitle = pair?.title
+        if (!bookTitle.isNullOrEmpty()) {
+            val titlePattern = Regex("^${Regex.escape(bookTitle)}\\s*", RegexOption.IGNORE_CASE)
+            text = titlePattern.replace(text, "") // Remove first occurrence
+            text = titlePattern.replace(text, "") // Remove possible second occurrence
+            text = text.trim()
+        }
+        return text
+    }
+
     private fun savePosition(locator: Locator) {
         val bookPair = pair ?: return
         lifecycleScope.launch {
             try {
                 val pub = publication ?: return@launch
-                val rawChapterIndex = pub.readingOrder.indexOfFirst { 
+                val rawChapterIndex = pub.readingOrder.indexOfFirst {
                     val pubHref = it.href.toString()
                     val locHref = locator.href.toString()
                     pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
                 }
                 val chapterIndex = rawChapterIndex.coerceAtLeast(0)
-                val syncChapter = (chapterIndex - syncChapterOffset).coerceAtLeast(0)
-                Log.d(TAG, "savePosition: locator.href='${locator.href}', rawIndex=$rawChapterIndex, chapterIndex=$chapterIndex, syncChapter=$syncChapter, progression=${locator.locations.progression}")
-            
+                Log.d(TAG, "savePosition: locator.href='${locator.href}', rawIndex=$rawChapterIndex, chapterIndex=$chapterIndex, progression=${locator.locations.progression}")
+
                 val progression = locator.locations.progression ?: 0.0
-                val plainText = getChapterPlainText(chapterIndex)
-                val textPreview = if (plainText != null) {
-                    val charIndex = (plainText.length * progression).toInt()
-                    val startIndex = maxOf(0, charIndex - 20)
-                    val endIndex = minOf(charIndex + 200, plainText.length)
-                    // Extract a focused window, strip chapter headings
-                    // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines)
-                    plainText.substring(startIndex, endIndex)
-                        .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
-                        .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
-                        .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
-                        .trim()
-                } else ""
+                val textPreview = extractTextPreview(chapterIndex, progression)
                 
                 val locatorJson = locator.toJSON().toString()
 
@@ -550,19 +498,30 @@ class ReaderActivity : AppCompatActivity() {
                 repository.updateBookmark(
                     pairId = pairId,
                     source = "ebook",
-                    epubChapter = syncChapter,
+                    epubChapter = chapterIndex,
                     epubLocator = locatorJson,
                 )
             } else {
-                val syncPoint = repository.getSyncPointForEpubText(pairId, syncChapter, textPreview)
-                repository.updateBookmark(
-                    pairId = pairId,
-                    source = "ebook",
-                    epubChapter = syncChapter,
-                    epubSentenceIndex = syncPoint?.epubSentenceIndex ?: 0,
-                    audioPositionMs = syncPoint?.audioStartMs,
-                    epubLocator = locatorJson,
-                )
+                val syncPoint = repository.getSyncPointForEpubText(pairId, chapterIndex, textPreview)
+                if (syncPoint != null) {
+                    repository.updateBookmark(
+                        pairId = pairId,
+                        source = "ebook",
+                        epubChapter = syncPoint.epubChapter,
+                        epubSentenceIndex = syncPoint.epubSentenceIndex,
+                        audioPositionMs = syncPoint.audioStartMs,
+                        epubLocator = locatorJson,
+                    )
+                } else {
+                    // Only save epub locator — don't corrupt audio position
+                    Log.w(TAG, "savePosition: no sync match found, saved epub locator only")
+                    repository.updateBookmark(
+                        pairId = pairId,
+                        source = "ebook",
+                        epubChapter = chapterIndex,
+                        epubLocator = locatorJson,
+                    )
+                }
             }
             } catch (e: Exception) {
                 Log.w(TAG, "Error saving position", e)
@@ -587,34 +546,21 @@ class ReaderActivity : AppCompatActivity() {
             pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
         }
         val chapterIndex = rawChapterIndex.coerceAtLeast(0)
-        val syncChapter = (chapterIndex - syncChapterOffset).coerceAtLeast(0)
-        
+
         val progression = locator.locations.progression ?: 0.0
         Log.d(TAG, "syncAudioToPage called! locator.href='${locator.href}', progression=$progression")
-        Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex, syncChapterOffset=$syncChapterOffset => syncChapter=$syncChapter")
-    
-        lifecycleScope.launch {
-            val plainText = getChapterPlainText(chapterIndex)
-            val textPreview = if (plainText != null) {
-                val charIndex = (plainText.length * progression).toInt()
-                val startIndex = maxOf(0, charIndex - 20)
-                val endIndex = minOf(charIndex + 200, plainText.length)
-                // Extract a focused window, strip chapter headings
-                // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines)
-                plainText.substring(startIndex, endIndex)
-                    .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
-                    .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
-                    .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
-                    .trim()
-            } else ""
+        Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex")
 
-            val audioMs = repository.epubToAudioText(pairId, syncChapter, textPreview, rewindMs = 2000)
+        lifecycleScope.launch {
+            val textPreview = extractTextPreview(chapterIndex, progression)
+
+            val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview, rewindMs = 2000)
             if (audioMs > 0) {
                 // Save audio position as bookmark so the player picks it up
                 repository.updateBookmark(
                     pairId = pairId,
                     source = "ebook",
-                    epubChapter = syncChapter,
+                    epubChapter = chapterIndex,
                     audioPositionMs = audioMs,
                 )
                 android.widget.Toast.makeText(this@ReaderActivity, "Audio synced — switching to player", android.widget.Toast.LENGTH_SHORT).show()
@@ -898,7 +844,19 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
 
-        webView.evaluateJavascript("window.getSelection().toString()") { result ->
+        webView.evaluateJavascript("""
+            (function() {
+                var sel = window.getSelection().toString();
+                if (!sel) {
+                    var frames = document.querySelectorAll('iframe');
+                    for (var i = 0; i < frames.length; i++) {
+                        try { sel = frames[i].contentWindow.getSelection().toString(); } catch(e) {}
+                        if (sel) break;
+                    }
+                }
+                return sel || '';
+            })()
+        """.trimIndent()) { result ->
             // Result comes back as a JSON string with quotes
             val selectedText = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
             Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
@@ -917,11 +875,10 @@ class ReaderActivity : AppCompatActivity() {
                 pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
             }
             val chapterIndex = rawChapterIndex.coerceAtLeast(0)
-            val syncChapter = (chapterIndex - syncChapterOffset).coerceAtLeast(0)
-            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, syncChapter=$syncChapter, text='${selectedText.take(60)}'")
+            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
             lifecycleScope.launch {
-                val audioMs = repository.epubToAudioText(pairId, syncChapter, selectedText, rewindMs = 2000)
+                val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 2000)
                 if (audioMs > 0) {
                     Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
                     sentenceSyncPending = true
@@ -931,7 +888,7 @@ class ReaderActivity : AppCompatActivity() {
                     repository.updateBookmark(
                         pairId = pairId,
                         source = "ebook",
-                        epubChapter = syncChapter,
+                        epubChapter = chapterIndex,
                         audioPositionMs = audioMs,
                     )
                     val timeStr = formatAudioTime(audioMs.toLong())

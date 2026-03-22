@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
-import { fetchEbookBlob, updateProgress, updateBookmark } from '../api'
+import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio } from '../api'
 import './EbookReader.css'
 
 function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, bookTitle, onSwitchToAudio }) {
@@ -21,6 +21,27 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const [savedIndicator, setSavedIndicator] = useState(false)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
 
+    const extractVisibleText = useCallback(() => {
+        const contents = renditionRef.current?.getContents?.()
+        if (!contents || !contents.length) return ''
+        const rawText = contents[0]?.document?.body?.innerText || ''
+        // Normalize: lowercase, strip non-alphanumeric (keep spaces), collapse spaces
+        let text = rawText.toLowerCase()
+            .replace(/[\n\r\t]/g, ' ')
+            .replace(/[^a-z0-9 ]/g, '')
+            .replace(/ +/g, ' ')
+            .trim()
+        // Strip book title from start (Jsoup/epub.js includes <title> text at top)
+        if (bookTitle) {
+            const titleNorm = bookTitle.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
+            if (titleNorm && text.startsWith(titleNorm)) {
+                text = text.slice(titleNorm.length).trim()
+                if (text.startsWith(titleNorm)) text = text.slice(titleNorm.length).trim()
+            }
+        }
+        return text.substring(0, 220)
+    }, [bookTitle])
+
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         const chapter = spineIndex ?? currentSpineIndexRef.current
@@ -33,16 +54,35 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                 device_id: 'web',
             })
             if (pairId) {
-                await updateBookmark(pairId, {
-                    source: 'ebook',
-                    epub_chapter: chapter,
-                    epub_sentence_index: 0,
-                }).catch(() => {})
+                // Extract visible text and match against sync map for accurate audio position
+                const textPreview = extractVisibleText()
+                if (textPreview && textPreview.length > 10) {
+                    const match = await matchTextToAudio(pairId, textPreview, chapter).catch(() => null)
+                    if (match) {
+                        await updateBookmark(pairId, {
+                            source: 'ebook',
+                            epub_chapter: match.epub_chapter,
+                            epub_sentence_index: match.epub_sentence_index,
+                            audio_position_ms: match.audio_position_ms,
+                        }).catch(() => {})
+                    } else {
+                        // No match — save epub position only, don't corrupt audio position
+                        await updateBookmark(pairId, {
+                            source: 'ebook',
+                            epub_chapter: chapter,
+                        }).catch(() => {})
+                    }
+                } else {
+                    await updateBookmark(pairId, {
+                        source: 'ebook',
+                        epub_chapter: chapter,
+                    }).catch(() => {})
+                }
             }
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
         }
-    }, [ebookId, pairId])
+    }, [ebookId, pairId, extractVisibleText])
 
     // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
