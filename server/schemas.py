@@ -272,6 +272,18 @@ class BookmarkUpdate(BaseModel):
     audio_position_ms: Optional[int] = None
 
 
+class TextMatchRequest(BaseModel):
+    epub_text: str
+    chapter_hint: int = 0
+
+
+class TextMatchResponse(BaseModel):
+    audio_position_ms: int
+    epub_chapter: int
+    epub_sentence_index: int
+    preview: Optional[str] = None
+
+
 class BookmarkResponse(BaseModel):
     id: int
     user_id: int

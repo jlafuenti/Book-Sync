@@ -440,6 +440,16 @@ export async function getBookmarkLog(pairId) {
     return resp.json();
 }
 
+export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/match-text/${pairId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epub_text: epubText, chapter_hint: chapterHint }),
+    });
+    if (!resp.ok) return null;
+    return resp.json();
+}
+
 // ============ File Access ============
 
 export async function fetchEbookBlob(ebookId) {
