@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark, updateBookmark } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -437,6 +437,8 @@ function BookDetailPage() {
                     onClose={() => setPlayerOpen(false)}
                     onSwitchToEbook={book.pair_id && book.paired_with ? async (pairId, ebookId) => {
                         audioPlayer.pause()
+                        const posMs = Math.floor(audioPlayer.currentTime * 1000)
+                        await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(() => {})
                         const bm = await getBookmark(pairId).catch(() => null)
                         setPlayerOpen(false)
                         setReaderInitialChapter(bm?.epub_chapter ?? null)
