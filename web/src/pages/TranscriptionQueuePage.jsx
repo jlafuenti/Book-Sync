@@ -12,6 +12,8 @@ function TranscriptionQueuePage() {
     const [searchQuery, setSearchQuery] = useState('')
     const [error, setError] = useState('')
     const [activeTab, setActiveTab] = useState('queue')
+    const [historySortCol, setHistorySortCol] = useState('started_at')
+    const [historySortDir, setHistorySortDir] = useState('desc')
     const pollingRef = useRef(null)
 
     const loadQueue = async () => {
@@ -152,6 +154,29 @@ function TranscriptionQueuePage() {
         const title = q.book_title || `Pair #${q.book_pair_id}`
         return title.toLowerCase().includes(searchQuery.toLowerCase())
     })
+
+    const sortedHistory = [...filteredHistory].sort((a, b) => {
+        const aVal = a[historySortCol] ? new Date(a[historySortCol]) : null
+        const bVal = b[historySortCol] ? new Date(b[historySortCol]) : null
+        if (aVal === null && bVal === null) return 0
+        if (aVal === null) return 1
+        if (bVal === null) return -1
+        return historySortDir === 'asc' ? aVal - bVal : bVal - aVal
+    })
+
+    const toggleHistorySort = (col) => {
+        if (historySortCol === col) {
+            setHistorySortDir(d => d === 'asc' ? 'desc' : 'asc')
+        } else {
+            setHistorySortCol(col)
+            setHistorySortDir('asc')
+        }
+    }
+
+    const SortIndicator = ({ col }) => {
+        if (historySortCol !== col) return <span style={{ opacity: 0.3, marginLeft: 4 }}>⇅</span>
+        return <span style={{ marginLeft: 4 }}>{historySortDir === 'asc' ? '↑' : '↓'}</span>
+    }
 
     const activeItem = filteredQueue.find(q => q.status === 'in_progress')
     const pendingItems = filteredQueue.filter(q => q.status === 'pending')
@@ -409,15 +434,15 @@ function TranscriptionQueuePage() {
                                             <th style={thStyle}>Book</th>
                                             <th style={thStyle}>Status</th>
                                             <th style={thStyle}>Retries</th>
-                                            <th style={thStyle}>Created</th>
-                                            <th style={thStyle}>Started</th>
-                                            <th style={thStyle}>Completed</th>
+                                            <th style={{ ...thStyle, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleHistorySort('created_at')}>Created<SortIndicator col="created_at" /></th>
+                                            <th style={{ ...thStyle, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleHistorySort('started_at')}>Started<SortIndicator col="started_at" /></th>
+                                            <th style={{ ...thStyle, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleHistorySort('completed_at')}>Completed<SortIndicator col="completed_at" /></th>
                                             <th style={thStyle}>Duration</th>
                                             <th style={thStyle}>Message</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredHistory.map(item => (
+                                        {sortedHistory.map(item => (
                                             <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                                 <td style={tdStyle}>
                                                     <div style={{ fontWeight: 600, maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

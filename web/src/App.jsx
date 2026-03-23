@@ -18,6 +18,8 @@ import BookDetailPage from './pages/BookDetailPage'
 import UnpairedPage from './pages/UnpairedPage'
 import UserManagementPage from './pages/UserManagementPage'
 import ContinuePage from './pages/ContinuePage'
+import NewItemsPage from './pages/NewItemsPage'
+import NewPairsPage from './pages/NewPairsPage'
 import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
 import { MiniPlayer } from './components/AudioPlayer'
 import { AudioPlayerView } from './components/AudioPlayer'
@@ -53,8 +55,36 @@ function AppShell({ user, setUser }) {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-logo">
-                    <svg viewBox="0 0 24 24" width="28" height="28" style={{ flexShrink: 0 }}>
-                        <path fill="var(--accent)" d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>
+                    <svg viewBox="0 0 560 360" width="90" height="58" style={{ flexShrink: 0 }}>
+                        <defs>
+                            <clipPath id="bm-logo">
+                                <path d="M 30,20 H 530 V 295 L 280,350 L 30,295 Z"/>
+                            </clipPath>
+                        </defs>
+                        <path d="M 30,20 H 530 V 295 L 280,350 L 30,295 Z" fill="var(--bg-card)" stroke="var(--border-light)" strokeWidth="6"/>
+                        <g clipPath="url(#bm-logo)">
+                            <rect x="55"  y="48"  width="180" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="70"  width="150" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="92"  width="170" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="114" width="140" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="136" width="165" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="158" width="145" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="180" width="160" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="202" width="135" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="224" width="155" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="246" width="130" height="10" rx="5" fill="var(--accent)"/>
+                            <rect x="55"  y="268" width="148" height="10" rx="5" fill="var(--accent)"/>
+                        </g>
+                        <rect x="276" y="20" width="8" height="330" fill="var(--bg-primary)"/>
+                        <g clipPath="url(#bm-logo)">
+                            <rect x="295" y="108" width="22" height="100" rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="323" y="73"  width="22" height="170" rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="351" y="98"  width="22" height="120" rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="379" y="58"  width="22" height="200" rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="407" y="83"  width="22" height="150" rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="435" y="113" width="22" height="90"  rx="11" fill="var(--accent-secondary)"/>
+                            <rect x="463" y="98"  width="22" height="120" rx="11" fill="var(--accent-secondary)"/>
+                        </g>
                     </svg>
                     <div>
                         <h1>Tandem</h1>
@@ -77,6 +107,7 @@ function AppShell({ user, setUser }) {
                         <div className="nav-sub-group">
                             <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
                             <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
+                            <Link to="/library/new-items" className={subNavClass('/library/new-items')}>🆕 New Items</Link>
                         </div>
                     )}
 
@@ -95,6 +126,7 @@ function AppShell({ user, setUser }) {
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
                             <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
+                            <Link to="/pairs/new-pairs" className={subNavClass('/pairs/new-pairs')}>🆕 New Pairs</Link>
                         </div>
                     )}
 
@@ -148,6 +180,8 @@ function AppShell({ user, setUser }) {
                     {/* Library routes */}
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
+                    <Route path="/library/new-items" element={<NewItemsPage />} />
+                    <Route path="/pairs/new-pairs" element={<NewPairsPage />} />
 
                     {/* Series routes */}
                     <Route path="/series" element={<SeriesPage />} />

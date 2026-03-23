@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover } from '../api';
+import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, enrichAudiobookFromAbs } from '../api';
 import ChapterEditor from './ChapterEditor';
 import MatchTab from './MatchTab';
 
@@ -32,6 +32,8 @@ function formatDate(iso) {
 export default function EnhancedMetadataModal({ book, type, onClose, onSave, initialTab = 'Details' }) {
     const [activeTab, setActiveTab] = useState(initialTab);
     const [saving, setSaving] = useState(false);
+    const [rescanning, setRescanning] = useState(false);
+    const [enriching, setEnriching] = useState(false);
 
     // Details Tab Form State
     const [formData, setFormData] = useState({
@@ -64,6 +66,52 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
             ...prev,
             [name]: inputType === 'checkbox' ? checked : value
         }));
+    };
+
+    const handleRescan = async () => {
+        if (!window.confirm('Rescan this file? This will overwrite its metadata with any tags found inside the file.')) return;
+        setRescanning(true);
+        try {
+            const updated = await rescanBook(type, book.id);
+            // Populate form with freshly scanned values
+            setFormData(prev => ({
+                ...prev,
+                title: updated.title || prev.title,
+                author: updated.author || prev.author,
+                series: updated.series || prev.series,
+                series_index: updated.series_index ?? prev.series_index,
+                description: updated.description || prev.description,
+                publisher: updated.publisher || prev.publisher,
+                publish_year: updated.publish_year || prev.publish_year,
+                language: updated.language || prev.language,
+                genres: updated.genres || prev.genres,
+                tags: updated.tags || prev.tags,
+                narrators: updated.narrators || prev.narrators,
+                isbn: updated.isbn || prev.isbn,
+                asin: updated.asin || prev.asin,
+            }));
+            if (updated.cover_path) setCoverPreview(updated.cover_path);
+        } catch (err) {
+            alert(err.message || 'Failed to rescan file');
+        } finally {
+            setRescanning(false);
+        }
+    };
+
+    const handleEnrichFromAbs = async () => {
+        setEnriching(true);
+        try {
+            const result = await enrichAudiobookFromAbs(book.id);
+            const msg = result.status === 'enriched' ? 'Enriched from Audiobookshelf'
+                : result.status === 'not_found' ? 'Not found in Audiobookshelf'
+                : 'Already up to date';
+            alert(msg);
+            if (result.status === 'enriched') onClose(); // parent will reload
+        } catch (err) {
+            alert(err.message || 'Failed to enrich from Audiobookshelf');
+        } finally {
+            setEnriching(false);
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -314,15 +362,27 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                     )}
                 </div>
 
-                <div className="modal-actions" style={{ padding: '16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                    <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
-                        Close
-                    </button>
-                    {activeTab === 'Details' && (
-                        <button type="submit" form="metadata-form" className="btn btn-primary" disabled={saving}>
-                            {saving ? 'Saving...' : 'Save Details'}
+                <div className="modal-actions" style={{ padding: '16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button type="button" className="btn btn-secondary" onClick={handleRescan} disabled={rescanning || saving}>
+                            {rescanning ? '🔄 Rescanning...' : '🔄 Rescan File'}
                         </button>
-                    )}
+                        {type === 'audiobook' && (
+                            <button type="button" className="btn btn-secondary" onClick={handleEnrichFromAbs} disabled={enriching || saving}>
+                                {enriching ? 'Enriching...' : '✨ Enrich from ABS'}
+                            </button>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
+                            Close
+                        </button>
+                        {activeTab === 'Details' && (
+                            <button type="submit" form="metadata-form" className="btn btn-primary" disabled={saving}>
+                                {saving ? 'Saving...' : 'Save Details'}
+                            </button>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>

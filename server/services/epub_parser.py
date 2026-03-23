@@ -6,7 +6,11 @@ organized by chapter.
 """
 
 import logging
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Tuple
 
 import ebooklib
@@ -142,3 +146,72 @@ def get_epub_metadata(epub_path: str) -> dict:
         "author": author[0][0] if author else None,
         "language": language[0][0] if language else None,
     }
+
+
+def extract_mobi_sentences(mobi_path: str) -> List[EpubSentence]:
+    """
+    Extract all sentences from a MOBI file, organized by chapter.
+
+    Uses the mobi library to unpack the file, then processes the extracted
+    HTML with the same pipeline used for EPUBs.
+
+    Args:
+        mobi_path: Path to the MOBI file
+
+    Returns:
+        List of EpubSentence objects, ordered by chapter and position.
+    """
+    import mobi as mobi_lib
+
+    logger.info(f"Parsing MOBI: {mobi_path}")
+
+    tempdir = None
+    try:
+        tempdir, extracted_path = mobi_lib.extract(mobi_path)
+
+        # The extracted file may be an HTML file or an EPUB — handle both
+        extracted = Path(extracted_path)
+        if extracted.suffix.lower() in (".epub",):
+            return extract_epub_sentences(extracted_path)
+
+        # Otherwise treat as raw HTML
+        with open(extracted_path, "r", encoding="utf-8", errors="ignore") as f:
+            html_content = f.read()
+
+        text = _extract_text_from_html(html_content)
+        sentences_text = _split_into_sentences(text)
+
+        sentences = []
+        for sent_index, sent_text in enumerate(sentences_text):
+            sentences.append(EpubSentence(
+                chapter=0,
+                sentence_index=sent_index,
+                text=sent_text,
+            ))
+
+        logger.info(f"Extracted {len(sentences)} sentences from MOBI (single chapter)")
+        return sentences
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to open MOBI '{mobi_path}': {e}") from e
+    finally:
+        if tempdir and os.path.exists(tempdir):
+            shutil.rmtree(tempdir, ignore_errors=True)
+
+
+def extract_book_sentences(path: str) -> List[EpubSentence]:
+    """
+    Extract sentences from an ebook file, dispatching based on file extension.
+
+    Supports .epub and .mobi formats.
+
+    Args:
+        path: Path to the ebook file
+
+    Returns:
+        List of EpubSentence objects, ordered by chapter and position.
+    """
+    ext = Path(path).suffix.lower()
+    if ext == ".mobi":
+        return extract_mobi_sentences(path)
+    return extract_epub_sentences(path)
