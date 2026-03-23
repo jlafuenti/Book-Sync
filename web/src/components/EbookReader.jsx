@@ -20,18 +20,27 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const fontSizeRef = useRef(100)
     const [savedIndicator, setSavedIndicator] = useState(false)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
+    // Tracks progression (0-1) within the current chapter, updated on each page turn
+    const currentChapterProgressionRef = useRef(0)
 
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
         if (!contents || !contents.length) return ''
         const rawText = contents[0]?.document?.body?.innerText || ''
-        // Normalize: lowercase, strip non-alphanumeric (keep spaces), collapse spaces
-        let text = rawText.toLowerCase()
+        // Use chapter-level progression to extract the right window of text,
+        // mirroring Android: charIndex = plainText.length * progression
+        const progression = currentChapterProgressionRef.current
+        const charIndex = Math.floor(rawText.length * progression)
+        const startIndex = Math.max(0, charIndex - 20)
+        const endIndex = Math.min(charIndex + 200, rawText.length)
+        // Normalize the window: lowercase, newlines→spaces, strip non-alphanumeric, collapse spaces
+        let text = rawText.substring(startIndex, endIndex)
+            .toLowerCase()
             .replace(/[\n\r\t]/g, ' ')
             .replace(/[^a-z0-9 ]/g, '')
             .replace(/ +/g, ' ')
             .trim()
-        // Strip book title from start (Jsoup/epub.js includes <title> text at top)
+        // Strip book title from start (epub.js includes <title> text at top of chapters)
         if (bookTitle) {
             const titleNorm = bookTitle.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
             if (titleNorm && text.startsWith(titleNorm)) {
@@ -45,7 +54,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         const chapter = spineIndex ?? currentSpineIndexRef.current
-        console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}`)
+        console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}, chapterProgression=${currentChapterProgressionRef.current?.toFixed(3)}`)
         try {
             await updateProgress('ebook', ebookId, {
                 epub_cfi: cfi,
@@ -181,6 +190,11 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                         : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
                     setCurrentCfi(cfi)
                     setProgressPercent(percent)
+
+                    // Track chapter-level progression for text extraction (mirrors Android)
+                    const page = location.start.displayed?.page || 1
+                    const total = location.start.displayed?.total || 1
+                    currentChapterProgressionRef.current = Math.max(0, page - 1) / Math.max(1, total)
 
                     // Track spine index for bookmark syncing
                     const spineIndex = book.spine.items.findIndex(item =>
