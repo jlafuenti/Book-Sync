@@ -224,12 +224,15 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                         const shortTarget = targetNorm.substring(0, 30)
 
                         if (shortTarget.length >= 5) {
-                            // Try to find text in current chapter first
-                            const trySearchCurrentChapter = () => {
+                            // Search for target text in the currently rendered chapter content.
+                            // Takes an explicit spineHref so we generate the CFI against the
+                            // correct spine section (renditionRef.location can be stale after
+                            // rapid chapter-hopping).
+                            const trySearchChapter = (spineHref) => {
                                 try {
                                     const contents = renditionRef.current?.getContents?.()
                                     const doc = contents?.[0]?.document
-                                    if (!doc) return false
+                                    if (!doc) return null
 
                                     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
                                     const boundaries = []
@@ -243,59 +246,83 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                                     }
 
                                     const idx = accumulated.indexOf(shortTarget)
-                                    if (idx < 0) return false
+                                    if (idx < 0) return null
 
                                     const boundary = boundaries.find(b => b.start <= idx && b.start + b.len > idx)
-                                    if (!boundary) return false
+                                    if (!boundary) return null
+
+                                    // Calculate the character offset within this text node
+                                    const nodeOffset = idx - boundary.start
+                                    // Map back to the original (un-normalized) text to get real offset
+                                    const origText = boundary.node.textContent
+                                    let realOffset = 0
+                                    let normCount = 0
+                                    for (let i = 0; i < origText.length && normCount < nodeOffset; i++) {
+                                        const ch = origText[i].toLowerCase()
+                                        const isKept = /[a-z0-9 ]/.test(ch) || /[\n\r\t]/.test(ch)
+                                        if (isKept) normCount++
+                                        realOffset = i + 1
+                                    }
 
                                     const range = doc.createRange()
-                                    range.setStart(boundary.node, 0)
-                                    range.setEnd(boundary.node, 0)
+                                    range.setStart(boundary.node, Math.min(realOffset, origText.length))
+                                    range.setEnd(boundary.node, Math.min(realOffset, origText.length))
 
-                                    const curLocation = renditionRef.current?.location
-                                    const href = curLocation?.start?.href
-                                    const section = href && bookRef.current?.spine.get(href)
-                                    if (!section) return false
+                                    const section = bookRef.current?.spine.get(spineHref)
+                                    if (!section) {
+                                        console.warn(`[EbookReader] text nav: spine.get('${spineHref}') returned null`)
+                                        return null
+                                    }
 
                                     const cfiStr = section.cfiFromRange(range)
-                                    console.log(`[EbookReader] text nav: found '${shortTarget}' → CFI ${cfiStr}`)
-                                    textNavInProgressRef.current = false
-                                    renditionRef.current?.display(cfiStr)
-                                    return true
+                                    console.log(`[EbookReader] text nav: found '${shortTarget}' in ${spineHref} → CFI ${cfiStr}`)
+                                    return cfiStr
                                 } catch (e) {
                                     console.warn('[EbookReader] text nav search error:', e.message)
-                                    return false
+                                    return null
                                 }
                             }
 
                             setTimeout(async () => {
-                                // First try the current chapter
-                                if (trySearchCurrentChapter()) return
-
-                                // Not found — try adjacent chapters (offsets: +1, -1, +2, -2)
-                                const baseChapter = currentSpineIndexRef.current
-                                const offsets = [1, -1, 2, -2]
                                 const spineItems = bookRef.current?.spine?.items || []
+                                const baseChapter = currentSpineIndexRef.current
+                                const offsets = [0, 1, -1, 2, -2]
 
                                 for (const offset of offsets) {
                                     const tryChapter = baseChapter + offset
                                     if (tryChapter < 0 || tryChapter >= spineItems.length) continue
+                                    const href = spineItems[tryChapter].href
 
-                                    console.log(`[EbookReader] text nav: '${shortTarget}' not in chapter ${baseChapter + (offset > 0 ? offset - 1 : offset + 1)}, trying chapter ${tryChapter}`)
-                                    try {
-                                        await renditionRef.current?.display(spineItems[tryChapter].href)
-                                        // Wait for content to render
-                                        await new Promise(r => setTimeout(r, 150))
-                                        if (trySearchCurrentChapter()) return
-                                    } catch (e) {
-                                        console.warn(`[EbookReader] text nav: failed to display chapter ${tryChapter}:`, e.message)
+                                    // Navigate to this chapter if it's not the initial one
+                                    if (offset !== 0) {
+                                        console.log(`[EbookReader] text nav: '${shortTarget}' not in chapter ${tryChapter - (offset > 0 ? 1 : -1)}, trying chapter ${tryChapter}`)
+                                        try {
+                                            await renditionRef.current?.display(href)
+                                            // Wait for epub.js to fully render the new chapter content
+                                            await new Promise(r => setTimeout(r, 300))
+                                        } catch (e) {
+                                            console.warn(`[EbookReader] text nav: failed to display chapter ${tryChapter}:`, e.message)
+                                            continue
+                                        }
+                                    }
+
+                                    const cfiStr = trySearchChapter(href)
+                                    if (cfiStr) {
+                                        textNavInProgressRef.current = false
+                                        try {
+                                            await renditionRef.current?.display(cfiStr)
+                                            console.log(`[EbookReader] text nav: navigated to CFI successfully`)
+                                        } catch (e) {
+                                            console.warn(`[EbookReader] text nav: display(cfi) failed:`, e.message)
+                                        }
+                                        return
                                     }
                                 }
 
                                 // Exhausted all attempts
                                 console.warn(`[EbookReader] text nav: '${shortTarget}' not found in chapters ${baseChapter}±2, giving up`)
                                 textNavInProgressRef.current = false
-                            }, 50)
+                            }, 100)
                         } else {
                             textNavInProgressRef.current = false
                         }
