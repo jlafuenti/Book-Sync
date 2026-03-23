@@ -271,16 +271,20 @@ function ContinuePage() {
                 ebookId={readerOpen.ebookId}
                 pairId={readerOpen.pairId}
                 initialCfi={readerOpen.cfi || null}
-                initialChapter={!readerOpen.cfi && readerOpen.chapter > 0 ? readerOpen.chapter : null}
+                initialChapter={!readerOpen.cfi && readerOpen.chapter != null && readerOpen.chapter >= 0 ? readerOpen.chapter : null}
                 bookTitle={readerOpen.title}
                 onClose={() => { setReaderOpen(null); loadData() }}
                 onSwitchToAudio={readerOpen.pairedAudiobookId ? async () => {
+                    console.log(`[ContinuePage] onSwitchToAudio: pairId=${readerOpen.pairId}, audiobookId=${readerOpen.pairedAudiobookId}`)
                     const bm = await getBookmark(readerOpen.pairId).catch(() => null)
+                    console.log(`[ContinuePage] bookmark:`, bm)
                     let audioPositionMs = bm?.audio_position_ms || 0
                     if (!audioPositionMs) {
                         const prog = await getProgress('audiobook', readerOpen.pairedAudiobookId).catch(() => null)
+                        console.log(`[ContinuePage] fallback progress:`, prog)
                         audioPositionMs = prog?.audio_position_ms || 0
                     }
+                    console.log(`[ContinuePage] opening player at ${audioPositionMs}ms`)
                     setReaderOpen(null)
                     openPlayer(readerOpen.pairedAudiobookId, readerOpen.pairId, audioPositionMs, readerOpen.ebookId)
                 } : null}
@@ -293,17 +297,22 @@ function ContinuePage() {
             <AudioPlayerView
                 onClose={() => { setPlayerOpen(false); loadData() }}
                 onSwitchToEbook={audioPlayer.pairedEbookId ? async (pairId) => {
+                    console.log(`[ContinuePage] onSwitchToEbook: pairId=${pairId}, ebookId=${audioPlayer.pairedEbookId}, audioTime=${audioPlayer.currentTime}s`)
                     audioPlayer.pause()
                     const posMs = Math.floor(audioPlayer.currentTime * 1000)
-                    await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(() => {})
-                    const bm = await getBookmark(pairId).catch(() => null)
+                    console.log(`[ContinuePage] updating bookmark: audioPos=${posMs}ms`)
+                    await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(e => console.warn('updateBookmark failed:', e))
+                    const bm = await getBookmark(pairId).catch(e => { console.warn('getBookmark failed:', e); return null })
+                    console.log(`[ContinuePage] bookmark after update:`, bm)
                     setPlayerOpen(false)
                     const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
+                    const chapter = bm?.epub_chapter ?? null
+                    console.log(`[ContinuePage] opening ebook at chapter=${chapter}, ebookId=${audioPlayer.pairedEbookId}`)
                     setReaderOpen({
                         ebookId: audioPlayer.pairedEbookId,
                         pairId,
                         cfi: null,
-                        chapter: bm?.epub_chapter ?? null,
+                        chapter,
                         title: ebookBook?.title || 'Reading',
                         pairedAudiobookId: audioPlayer.currentAudiobook.id,
                         pairedAudiobook: { ...audioPlayer.currentAudiobook, pair_id: pairId },

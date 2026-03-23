@@ -45,6 +45,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         const chapter = spineIndex ?? currentSpineIndexRef.current
+        console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}`)
         try {
             await updateProgress('ebook', ebookId, {
                 epub_cfi: cfi,
@@ -56,9 +57,14 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
             if (pairId) {
                 // Extract visible text and match against sync map for accurate audio position
                 const textPreview = extractVisibleText()
+                console.log(`[EbookReader] textPreview (${textPreview?.length} chars): '${textPreview?.substring(0, 80)}...'`)
                 if (textPreview && textPreview.length > 10) {
-                    const match = await matchTextToAudio(pairId, textPreview, chapter).catch(() => null)
+                    const match = await matchTextToAudio(pairId, textPreview, chapter).catch(e => {
+                        console.warn(`[EbookReader] matchTextToAudio failed:`, e.message || e)
+                        return null
+                    })
                     if (match) {
+                        console.log(`[EbookReader] MATCH: ch${match.epub_chapter} s${match.epub_sentence_index} audio=${match.audio_position_ms}ms, preview='${match.preview?.substring(0, 60)}'`)
                         await updateBookmark(pairId, {
                             source: 'ebook',
                             epub_chapter: match.epub_chapter,
@@ -66,6 +72,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                             audio_position_ms: match.audio_position_ms,
                         }).catch(() => {})
                     } else {
+                        console.warn(`[EbookReader] No match found — saving epub position only`)
                         // No match — save epub position only, don't corrupt audio position
                         await updateBookmark(pairId, {
                             source: 'ebook',
@@ -73,11 +80,14 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                         }).catch(() => {})
                     }
                 } else {
+                    console.warn(`[EbookReader] Text too short for matching (${textPreview?.length} chars), saving chapter only`)
                     await updateBookmark(pairId, {
                         source: 'ebook',
                         epub_chapter: chapter,
                     }).catch(() => {})
                 }
+            } else {
+                console.log(`[EbookReader] No pairId, skipping bookmark sync`)
             }
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
@@ -154,7 +164,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                 // Display at saved position or chapter, or start
                 if (initialCfi) {
                     await rendition.display(initialCfi)
-                } else if (initialChapter > 0 && book.spine.items[initialChapter]) {
+                } else if (initialChapter != null && initialChapter >= 0 && book.spine.items[initialChapter]) {
                     await rendition.display(book.spine.items[initialChapter].href)
                 } else {
                     await rendition.display()
