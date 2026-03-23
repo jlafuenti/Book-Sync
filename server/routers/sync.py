@@ -57,11 +57,20 @@ async def _convert_position(
 
     points = sync_map.sync_points  # Already ordered by chapter, sentence_index
 
+    def _nearest_preview(chapter: int, sentence_index: int) -> str | None:
+        """Find the epub_text_preview from the nearest sync point in the same chapter
+        that has a non-null preview — fallback when the matched point has no preview."""
+        candidates = [p for p in points if p.epub_chapter == chapter and p.epub_text_preview]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda p: abs(p.epub_sentence_index - sentence_index)).epub_text_preview
+
     if source == BookmarkSource.EBOOK and epub_chapter is not None and epub_sentence_index is not None:
         # Find the matching sync point for this epub position
         for point in points:
             if point.epub_chapter == epub_chapter and point.epub_sentence_index == epub_sentence_index:
-                return epub_chapter, epub_sentence_index, point.audio_start_ms, point.epub_text_preview
+                preview = point.epub_text_preview or _nearest_preview(epub_chapter, epub_sentence_index)
+                return epub_chapter, epub_sentence_index, point.audio_start_ms, preview
 
         # If exact match not found, find the closest preceding point
         best = None
@@ -71,10 +80,11 @@ async def _convert_position(
                 best = point
 
         if best:
-            return epub_chapter, epub_sentence_index, best.audio_start_ms, best.epub_text_preview
+            preview = best.epub_text_preview or _nearest_preview(epub_chapter, epub_sentence_index)
+            return epub_chapter, epub_sentence_index, best.audio_start_ms, preview
 
     elif source == BookmarkSource.AUDIOBOOK and audio_position_ms is not None:
-        # Binary search for the sync point covering this audio position
+        # Find the sync point covering this audio position
         best = None
         for point in points:
             if point.audio_start_ms <= audio_position_ms:
@@ -83,7 +93,8 @@ async def _convert_position(
                 break
 
         if best:
-            return best.epub_chapter, best.epub_sentence_index, audio_position_ms, best.epub_text_preview
+            preview = best.epub_text_preview or _nearest_preview(best.epub_chapter, best.epub_sentence_index)
+            return best.epub_chapter, best.epub_sentence_index, audio_position_ms, preview
 
     return epub_chapter, epub_sentence_index, audio_position_ms, None
 
@@ -122,7 +133,15 @@ async def get_bookmark(
         await db.flush()
         await db.refresh(bookmark)
 
-    return bookmark
+    # Attach epub_text_preview by looking up nearest sync point with a preview
+    _, _, _, text_preview = await _convert_position(
+        db, pair_id, bookmark.source,
+        bookmark.epub_chapter, bookmark.epub_sentence_index,
+        bookmark.audio_position_ms,
+    )
+    response = BookmarkResponse.model_validate(bookmark)
+    response.epub_text_preview = text_preview
+    return response
 
 
 @router.put("/bookmark/{pair_id}", response_model=BookmarkResponse)
