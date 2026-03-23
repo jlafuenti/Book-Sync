@@ -35,13 +35,13 @@ async def _convert_position(
     epub_chapter: int | None,
     epub_sentence_index: int | None,
     audio_position_ms: int | None,
-) -> tuple[int | None, int | None, int | None]:
+) -> tuple[int | None, int | None, int | None, str | None]:
     """
     Given a position from one source, use the SyncMap to compute the
     corresponding position in the other format.
 
-    Returns (epub_chapter, epub_sentence_index, audio_position_ms) with
-    both sides filled in.
+    Returns (epub_chapter, epub_sentence_index, audio_position_ms, epub_text_preview)
+    with both sides filled in.
     """
     # Load the sync map
     result = await db.execute(
@@ -53,7 +53,7 @@ async def _convert_position(
 
     if not sync_map or not sync_map.sync_points:
         # No sync map available yet — return as-is
-        return epub_chapter, epub_sentence_index, audio_position_ms
+        return epub_chapter, epub_sentence_index, audio_position_ms, None
 
     points = sync_map.sync_points  # Already ordered by chapter, sentence_index
 
@@ -61,7 +61,7 @@ async def _convert_position(
         # Find the matching sync point for this epub position
         for point in points:
             if point.epub_chapter == epub_chapter and point.epub_sentence_index == epub_sentence_index:
-                return epub_chapter, epub_sentence_index, point.audio_start_ms
+                return epub_chapter, epub_sentence_index, point.audio_start_ms, point.epub_text_preview
 
         # If exact match not found, find the closest preceding point
         best = None
@@ -71,7 +71,7 @@ async def _convert_position(
                 best = point
 
         if best:
-            return epub_chapter, epub_sentence_index, best.audio_start_ms
+            return epub_chapter, epub_sentence_index, best.audio_start_ms, best.epub_text_preview
 
     elif source == BookmarkSource.AUDIOBOOK and audio_position_ms is not None:
         # Binary search for the sync point covering this audio position
@@ -83,9 +83,9 @@ async def _convert_position(
                 break
 
         if best:
-            return best.epub_chapter, best.epub_sentence_index, audio_position_ms
+            return best.epub_chapter, best.epub_sentence_index, audio_position_ms, best.epub_text_preview
 
-    return epub_chapter, epub_sentence_index, audio_position_ms
+    return epub_chapter, epub_sentence_index, audio_position_ms, None
 
 
 @router.get("/bookmark/{pair_id}", response_model=BookmarkResponse)
@@ -152,7 +152,7 @@ async def update_bookmark(
     bookmark = result.scalar_one_or_none()
 
     # Convert position using sync map
-    epub_ch, epub_si, audio_ms = await _convert_position(
+    epub_ch, epub_si, audio_ms, text_preview = await _convert_position(
         db, pair_id, update.source,
         update.epub_chapter, update.epub_sentence_index,
         update.audio_position_ms,
@@ -198,7 +198,12 @@ async def update_bookmark(
         bookmark.updated_at = datetime.utcnow()
         bookmark.synced_at = datetime.utcnow()
 
-    return bookmark
+    await db.commit()
+    await db.refresh(bookmark)
+    # Attach epub_text_preview from the matched sync point (not stored on the model)
+    response = BookmarkResponse.model_validate(bookmark)
+    response.epub_text_preview = text_preview
+    return response
 
 
 @router.get("/bookmark/{pair_id}/log", response_model=List[BookmarkLogResponse])

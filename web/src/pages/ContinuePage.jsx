@@ -272,6 +272,7 @@ function ContinuePage() {
                 pairId={readerOpen.pairId}
                 initialCfi={readerOpen.cfi || null}
                 initialChapter={!readerOpen.cfi && readerOpen.chapter != null && readerOpen.chapter >= 0 ? readerOpen.chapter : null}
+                initialTextPreview={readerOpen.textPreview || null}
                 bookTitle={readerOpen.title}
                 onClose={() => { setReaderOpen(null); loadData() }}
                 onSwitchToAudio={readerOpen.pairedAudiobookId ? async () => {
@@ -307,12 +308,14 @@ function ContinuePage() {
                     setPlayerOpen(false)
                     const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
                     const chapter = bm?.epub_chapter ?? null
-                    console.log(`[ContinuePage] opening ebook at chapter=${chapter}, ebookId=${audioPlayer.pairedEbookId}`)
+                    const textPreview = bm?.epub_text_preview ?? null
+                    console.log(`[ContinuePage] opening ebook at chapter=${chapter}, textPreview='${textPreview?.substring(0, 60)}', ebookId=${audioPlayer.pairedEbookId}`)
                     setReaderOpen({
                         ebookId: audioPlayer.pairedEbookId,
                         pairId,
                         cfi: null,
                         chapter,
+                        textPreview,
                         title: ebookBook?.title || 'Reading',
                         pairedAudiobookId: audioPlayer.currentAudiobook.id,
                         pairedAudiobook: { ...audioPlayer.currentAudiobook, pair_id: pairId },
