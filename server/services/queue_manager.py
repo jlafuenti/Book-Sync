@@ -418,14 +418,14 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         await _update_queue_item(
             item_id,
             progress=0.50,
-            message=f"Transcription complete ({len(whisper_sentences)} sentences). Extracting EPUB text...",
+            message=f"Transcription complete ({len(whisper_sentences)} sentences). Extracting ebook text...",
         )
 
-    # Step 2: Extract EPUB text
-    from services.epub_parser import extract_epub_sentences
+    # Step 2: Extract ebook text
+    from services.epub_parser import extract_book_sentences
     from services.transcription_providers.base import TranscriptionError
     try:
-        epub_sentences = await _asyncio.to_thread(extract_epub_sentences, ebook_path)
+        epub_sentences = await _asyncio.to_thread(extract_book_sentences, ebook_path)
     except zipfile.BadZipFile as e:
         raise TranscriptionError(
             f"EPUB file appears corrupted (bad zip): {ebook_path}. "
@@ -435,7 +435,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     await _update_queue_item(
         item_id,
         progress=0.60,
-        message=f"EPUB extracted ({len(epub_sentences)} sentences). Aligning text to audio...",
+        message=f"Ebook extracted ({len(epub_sentences)} sentences). Aligning text to audio...",
     )
 
     # Check cancellation
