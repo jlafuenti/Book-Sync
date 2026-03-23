@@ -292,6 +292,7 @@ class BookmarkResponse(BaseModel):
     epub_chapter: Optional[int]
     epub_sentence_index: Optional[int]
     audio_position_ms: Optional[int]
+    epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
 

@@ -3,7 +3,7 @@ import ePub from 'epubjs'
 import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio } from '../api'
 import './EbookReader.css'
 
-function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, bookTitle, onSwitchToAudio }) {
+function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
     const viewerRef = useRef(null)
     const bookRef = useRef(null)
     const renditionRef = useRef(null)
@@ -22,6 +22,8 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
     // Tracks progression (0-1) within the current chapter, updated on each page turn
     const currentChapterProgressionRef = useRef(0)
+    // Whether we've done the initial text-based navigation (only do it once)
+    const textNavDoneRef = useRef(false)
 
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
@@ -205,6 +207,59 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, onClose, boo
                     if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
 
                     saveProgress(cfi, percent, spineIndex >= 0 ? spineIndex : undefined)
+
+                    // On first render: if we have a text preview, navigate to it within the chapter
+                    if (!textNavDoneRef.current && initialTextPreview) {
+                        textNavDoneRef.current = true
+                        setTimeout(() => {
+                            try {
+                                const contents = renditionRef.current?.getContents?.()
+                                const doc = contents?.[0]?.document
+                                if (!doc) return
+
+                                // Normalize the target text for searching
+                                const targetNorm = initialTextPreview.toLowerCase()
+                                    .replace(/[\n\r\t]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
+                                const shortTarget = targetNorm.substring(0, 30)
+                                if (shortTarget.length < 5) return
+
+                                // Walk text nodes, building a normalized accumulation with node boundaries
+                                const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+                                const boundaries = []
+                                let accumulated = ''
+                                let node
+                                while ((node = walker.nextNode())) {
+                                    const norm = node.textContent.toLowerCase()
+                                        .replace(/[\n\r\t]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ')
+                                    boundaries.push({ node, start: accumulated.length, len: norm.length })
+                                    accumulated += norm
+                                }
+
+                                const idx = accumulated.indexOf(shortTarget)
+                                if (idx < 0) {
+                                    console.warn(`[EbookReader] text nav: '${shortTarget}' not found in chapter`)
+                                    return
+                                }
+
+                                // Find the text node at that position
+                                const boundary = boundaries.find(b => b.start <= idx && b.start + b.len > idx)
+                                if (!boundary) return
+
+                                const range = doc.createRange()
+                                range.setStart(boundary.node, 0)
+                                range.setEnd(boundary.node, 0)
+
+                                const section = bookRef.current?.spine.get(location.start.href)
+                                if (!section) return
+
+                                const cfiStr = section.cfiFromRange(range)
+                                console.log(`[EbookReader] text nav: found '${shortTarget}' → CFI ${cfiStr}`)
+                                renditionRef.current?.display(cfiStr)
+                            } catch (e) {
+                                console.warn('[EbookReader] text nav failed:', e.message)
+                            }
+                        }, 50)
+                    }
 
                     // Find current chapter
                     const currentSection = book.spine.get(location.start.href)
