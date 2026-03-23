@@ -1,0 +1,445 @@
+/* ============================================================
+   AudioPlayer — Full player view and mini-player bar
+   ============================================================ */
+
+/* ---- Full Player Overlay ---- */
+.audio-player-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    background: var(--bg-primary);
+    display: flex;
+    flex-direction: column;
+}
+
+.audio-player-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    min-height: 48px;
+    flex-shrink: 0;
+}
+
+.audio-player-toolbar .btn-icon {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    transition: var(--transition);
+}
+
+.audio-player-toolbar .btn-icon:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.audio-player-toolbar .btn-icon.active {
+    color: var(--accent);
+}
+
+.audio-player-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.audio-player-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+/* Main controls area */
+.audio-player-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    gap: 24px;
+}
+
+.audio-player-cover {
+    width: 280px;
+    height: 280px;
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.audio-player-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.audio-player-cover .cover-placeholder {
+    font-size: 64px;
+    color: var(--text-muted);
+}
+
+.audio-player-info {
+    text-align: center;
+}
+
+.audio-player-info h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.audio-player-info p {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+/* Seek bar */
+.audio-seek-container {
+    width: 100%;
+    max-width: 500px;
+}
+
+.audio-seek-bar {
+    width: 100%;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--border);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+}
+
+.audio-seek-bar::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+.audio-seek-bar::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+.audio-seek-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* Transport controls */
+.audio-transport {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.audio-transport button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+}
+
+.audio-transport button:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.audio-transport .play-btn {
+    width: 56px;
+    height: 56px;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+}
+
+.audio-transport .play-btn:hover {
+    background: var(--accent-hover);
+    color: white;
+}
+
+/* Secondary controls */
+.audio-secondary-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.speed-selector {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.speed-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 600;
+    transition: var(--transition);
+}
+
+.speed-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.speed-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+.sleep-timer-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    transition: var(--transition);
+    position: relative;
+}
+
+.sleep-timer-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.sleep-timer-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* Sleep timer dropdown */
+.sleep-timer-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+    margin-bottom: 4px;
+    display: flex;
+    flex-direction: column;
+    min-width: 80px;
+    z-index: 10;
+}
+
+.sleep-timer-dropdown button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px 12px;
+    font-size: 13px;
+    text-align: left;
+    border-radius: 4px;
+    transition: var(--transition);
+}
+
+.sleep-timer-dropdown button:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+}
+
+/* Chapter list sidebar */
+.audio-chapters-panel {
+    width: 300px;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.audio-chapters-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.audio-chapters-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.audio-chapter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 10px 16px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.audio-chapter-item:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.audio-chapter-item.active {
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.audio-chapter-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* ---- Mini Player Bar ---- */
+.mini-player {
+    position: fixed;
+    bottom: 0;
+    left: 260px;
+    right: 0;
+    height: 56px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    z-index: 100;
+}
+
+.mini-player-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--border);
+}
+
+.mini-player-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.5s linear;
+}
+
+.mini-player-cover {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.mini-player-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.mini-player-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.mini-player-info .title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mini-player-info .author {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.mini-player-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.mini-player-controls button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    transition: var(--transition);
+}
+
+.mini-player-controls button:hover {
+    color: var(--text-primary);
+    background: var(--bg-card);
+}
+
+.mini-player-time {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Adjust main content when mini-player is visible */
+.has-mini-player .main-content {
+    padding-bottom: 56px;
+}
