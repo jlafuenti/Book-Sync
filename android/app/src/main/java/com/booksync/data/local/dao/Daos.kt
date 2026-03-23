@@ -90,6 +90,21 @@ interface EBookDao {
 
     @Query("SELECT * FROM ebooks ORDER BY title")
     suspend fun getAllEBooksOnce(): List<EBookEntity>
+
+    /**
+     * Ebooks with reading progress, ordered by most recently read.
+     * Joins user_progress; updatedAt is a Long epoch-ms timestamp.
+     */
+    @Query("""
+        SELECT eb.* FROM ebooks eb
+        INNER JOIN user_progress up ON up.mediaType = 'ebook' AND up.mediaId = eb.id
+        WHERE eb.isDownloaded = 1
+          AND up.isCompleted = 0
+          AND (up.epubProgressPercent IS NOT NULL AND up.epubProgressPercent > 0
+               OR up.epubChapter IS NOT NULL AND up.epubChapter > 0)
+        ORDER BY up.updatedAt DESC
+    """)
+    fun getRecentlyReadEbooks(): Flow<List<EBookEntity>>
 }
 
 @Dao

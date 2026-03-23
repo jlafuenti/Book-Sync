@@ -124,6 +124,28 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
         audioBookDao.getRecentlyPlayedStandaloneAudiobooks()
 
+    /** Ebooks with reading progress, ordered by most recently read. */
+    fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
+        eBookDao.getRecentlyReadEbooks()
+
+    /** Mark a media item as completed. */
+    suspend fun markComplete(mediaType: String, mediaId: Int) {
+        updateProgress(mediaType, mediaId, isCompleted = true)
+    }
+
+    /** Reset progress for a media item (sets to 0, not completed). */
+    suspend fun resetMediaProgress(mediaType: String, mediaId: Int) {
+        updateProgress(
+            mediaType = mediaType,
+            mediaId = mediaId,
+            epubCfi = "",
+            epubChapter = 0,
+            epubProgressPercent = 0f,
+            audioPositionMs = 0,
+            isCompleted = false
+        )
+    }
+
     /** Get the current bookmark for a pair (single snapshot, not a flow). */
     suspend fun getBookmark(pairId: Int): com.booksync.data.local.entity.BookmarkEntity? =
         bookmarkDao.getBookmark(pairId)
@@ -347,6 +369,11 @@ class BookSyncRepository @Inject constructor(
         return file
     }
 
+    /** Reset the syncMapDownloaded flag so a re-download is triggered. */
+    suspend fun resetSyncMapDownloaded(pairId: Int) {
+        bookPairDao.setSyncMapDownloaded(pairId, false)
+    }
+
     /** Download the sync map for a book pair. */
     suspend fun downloadSyncMap(pairId: Int) {
         log("downloadSyncMap — pairId=$pairId")
@@ -509,7 +536,11 @@ class BookSyncRepository @Inject constructor(
     /** Normalize text for comparison: lowercase, convert ALL whitespace to spaces, strip punctuation */
     private fun normalizeForSearch(text: String): String {
         return text.lowercase()
-            // Convert ALL Unicode whitespace variants to regular spaces FIRST
+            // Convert newlines and tabs to spaces FIRST (before stripping non-alphanumeric)
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace('\t', ' ')
+            // Convert Unicode whitespace variants to regular spaces
             .replace('\u00A0', ' ')  // non-breaking space (very common in epubs)
             .replace('\u2002', ' ')  // en space
             .replace('\u2003', ' ')  // em space

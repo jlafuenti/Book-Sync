@@ -115,4 +115,37 @@ class DownloadedViewModel @Inject constructor(
     fun deleteAudiobook(pair: BookPairEntity) = viewModelScope.launch { repository.deleteAudiobook(pair) }
     fun deleteStandaloneEbook(ebook: EBookEntity) = viewModelScope.launch { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity) = viewModelScope.launch { repository.deleteStandaloneAudiobook(audio) }
+
+    fun refreshSyncData(pair: BookPairEntity) {
+        viewModelScope.launch {
+            repository.resetSyncMapDownloaded(pair.id)
+        }
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pair.id,
+                DownloadWorker.KEY_TYPE to "SYNC_MAP"
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(
+            "sync_map_${pair.id}",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        _downloadingProgress.value = _downloadingProgress.value + (pair.id to "Refreshing sync data...")
+    }
+
+    fun markComplete(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.markComplete("audiobook", it) }
+            pair.ebookId?.let { repository.markComplete("ebook", it) }
+        }
+    }
+
+    fun resetProgress(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
+            pair.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+        }
+    }
 }
