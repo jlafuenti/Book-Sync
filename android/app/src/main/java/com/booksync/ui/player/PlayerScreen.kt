@@ -8,6 +8,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -655,7 +657,7 @@ fun PlayerScreen(
                                 leadingContent = {
                                     Icon(
                                         if (item.source == "audiobook") Icons.Default.Headphones
-                                        else Icons.Default.MenuBook,
+                                        else Icons.AutoMirrored.Filled.MenuBook,
                                         contentDescription = null
                                     )
                                 },
@@ -949,7 +951,7 @@ fun PlayerScreen(
                     enabled = isDownloaded,
                 ) {
                     Icon(
-                        Icons.Default.FormatListBulleted,
+                        Icons.AutoMirrored.Filled.FormatListBulleted,
                         contentDescription = "Chapters",
                         modifier = Modifier.size(28.dp),
                     )

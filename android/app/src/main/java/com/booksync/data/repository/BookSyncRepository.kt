@@ -31,6 +31,7 @@ class BookSyncRepository @Inject constructor(
     private val bookmarkDao: BookmarkDao,
     private val pendingSyncDao: PendingSyncDao,
     private val userProgressDao: UserProgressDao,
+    private val acknowledgedItemDao: AcknowledgedItemDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
 ) {
@@ -907,5 +908,18 @@ class BookSyncRepository @Inject constructor(
                  break
              }
         }
+    }
+
+    // ============ New Items (unacknowledged) ============
+
+    fun getNewEbooksFlow(): Flow<List<EBookEntity>> = acknowledgedItemDao.getNewEbooks()
+    fun getNewAudiobooksFlow(): Flow<List<AudioBookEntity>> = acknowledgedItemDao.getNewAudiobooks()
+    fun getNewPairsFlow(): Flow<List<BookPairEntity>> = acknowledgedItemDao.getNewPairs()
+    fun getNewEbookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewEbookCount()
+    fun getNewAudiobookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewAudiobookCount()
+    fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount()
+
+    suspend fun acknowledgeItems(ids: List<Int>, type: String) {
+        acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
     }
 }
