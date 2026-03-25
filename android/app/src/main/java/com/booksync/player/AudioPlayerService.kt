@@ -11,6 +11,7 @@ import androidx.media3.cast.CastPlayer
 import androidx.media3.cast.SessionAvailabilityListener
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -91,7 +92,7 @@ class AudioPlayerService : MediaLibraryService() {
 
     private var mediaLibrarySession: MediaLibrarySession? = null
     private var castPlayer: CastPlayer? = null
-    private var exoPlayer: ExoPlayer? = null
+    private var exoPlayer: Player? = null
     private var sleepTimerJob: Job? = null
     private var autoPositionSaveJob: Job? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -148,10 +149,14 @@ class AudioPlayerService : MediaLibraryService() {
             .setSeekForwardIncrementMs(10_000)
             .build()
         localPlayer.playbackParameters = localPlayer.playbackParameters.withSpeed(initialSpeed)
-        localPlayer.addListener(playerListener)
-        exoPlayer = localPlayer
+        // Android Auto on some head units renders rewind/fast-forward buttons based on
+        // SEEK_TO_PREVIOUS/SEEK_TO_NEXT rather than SEEK_BACK/SEEK_FORWARD.
+        // We wrap the player so those "track-style" commands behave like +/-10s seeking.
+        val androidAutoPlayer = AndroidAutoSeekMappingPlayer(localPlayer)
+        androidAutoPlayer.addListener(playerListener)
+        exoPlayer = androidAutoPlayer
 
-        mediaLibrarySession = MediaLibrarySession.Builder(this, localPlayer, BrowseCallback())
+        mediaLibrarySession = MediaLibrarySession.Builder(this, androidAutoPlayer, BrowseCallback())
             .setId("AudioPlayerSession")
             .build()
 
@@ -177,6 +182,35 @@ class AudioPlayerService : MediaLibraryService() {
         } catch (e: Exception) {
             Log.d(TAG, "Cast not available: ${e.message}")
         }
+    }
+
+    /**
+     * Maps Android Auto "previous/next" controls to relative seek backward/forward.
+     *
+     * This lets head units that only advertise `COMMAND_SEEK_TO_PREVIOUS/NEXT` still get the
+     * expected rewind/fast-forward behavior (10s, driven by ExoPlayer's seek increment setup).
+     */
+    private class AndroidAutoSeekMappingPlayer(delegate: Player) : ForwardingPlayer(delegate) {
+        override fun getAvailableCommands(): Player.Commands {
+            val base = super.getAvailableCommands()
+            return base.buildUpon()
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .build()
+        }
+
+        override fun hasPreviousMediaItem(): Boolean = true
+        @Suppress("OVERRIDE_DEPRECATION") override fun hasNext(): Boolean = true
+        override fun hasNextMediaItem(): Boolean = true
+
+        override fun seekToPrevious() { seekBack() }
+        override fun seekToNext() { seekForward() }
+        override fun seekToPreviousMediaItem() { seekBack() }
+        override fun seekToNextMediaItem() { seekForward() }
+        @Suppress("OVERRIDE_DEPRECATION") override fun seekToPreviousWindow() { seekBack() }
+        @Suppress("OVERRIDE_DEPRECATION") override fun seekToNextWindow() { seekForward() }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
@@ -467,20 +501,11 @@ class AudioPlayerService : MediaLibraryService() {
                 .add(SessionCommand(CMD_GET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_CHAPTERS, Bundle.EMPTY))
                 .build()
-            val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+            // AudiobookPlayer (ForwardingPlayer) already removes SEEK_TO_PREVIOUS/NEXT globally,
+            // so no per-controller command restriction is needed here.
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
-            // For Android Auto: replace prev/next track buttons with 10-second rewind/fast-forward.
-            if (controller.packageName == "com.google.android.projection.gearhead") {
-                val playerCommands = Player.Commands.Builder()
-                    .addAllCommands()
-                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS)
-                    .remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-                    .remove(Player.COMMAND_SEEK_TO_NEXT)
-                    .remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-                    .build()
-                builder.setAvailablePlayerCommands(playerCommands)
-            }
-            return builder.build()
+                .build()
         }
 
         override fun onCustomCommand(

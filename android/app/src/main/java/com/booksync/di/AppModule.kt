@@ -82,7 +82,7 @@ object AppModule {
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).fallbackToDestructiveMigration()
+        ).fallbackToDestructiveMigration(dropAllTables = true)
          .build()
 
     @Provides
@@ -105,6 +105,9 @@ object AppModule {
 
     @Provides
     fun provideUserProgressDao(db: BookSyncDatabase): UserProgressDao = db.userProgressDao()
+
+    @Provides
+    fun provideAcknowledgedItemDao(db: BookSyncDatabase): AcknowledgedItemDao = db.acknowledgedItemDao()
 
     @Provides
     @Singleton

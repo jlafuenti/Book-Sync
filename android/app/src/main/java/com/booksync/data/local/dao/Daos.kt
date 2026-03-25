@@ -220,3 +220,30 @@ interface UserProgressDao {
     @Query("SELECT * FROM user_progress WHERE syncedToServer = 0")
     suspend fun getUnsyncedProgress(): List<UserProgressEntity>
 }
+
+@Dao
+interface AcknowledgedItemDao {
+    @Upsert
+    suspend fun acknowledge(items: List<AcknowledgedItemEntity>)
+
+    @Query("DELETE FROM acknowledged_items WHERE itemId IN (:ids) AND itemType = :type")
+    suspend fun remove(ids: List<Int>, type: String)
+
+    @Query("SELECT * FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'ebook') ORDER BY uploadedAt DESC")
+    fun getNewEbooks(): Flow<List<EBookEntity>>
+
+    @Query("SELECT * FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'audiobook') ORDER BY uploadedAt DESC")
+    fun getNewAudiobooks(): Flow<List<AudioBookEntity>>
+
+    @Query("SELECT * FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'pair') ORDER BY ebookTitle")
+    fun getNewPairs(): Flow<List<BookPairEntity>>
+
+    @Query("SELECT COUNT(*) FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'ebook')")
+    fun getNewEbookCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'audiobook')")
+    fun getNewAudiobookCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'pair')")
+    fun getNewPairCount(): Flow<Int>
+}
