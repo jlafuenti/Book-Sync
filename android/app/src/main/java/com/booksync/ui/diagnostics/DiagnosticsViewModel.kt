@@ -49,7 +49,7 @@ data class DiagnosticsUiState(
 @HiltViewModel
 class DiagnosticsViewModel @Inject constructor(
     private val diagnosticLogger: DiagnosticLogger,
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 

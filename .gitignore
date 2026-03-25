@@ -32,7 +32,8 @@ web/dist/
 web/build/
 
 # Data directories (runtime)
-data/
+/data/
+!android/app/src/main/java/com/booksync/data/
 
 # Android Gradle cache
 android/.gradle/

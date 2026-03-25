@@ -82,7 +82,7 @@ object AppModule {
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).fallbackToDestructiveMigration()
+        ).fallbackToDestructiveMigration(dropAllTables = true)
          .build()
 
     @Provides
