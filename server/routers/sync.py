@@ -20,7 +20,8 @@ from models.sync_map import SyncMap, SyncPoint
 from models.progress import UserProgress, ProgressType
 from schemas import (
     BookmarkUpdate, BookmarkResponse, BookmarkLogResponse,
-    ProgressUpdate, ProgressResponse
+    ProgressUpdate, ProgressResponse,
+    TextMatchRequest, TextMatchResponse
 )
 from routers.auth import get_current_user
 
@@ -34,13 +35,13 @@ async def _convert_position(
     epub_chapter: int | None,
     epub_sentence_index: int | None,
     audio_position_ms: int | None,
-) -> tuple[int | None, int | None, int | None]:
+) -> tuple[int | None, int | None, int | None, str | None]:
     """
     Given a position from one source, use the SyncMap to compute the
     corresponding position in the other format.
 
-    Returns (epub_chapter, epub_sentence_index, audio_position_ms) with
-    both sides filled in.
+    Returns (epub_chapter, epub_sentence_index, audio_position_ms, epub_text_preview)
+    with both sides filled in.
     """
     # Load the sync map
     result = await db.execute(
@@ -52,15 +53,24 @@ async def _convert_position(
 
     if not sync_map or not sync_map.sync_points:
         # No sync map available yet — return as-is
-        return epub_chapter, epub_sentence_index, audio_position_ms
+        return epub_chapter, epub_sentence_index, audio_position_ms, None
 
     points = sync_map.sync_points  # Already ordered by chapter, sentence_index
+
+    def _nearest_preview(chapter: int, sentence_index: int) -> str | None:
+        """Find the epub_text_preview from the nearest sync point in the same chapter
+        that has a non-null preview — fallback when the matched point has no preview."""
+        candidates = [p for p in points if p.epub_chapter == chapter and p.epub_text_preview]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda p: abs(p.epub_sentence_index - sentence_index)).epub_text_preview
 
     if source == BookmarkSource.EBOOK and epub_chapter is not None and epub_sentence_index is not None:
         # Find the matching sync point for this epub position
         for point in points:
             if point.epub_chapter == epub_chapter and point.epub_sentence_index == epub_sentence_index:
-                return epub_chapter, epub_sentence_index, point.audio_start_ms
+                preview = point.epub_text_preview or _nearest_preview(epub_chapter, epub_sentence_index)
+                return epub_chapter, epub_sentence_index, point.audio_start_ms, preview
 
         # If exact match not found, find the closest preceding point
         best = None
@@ -70,10 +80,11 @@ async def _convert_position(
                 best = point
 
         if best:
-            return epub_chapter, epub_sentence_index, best.audio_start_ms
+            preview = best.epub_text_preview or _nearest_preview(epub_chapter, epub_sentence_index)
+            return epub_chapter, epub_sentence_index, best.audio_start_ms, preview
 
     elif source == BookmarkSource.AUDIOBOOK and audio_position_ms is not None:
-        # Binary search for the sync point covering this audio position
+        # Find the sync point covering this audio position
         best = None
         for point in points:
             if point.audio_start_ms <= audio_position_ms:
@@ -82,9 +93,10 @@ async def _convert_position(
                 break
 
         if best:
-            return best.epub_chapter, best.epub_sentence_index, audio_position_ms
+            preview = best.epub_text_preview or _nearest_preview(best.epub_chapter, best.epub_sentence_index)
+            return best.epub_chapter, best.epub_sentence_index, audio_position_ms, preview
 
-    return epub_chapter, epub_sentence_index, audio_position_ms
+    return epub_chapter, epub_sentence_index, audio_position_ms, None
 
 
 @router.get("/bookmark/{pair_id}", response_model=BookmarkResponse)
@@ -121,7 +133,15 @@ async def get_bookmark(
         await db.flush()
         await db.refresh(bookmark)
 
-    return bookmark
+    # Attach epub_text_preview by looking up nearest sync point with a preview
+    _, _, _, text_preview = await _convert_position(
+        db, pair_id, bookmark.source,
+        bookmark.epub_chapter, bookmark.epub_sentence_index,
+        bookmark.audio_position_ms,
+    )
+    response = BookmarkResponse.model_validate(bookmark)
+    response.epub_text_preview = text_preview
+    return response
 
 
 @router.put("/bookmark/{pair_id}", response_model=BookmarkResponse)
@@ -151,7 +171,7 @@ async def update_bookmark(
     bookmark = result.scalar_one_or_none()
 
     # Convert position using sync map
-    epub_ch, epub_si, audio_ms = await _convert_position(
+    epub_ch, epub_si, audio_ms, text_preview = await _convert_position(
         db, pair_id, update.source,
         update.epub_chapter, update.epub_sentence_index,
         update.audio_position_ms,
@@ -197,7 +217,12 @@ async def update_bookmark(
         bookmark.updated_at = datetime.utcnow()
         bookmark.synced_at = datetime.utcnow()
 
-    return bookmark
+    await db.commit()
+    await db.refresh(bookmark)
+    # Attach epub_text_preview from the matched sync point (not stored on the model)
+    response = BookmarkResponse.model_validate(bookmark)
+    response.epub_text_preview = text_preview
+    return response
 
 
 @router.get("/bookmark/{pair_id}/log", response_model=List[BookmarkLogResponse])
@@ -349,8 +374,141 @@ async def update_progress(
         progress.device_id = update_data.device_id
         
     progress.updated_at = datetime.utcnow()
-    
+
     await db.commit()
     await db.refresh(progress)
-    
+
     return progress
+
+
+import re
+import unicodedata
+
+
+def _normalize_for_search(text: str) -> str:
+    """Normalize text for substring matching — same algorithm as Android normalizeForSearch."""
+    t = text.lower()
+    # Replace all whitespace variants with regular space
+    for ch in "\n\r\t\u00a0\u2002\u2003\u2009\u200b\u202f":
+        t = t.replace(ch, " ")
+    # Keep only a-z, 0-9, and space
+    t = re.sub(r"[^a-z0-9 ]", "", t)
+    # Collapse multiple spaces
+    t = re.sub(r" +", " ", t)
+    return t.strip()
+
+
+def _match_text_to_sync_points(
+    sync_points: list[SyncPoint],
+    epub_text: str,
+    chapter_hint: int,
+) -> SyncPoint | None:
+    """
+    Find the sync point matching extracted EPUB text.
+    Same algorithm as Android getSyncPointForEpubText:
+    1. Normalize epub text
+    2. For each chapter (hint first, then ±10):
+       - Build transcript by concatenating normalized sync point previews
+       - Progressive substring search (200→150→100→60→30 chars)
+       - Try from start, then skip 30 chars
+    """
+    normalized_epub = _normalize_for_search(epub_text)
+    if len(normalized_epub) < 10:
+        return None
+
+    # Group sync points by chapter
+    chapters: dict[int, list[SyncPoint]] = {}
+    for p in sync_points:
+        chapters.setdefault(p.epub_chapter, []).append(p)
+    for ch in chapters:
+        chapters[ch].sort(key=lambda p: p.epub_sentence_index)
+
+    # Try chapters in order: hint first, then expanding outward ±10
+    chapters_to_try = [chapter_hint]
+    for d in range(1, 11):
+        chapters_to_try.extend([chapter_hint - d, chapter_hint + d])
+
+    search_lengths = sorted(set(
+        min(len(normalized_epub), l) for l in [200, 150, 100, 60, 30]
+        if min(len(normalized_epub), l) > 10
+    ), reverse=True)
+
+    for target_chapter in chapters_to_try:
+        points = chapters.get(target_chapter)
+        if not points:
+            continue
+
+        # Build concatenated transcript with sentence boundary tracking
+        transcript_parts = []
+        boundaries = []  # (start_char_index, point_index)
+        pos = 0
+        for idx, point in enumerate(points):
+            preview = point.epub_text_preview
+            if not preview:
+                continue
+            normalized = _normalize_for_search(preview)
+            if not normalized:
+                continue
+            boundaries.append((pos, idx))
+            transcript_parts.append(normalized)
+            pos += len(normalized) + 1  # +1 for space separator
+
+        transcript = " ".join(transcript_parts)
+        if not transcript:
+            continue
+
+        for search_len in search_lengths:
+            search_text = normalized_epub[:search_len]
+            match_index = transcript.find(search_text)
+
+            # Also try skipping first 30 chars (handles chapter headings)
+            if match_index < 0 and len(normalized_epub) > search_len + 30:
+                offset_text = normalized_epub[30 : 30 + search_len]
+                match_index = transcript.find(offset_text)
+
+            if match_index >= 0:
+                # Map character offset to sentence index
+                matched_idx = 0
+                for start_pos, idx in boundaries:
+                    if start_pos <= match_index:
+                        matched_idx = idx
+                    else:
+                        break
+                return points[matched_idx]
+
+    return None
+
+
+@router.post("/match-text/{pair_id}", response_model=TextMatchResponse)
+async def match_text_to_audio(
+    pair_id: int,
+    body: TextMatchRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Match extracted EPUB text to an audio position using the sync map."""
+    result = await db.execute(
+        select(SyncMap)
+        .options(selectinload(SyncMap.sync_points))
+        .where(SyncMap.book_pair_id == pair_id)
+    )
+    sync_map = result.scalar_one_or_none()
+
+    if not sync_map or not sync_map.sync_points:
+        raise HTTPException(status_code=404, detail="No sync map found for this pair")
+
+    matched_point = _match_text_to_sync_points(
+        sync_map.sync_points,
+        body.epub_text,
+        body.chapter_hint,
+    )
+
+    if matched_point is None:
+        raise HTTPException(status_code=404, detail="No matching audio position found")
+
+    return TextMatchResponse(
+        audio_position_ms=matched_point.audio_start_ms,
+        epub_chapter=matched_point.epub_chapter,
+        epub_sentence_index=matched_point.epub_sentence_index,
+        preview=matched_point.epub_text_preview,
+    )

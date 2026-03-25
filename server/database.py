@@ -106,6 +106,11 @@ async def init_db():
         # Migrate existing is_admin=true users to role='admin' (one-time)
         await conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true AND role = 'user'"))
 
+        # New-items / New-pairs inbox migration
+        await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(text("ALTER TABLE book_pairs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
+
 
 async def bootstrap_superadmin():
     """Create default superadmin account if no users exist, or promote first admin."""

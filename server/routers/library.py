@@ -39,7 +39,8 @@ from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
     EBookDetailResponse, AudioBookDetailResponse,
-    MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField
+    MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField,
+    NewItemsResponse, AcknowledgeItemsRequest, AcknowledgePairsRequest,
 )
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
@@ -828,7 +829,7 @@ async def scan_library(
 
                 # Enrich from ABS before creating the record
                 if abs_index:
-                    meta, abs_changed = enrich_from_abs(
+                    meta, abs_changed, _ = enrich_from_abs(
                         meta, filepath, abs_index, audiobook_dir
                     )
                     if abs_changed:
@@ -1354,6 +1355,17 @@ async def create_pair(
     )
     db.add(pair)
     await db.flush()
+
+    # Auto-acknowledge the individual books now that they've been matched
+    result = await db.execute(select(EBook).where(EBook.id == pair_data.ebook_id))
+    ebook_obj = result.scalar_one_or_none()
+    if ebook_obj:
+        ebook_obj.acknowledged = True
+
+    result = await db.execute(select(AudioBook).where(AudioBook.id == pair_data.audiobook_id))
+    audio_obj = result.scalar_one_or_none()
+    if audio_obj:
+        audio_obj.acknowledged = True
 
     # Check auto-transcribe setting
     setting_result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
@@ -1948,6 +1960,97 @@ FIELDS_TO_COMPARE = [
     "is_explicit", "is_abridged", "cover_path"
 ]
 
+
+def _pair_has_discrepancies(pair: BookPair) -> bool:
+    """Return True if a pair still has un-ignored metadata mismatches."""
+    if not pair.ebook or not pair.audiobook:
+        return False
+    ignored = set(pair.ignored_fields or [])
+    for field in FIELDS_TO_COMPARE:
+        if field in ignored:
+            continue
+        ev = getattr(pair.ebook, field)
+        av = getattr(pair.audiobook, field)
+        if ev == "":
+            ev = None
+        if av == "":
+            av = None
+        if field == "series_index":
+            if ev is not None:
+                ev = float(ev)
+            if av is not None:
+                av = float(av)
+        if ev != av:
+            return True
+    return False
+
+
+@router.get("/new-items", response_model=NewItemsResponse)
+async def get_new_items(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Return ebooks and audiobooks that haven't been acknowledged yet."""
+    ebook_result = await db.execute(
+        select(EBook).where(EBook.acknowledged == False).order_by(EBook.uploaded_at.desc())
+    )
+    audio_result = await db.execute(
+        select(AudioBook).where(AudioBook.acknowledged == False).order_by(AudioBook.uploaded_at.desc())
+    )
+    return NewItemsResponse(
+        ebooks=[EBookResponse.model_validate(e) for e in ebook_result.scalars().all()],
+        audiobooks=[AudioBookResponse.model_validate(a) for a in audio_result.scalars().all()],
+    )
+
+
+@router.post("/new-items/acknowledge")
+async def acknowledge_new_items(
+    req: AcknowledgeItemsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Mark selected ebooks and/or audiobooks as acknowledged."""
+    if req.ebook_ids:
+        ebook_result = await db.execute(select(EBook).where(EBook.id.in_(req.ebook_ids)))
+        for e in ebook_result.scalars().all():
+            e.acknowledged = True
+    if req.audiobook_ids:
+        audio_result = await db.execute(select(AudioBook).where(AudioBook.id.in_(req.audiobook_ids)))
+        for a in audio_result.scalars().all():
+            a.acknowledged = True
+    await db.commit()
+    return {"acknowledged_ebooks": len(req.ebook_ids), "acknowledged_audiobooks": len(req.audiobook_ids)}
+
+
+@router.get("/new-pairs", response_model=List[BookPairResponse])
+async def get_new_pairs(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Return book pairs that haven't been acknowledged yet."""
+    result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        .where(BookPair.acknowledged == False)
+        .order_by(BookPair.matched_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/new-pairs/acknowledge")
+async def acknowledge_new_pairs(
+    req: AcknowledgePairsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Mark selected book pairs as acknowledged."""
+    result = await db.execute(select(BookPair).where(BookPair.id.in_(req.pair_ids)))
+    for pair in result.scalars().all():
+        pair.acknowledged = True
+    await db.commit()
+    return {"acknowledged_pairs": len(req.pair_ids)}
+
+
 @router.get("/pairs-discrepancies", response_model=List[MetadataDiscrepancy])
 async def get_metadata_discrepancies(
     db: AsyncSession = Depends(get_db),
@@ -2059,14 +2162,18 @@ async def resolve_metadata_discrepancy(
             audio_changed = True
             
     if ebook_changed or audio_changed:
+        # Auto-acknowledge pair if all discrepancies are now resolved
+        if not _pair_has_discrepancies(pair):
+            pair.acknowledged = True
+
         await db.commit()
-        
+
         # Write back to files
         if ebook_changed:
             _write_ebook_metadata(ebook.file_path, ebook)
         if audio_changed:
             _write_audiobook_metadata(audiobook.file_path, audiobook)
-            
+
     return {"message": "Discrepancies resolved successfully"}
 
 
@@ -2086,6 +2193,17 @@ async def ignore_metadata_discrepancies(
     existing = set(pair.ignored_fields or [])
     existing.update(req.fields)
     pair.ignored_fields = list(existing)
+
+    # Need ebook/audiobook loaded to check discrepancies
+    result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        .where(BookPair.id == pair_id)
+    )
+    loaded_pair = result.scalar_one_or_none()
+    if loaded_pair and not _pair_has_discrepancies(loaded_pair):
+        loaded_pair.acknowledged = True
+
     await db.commit()
     return {"message": "Fields ignored successfully"}
 

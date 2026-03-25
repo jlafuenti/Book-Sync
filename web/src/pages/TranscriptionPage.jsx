@@ -322,7 +322,7 @@ function TranscriptionPage({ tab }) {
     )
 
     const renderSeriesCard = (seriesName, seriesPairs) => {
-        const isCollapsed = expandedSeries.has(seriesName)
+        const isCollapsed = !expandedSeries.has(seriesName)
         const canQueueAny = seriesPairs.some(p => canTranscribe(p))
 
         return (

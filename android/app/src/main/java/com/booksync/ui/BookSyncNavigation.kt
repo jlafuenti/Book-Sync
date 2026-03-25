@@ -24,6 +24,7 @@ import com.booksync.ui.audiobooks.AudiobooksScreen
 import com.booksync.ui.downloaded.DownloadedScreen
 import com.booksync.ui.settings.SettingsScreen
 import com.booksync.ui.series.SeriesScreen
+import com.booksync.ui.continue_reading.ContinueScreen
 import com.booksync.ui.diagnostics.DiagnosticsScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,6 +101,20 @@ fun BookSyncNavigation() {
             Scaffold(
                 bottomBar = {
                     NavigationBar {
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.PlayArrow, contentDescription = "Continue") },
+                            label = { Text("Continue") },
+                            selected = currentRoute == "continue_reading",
+                            onClick = {
+                                bottomNavController.navigate("continue_reading") {
+                                    popUpTo(bottomNavController.graph.startDestinationId) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
                         NavigationBarItem(
                             icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Pairs") },
                             label = { Text("Pairs") },
@@ -172,7 +188,23 @@ fun BookSyncNavigation() {
                     }
                 }
             ) { padding ->
-                NavHost(navController = bottomNavController, startDestination = "library", modifier = Modifier.padding(padding)) {
+                NavHost(navController = bottomNavController, startDestination = "continue_reading", modifier = Modifier.padding(padding)) {
+                    composable("continue_reading") {
+                        ContinueScreen(
+                            onPairBookSelect = { pairId ->
+                                navController.navigate("reader/$pairId")
+                            },
+                            onPairAudioSelect = { pairId ->
+                                navController.navigate("player/$pairId")
+                            },
+                            onEbookSelect = { ebookId ->
+                                // Standalone ebooks - no pair navigation yet
+                            },
+                            onAudiobookSelect = { audiobookId ->
+                                // Standalone audiobooks - no pair navigation yet
+                            }
+                        )
+                    }
                     composable("library") {
                         LibraryScreen(
                             onBookSelect = { pairId ->

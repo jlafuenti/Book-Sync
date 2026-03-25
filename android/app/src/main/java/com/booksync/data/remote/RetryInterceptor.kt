@@ -5,41 +5,25 @@ import okhttp3.Response
 import java.io.IOException
 
 class RetryInterceptor(private val maxRetries: Int = 3) : Interceptor {
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        var response: Response? = null
-        var exception: IOException? = null
-        var tryCount = 0
+        var lastException: IOException? = null
 
-        while (tryCount < maxRetries) {
+        repeat(maxRetries) { attempt ->
             try {
-                response = chain.proceed(request)
-                if (response.isSuccessful) {
+                val response = chain.proceed(request)
+                // Only retry on server errors (5xx), not client errors
+                if (response.isSuccessful || response.code < 500) {
                     return response
                 }
-                // Only retry on server errors or non-200 if necessary, but here we simply retry failures.
-                // If it's 401 Unauthorized, maybe AuthInterceptor will handle it.
-                // Actually, let's only retry on actual IOExceptions (like UnknownHostException)
-                // If we get a response, we just return it rather than blindly retrying 404s.
-                return response
+                response.close()
             } catch (e: IOException) {
-                exception = e
-                tryCount++
-                if (tryCount >= maxRetries) {
-                    break
-                }
-                // Exponential backoff or simple sleep
-                try {
-                    Thread.sleep((1000 * tryCount).toLong())
-                } catch (interruptedException: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
+                lastException = e
+                if (attempt == maxRetries - 1) throw e
             }
         }
 
-        if (response != null) {
-            return response
-        }
-        throw exception ?: IOException("Unknown network error")
+        throw lastException ?: IOException("Request failed after $maxRetries attempts")
     }
 }

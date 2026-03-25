@@ -32,6 +32,16 @@ function clearTokens() {
     localStorage.removeItem('tandem_refresh');
 }
 
+/**
+ * Append ?token= to a cover_path URL so the browser <img> tag
+ * can authenticate against the /api/files/covers/ endpoint.
+ * Returns null/undefined as-is so callers can still check falsiness.
+ */
+export function coverSrc(path) {
+    if (!path) return path;
+    return `${path}${path.includes('?') ? '&' : '?'}token=${accessToken || ''}`;
+}
+
 async function fetchWithAuth(url, options = {}) {
     const headers = { ...options.headers };
     if (accessToken) {
@@ -396,6 +406,12 @@ export async function getDiskUsage() {
 
 // ============ Progress ============
 
+export async function getAllProgress() {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/progress`);
+    if (!resp.ok) throw new Error('Failed to fetch all progress');
+    return resp.json();
+}
+
 export async function getProgress(mediaType, mediaId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`);
     if (!resp.ok) throw new Error('Failed to fetch progress');
@@ -409,6 +425,51 @@ export async function updateProgress(mediaType, mediaId, progressData) {
     });
     if (!resp.ok) throw new Error('Failed to update progress');
     return resp.json();
+}
+
+// ============ Bookmarks ============
+
+export async function getBookmark(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`);
+    if (!resp.ok) throw new Error('Failed to fetch bookmark');
+    return resp.json();
+}
+
+export async function updateBookmark(pairId, data) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+    if (!resp.ok) throw new Error('Failed to update bookmark');
+    return resp.json();
+}
+
+export async function getBookmarkLog(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}/log`);
+    if (!resp.ok) throw new Error('Failed to fetch bookmark log');
+    return resp.json();
+}
+
+export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/match-text/${pairId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epub_text: epubText, chapter_hint: chapterHint }),
+    });
+    if (!resp.ok) return null;
+    return resp.json();
+}
+
+// ============ File Access ============
+
+export async function fetchEbookBlob(ebookId) {
+    const resp = await fetchWithAuth(`${API_BASE}/files/ebook/${ebookId}`);
+    if (!resp.ok) throw new Error('Failed to fetch ebook file');
+    return resp.arrayBuffer();
+}
+
+export function getAudiobookStreamUrl(audiobookId) {
+    return `${API_BASE}/files/audiobook/${audiobookId}?token=${accessToken}`;
 }
 
 // ============ Settings ============
@@ -579,6 +640,38 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
         body: JSON.stringify(resolutions)
     });
     if (!resp.ok) throw new Error('Failed to resolve metadata discrepancies');
+    return resp.json();
+}
+
+// ============ New Items / New Pairs Inbox ============
+
+export async function getNewItems() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items`);
+    if (!resp.ok) throw new Error('Failed to get new items');
+    return resp.json();
+}
+
+export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-items/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new items');
+    return resp.json();
+}
+
+export async function getNewPairs() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs`);
+    if (!resp.ok) throw new Error('Failed to get new pairs');
+    return resp.json();
+}
+
+export async function acknowledgeNewPairs(pairIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs/acknowledge`, {
+        method: 'POST',
+        body: JSON.stringify({ pair_ids: pairIds }),
+    });
+    if (!resp.ok) throw new Error('Failed to acknowledge new pairs');
     return resp.json();
 }
 

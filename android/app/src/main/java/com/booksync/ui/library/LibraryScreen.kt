@@ -212,6 +212,20 @@ class LibraryViewModel @Inject constructor(
             } catch (_: Exception) {}
         }
     }
+
+    fun markComplete(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.markComplete("audiobook", it) }
+            pair.ebookId?.let { repository.markComplete("ebook", it) }
+        }
+    }
+
+    fun resetProgress(pair: BookPairEntity) {
+        viewModelScope.launch {
+            pair.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
+            pair.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -347,6 +361,8 @@ fun LibraryScreen(
                             onDeletePair = { viewModel.deletePair(pair) },
                             onReadClick = { onBookSelect(pair.id) },
                             onListenClick = { onAudioSelect(pair.id) },
+                            onMarkComplete = { viewModel.markComplete(pair) },
+                            onResetProgress = { viewModel.resetProgress(pair) },
                         )
                     }
                 }
@@ -367,6 +383,9 @@ fun BookPairCard(
     onDeletePair: () -> Unit = {},
     onReadClick: () -> Unit,
     onListenClick: () -> Unit,
+    onMarkComplete: () -> Unit = {},
+    onResetProgress: () -> Unit = {},
+    onRefreshSyncData: () -> Unit = {},
 ) {
     var showManageDialog by remember { mutableStateOf(false) }
     var showUnlinkConfirm by remember { mutableStateOf(false) }
@@ -410,6 +429,24 @@ fun BookPairCard(
                         TextButton(onClick = { onDownloadAudiobook(); showManageDialog = false }) { Text("Download Audiobook") }
                     } else {
                         TextButton(onClick = { onDeleteAudiobook(); showManageDialog = false }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Local Audiobook") }
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    TextButton(onClick = { onMarkComplete(); showManageDialog = false }) {
+                        Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Mark Complete")
+                    }
+                    TextButton(onClick = { onResetProgress(); showManageDialog = false }) {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Reset Progress")
+                    }
+                    if (pair.status == "synced") {
+                        TextButton(onClick = { onRefreshSyncData(); showManageDialog = false }) {
+                            Icon(Icons.Default.Sync, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Refresh Sync Data")
+                        }
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     TextButton(

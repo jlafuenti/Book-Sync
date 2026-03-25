@@ -33,7 +33,7 @@ class DownloadWorker @AssistedInject constructor(
 
     companion object {
         const val KEY_PAIR_ID = "PAIR_ID"
-        const val KEY_TYPE = "TYPE" // "EBOOK" or "AUDIOBOOK" or "ALL"
+        const val KEY_TYPE = "TYPE" // "EBOOK" or "AUDIOBOOK" or "ALL" or "SYNC_MAP"
         
         const val PROGRESS_KEY = "PROGRESS"
         const val ERROR_KEY = "ERROR"
@@ -134,7 +134,7 @@ class DownloadWorker @AssistedInject constructor(
                     }
                 }
 
-                if (type == "ALL" && !pair.syncMapDownloaded && pair.status == "synced") {
+                if (type == "SYNC_MAP" || (type == "ALL" && !pair.syncMapDownloaded && pair.status == "synced")) {
                     updateNotificationProgress(-1, "Sync Data")
                     setProgressAsync(workDataOf(PROGRESS_KEY to -1, "CURRENT" to "SYNC_MAP", KEY_PAIR_ID to pairId, KEY_TYPE to type))
                     repository.downloadSyncMap(pair.id)
@@ -173,6 +173,7 @@ class DownloadWorker @AssistedInject constructor(
             "STANDALONE_AUDIOBOOK" -> "Audiobook"
             "EBOOK" -> "Ebook"
             "AUDIOBOOK" -> "Audiobook"
+            "SYNC_MAP" -> "Sync data"
             else -> "Book files"
         }
 
