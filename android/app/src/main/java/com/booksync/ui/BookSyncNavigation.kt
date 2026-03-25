@@ -27,7 +27,7 @@ import com.booksync.ui.series.SeriesScreen
 import com.booksync.ui.diagnostics.DiagnosticsScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Bookmark
@@ -100,7 +100,7 @@ fun BookSyncNavigation() {
                 bottomBar = {
                     NavigationBar {
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.LibraryBooks, contentDescription = "Pairs") },
+                            icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Pairs") },
                             label = { Text("Pairs") },
                             selected = currentRoute == "library",
                             onClick = {
