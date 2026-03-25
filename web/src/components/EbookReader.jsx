@@ -30,15 +30,42 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
         if (!contents || !contents.length) return ''
-        const rawText = contents[0]?.document?.body?.innerText || ''
-        // Use chapter-level progression to extract the right window of text,
-        // mirroring Android: charIndex = plainText.length * progression
-        const progression = currentChapterProgressionRef.current
-        const charIndex = Math.floor(rawText.length * progression)
-        const startIndex = Math.max(0, charIndex - 20)
-        const endIndex = Math.min(charIndex + 200, rawText.length)
-        // Normalize the window: lowercase, newlines→spaces, strip non-alphanumeric, collapse spaces
-        let text = rawText.substring(startIndex, endIndex)
+        const doc = contents[0]?.document
+        if (!doc) return ''
+
+        let rawText = ''
+
+        // Primary: use the current CFI to get text at the exact reader position.
+        // epub.js pagination splits pages by pixel height, not character count, so
+        // (page-1)/total * rawText.length gives the wrong character position.
+        // bookRef.current.epubcfi.toRange(cfi, doc) gives the actual DOM position.
+        const location = renditionRef.current?.currentLocation?.()
+        const startCfi = location?.start?.cfi
+        if (startCfi && bookRef.current?.epubcfi) {
+            try {
+                const range = bookRef.current.epubcfi.toRange(startCfi, doc)
+                if (range) {
+                    // Extend from the CFI position to the end of body to capture text forward
+                    const extRange = doc.createRange()
+                    extRange.setStart(range.startContainer, range.startOffset)
+                    extRange.setEnd(doc.body, doc.body.childNodes.length)
+                    rawText = extRange.toString().substring(0, 350)
+                }
+            } catch (e) {
+                // fall through to progression-based fallback
+            }
+        }
+
+        // Fallback: progression-based character offset (less accurate but better than nothing)
+        if (rawText.trim().length < 20) {
+            const bodyText = doc.body?.innerText || ''
+            const progression = currentChapterProgressionRef.current
+            const charIndex = Math.floor(bodyText.length * progression)
+            rawText = bodyText.substring(Math.max(0, charIndex - 20), Math.min(charIndex + 200, bodyText.length))
+        }
+
+        // Normalize: lowercase, whitespace→spaces, strip non-alphanumeric, collapse spaces
+        let text = rawText.substring(0, 300)
             .toLowerCase()
             .replace(/[\n\r\t]/g, ' ')
             .replace(/[^a-z0-9 ]/g, '')
