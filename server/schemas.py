@@ -104,6 +104,7 @@ class EBookResponse(BaseModel):
     is_explicit: Optional[bool] = None
     is_abridged: Optional[bool] = None
     cover_path: Optional[str] = None
+    acknowledged: bool = False
 
     class Config:
         from_attributes = True
@@ -136,6 +137,7 @@ class AudioBookResponse(BaseModel):
     is_explicit: Optional[bool] = None
     is_abridged: Optional[bool] = None
     cover_path: Optional[str] = None
+    acknowledged: bool = False
 
     class Config:
         from_attributes = True
@@ -148,6 +150,7 @@ class BookPairResponse(BaseModel):
     status: PairStatus
     matched_at: Optional[datetime]
     synced_at: Optional[datetime]
+    acknowledged: bool = False
 
     class Config:
         from_attributes = True
@@ -272,6 +275,18 @@ class BookmarkUpdate(BaseModel):
     audio_position_ms: Optional[int] = None
 
 
+class TextMatchRequest(BaseModel):
+    epub_text: str
+    chapter_hint: int = 0
+
+
+class TextMatchResponse(BaseModel):
+    audio_position_ms: int
+    epub_chapter: int
+    epub_sentence_index: int
+    preview: Optional[str] = None
+
+
 class BookmarkResponse(BaseModel):
     id: int
     user_id: int
@@ -280,6 +295,7 @@ class BookmarkResponse(BaseModel):
     epub_chapter: Optional[int]
     epub_sentence_index: Optional[int]
     audio_position_ms: Optional[int]
+    epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
 
@@ -417,3 +433,21 @@ class ResolveDiscrepancyRequest(BaseModel):
 
 class IgnoreDiscrepancyRequest(BaseModel):
     fields: List[str]
+
+
+# ============================================================
+# New Items / New Pairs Inbox Schemas
+# ============================================================
+
+class NewItemsResponse(BaseModel):
+    ebooks: List[EBookResponse]
+    audiobooks: List[AudioBookResponse]
+
+
+class AcknowledgeItemsRequest(BaseModel):
+    ebook_ids: List[int] = []
+    audiobook_ids: List[int] = []
+
+
+class AcknowledgePairsRequest(BaseModel):
+    pair_ids: List[int]

@@ -9,38 +9,30 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
+private val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
+
 @Singleton
 class TokenManager @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
-    companion object {
-        private val ACCESS_TOKEN_KEY = stringPreferencesKey("access_token")
-        private val REFRESH_TOKEN_KEY = stringPreferencesKey("refresh_token")
-    }
+    fun getAccessToken(): Flow<String?> =
+        dataStore.data.map { it[KEY_ACCESS_TOKEN] }
 
-    fun getAccessToken(): Flow<String?> {
-        return dataStore.data.map { preferences ->
-            preferences[ACCESS_TOKEN_KEY]
-        }
-    }
-
-    fun getRefreshToken(): Flow<String?> {
-        return dataStore.data.map { preferences ->
-            preferences[REFRESH_TOKEN_KEY]
-        }
-    }
+    fun getRefreshToken(): Flow<String?> =
+        dataStore.data.map { it[KEY_REFRESH_TOKEN] }
 
     suspend fun saveTokens(accessToken: String, refreshToken: String) {
-        dataStore.edit { preferences ->
-            preferences[ACCESS_TOKEN_KEY] = accessToken
-            preferences[REFRESH_TOKEN_KEY] = refreshToken
+        dataStore.edit { prefs ->
+            prefs[KEY_ACCESS_TOKEN] = accessToken
+            prefs[KEY_REFRESH_TOKEN] = refreshToken
         }
     }
 
     suspend fun clearTokens() {
-        dataStore.edit { preferences ->
-            preferences.remove(ACCESS_TOKEN_KEY)
-            preferences.remove(REFRESH_TOKEN_KEY)
+        dataStore.edit { prefs ->
+            prefs.remove(KEY_ACCESS_TOKEN)
+            prefs.remove(KEY_REFRESH_TOKEN)
         }
     }
 }
