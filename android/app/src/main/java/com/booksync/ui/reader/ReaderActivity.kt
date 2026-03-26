@@ -21,7 +21,9 @@ import com.booksync.data.repository.BookSyncRepository
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
@@ -117,6 +119,8 @@ class ReaderActivity : AppCompatActivity() {
     private var isBarVisible = false
     private var isSeeking = false
     private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
+    // Precomputed content-weighted chapter lengths for accurate slider→position mapping
+    private var chapterLengthsDeferred: Deferred<LongArray>? = null
     /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
     private var sentenceSyncPending = false
     // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
@@ -406,6 +410,17 @@ class ReaderActivity : AppCompatActivity() {
     private fun startPositionTracking() {
         val nav = navigator ?: return
 
+        // Precompute chapter content lengths in the background so the slider can map
+        // totalProgression (content-weighted) → correct spine item + progression.
+        val pub = publication
+        if (pub != null && chapterLengthsDeferred == null) {
+            chapterLengthsDeferred = lifecycleScope.async {
+                LongArray(pub.readingOrder.size) { i ->
+                    getChapterPlainText(i)?.length?.toLong() ?: 1000L
+                }
+            }
+        }
+
         positionSaveJob?.cancel()
         positionSaveJob = lifecycleScope.launch {
             var lastSaveTime = 0L
@@ -450,15 +465,42 @@ class ReaderActivity : AppCompatActivity() {
     private fun goToProgress(progress: Double) {
         val pub = publication ?: return
         val nav = navigator ?: return
-
-        // Map overall progress to a chapter in the reading order
         val readingOrder = pub.readingOrder
         if (readingOrder.isEmpty()) return
 
-        val targetIndex = (progress * readingOrder.size).toInt().coerceIn(0, readingOrder.size - 1)
-        val link = readingOrder[targetIndex]
-        val locator = pub.locatorFromLink(link) ?: return
-        nav.go(locator, animated = false)
+        lifecycleScope.launch {
+            // Get content-weighted chapter lengths (precomputed in background by startPositionTracking).
+            // Falls back to computing now if somehow not ready yet.
+            val lengths = chapterLengthsDeferred?.await()
+                ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
+
+            val totalLength = lengths.sum().coerceAtLeast(1)
+            val targetChar = (progress * totalLength).toLong().coerceIn(0, totalLength - 1)
+
+            // Find which spine item contains targetChar
+            var accumulated = 0L
+            var targetSpineIndex = readingOrder.size - 1
+            var targetProgression = 1.0
+            for (i in lengths.indices) {
+                val len = lengths[i]
+                if (accumulated + len > targetChar) {
+                    targetSpineIndex = i
+                    targetProgression = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
+                    break
+                }
+                accumulated += len
+            }
+
+            Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}% → spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
+            val link = readingOrder[targetSpineIndex]
+            val locator = pub.locatorFromLink(link) ?: return@launch
+            nav.go(
+                locator.copy(locations = locator.locations.copy(
+                    progression = targetProgression.coerceIn(0.0, 1.0)
+                )),
+                animated = false
+            )
+        }
     }
 
     // ============ Bookmark save/restore ============
