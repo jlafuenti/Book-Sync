@@ -21,9 +21,13 @@ import com.booksync.data.repository.BookSyncRepository
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
@@ -60,6 +64,49 @@ class ReaderActivity : AppCompatActivity() {
         private const val KEY_FONT_FAMILY = "font_family"
         private const val KEY_LINE_SPACING = "line_spacing"
         private const val KEY_MARGINS = "margins"
+
+        /**
+         * Injected into the Readium host WebView on every page turn.
+         * Listens for text selection in all epub iframes and stores the last selection in
+         * window.top._bookSyncSelection so it survives ActionMode dismissal.
+         * Readium serves epub content from localhost iframes, so same-origin access works.
+         */
+        private const val SELECTION_TRACKER_JS = """
+            (function() {
+                function installInDoc(doc) {
+                    if (!doc || doc._bsListenerAdded) return;
+                    doc._bsListenerAdded = true;
+                    doc.addEventListener('selectionchange', function() {
+                        try {
+                            var sel = doc.defaultView.getSelection();
+                            var text = sel ? sel.toString().trim() : '';
+                            if (text.length > 3) { window.top._bookSyncSelection = text; }
+                        } catch(e) {}
+                    });
+                }
+                installInDoc(document);
+                var frames = document.querySelectorAll('iframe');
+                for (var i = 0; i < frames.length; i++) {
+                    try {
+                        installInDoc(frames[i].contentDocument);
+                        frames[i].addEventListener('load', (function(f) {
+                            return function() { try { installInDoc(f.contentDocument); } catch(e) {} };
+                        })(frames[i]));
+                    } catch(e) {}
+                }
+                new MutationObserver(function(ms) {
+                    ms.forEach(function(m) {
+                        m.addedNodes.forEach(function(n) {
+                            if (n.nodeName === 'IFRAME') {
+                                n.addEventListener('load', function() {
+                                    try { installInDoc(n.contentDocument); } catch(e) {}
+                                });
+                            }
+                        });
+                    });
+                }).observe(document.body || document, {childList: true, subtree: true});
+            })()
+        """
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -72,8 +119,12 @@ class ReaderActivity : AppCompatActivity() {
     private var isBarVisible = false
     private var isSeeking = false
     private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
+    // Precomputed content-weighted chapter lengths for accurate slider→position mapping
+    private var chapterLengthsDeferred: Deferred<LongArray>? = null
     /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
     private var sentenceSyncPending = false
+    // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
+    private var lastSelectedText: String = ""
 
     // UI views
     private lateinit var topBar: View
@@ -359,6 +410,17 @@ class ReaderActivity : AppCompatActivity() {
     private fun startPositionTracking() {
         val nav = navigator ?: return
 
+        // Precompute chapter content lengths in the background so the slider can map
+        // totalProgression (content-weighted) → correct spine item + progression.
+        val pub = publication
+        if (pub != null && chapterLengthsDeferred == null) {
+            chapterLengthsDeferred = lifecycleScope.async {
+                LongArray(pub.readingOrder.size) { i ->
+                    getChapterPlainText(i)?.length?.toLong() ?: 1000L
+                }
+            }
+        }
+
         positionSaveJob?.cancel()
         positionSaveJob = lifecycleScope.launch {
             var lastSaveTime = 0L
@@ -403,15 +465,42 @@ class ReaderActivity : AppCompatActivity() {
     private fun goToProgress(progress: Double) {
         val pub = publication ?: return
         val nav = navigator ?: return
-
-        // Map overall progress to a chapter in the reading order
         val readingOrder = pub.readingOrder
         if (readingOrder.isEmpty()) return
 
-        val targetIndex = (progress * readingOrder.size).toInt().coerceIn(0, readingOrder.size - 1)
-        val link = readingOrder[targetIndex]
-        val locator = pub.locatorFromLink(link) ?: return
-        nav.go(locator, animated = false)
+        lifecycleScope.launch {
+            // Get content-weighted chapter lengths (precomputed in background by startPositionTracking).
+            // Falls back to computing now if somehow not ready yet.
+            val lengths = chapterLengthsDeferred?.await()
+                ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
+
+            val totalLength = lengths.sum().coerceAtLeast(1)
+            val targetChar = (progress * totalLength).toLong().coerceIn(0, totalLength - 1)
+
+            // Find which spine item contains targetChar
+            var accumulated = 0L
+            var targetSpineIndex = readingOrder.size - 1
+            var targetProgression = 1.0
+            for (i in lengths.indices) {
+                val len = lengths[i]
+                if (accumulated + len > targetChar) {
+                    targetSpineIndex = i
+                    targetProgression = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
+                    break
+                }
+                accumulated += len
+            }
+
+            Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
+            val link = readingOrder[targetSpineIndex]
+            val locator = pub.locatorFromLink(link) ?: return@launch
+            nav.go(
+                locator.copy(locations = locator.locations.copy(
+                    progression = targetProgression.coerceIn(0.0, 1.0)
+                )),
+                animated = false
+            )
+        }
     }
 
     // ============ Bookmark save/restore ============
@@ -474,6 +563,9 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun savePosition(locator: Locator) {
         val bookPair = pair ?: return
+        // Inject selection tracker on every page turn (content may have changed).
+        // Called on the main thread before the coroutine, so WebView access is safe.
+        injectSelectionTracker()
         lifecycleScope.launch {
             try {
                 val pub = publication ?: return@launch
@@ -531,6 +623,98 @@ class ReaderActivity : AppCompatActivity() {
 
     // ============ Manual Sync ============
 
+    /**
+     * Gets the visible paragraph text from the correct Readium iframe for [chapterHref].
+     * Readium pre-renders adjacent chapters in background iframes so we MUST target
+     * the iframe whose src URL matches the current chapter filename.
+     * Within that iframe, Readium CSS uses horizontal CSS columns for pagination;
+     * elements on the current page have BoundingClientRect.left in [0, innerWidth).
+     * Falls back to scroll-position text extraction if BoundingClientRect gives nothing.
+     */
+    private suspend fun extractVisibleTextFromWebView(chapterHref: String): String =
+        suspendCancellableCoroutine { cont ->
+            val webView = navigator?.view?.let { findWebView(it) }
+            if (webView == null) {
+                cont.resume("")
+                return@suspendCancellableCoroutine
+            }
+            val chapterFile = chapterHref.substringAfterLast("/").ifEmpty { chapterHref }
+            val quotedFile = org.json.JSONObject.quote(chapterFile)
+            val js = """
+                (function() {
+                    var chapterFile = $quotedFile;
+
+                    function getVisibleText(doc) {
+                        var win = doc.defaultView;
+                        var vpW = win ? win.innerWidth : 800;
+                        var vpH = win ? win.innerHeight : 1200;
+                        var elems = doc.querySelectorAll('p, li, blockquote');
+                        for (var i = 0; i < elems.length; i++) {
+                            var el = elems[i];
+                            if (el.children.length > 4) continue;
+                            var r = el.getBoundingClientRect();
+                            // Readium paginated = CSS columns with horizontal scroll:
+                            // current page elements have left in [0, vpW), bottom > 0
+                            if (r.width > 0 && r.height > 0 &&
+                                r.right > 0 && r.left < vpW &&
+                                r.bottom > 0 && r.top < vpH) {
+                                var text = (el.innerText || el.textContent || '').trim();
+                                if (text.length > 20) return text.substring(0, 350);
+                            }
+                        }
+                        return '';
+                    }
+
+                    function scrollBasedText(doc) {
+                        // Fallback: use horizontal scroll position to estimate chapter offset
+                        var de = doc.documentElement;
+                        var sl = de.scrollLeft || 0;
+                        var sw = de.scrollWidth || 1;
+                        var vw = (doc.defaultView ? doc.defaultView.innerWidth : 0) || 800;
+                        var fraction = sw > vw ? sl / (sw - vw) : 0;
+                        var body = doc.body ? (doc.body.innerText || '') : '';
+                        var pos = Math.floor(body.length * fraction);
+                        return body.substring(Math.max(0, pos - 20), pos + 300);
+                    }
+
+                    // Target the iframe for the current chapter
+                    var frames = document.querySelectorAll('iframe');
+                    var targetDoc = null;
+                    for (var i = 0; i < frames.length; i++) {
+                        try {
+                            if (frames[i].src.indexOf(chapterFile) >= 0) {
+                                targetDoc = frames[i].contentDocument;
+                                break;
+                            }
+                        } catch(e) {}
+                    }
+
+                    if (targetDoc) {
+                        var text = getVisibleText(targetDoc);
+                        if (!text) text = scrollBasedText(targetDoc);
+                        if (text.trim().length > 10) return JSON.stringify(text);
+                    }
+
+                    // No matching iframe — try all frames (chapter may load directly in WebView)
+                    for (var i = 0; i < frames.length; i++) {
+                        try {
+                            var text = getVisibleText(frames[i].contentDocument);
+                            if (text.trim().length > 10) return JSON.stringify(text);
+                        } catch(e) {}
+                    }
+                    return JSON.stringify('');
+                })()
+            """.trimIndent()
+            webView.evaluateJavascript(js) { result ->
+                val text = try {
+                    org.json.JSONArray("[$result]").getString(0)
+                } catch (e: Exception) {
+                    result?.trim('"') ?: ""
+                }
+                cont.resume(text.replace("\\n", " ").replace("\\t", " ").trim())
+            }
+        }
+
     private fun syncAudioToPage() {
         if (pair?.audiobookDownloaded != true) {
             android.widget.Toast.makeText(this, "Audiobook not downloaded", android.widget.Toast.LENGTH_SHORT).show()
@@ -551,12 +735,18 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "syncAudioToPage called! locator.href='${locator.href}', progression=$progression")
         Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex")
 
+        val chapterHref = locator.href.toString()
         lifecycleScope.launch {
-            val textPreview = extractTextPreview(chapterIndex, progression)
+            // Prefer DOM-based visible text (accurate) over progression * length (unreliable,
+            // because Readium pagination splits by pixel height, not character count).
+            // Pass chapter href so we target the correct iframe (Readium pre-loads adjacent chapters).
+            val domText = extractVisibleTextFromWebView(chapterHref)
+            val textPreview = if (domText.length >= 10) domText
+                              else extractTextPreview(chapterIndex, progression)
+            Log.d(TAG, "syncAudioToPage: textPreview='${textPreview.take(80)}'")
 
             val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview, rewindMs = 2000)
             if (audioMs > 0) {
-                // Save audio position as bookmark so the player picks it up
                 repository.updateBookmark(
                     pairId = pairId,
                     source = "ebook",
@@ -822,6 +1012,34 @@ class ReaderActivity : AppCompatActivity() {
         super.onActionModeStarted(mode)
         if (mode == null || pair?.audiobookDownloaded != true) return
 
+        // Read the selection stored by the selectionchange tracker injected in savePosition.
+        // window.getSelection() is unreliable here (ActionMode may clear it before JS fires,
+        // and Android native touch-selection isn't always reflected in the JS DOM selection).
+        // The tracker captures it the moment the user makes a selection.
+        val webView = navigator?.view?.let { findWebView(it) }
+        webView?.evaluateJavascript("""
+            (function() {
+                // Primary: tracker stored it when selectionchange fired
+                var stored = window._bookSyncSelection || '';
+                if (stored.trim().length > 3) return stored;
+                // Fallback: try live selection in iframes (same-origin localhost)
+                var frames = document.querySelectorAll('iframe');
+                for (var i = 0; i < frames.length; i++) {
+                    try {
+                        var sel = frames[i].contentWindow.getSelection().toString().trim();
+                        if (sel.length > 3) return sel;
+                    } catch(e) {}
+                }
+                return window.getSelection().toString();
+            })()
+        """.trimIndent()) { result ->
+            val captured = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
+            if (captured.isNotEmpty()) {
+                lastSelectedText = captured
+                Log.d(TAG, "Captured selection: '${captured.take(60)}'")
+            }
+        }
+
         // Add our custom item and force the floating toolbar to refresh
         if (mode.menu?.findItem(R.id.action_sync_selection) == null) {
             val item = mode.menu?.add(0, R.id.action_sync_selection, 0, "Sync to Audio")
@@ -837,65 +1055,42 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun syncSelectedTextToAudio() {
-        // Get selected text from the WebView inside the navigator fragment
-        val webView = navigator?.view?.let { findWebView(it) }
-        if (webView == null) {
-            Log.w(TAG, "Could not find WebView for text selection")
+        // Use text captured in onActionModeStarted — by the time this click fires,
+        // the ActionMode interaction has already cleared window.getSelection().
+        val selectedText = lastSelectedText.trim()
+        Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
+
+        if (selectedText.length < 5) {
+            android.widget.Toast.makeText(this, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
-        webView.evaluateJavascript("""
-            (function() {
-                var sel = window.getSelection().toString();
-                if (!sel) {
-                    var frames = document.querySelectorAll('iframe');
-                    for (var i = 0; i < frames.length; i++) {
-                        try { sel = frames[i].contentWindow.getSelection().toString(); } catch(e) {}
-                        if (sel) break;
-                    }
-                }
-                return sel || '';
-            })()
-        """.trimIndent()) { result ->
-            // Result comes back as a JSON string with quotes
-            val selectedText = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
-            Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
+        val locator = navigator?.currentLocator?.value ?: return
+        val pub = publication ?: return
+        val rawChapterIndex = pub.readingOrder.indexOfFirst {
+            val pubHref = it.href.toString()
+            val locHref = locator.href.toString()
+            pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
+        }
+        val chapterIndex = rawChapterIndex.coerceAtLeast(0)
+        Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
-            if (selectedText.length < 5) {
-                android.widget.Toast.makeText(this, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
-                return@evaluateJavascript
-            }
-
-            // Find current chapter for hint
-            val locator = navigator?.currentLocator?.value ?: return@evaluateJavascript
-            val pub = publication ?: return@evaluateJavascript
-            val rawChapterIndex = pub.readingOrder.indexOfFirst {
-                val pubHref = it.href.toString()
-                val locHref = locator.href.toString()
-                pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-            }
-            val chapterIndex = rawChapterIndex.coerceAtLeast(0)
-            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
-
-            lifecycleScope.launch {
-                val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 2000)
-                if (audioMs > 0) {
-                    Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
-                    sentenceSyncPending = true
-                    // Save to process-local state so the player can read it directly,
-                    // bypassing the server round-trip race condition.
-                    SyncState.pendingAudioSeekMs = audioMs.toLong()
-                    repository.updateBookmark(
-                        pairId = pairId,
-                        source = "ebook",
-                        epubChapter = chapterIndex,
-                        audioPositionMs = audioMs,
-                    )
-                    val timeStr = formatAudioTime(audioMs.toLong())
-                    android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
-                } else {
-                    android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
-                }
+        lifecycleScope.launch {
+            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 2000)
+            if (audioMs > 0) {
+                Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
+                sentenceSyncPending = true
+                SyncState.pendingAudioSeekMs = audioMs.toLong()
+                repository.updateBookmark(
+                    pairId = pairId,
+                    source = "ebook",
+                    epubChapter = chapterIndex,
+                    audioPositionMs = audioMs,
+                )
+                val timeStr = formatAudioTime(audioMs.toLong())
+                android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
+            } else {
+                android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -906,6 +1101,12 @@ class ReaderActivity : AppCompatActivity() {
         val m = (totalSec % 3600) / 60
         val s = totalSec % 60
         return "%d:%02d:%02d".format(h, m, s)
+    }
+
+    /** Injects the selection-change tracker into the Readium WebView (idempotent). */
+    private fun injectSelectionTracker() {
+        val webView = navigator?.view?.let { findWebView(it) } ?: return
+        webView.evaluateJavascript(SELECTION_TRACKER_JS) {}
     }
 
     private fun findWebView(view: View): android.webkit.WebView? {
