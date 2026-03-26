@@ -491,7 +491,7 @@ class ReaderActivity : AppCompatActivity() {
                 accumulated += len
             }
 
-            Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}% → spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
+            Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
             val link = readingOrder[targetSpineIndex]
             val locator = pub.locatorFromLink(link) ?: return@launch
             nav.go(
