@@ -62,6 +62,49 @@ class ReaderActivity : AppCompatActivity() {
         private const val KEY_FONT_FAMILY = "font_family"
         private const val KEY_LINE_SPACING = "line_spacing"
         private const val KEY_MARGINS = "margins"
+
+        /**
+         * Injected into the Readium host WebView on every page turn.
+         * Listens for text selection in all epub iframes and stores the last selection in
+         * window.top._bookSyncSelection so it survives ActionMode dismissal.
+         * Readium serves epub content from localhost iframes, so same-origin access works.
+         */
+        private const val SELECTION_TRACKER_JS = """
+            (function() {
+                function installInDoc(doc) {
+                    if (!doc || doc._bsListenerAdded) return;
+                    doc._bsListenerAdded = true;
+                    doc.addEventListener('selectionchange', function() {
+                        try {
+                            var sel = doc.defaultView.getSelection();
+                            var text = sel ? sel.toString().trim() : '';
+                            if (text.length > 3) { window.top._bookSyncSelection = text; }
+                        } catch(e) {}
+                    });
+                }
+                installInDoc(document);
+                var frames = document.querySelectorAll('iframe');
+                for (var i = 0; i < frames.length; i++) {
+                    try {
+                        installInDoc(frames[i].contentDocument);
+                        frames[i].addEventListener('load', (function(f) {
+                            return function() { try { installInDoc(f.contentDocument); } catch(e) {} };
+                        })(frames[i]));
+                    } catch(e) {}
+                }
+                new MutationObserver(function(ms) {
+                    ms.forEach(function(m) {
+                        m.addedNodes.forEach(function(n) {
+                            if (n.nodeName === 'IFRAME') {
+                                n.addEventListener('load', function() {
+                                    try { installInDoc(n.contentDocument); } catch(e) {}
+                                });
+                            }
+                        });
+                    });
+                }).observe(document.body || document, {childList: true, subtree: true});
+            })()
+        """
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -478,6 +521,9 @@ class ReaderActivity : AppCompatActivity() {
 
     private fun savePosition(locator: Locator) {
         val bookPair = pair ?: return
+        // Inject selection tracker on every page turn (content may have changed).
+        // Called on the main thread before the coroutine, so WebView access is safe.
+        injectSelectionTracker()
         lifecycleScope.launch {
             try {
                 val pub = publication ?: return@launch
@@ -536,54 +582,96 @@ class ReaderActivity : AppCompatActivity() {
     // ============ Manual Sync ============
 
     /**
-     * Gets the first visible paragraph text directly from the rendered WebView DOM.
-     * This is more accurate than the progression * rawText.length approach because
-     * epub.js/Readium pagination is pixel-based (splits by viewport height), so
-     * page 2 of 5 does NOT correspond to characters 20-40% through the raw text.
+     * Gets the visible paragraph text from the correct Readium iframe for [chapterHref].
+     * Readium pre-renders adjacent chapters in background iframes so we MUST target
+     * the iframe whose src URL matches the current chapter filename.
+     * Within that iframe, Readium CSS uses horizontal CSS columns for pagination;
+     * elements on the current page have BoundingClientRect.left in [0, innerWidth).
+     * Falls back to scroll-position text extraction if BoundingClientRect gives nothing.
      */
-    private suspend fun extractVisibleTextFromWebView(): String = suspendCancellableCoroutine { cont ->
-        val webView = navigator?.view?.let { findWebView(it) }
-        if (webView == null) {
-            cont.resume("")
-            return@suspendCancellableCoroutine
-        }
-        // Query the rendered DOM for the first visible paragraph in the viewport.
-        // The content lives inside an iframe so we check both the top document and iframes.
-        val js = """
-            (function() {
-                function getFirstVisibleText(doc) {
-                    var elems = doc.querySelectorAll('p, li, blockquote');
-                    for (var i = 0; i < elems.length; i++) {
-                        var el = elems[i];
-                        if (el.children.length > 4) continue;
-                        var rect = el.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < (doc.defaultView.innerHeight || 800)) {
-                            var text = (el.innerText || el.textContent || '').trim();
-                            if (text.length > 20) return text.substring(0, 350);
-                        }
-                    }
-                    return '';
-                }
-                var text = getFirstVisibleText(document);
-                if (!text) {
-                    var frames = document.querySelectorAll('iframe');
-                    for (var i = 0; i < frames.length; i++) {
-                        try { text = getFirstVisibleText(frames[i].contentDocument); } catch(e) {}
-                        if (text) break;
-                    }
-                }
-                return JSON.stringify(text || document.body.innerText.substring(0, 350));
-            })()
-        """.trimIndent()
-        webView.evaluateJavascript(js) { result ->
-            val text = try {
-                org.json.JSONArray("[$result]").getString(0)
-            } catch (e: Exception) {
-                result?.trim('"') ?: ""
+    private suspend fun extractVisibleTextFromWebView(chapterHref: String): String =
+        suspendCancellableCoroutine { cont ->
+            val webView = navigator?.view?.let { findWebView(it) }
+            if (webView == null) {
+                cont.resume("")
+                return@suspendCancellableCoroutine
             }
-            cont.resume(text.replace("\\n", " ").replace("\\t", " ").trim())
+            val chapterFile = chapterHref.substringAfterLast("/").ifEmpty { chapterHref }
+            val quotedFile = org.json.JSONObject.quote(chapterFile)
+            val js = """
+                (function() {
+                    var chapterFile = $quotedFile;
+
+                    function getVisibleText(doc) {
+                        var win = doc.defaultView;
+                        var vpW = win ? win.innerWidth : 800;
+                        var vpH = win ? win.innerHeight : 1200;
+                        var elems = doc.querySelectorAll('p, li, blockquote');
+                        for (var i = 0; i < elems.length; i++) {
+                            var el = elems[i];
+                            if (el.children.length > 4) continue;
+                            var r = el.getBoundingClientRect();
+                            // Readium paginated = CSS columns with horizontal scroll:
+                            // current page elements have left in [0, vpW), bottom > 0
+                            if (r.width > 0 && r.height > 0 &&
+                                r.right > 0 && r.left < vpW &&
+                                r.bottom > 0 && r.top < vpH) {
+                                var text = (el.innerText || el.textContent || '').trim();
+                                if (text.length > 20) return text.substring(0, 350);
+                            }
+                        }
+                        return '';
+                    }
+
+                    function scrollBasedText(doc) {
+                        // Fallback: use horizontal scroll position to estimate chapter offset
+                        var de = doc.documentElement;
+                        var sl = de.scrollLeft || 0;
+                        var sw = de.scrollWidth || 1;
+                        var vw = (doc.defaultView ? doc.defaultView.innerWidth : 0) || 800;
+                        var fraction = sw > vw ? sl / (sw - vw) : 0;
+                        var body = doc.body ? (doc.body.innerText || '') : '';
+                        var pos = Math.floor(body.length * fraction);
+                        return body.substring(Math.max(0, pos - 20), pos + 300);
+                    }
+
+                    // Target the iframe for the current chapter
+                    var frames = document.querySelectorAll('iframe');
+                    var targetDoc = null;
+                    for (var i = 0; i < frames.length; i++) {
+                        try {
+                            if (frames[i].src.indexOf(chapterFile) >= 0) {
+                                targetDoc = frames[i].contentDocument;
+                                break;
+                            }
+                        } catch(e) {}
+                    }
+
+                    if (targetDoc) {
+                        var text = getVisibleText(targetDoc);
+                        if (!text) text = scrollBasedText(targetDoc);
+                        if (text.trim().length > 10) return JSON.stringify(text);
+                    }
+
+                    // No matching iframe — try all frames (chapter may load directly in WebView)
+                    for (var i = 0; i < frames.length; i++) {
+                        try {
+                            var text = getVisibleText(frames[i].contentDocument);
+                            if (text.trim().length > 10) return JSON.stringify(text);
+                        } catch(e) {}
+                    }
+                    return JSON.stringify('');
+                })()
+            """.trimIndent()
+            webView.evaluateJavascript(js) { result ->
+                val text = try {
+                    org.json.JSONArray("[$result]").getString(0)
+                } catch (e: Exception) {
+                    result?.trim('"') ?: ""
+                }
+                cont.resume(text.replace("\\n", " ").replace("\\t", " ").trim())
+            }
         }
-    }
 
     private fun syncAudioToPage() {
         if (pair?.audiobookDownloaded != true) {
@@ -605,10 +693,12 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "syncAudioToPage called! locator.href='${locator.href}', progression=$progression")
         Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex")
 
+        val chapterHref = locator.href.toString()
         lifecycleScope.launch {
             // Prefer DOM-based visible text (accurate) over progression * length (unreliable,
-            // because epub.js/Readium pagination splits by pixel height, not character count).
-            val domText = extractVisibleTextFromWebView()
+            // because Readium pagination splits by pixel height, not character count).
+            // Pass chapter href so we target the correct iframe (Readium pre-loads adjacent chapters).
+            val domText = extractVisibleTextFromWebView(chapterHref)
             val textPreview = if (domText.length >= 10) domText
                               else extractTextPreview(chapterIndex, progression)
             Log.d(TAG, "syncAudioToPage: textPreview='${textPreview.take(80)}'")
@@ -880,21 +970,25 @@ class ReaderActivity : AppCompatActivity() {
         super.onActionModeStarted(mode)
         if (mode == null || pair?.audiobookDownloaded != true) return
 
-        // Capture selection NOW while it's still active. When the user later taps "Sync to Audio",
-        // the ActionMode interaction clears window.getSelection() before the JS callback fires,
-        // so we must cache it here instead of querying it at click time.
+        // Read the selection stored by the selectionchange tracker injected in savePosition.
+        // window.getSelection() is unreliable here (ActionMode may clear it before JS fires,
+        // and Android native touch-selection isn't always reflected in the JS DOM selection).
+        // The tracker captures it the moment the user makes a selection.
         val webView = navigator?.view?.let { findWebView(it) }
         webView?.evaluateJavascript("""
             (function() {
-                var sel = window.getSelection().toString();
-                if (!sel) {
-                    var frames = document.querySelectorAll('iframe');
-                    for (var i = 0; i < frames.length; i++) {
-                        try { sel = frames[i].contentWindow.getSelection().toString(); } catch(e) {}
-                        if (sel) break;
-                    }
+                // Primary: tracker stored it when selectionchange fired
+                var stored = window._bookSyncSelection || '';
+                if (stored.trim().length > 3) return stored;
+                // Fallback: try live selection in iframes (same-origin localhost)
+                var frames = document.querySelectorAll('iframe');
+                for (var i = 0; i < frames.length; i++) {
+                    try {
+                        var sel = frames[i].contentWindow.getSelection().toString().trim();
+                        if (sel.length > 3) return sel;
+                    } catch(e) {}
                 }
-                return sel || '';
+                return window.getSelection().toString();
             })()
         """.trimIndent()) { result ->
             val captured = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
@@ -965,6 +1059,12 @@ class ReaderActivity : AppCompatActivity() {
         val m = (totalSec % 3600) / 60
         val s = totalSec % 60
         return "%d:%02d:%02d".format(h, m, s)
+    }
+
+    /** Injects the selection-change tracker into the Readium WebView (idempotent). */
+    private fun injectSelectionTracker() {
+        val webView = navigator?.view?.let { findWebView(it) } ?: return
+        webView.evaluateJavascript(SELECTION_TRACKER_JS) {}
     }
 
     private fun findWebView(view: View): android.webkit.WebView? {
