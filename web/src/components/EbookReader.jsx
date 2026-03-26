@@ -335,12 +335,21 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
 
                                     const cfiStr = trySearchChapter(href)
                                     if (cfiStr) {
-                                        textNavInProgressRef.current = false
+                                        // Keep textNavInProgressRef true through the display() call.
+                                        // Setting it false BEFORE display() (the previous bug) allowed
+                                        // doSave to run from the relocated event that display() fires,
+                                        // corrupting the just-restored bookmark.
+                                        // Also wait 3 s after navigation: book.locations.generate()
+                                        // fires reportLocation() asynchronously, which emits another
+                                        // relocated and overwrites our position if not suppressed.
                                         try {
                                             await renditionRef.current?.display(cfiStr)
                                             console.log(`[EbookReader] text nav: navigated to CFI successfully`)
+                                            await new Promise(r => setTimeout(r, 3000))
                                         } catch (e) {
                                             console.warn(`[EbookReader] text nav: display(cfi) failed:`, e.message)
+                                        } finally {
+                                            textNavInProgressRef.current = false
                                         }
                                         return
                                     }
