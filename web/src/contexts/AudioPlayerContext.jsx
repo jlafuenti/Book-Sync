@@ -92,8 +92,11 @@ export function AudioPlayerProvider({ children }) {
         const audio = audioRef.current
         if (!audio) return
 
-        // If same audiobook, just resume
+        // If same audiobook, seek to requested position (if any) then resume
         if (currentAudiobook?.id === audiobookId && audio.src) {
+            if (positionMs > 0) {
+                audio.currentTime = positionMs / 1000
+            }
             audio.play()
             return
         }
