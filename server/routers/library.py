@@ -1396,6 +1396,8 @@ async def delete_pair(
     pair = result.scalar_one_or_none()
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
+    await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
+    await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
     await db.delete(pair)
 
 
@@ -2358,14 +2360,11 @@ async def cleanup_orphans(
         result = await db.execute(select(EBook).where(EBook.id == eid))
         ebook = result.scalar_one_or_none()
         if ebook:
-            # Clean up transcription queue items for related pairs
             pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eid))
             for pair in pairs_result.scalars().all():
-                qr = await db.execute(
-                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-                )
-                for qi in qr.scalars().all():
-                    await db.delete(qi)
+                await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eid))
             await db.delete(ebook)
             deleted_ebooks += 1
 
@@ -2375,11 +2374,9 @@ async def cleanup_orphans(
         if audiobook:
             pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == aid))
             for pair in pairs_result.scalars().all():
-                qr = await db.execute(
-                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-                )
-                for qi in qr.scalars().all():
-                    await db.delete(qi)
+                await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == aid))
             await db.delete(audiobook)
             deleted_audiobooks += 1
 
