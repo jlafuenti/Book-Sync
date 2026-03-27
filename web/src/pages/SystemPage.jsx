@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs } from '../api'
+import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles, convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 
 function SystemPage() {
     const { hasMinRole } = useAuth()
     const canAdmin = hasMinRole('admin')
+    const [activeTab, setActiveTab] = useState('status')
     const [stats, setStats] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -27,105 +28,118 @@ function SystemPage() {
         }
     }
 
-    if (loading) {
-        return (
-            <div className="loading-page">
-                <div className="spinner"></div>
-            </div>
-        )
-    }
-
-    if (error) {
-        return (
-            <div className="alert alert-error">
-                {error}
-                <button className="btn btn-sm btn-secondary" onClick={loadStats} style={{ marginLeft: 'auto' }}>Retry</button>
-            </div>
-        )
-    }
+    const tabStyle = (tab) => ({
+        padding: '8px 20px',
+        border: 'none',
+        borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
+        background: 'none',
+        color: activeTab === tab ? 'var(--accent)' : 'var(--text-secondary)',
+        fontWeight: activeTab === tab ? 600 : 400,
+        cursor: 'pointer',
+        fontSize: '0.95rem',
+    })
 
     return (
         <div className="page-wrapper">
             <div className="page-header">
-                <h2>System Status</h2>
-                <p>Monitor resource usage and system health.</p>
+                <h2>System</h2>
+                <p>Monitor resource usage, settings, and file management.</p>
             </div>
 
-            <div className="stat-grid">
-                <StatCard
-                    title="EBook Library"
-                    icon="book"
-                    color="purple"
-                    usedHuman={stats.ebook_used_human}
-                    totalHuman={stats.ebook_total_human}
-                    usedBytes={stats.ebook_used_bytes}
-                    totalBytes={stats.ebook_total_bytes}
-                />
-                <StatCard
-                    title="Audiobook Library"
-                    icon="headphones"
-                    color="green"
-                    usedHuman={stats.audiobook_used_human}
-                    totalHuman={stats.audiobook_total_human}
-                    usedBytes={stats.audiobook_used_bytes}
-                    totalBytes={stats.audiobook_total_bytes}
-                />
-                <StatCard
-                    title="App Data & DB"
-                    icon="database"
-                    color="blue"
-                    usedHuman={stats.app_data_used_human}
-                    totalHuman={stats.app_data_total_human}
-                    usedBytes={stats.app_data_used_bytes}
-                    totalBytes={stats.app_data_total_bytes}
-                />
+            {/* Tab bar */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
+                <button style={tabStyle('status')} onClick={() => setActiveTab('status')}>Status</button>
+                <button style={tabStyle('unsupported')} onClick={() => setActiveTab('unsupported')}>Unsupported Files</button>
             </div>
 
-            <SettingsSection />
-            <TranscriptionSettingsSection />
-            <ABSSettingsSection />
-
-            <div className="card">
-                <div className="card-header">
-                    <h3>Detailed Breakdown</h3>
+            {activeTab === 'unsupported' ? (
+                <UnsupportedFilesTab canAdmin={canAdmin} />
+            ) : loading ? (
+                <div className="loading-page"><div className="spinner"></div></div>
+            ) : error ? (
+                <div className="alert alert-error">
+                    {error}
+                    <button className="btn btn-sm btn-secondary" onClick={loadStats} style={{ marginLeft: 'auto' }}>Retry</button>
                 </div>
-                <div className="table-wrapper">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Category</th>
-                                <th>Used</th>
-                                <th>Total Capacity</th>
-                                <th>Free</th>
-                                <th>% Used</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <TableRow
-                                label="Ebooks"
-                                used={stats.ebook_used_human}
-                                total={stats.ebook_total_human}
-                                free={stats.ebook_free_human}
-                                percent={stats.ebook_total_bytes > 0 ? (stats.ebook_used_bytes / stats.ebook_total_bytes * 100) : 0}
-                            />
-                            <TableRow
-                                label="Audiobooks"
-                                used={stats.audiobook_used_human}
-                                total={stats.audiobook_total_human}
-                                free={stats.audiobook_free_human}
-                                percent={stats.audiobook_total_bytes > 0 ? (stats.audiobook_used_bytes / stats.audiobook_total_bytes * 100) : 0}
-                            />
-                            <TableRow
-                                label="Data & Database"
-                                used={stats.app_data_used_human}
-                                total={stats.app_data_total_human}
-                                free={stats.app_data_free_human}
-                                percent={stats.app_data_total_bytes > 0 ? (stats.app_data_used_bytes / stats.app_data_total_bytes * 100) : 0}
-                            />
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            ) : (
+                <>
+                    <div className="stat-grid">
+                        <StatCard
+                            title="EBook Library"
+                            icon="book"
+                            color="purple"
+                            usedHuman={stats.ebook_used_human}
+                            totalHuman={stats.ebook_total_human}
+                            usedBytes={stats.ebook_used_bytes}
+                            totalBytes={stats.ebook_total_bytes}
+                        />
+                        <StatCard
+                            title="Audiobook Library"
+                            icon="headphones"
+                            color="green"
+                            usedHuman={stats.audiobook_used_human}
+                            totalHuman={stats.audiobook_total_human}
+                            usedBytes={stats.audiobook_used_bytes}
+                            totalBytes={stats.audiobook_total_bytes}
+                        />
+                        <StatCard
+                            title="App Data & DB"
+                            icon="database"
+                            color="blue"
+                            usedHuman={stats.app_data_used_human}
+                            totalHuman={stats.app_data_total_human}
+                            usedBytes={stats.app_data_used_bytes}
+                            totalBytes={stats.app_data_total_bytes}
+                        />
+                    </div>
+
+                    <SettingsSection />
+                    <TranscriptionSettingsSection />
+                    <ABSSettingsSection />
+
+                    <div className="card">
+                        <div className="card-header">
+                            <h3>Detailed Breakdown</h3>
+                        </div>
+                        <div className="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Category</th>
+                                        <th>Used</th>
+                                        <th>Total Capacity</th>
+                                        <th>Free</th>
+                                        <th>% Used</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <TableRow
+                                        label="Ebooks"
+                                        used={stats.ebook_used_human}
+                                        total={stats.ebook_total_human}
+                                        free={stats.ebook_free_human}
+                                        percent={stats.ebook_total_bytes > 0 ? (stats.ebook_used_bytes / stats.ebook_total_bytes * 100) : 0}
+                                    />
+                                    <TableRow
+                                        label="Audiobooks"
+                                        used={stats.audiobook_used_human}
+                                        total={stats.audiobook_total_human}
+                                        free={stats.audiobook_free_human}
+                                        percent={stats.audiobook_total_bytes > 0 ? (stats.audiobook_used_bytes / stats.audiobook_total_bytes * 100) : 0}
+                                    />
+                                    <TableRow
+                                        label="Data & Database"
+                                        used={stats.app_data_used_human}
+                                        total={stats.app_data_total_human}
+                                        free={stats.app_data_free_human}
+                                        percent={stats.app_data_total_bytes > 0 ? (stats.app_data_used_bytes / stats.app_data_total_bytes * 100) : 0}
+                                    />
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </>
+            )}
         </div>
     )
 }
@@ -233,6 +247,253 @@ function SettingsSection() {
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                         Admin role required to change settings.
                     </p>
+                )}
+            </div>
+        </div>
+    )
+}
+
+function UnsupportedFilesTab({ canAdmin }) {
+    const [files, setFiles] = useState([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState(null)
+    const [busyIds, setBusyIds] = useState(new Set())
+    const [batchBusy, setBatchBusy] = useState(false)
+    const [batchResult, setBatchResult] = useState(null)
+    const [fileMessages, setFileMessages] = useState({})
+
+    useEffect(() => { loadFiles() }, [])
+
+    const loadFiles = async () => {
+        setLoading(true)
+        setError(null)
+        try {
+            const data = await getUnsupportedFiles()
+            setFiles(data)
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const setFileBusy = (id, busy) => {
+        setBusyIds(prev => {
+            const next = new Set(prev)
+            busy ? next.add(id) : next.delete(id)
+            return next
+        })
+    }
+
+    const setFileMsg = (id, msg) => {
+        setFileMessages(prev => ({ ...prev, [id]: msg }))
+    }
+
+    const handleConvert = async (file, deleteSource) => {
+        setFileBusy(file.id, true)
+        setFileMsg(file.id, null)
+        try {
+            await convertUnsupportedFile(file.id, deleteSource)
+            setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & source deleted' : 'Converted to EPUB' })
+            await loadFiles()
+        } catch (err) {
+            setFileMsg(file.id, { type: 'error', text: err.message })
+        } finally {
+            setFileBusy(file.id, false)
+        }
+    }
+
+    const handleDeleteSource = async (file) => {
+        setFileBusy(file.id, true)
+        setFileMsg(file.id, null)
+        try {
+            await deleteUnsupportedSource(file.id)
+            await loadFiles()
+        } catch (err) {
+            setFileMsg(file.id, { type: 'error', text: err.message })
+        } finally {
+            setFileBusy(file.id, false)
+        }
+    }
+
+    const handleBatchConvert = async (deleteSource) => {
+        setBatchBusy(true)
+        setBatchResult(null)
+        try {
+            const result = await convertAllUnsupportedFiles(deleteSource)
+            const msg = `Converted ${result.succeeded.length} of ${result.total} files.` +
+                (result.failed.length > 0 ? ` ${result.failed.length} failed.` : '')
+            setBatchResult({ type: result.failed.length > 0 ? 'error' : 'success', text: msg, detail: result })
+            await loadFiles()
+        } catch (err) {
+            setBatchResult({ type: 'error', text: err.message })
+        } finally {
+            setBatchBusy(false)
+        }
+    }
+
+    const formatBytes = (bytes) => {
+        if (!bytes) return '—'
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    }
+
+    const unconverted = files.filter(f => !f.already_converted)
+
+    return (
+        <div>
+            <div className="card" style={{ marginBottom: '24px' }}>
+                <div className="card-header">
+                    <h3>MOBI / AZW3 Files</h3>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <button
+                            className="btn btn-secondary"
+                            onClick={loadFiles}
+                            disabled={loading || batchBusy}
+                        >
+                            Refresh
+                        </button>
+                        {canAdmin && unconverted.length > 0 && (
+                            <>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => handleBatchConvert(false)}
+                                    disabled={batchBusy}
+                                >
+                                    {batchBusy ? 'Converting...' : 'Convert All'}
+                                </button>
+                                <button
+                                    className="btn btn-danger"
+                                    onClick={() => handleBatchConvert(true)}
+                                    disabled={batchBusy}
+                                >
+                                    {batchBusy ? 'Converting...' : 'Convert All & Delete Source'}
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                <div style={{ padding: '12px 16px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    MOBI and AZW3 files cannot be read directly by the app. Convert them to EPUB using calibre (if installed on the server) or the built-in Python converter.
+                </div>
+
+                {batchResult && (
+                    <div className={`alert alert-${batchResult.type}`} style={{ margin: '0 16px 12px' }}>
+                        {batchResult.text}
+                        {batchResult.detail?.failed?.length > 0 && (
+                            <ul style={{ marginTop: '8px', paddingLeft: '20px', fontSize: '0.8rem' }}>
+                                {batchResult.detail.failed.map((f, i) => (
+                                    <li key={i}>{f.filename}: {f.error}</li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                )}
+
+                {loading ? (
+                    <div style={{ padding: '32px', textAlign: 'center' }}>
+                        <div className="spinner"></div>
+                    </div>
+                ) : error ? (
+                    <div className="alert alert-error" style={{ margin: '16px' }}>{error}</div>
+                ) : files.length === 0 ? (
+                    <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        No unsupported files found in your library.
+                    </div>
+                ) : (
+                    <div className="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>File</th>
+                                    <th>Format</th>
+                                    <th>Size</th>
+                                    <th>Status</th>
+                                    {canAdmin && <th>Actions</th>}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {files.map(file => (
+                                    <tr key={file.id}>
+                                        <td>
+                                            <div style={{ fontWeight: 500 }}>{file.title || file.filename}</div>
+                                            {file.author && (
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>
+                                            )}
+                                            {fileMessages[file.id] && (
+                                                <div style={{
+                                                    fontSize: '0.8rem',
+                                                    marginTop: '4px',
+                                                    color: fileMessages[file.id].type === 'success' ? 'var(--success)' : 'var(--error)'
+                                                }}>
+                                                    {fileMessages[file.id].text}
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td>
+                                            <span style={{
+                                                padding: '2px 8px',
+                                                borderRadius: '4px',
+                                                fontSize: '0.75rem',
+                                                fontWeight: 600,
+                                                textTransform: 'uppercase',
+                                                background: 'var(--bg-input)',
+                                                color: 'var(--text-secondary)',
+                                            }}>
+                                                {file.format}
+                                            </span>
+                                        </td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>{formatBytes(file.file_size)}</td>
+                                        <td>
+                                            {file.already_converted ? (
+                                                <span style={{ color: 'var(--success)', fontWeight: 500, fontSize: '0.85rem' }}>
+                                                    Converted
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                                    Not converted
+                                                </span>
+                                            )}
+                                        </td>
+                                        {canAdmin && (
+                                            <td>
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    {!file.already_converted && (
+                                                        <>
+                                                            <button
+                                                                className="btn btn-sm btn-primary"
+                                                                onClick={() => handleConvert(file, false)}
+                                                                disabled={busyIds.has(file.id)}
+                                                            >
+                                                                {busyIds.has(file.id) ? '...' : 'Convert'}
+                                                            </button>
+                                                            <button
+                                                                className="btn btn-sm btn-secondary"
+                                                                onClick={() => handleConvert(file, true)}
+                                                                disabled={busyIds.has(file.id)}
+                                                            >
+                                                                {busyIds.has(file.id) ? '...' : 'Convert & Delete'}
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                    {file.already_converted && (
+                                                        <button
+                                                            className="btn btn-sm btn-danger"
+                                                            onClick={() => handleDeleteSource(file)}
+                                                            disabled={busyIds.has(file.id)}
+                                                        >
+                                                            {busyIds.has(file.id) ? '...' : 'Delete Source'}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
             </div>
         </div>

@@ -716,3 +716,46 @@ export async function cleanupOrphans(ebookIds, audiobookIds) {
     if (!resp.ok) throw new Error('Failed to cleanup orphaned entries');
     return resp.json();
 }
+
+// ============ Unsupported Files ============
+
+export async function getUnsupportedFiles() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/unsupported`);
+    if (!resp.ok) throw new Error('Failed to load unsupported files');
+    return resp.json();
+}
+
+export async function convertUnsupportedFile(id, deleteSource = false) {
+    const resp = await fetchWithAuth(
+        `${API_BASE}/library/unsupported/${id}/convert?delete_source=${deleteSource}`,
+        { method: 'POST' }
+    );
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Conversion failed');
+    }
+    return resp.json();
+}
+
+export async function convertAllUnsupportedFiles(deleteSource = false) {
+    const resp = await fetchWithAuth(
+        `${API_BASE}/library/unsupported/convert-all?delete_source=${deleteSource}`,
+        { method: 'POST' }
+    );
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Batch conversion failed');
+    }
+    return resp.json();
+}
+
+export async function deleteUnsupportedSource(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/${id}/source`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Delete failed');
+    }
+    return resp.json();
+}
