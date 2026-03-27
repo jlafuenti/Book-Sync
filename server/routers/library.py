@@ -16,7 +16,7 @@ import asyncio
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from rapidfuzz import fuzz
@@ -36,6 +36,7 @@ from models.user import User
 from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.transcription_queue import TranscriptionQueueItem
+from models.progress import UserProgress
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
@@ -2228,15 +2229,15 @@ async def delete_ebook(
 
     file_path = ebook.file_path
 
-    # Remove associated transcription queue items for any pairs this ebook is in
+    # Remove associated transcription queue items and user progress for any pairs this ebook is in
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
-        queue_result = await db.execute(
-            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-        )
-        for qi in queue_result.scalars().all():
-            await db.delete(qi)
+        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+
+    # Remove any user progress referencing this ebook directly
+    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
 
     # Delete the ebook (cascades to BookPair → SyncMap, Bookmarks)
     await db.delete(ebook)
@@ -2266,15 +2267,15 @@ async def delete_audiobook(
 
     file_path = audiobook.file_path
 
-    # Remove associated transcription queue items for any pairs this audiobook is in
+    # Remove associated transcription queue items and user progress for any pairs this audiobook is in
     pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == audiobook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
-        queue_result = await db.execute(
-            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-        )
-        for qi in queue_result.scalars().all():
-            await db.delete(qi)
+        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+
+    # Remove any user progress referencing this audiobook directly
+    await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == audiobook_id))
 
     # Delete the audiobook (cascades to BookPair → SyncMap, Bookmarks)
     await db.delete(audiobook)
@@ -2766,6 +2767,13 @@ async def delete_unsupported_source(
         os.remove(eb.file_path)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
+
+    # Clean up pairs and their dependent rows before deleting the ebook record
+    pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
+    for pair in pairs_result.scalars().all():
+        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
 
     await db.delete(eb)
     await db.commit()
