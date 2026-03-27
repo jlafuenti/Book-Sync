@@ -131,6 +131,8 @@ function SystemPage() {
 }
 
 function SettingsSection() {
+    const { hasMinRole } = useAuth()
+    const canAdmin = hasMinRole('admin')
     const [ebookPatterns, setEbookPatterns] = useState('')
     const [audiobookPatterns, setAudiobookPatterns] = useState('')
     const [loading, setLoading] = useState(false)
