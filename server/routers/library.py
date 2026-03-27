@@ -2587,6 +2587,34 @@ class UnsupportedFileResponse(BaseModel):
     format: str
     file_size: Optional[int]
     already_converted: bool
+    epub_ebook_id: Optional[int] = None
+
+
+async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSession) -> EBook:
+    """Add the converted EPUB as a new EBook record (inheriting source metadata). No-op if already registered."""
+    existing = await db.execute(select(EBook).where(EBook.file_path == epub_path))
+    existing_eb = existing.scalar_one_or_none()
+    if existing_eb:
+        return existing_eb
+
+    file_size = Path(epub_path).stat().st_size
+    file_hash = compute_file_hash(epub_path)
+
+    epub_eb = EBook(
+        title=source_eb.title,
+        author=source_eb.author,
+        series=source_eb.series,
+        series_index=source_eb.series_index,
+        filename=Path(epub_path).name,
+        file_path=epub_path,
+        file_hash=file_hash,
+        file_size=file_size,
+        format="epub",
+        metadata_source=source_eb.metadata_source,
+    )
+    db.add(epub_eb)
+    await db.flush()
+    return epub_eb
 
 
 @router.get("/unsupported", response_model=List[UnsupportedFileResponse])
@@ -2603,6 +2631,9 @@ async def list_unsupported_files(
     items = []
     for eb in ebooks:
         epub_sibling = Path(eb.file_path).with_suffix(".epub")
+        epub_path_str = str(epub_sibling)
+        epub_result = await db.execute(select(EBook).where(EBook.file_path == epub_path_str))
+        epub_eb = epub_result.scalar_one_or_none()
         items.append(
             UnsupportedFileResponse(
                 id=eb.id,
@@ -2612,6 +2643,7 @@ async def list_unsupported_files(
                 format=eb.format or "",
                 file_size=eb.file_size,
                 already_converted=epub_sibling.exists(),
+                epub_ebook_id=epub_eb.id if epub_eb else None,
             )
         )
     return items
@@ -2637,12 +2669,14 @@ async def convert_all_unsupported(
     for eb in ebooks:
         epub_sibling = Path(eb.file_path).with_suffix(".epub")
         if epub_sibling.exists():
-            # Already converted — skip or delete source if requested
+            # Already converted — ensure it's registered in the DB then skip/delete
+            await _register_epub_in_db(str(epub_sibling), eb, db)
             if delete_source:
                 ids_to_delete.append(eb)
             continue
         try:
-            await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+            epub_path = await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+            await _register_epub_in_db(epub_path, eb, db)
             succeeded.append(eb.filename)
             if delete_source:
                 ids_to_delete.append(eb)
@@ -2656,7 +2690,8 @@ async def convert_all_unsupported(
                 await db.delete(eb)
             except OSError as e:
                 logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
-        await db.commit()
+
+    await db.commit()
 
     return {
         "succeeded": succeeded,
@@ -2686,17 +2721,23 @@ async def convert_unsupported_file(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # Register the new EPUB in the DB so it can be previewed
+    epub_eb = await _register_epub_in_db(epub_path, eb, db)
+    epub_ebook_id = epub_eb.id
+
     # Delete source if requested
     if delete_source:
         try:
             os.remove(eb.file_path)
             await db.delete(eb)
-            await db.commit()
         except OSError as e:
             logger.warning(f"[convert] could not delete source {eb.file_path}: {e}")
 
+    await db.commit()
+
     return {
         "status": "converted",
+        "epub_ebook_id": epub_ebook_id,
         "epub_path": epub_path,
         "source_deleted": delete_source,
     }

@@ -1,18 +1,18 @@
 import React, { useState, useEffect } from 'react'
 import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles, convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import EbookReader from '../components/EbookReader'
 
-function SystemPage() {
+function SystemPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canAdmin = hasMinRole('admin')
-    const [activeTab, setActiveTab] = useState('status')
     const [stats, setStats] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        loadStats()
-    }, [])
+        if (tab === 'status') loadStats()
+    }, [tab])
 
     const loadStats = async () => {
         setLoading(true)
@@ -28,17 +28,6 @@ function SystemPage() {
         }
     }
 
-    const tabStyle = (tab) => ({
-        padding: '8px 20px',
-        border: 'none',
-        borderBottom: activeTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
-        background: 'none',
-        color: activeTab === tab ? 'var(--accent)' : 'var(--text-secondary)',
-        fontWeight: activeTab === tab ? 600 : 400,
-        cursor: 'pointer',
-        fontSize: '0.95rem',
-    })
-
     return (
         <div className="page-wrapper">
             <div className="page-header">
@@ -46,13 +35,7 @@ function SystemPage() {
                 <p>Monitor resource usage, settings, and file management.</p>
             </div>
 
-            {/* Tab bar */}
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: '24px' }}>
-                <button style={tabStyle('status')} onClick={() => setActiveTab('status')}>Status</button>
-                <button style={tabStyle('unsupported')} onClick={() => setActiveTab('unsupported')}>Unsupported Files</button>
-            </div>
-
-            {activeTab === 'unsupported' ? (
+            {tab === 'unsupported' ? (
                 <UnsupportedFilesTab canAdmin={canAdmin} />
             ) : loading ? (
                 <div className="loading-page"><div className="spinner"></div></div>
@@ -261,6 +244,7 @@ function UnsupportedFilesTab({ canAdmin }) {
     const [batchBusy, setBatchBusy] = useState(false)
     const [batchResult, setBatchResult] = useState(null)
     const [fileMessages, setFileMessages] = useState({})
+    const [previewFile, setPreviewFile] = useState(null)
 
     useEffect(() => { loadFiles() }, [])
 
@@ -478,13 +462,24 @@ function UnsupportedFilesTab({ canAdmin }) {
                                                         </>
                                                     )}
                                                     {file.already_converted && (
-                                                        <button
-                                                            className="btn btn-sm btn-danger"
-                                                            onClick={() => handleDeleteSource(file)}
-                                                            disabled={busyIds.has(file.id)}
-                                                        >
-                                                            {busyIds.has(file.id) ? '...' : 'Delete Source'}
-                                                        </button>
+                                                        <>
+                                                            {file.epub_ebook_id && (
+                                                                <button
+                                                                    className="btn btn-sm btn-secondary"
+                                                                    onClick={() => setPreviewFile(file)}
+                                                                    disabled={busyIds.has(file.id)}
+                                                                >
+                                                                    Preview
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                className="btn btn-sm btn-danger"
+                                                                onClick={() => handleDeleteSource(file)}
+                                                                disabled={busyIds.has(file.id)}
+                                                            >
+                                                                {busyIds.has(file.id) ? '...' : 'Delete Source'}
+                                                            </button>
+                                                        </>
                                                     )}
                                                 </div>
                                             </td>
@@ -496,6 +491,14 @@ function UnsupportedFilesTab({ canAdmin }) {
                     </div>
                 )}
             </div>
+
+            {previewFile?.epub_ebook_id && (
+                <EbookReader
+                    ebookId={previewFile.epub_ebook_id}
+                    bookTitle={previewFile.title || previewFile.filename}
+                    onClose={() => setPreviewFile(null)}
+                />
+            )}
         </div>
     )
 }
