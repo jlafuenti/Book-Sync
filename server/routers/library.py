@@ -7,6 +7,7 @@ import os
 import re
 import hashlib
 import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -2524,3 +2525,207 @@ async def enrich_audiobook_from_abs(
     await db.refresh(ab)
     from schemas import AudioBookResponse
     return {"status": status_key, "message": message, "book": AudioBookResponse.model_validate(ab)}
+
+
+# ---------------------------------------------------------------------------
+# Unsupported file conversion helpers
+# ---------------------------------------------------------------------------
+
+UNSUPPORTED_FORMATS = {".mobi", ".azw3"}
+
+
+def _convert_to_epub_sync(src_path: str) -> str:
+    """
+    Convert a MOBI/AZW3 file to EPUB.  Returns the output EPUB path on success.
+    Tries calibre ebook-convert first, then falls back to the mobi Python library.
+    Raises RuntimeError on failure.
+    """
+    src = Path(src_path)
+    out = src.with_suffix(".epub")
+
+    # Try calibre ebook-convert
+    try:
+        result = subprocess.run(
+            ["ebook-convert", str(src), str(out)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and out.exists():
+            logger.info(f"[convert] calibre succeeded: {out}")
+            return str(out)
+        logger.warning(f"[convert] calibre failed (rc={result.returncode}): {result.stderr[:200]}")
+    except FileNotFoundError:
+        logger.warning("[convert] ebook-convert not found, trying Python fallback")
+    except subprocess.TimeoutExpired:
+        logger.warning("[convert] ebook-convert timed out")
+
+    # Python fallback via mobi library
+    try:
+        import mobi  # type: ignore
+        tmpdir, extracted = mobi.extract(src_path)
+        extracted_path = Path(extracted)
+        if extracted_path.suffix.lower() == ".epub":
+            shutil.copy(str(extracted_path), str(out))
+            logger.info(f"[convert] mobi fallback succeeded: {out}")
+            return str(out)
+        raise RuntimeError(f"mobi fallback produced {extracted_path.suffix}, not .epub")
+    except Exception as e:
+        raise RuntimeError(f"All conversion methods failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Unsupported file endpoints
+# ---------------------------------------------------------------------------
+
+
+class UnsupportedFileResponse(BaseModel):
+    id: int
+    filename: str
+    title: Optional[str]
+    author: Optional[str]
+    format: str
+    file_size: Optional[int]
+    already_converted: bool
+
+
+@router.get("/unsupported", response_model=List[UnsupportedFileResponse])
+async def list_unsupported_files(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all ebooks in unsupported formats (MOBI, AZW3) with conversion status."""
+    result = await db.execute(
+        select(EBook).where(EBook.format.in_(["mobi", "azw3"]))
+    )
+    ebooks = result.scalars().all()
+
+    items = []
+    for eb in ebooks:
+        epub_sibling = Path(eb.file_path).with_suffix(".epub")
+        items.append(
+            UnsupportedFileResponse(
+                id=eb.id,
+                filename=eb.filename,
+                title=eb.title,
+                author=eb.author,
+                format=eb.format or "",
+                file_size=eb.file_size,
+                already_converted=epub_sibling.exists(),
+            )
+        )
+    return items
+
+
+# NOTE: /unsupported/convert-all must be registered BEFORE /unsupported/{ebook_id}/convert
+# so FastAPI doesn't try to interpret "convert-all" as an integer ebook_id.
+@router.post("/unsupported/convert-all")
+async def convert_all_unsupported(
+    delete_source: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Convert all unsupported ebooks (MOBI/AZW3) to EPUB."""
+    result = await db.execute(
+        select(EBook).where(EBook.format.in_(["mobi", "azw3"]))
+    )
+    ebooks = result.scalars().all()
+
+    succeeded, failed = [], []
+    ids_to_delete = []
+
+    for eb in ebooks:
+        epub_sibling = Path(eb.file_path).with_suffix(".epub")
+        if epub_sibling.exists():
+            # Already converted — skip or delete source if requested
+            if delete_source:
+                ids_to_delete.append(eb)
+            continue
+        try:
+            await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+            succeeded.append(eb.filename)
+            if delete_source:
+                ids_to_delete.append(eb)
+        except RuntimeError as e:
+            failed.append({"filename": eb.filename, "error": str(e)})
+
+    if delete_source and ids_to_delete:
+        for eb in ids_to_delete:
+            try:
+                os.remove(eb.file_path)
+                await db.delete(eb)
+            except OSError as e:
+                logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
+        await db.commit()
+
+    return {
+        "succeeded": succeeded,
+        "failed": failed,
+        "total": len(ebooks),
+    }
+
+
+@router.post("/unsupported/{ebook_id}/convert")
+async def convert_unsupported_file(
+    ebook_id: int,
+    delete_source: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Convert a single unsupported ebook to EPUB using calibre or mobi library."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    eb = result.scalar_one_or_none()
+    if not eb:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    if eb.format not in ("mobi", "azw3"):
+        raise HTTPException(status_code=400, detail="File is already in a supported format")
+
+    try:
+        epub_path = await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Delete source if requested
+    if delete_source:
+        try:
+            os.remove(eb.file_path)
+            await db.delete(eb)
+            await db.commit()
+        except OSError as e:
+            logger.warning(f"[convert] could not delete source {eb.file_path}: {e}")
+
+    return {
+        "status": "converted",
+        "epub_path": epub_path,
+        "source_deleted": delete_source,
+    }
+
+
+@router.delete("/unsupported/{ebook_id}/source")
+async def delete_unsupported_source(
+    ebook_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Delete the source MOBI/AZW3 file (only if an EPUB version already exists)."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    eb = result.scalar_one_or_none()
+    if not eb:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    epub_sibling = Path(eb.file_path).with_suffix(".epub")
+    if not epub_sibling.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="No converted EPUB found. Convert the file first before deleting the source.",
+        )
+
+    try:
+        os.remove(eb.file_path)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
+
+    await db.delete(eb)
+    await db.commit()
+    return {"status": "deleted", "filename": eb.filename}
