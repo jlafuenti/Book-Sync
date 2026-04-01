@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles, convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource } from '../api'
+import { getDiskUsage, getSettings, updateSettings, testRemoteConnection, testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles, convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource, getCalibreStatus } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EbookReader from '../components/EbookReader'
 
@@ -76,6 +76,7 @@ function SystemPage({ tab }) {
                         />
                     </div>
 
+                    <CalibreStatusSection />
                     <SettingsSection />
                     <TranscriptionSettingsSection />
                     <ABSSettingsSection />
@@ -236,6 +237,56 @@ function SettingsSection() {
     )
 }
 
+function CalibreStatusSection() {
+    const [status, setStatus] = useState(null)
+    const [checking, setChecking] = useState(false)
+
+    useEffect(() => { checkStatus() }, [])
+
+    const checkStatus = async () => {
+        setChecking(true)
+        try {
+            const data = await getCalibreStatus()
+            setStatus(data)
+        } catch (err) {
+            setStatus({ available: false, error: err.message })
+        } finally {
+            setChecking(false)
+        }
+    }
+
+    return (
+        <div className="card" style={{ marginBottom: '24px' }}>
+            <div className="card-header">
+                <h3>Calibre (MOBI/AZW3 Conversion)</h3>
+                <button className="btn btn-secondary" onClick={checkStatus} disabled={checking}>
+                    {checking ? 'Checking...' : 'Check'}
+                </button>
+            </div>
+            <div style={{ padding: '16px' }}>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                    Calibre's <code>ebook-convert</code> is used to convert MOBI and AZW3 files to EPUB. It must be installed in the server container.
+                </p>
+                {status === null ? (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Checking…</span>
+                ) : status.available ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: 'var(--success)', fontWeight: 600 }}>Available</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{status.version}</span>
+                    </div>
+                ) : (
+                    <div>
+                        <span style={{ color: 'var(--error)', fontWeight: 600 }}>Not Available</span>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
+                            {status.error}
+                        </p>
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+}
+
 function UnsupportedFilesTab({ canAdmin }) {
     const [files, setFiles] = useState([])
     const [loading, setLoading] = useState(true)
@@ -351,7 +402,7 @@ function UnsupportedFilesTab({ canAdmin }) {
                                     onClick={() => handleBatchConvert(true)}
                                     disabled={batchBusy}
                                 >
-                                    {batchBusy ? 'Converting...' : 'Convert All & Delete Source'}
+                                    {batchBusy ? 'Converting...' : 'Convert All & Delete Original'}
                                 </button>
                             </>
                         )}
@@ -477,7 +528,7 @@ function UnsupportedFilesTab({ canAdmin }) {
                                                                 onClick={() => handleDeleteSource(file)}
                                                                 disabled={busyIds.has(file.id)}
                                                             >
-                                                                {busyIds.has(file.id) ? '...' : 'Delete Source'}
+                                                                {busyIds.has(file.id) ? '...' : 'Delete Original'}
                                                             </button>
                                                         </>
                                                     )}

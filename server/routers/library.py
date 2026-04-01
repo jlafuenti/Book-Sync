@@ -2534,14 +2534,12 @@ UNSUPPORTED_FORMATS = {".mobi", ".azw3"}
 
 def _convert_to_epub_sync(src_path: str) -> str:
     """
-    Convert a MOBI/AZW3 file to EPUB.  Returns the output EPUB path on success.
-    Tries calibre ebook-convert first, then falls back to the mobi Python library.
-    Raises RuntimeError on failure.
+    Convert a MOBI/AZW3 file to EPUB using calibre's ebook-convert.
+    Returns the output EPUB path on success. Raises RuntimeError on failure.
     """
     src = Path(src_path)
     out = src.with_suffix(".epub")
 
-    # Try calibre ebook-convert
     try:
         result = subprocess.run(
             ["ebook-convert", str(src), str(out)],
@@ -2552,24 +2550,38 @@ def _convert_to_epub_sync(src_path: str) -> str:
         if result.returncode == 0 and out.exists():
             logger.info(f"[convert] calibre succeeded: {out}")
             return str(out)
-        logger.warning(f"[convert] calibre failed (rc={result.returncode}): {result.stderr[:200]}")
+        raise RuntimeError(f"ebook-convert failed: {result.stderr[:300]}")
     except FileNotFoundError:
-        logger.warning("[convert] ebook-convert not found, trying Python fallback")
+        raise RuntimeError(
+            "Calibre (ebook-convert) is not installed in the server container. "
+            "Rebuild the server image to enable conversions."
+        )
     except subprocess.TimeoutExpired:
-        logger.warning("[convert] ebook-convert timed out")
+        raise RuntimeError("ebook-convert timed out after 5 minutes.")
 
-    # Python fallback via mobi library
+
+# ---------------------------------------------------------------------------
+# Calibre status
+# ---------------------------------------------------------------------------
+
+@router.get("/calibre-status")
+async def get_calibre_status(current_user: User = Depends(get_current_user)):
+    """Check whether calibre's ebook-convert is available in the server container."""
     try:
-        import mobi  # type: ignore
-        tmpdir, extracted = mobi.extract(src_path)
-        extracted_path = Path(extracted)
-        if extracted_path.suffix.lower() == ".epub":
-            shutil.copy(str(extracted_path), str(out))
-            logger.info(f"[convert] mobi fallback succeeded: {out}")
-            return str(out)
-        raise RuntimeError(f"mobi fallback produced {extracted_path.suffix}, not .epub")
-    except Exception as e:
-        raise RuntimeError(f"All conversion methods failed: {e}")
+        result = subprocess.run(
+            ["ebook-convert", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip().splitlines()[0] if result.stdout else "unknown"
+            return {"available": True, "version": version}
+        return {"available": False, "error": result.stderr.strip()[:200]}
+    except FileNotFoundError:
+        return {"available": False, "error": "ebook-convert not found — rebuild the server container to install calibre"}
+    except subprocess.TimeoutExpired:
+        return {"available": False, "error": "version check timed out"}
 
 
 # ---------------------------------------------------------------------------
