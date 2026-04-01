@@ -717,6 +717,14 @@ export async function cleanupOrphans(ebookIds, audiobookIds) {
     return resp.json();
 }
 
+// ============ Calibre ============
+
+export async function getCalibreStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/calibre-status`);
+    if (!resp.ok) throw new Error('Failed to check calibre status');
+    return resp.json();
+}
+
 // ============ Unsupported Files ============
 
 export async function getUnsupportedFiles() {
