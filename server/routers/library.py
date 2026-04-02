@@ -2556,7 +2556,16 @@ def _convert_to_epub_sync(src_path: str) -> str:
         if result.returncode == 0 and out.exists():
             logger.info(f"[convert] calibre succeeded: {out}")
             return str(out)
-        raise RuntimeError(f"ebook-convert failed: {result.stderr[:300]}")
+        stderr = result.stderr
+        logger.warning(f"[convert] calibre failed: {stderr[:300]}")
+        if "MobiError" in stderr or "Unknown book type" in stderr:
+            raise RuntimeError(
+                "This file appears to be corrupted or in an unsupported MOBI variant "
+                "and cannot be converted. The original file may need to be replaced."
+            )
+        if "DRMException" in stderr or "drm" in stderr.lower() and "protected" in stderr.lower():
+            raise RuntimeError("This file is DRM-protected and cannot be converted.")
+        raise RuntimeError(f"Conversion failed: {stderr[:200]}")
     except FileNotFoundError:
         raise RuntimeError(
             "Calibre (ebook-convert) is not installed in the server container. "
@@ -2633,6 +2642,26 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
     return epub_eb
 
 
+async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> None:
+    """
+    For every BookPair whose ebook_id == eb_id:
+      - If epub_eb is given: re-point pair.ebook_id to the new EPUB (keeps pair + all data intact).
+      - If epub_eb is None: delete the pair and all its dependent rows.
+    Also removes UserProgress rows that reference eb_id directly.
+    """
+    pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eb_id))
+    for pair in pairs_result.scalars().all():
+        if epub_eb is not None:
+            pair.ebook_id = epub_eb.id
+            db.add(pair)
+        else:
+            await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+            await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await db.delete(pair)
+    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
+
+
 @router.get("/unsupported", response_model=List[UnsupportedFileResponse])
 async def list_unsupported_files(
     db: AsyncSession = Depends(get_db),
@@ -2680,32 +2709,32 @@ async def convert_all_unsupported(
     ebooks = result.scalars().all()
 
     succeeded, failed = [], []
-    ids_to_delete = []
+    # Track (source_eb, epub_eb) pairs to delete after all conversions
+    to_delete: list[tuple] = []
 
     for eb in ebooks:
         epub_sibling = Path(eb.file_path).with_suffix(".epub")
         if epub_sibling.exists():
-            # Already converted — ensure it's registered in the DB then skip/delete
-            await _register_epub_in_db(str(epub_sibling), eb, db)
+            epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
             if delete_source:
-                ids_to_delete.append(eb)
+                to_delete.append((eb, epub_eb))
             continue
         try:
             epub_path = await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
-            await _register_epub_in_db(epub_path, eb, db)
+            epub_eb = await _register_epub_in_db(epub_path, eb, db)
             succeeded.append(eb.filename)
             if delete_source:
-                ids_to_delete.append(eb)
+                to_delete.append((eb, epub_eb))
         except RuntimeError as e:
             failed.append({"filename": eb.filename, "error": str(e)})
 
-    if delete_source and ids_to_delete:
-        for eb in ids_to_delete:
-            try:
-                os.remove(eb.file_path)
-                await db.delete(eb)
-            except OSError as e:
-                logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
+    for eb, epub_eb in to_delete:
+        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        try:
+            os.remove(eb.file_path)
+        except OSError as e:
+            logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
+        await db.delete(eb)
 
     await db.commit()
 
@@ -2741,13 +2770,14 @@ async def convert_unsupported_file(
     epub_eb = await _register_epub_in_db(epub_path, eb, db)
     epub_ebook_id = epub_eb.id
 
-    # Delete source if requested
+    # Delete source if requested — re-link any pairs to the new EPUB first
     if delete_source:
+        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
         try:
             os.remove(eb.file_path)
-            await db.delete(eb)
         except OSError as e:
             logger.warning(f"[convert] could not delete source {eb.file_path}: {e}")
+        await db.delete(eb)
 
     await db.commit()
 
@@ -2783,13 +2813,9 @@ async def delete_unsupported_source(
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
 
-    # Clean up pairs and their dependent rows before deleting the ebook record
-    pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
-    for pair in pairs_result.scalars().all():
-        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
-        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
-    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
+    # Ensure the EPUB is registered, then re-link any pairs to it (preserves pair + transcript)
+    epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
+    await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
 
     await db.delete(eb)
     await db.commit()
