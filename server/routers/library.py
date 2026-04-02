@@ -37,6 +37,7 @@ from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.transcription_queue import TranscriptionQueueItem
 from models.progress import UserProgress
+from models.transcript import AudioTranscript
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
@@ -1398,6 +1399,7 @@ async def delete_pair(
         raise HTTPException(status_code=404, detail="Book pair not found")
     await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
     await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
+    await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair_id))
     await db.delete(pair)
 
 
@@ -2237,6 +2239,7 @@ async def delete_ebook(
     for pair in pairs:
         await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
         await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
     # Remove any user progress referencing this ebook directly
     await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
@@ -2275,6 +2278,7 @@ async def delete_audiobook(
     for pair in pairs:
         await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
         await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
     # Remove any user progress referencing this audiobook directly
     await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == audiobook_id))
@@ -2364,6 +2368,7 @@ async def cleanup_orphans(
             for pair in pairs_result.scalars().all():
                 await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
                 await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+                await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
             await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eid))
             await db.delete(ebook)
             deleted_ebooks += 1
@@ -2376,6 +2381,7 @@ async def cleanup_orphans(
             for pair in pairs_result.scalars().all():
                 await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
                 await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+                await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
             await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == aid))
             await db.delete(audiobook)
             deleted_audiobooks += 1
@@ -2782,6 +2788,7 @@ async def delete_unsupported_source(
     for pair in pairs_result.scalars().all():
         await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
         await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
     await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
 
     await db.delete(eb)
