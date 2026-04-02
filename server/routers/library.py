@@ -7,6 +7,7 @@ import os
 import re
 import hashlib
 import logging
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -15,7 +16,7 @@ import asyncio
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from rapidfuzz import fuzz
@@ -35,6 +36,8 @@ from models.user import User
 from routers.settings import DEFAULT_SETTINGS
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.transcription_queue import TranscriptionQueueItem
+from models.progress import UserProgress
+from models.transcript import AudioTranscript
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
@@ -1394,6 +1397,9 @@ async def delete_pair(
     pair = result.scalar_one_or_none()
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
+    await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
+    await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
+    await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair_id))
     await db.delete(pair)
 
 
@@ -2227,15 +2233,16 @@ async def delete_ebook(
 
     file_path = ebook.file_path
 
-    # Remove associated transcription queue items for any pairs this ebook is in
+    # Remove associated transcription queue items and user progress for any pairs this ebook is in
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
-        queue_result = await db.execute(
-            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-        )
-        for qi in queue_result.scalars().all():
-            await db.delete(qi)
+        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+
+    # Remove any user progress referencing this ebook directly
+    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
 
     # Delete the ebook (cascades to BookPair → SyncMap, Bookmarks)
     await db.delete(ebook)
@@ -2265,15 +2272,16 @@ async def delete_audiobook(
 
     file_path = audiobook.file_path
 
-    # Remove associated transcription queue items for any pairs this audiobook is in
+    # Remove associated transcription queue items and user progress for any pairs this audiobook is in
     pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == audiobook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
-        queue_result = await db.execute(
-            select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-        )
-        for qi in queue_result.scalars().all():
-            await db.delete(qi)
+        await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+        await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+
+    # Remove any user progress referencing this audiobook directly
+    await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == audiobook_id))
 
     # Delete the audiobook (cascades to BookPair → SyncMap, Bookmarks)
     await db.delete(audiobook)
@@ -2356,14 +2364,12 @@ async def cleanup_orphans(
         result = await db.execute(select(EBook).where(EBook.id == eid))
         ebook = result.scalar_one_or_none()
         if ebook:
-            # Clean up transcription queue items for related pairs
             pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eid))
             for pair in pairs_result.scalars().all():
-                qr = await db.execute(
-                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-                )
-                for qi in qr.scalars().all():
-                    await db.delete(qi)
+                await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+                await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eid))
             await db.delete(ebook)
             deleted_ebooks += 1
 
@@ -2373,11 +2379,10 @@ async def cleanup_orphans(
         if audiobook:
             pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == aid))
             for pair in pairs_result.scalars().all():
-                qr = await db.execute(
-                    select(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id)
-                )
-                for qi in qr.scalars().all():
-                    await db.delete(qi)
+                await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+                await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == aid))
             await db.delete(audiobook)
             deleted_audiobooks += 1
 
@@ -2524,3 +2529,294 @@ async def enrich_audiobook_from_abs(
     await db.refresh(ab)
     from schemas import AudioBookResponse
     return {"status": status_key, "message": message, "book": AudioBookResponse.model_validate(ab)}
+
+
+# ---------------------------------------------------------------------------
+# Unsupported file conversion helpers
+# ---------------------------------------------------------------------------
+
+UNSUPPORTED_FORMATS = {".mobi", ".azw3"}
+
+
+def _convert_to_epub_sync(src_path: str) -> str:
+    """
+    Convert a MOBI/AZW3 file to EPUB using calibre's ebook-convert.
+    Returns the output EPUB path on success. Raises RuntimeError on failure.
+    """
+    src = Path(src_path)
+    out = src.with_suffix(".epub")
+
+    try:
+        result = subprocess.run(
+            ["ebook-convert", str(src), str(out)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and out.exists():
+            logger.info(f"[convert] calibre succeeded: {out}")
+            return str(out)
+        stderr = result.stderr
+        logger.warning(f"[convert] calibre failed: {stderr[:300]}")
+        if "MobiError" in stderr or "Unknown book type" in stderr:
+            raise RuntimeError(
+                "This file appears to be corrupted or in an unsupported MOBI variant "
+                "and cannot be converted. The original file may need to be replaced."
+            )
+        if "DRMException" in stderr or "drm" in stderr.lower() and "protected" in stderr.lower():
+            raise RuntimeError("This file is DRM-protected and cannot be converted.")
+        raise RuntimeError(f"Conversion failed: {stderr[:200]}")
+    except FileNotFoundError:
+        raise RuntimeError(
+            "Calibre (ebook-convert) is not installed in the server container. "
+            "Rebuild the server image to enable conversions."
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ebook-convert timed out after 5 minutes.")
+
+
+# ---------------------------------------------------------------------------
+# Calibre status
+# ---------------------------------------------------------------------------
+
+@router.get("/calibre-status")
+async def get_calibre_status(current_user: User = Depends(get_current_user)):
+    """Check whether calibre's ebook-convert is available in the server container."""
+    try:
+        result = subprocess.run(
+            ["ebook-convert", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip().splitlines()[0] if result.stdout else "unknown"
+            return {"available": True, "version": version}
+        return {"available": False, "error": result.stderr.strip()[:200]}
+    except FileNotFoundError:
+        return {"available": False, "error": "ebook-convert not found — rebuild the server container to install calibre"}
+    except subprocess.TimeoutExpired:
+        return {"available": False, "error": "version check timed out"}
+
+
+# ---------------------------------------------------------------------------
+# Unsupported file endpoints
+# ---------------------------------------------------------------------------
+
+
+class UnsupportedFileResponse(BaseModel):
+    id: int
+    filename: str
+    title: Optional[str]
+    author: Optional[str]
+    format: str
+    file_size: Optional[int]
+    already_converted: bool
+    epub_ebook_id: Optional[int] = None
+
+
+async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSession) -> EBook:
+    """Add the converted EPUB as a new EBook record (inheriting source metadata). No-op if already registered."""
+    existing = await db.execute(select(EBook).where(EBook.file_path == epub_path))
+    existing_eb = existing.scalar_one_or_none()
+    if existing_eb:
+        return existing_eb
+
+    file_size = Path(epub_path).stat().st_size
+    file_hash = compute_file_hash(epub_path)
+
+    epub_eb = EBook(
+        title=source_eb.title,
+        author=source_eb.author,
+        series=source_eb.series,
+        series_index=source_eb.series_index,
+        filename=Path(epub_path).name,
+        file_path=epub_path,
+        file_hash=file_hash,
+        file_size=file_size,
+        format="epub",
+        metadata_source=source_eb.metadata_source,
+    )
+    db.add(epub_eb)
+    await db.flush()
+    return epub_eb
+
+
+async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> None:
+    """
+    For every BookPair whose ebook_id == eb_id:
+      - If epub_eb is given: re-point pair.ebook_id to the new EPUB (keeps pair + all data intact).
+      - If epub_eb is None: delete the pair and all its dependent rows.
+    Also removes UserProgress rows that reference eb_id directly.
+    """
+    pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eb_id))
+    for pair in pairs_result.scalars().all():
+        if epub_eb is not None:
+            pair.ebook_id = epub_eb.id
+            db.add(pair)
+        else:
+            await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
+            await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
+            await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await db.delete(pair)
+    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
+
+
+@router.get("/unsupported", response_model=List[UnsupportedFileResponse])
+async def list_unsupported_files(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List all ebooks in unsupported formats (MOBI, AZW3) with conversion status."""
+    result = await db.execute(
+        select(EBook).where(EBook.format.in_(["mobi", "azw3"]))
+    )
+    ebooks = result.scalars().all()
+
+    items = []
+    for eb in ebooks:
+        epub_sibling = Path(eb.file_path).with_suffix(".epub")
+        epub_path_str = str(epub_sibling)
+        epub_result = await db.execute(select(EBook).where(EBook.file_path == epub_path_str))
+        epub_eb = epub_result.scalar_one_or_none()
+        items.append(
+            UnsupportedFileResponse(
+                id=eb.id,
+                filename=eb.filename,
+                title=eb.title,
+                author=eb.author,
+                format=eb.format or "",
+                file_size=eb.file_size,
+                already_converted=epub_sibling.exists(),
+                epub_ebook_id=epub_eb.id if epub_eb else None,
+            )
+        )
+    return items
+
+
+# NOTE: /unsupported/convert-all must be registered BEFORE /unsupported/{ebook_id}/convert
+# so FastAPI doesn't try to interpret "convert-all" as an integer ebook_id.
+@router.post("/unsupported/convert-all")
+async def convert_all_unsupported(
+    delete_source: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Convert all unsupported ebooks (MOBI/AZW3) to EPUB."""
+    result = await db.execute(
+        select(EBook).where(EBook.format.in_(["mobi", "azw3"]))
+    )
+    ebooks = result.scalars().all()
+
+    succeeded, failed = [], []
+    # Track (source_eb, epub_eb) pairs to delete after all conversions
+    to_delete: list[tuple] = []
+
+    for eb in ebooks:
+        epub_sibling = Path(eb.file_path).with_suffix(".epub")
+        if epub_sibling.exists():
+            epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
+            if delete_source:
+                to_delete.append((eb, epub_eb))
+            continue
+        try:
+            epub_path = await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+            epub_eb = await _register_epub_in_db(epub_path, eb, db)
+            succeeded.append(eb.filename)
+            if delete_source:
+                to_delete.append((eb, epub_eb))
+        except RuntimeError as e:
+            failed.append({"filename": eb.filename, "error": str(e)})
+
+    for eb, epub_eb in to_delete:
+        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        try:
+            os.remove(eb.file_path)
+        except OSError as e:
+            logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
+        await db.delete(eb)
+
+    await db.commit()
+
+    return {
+        "succeeded": succeeded,
+        "failed": failed,
+        "total": len(ebooks),
+    }
+
+
+@router.post("/unsupported/{ebook_id}/convert")
+async def convert_unsupported_file(
+    ebook_id: int,
+    delete_source: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Convert a single unsupported ebook to EPUB using calibre or mobi library."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    eb = result.scalar_one_or_none()
+    if not eb:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    if eb.format not in ("mobi", "azw3"):
+        raise HTTPException(status_code=400, detail="File is already in a supported format")
+
+    try:
+        epub_path = await asyncio.to_thread(_convert_to_epub_sync, eb.file_path)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Register the new EPUB in the DB so it can be previewed
+    epub_eb = await _register_epub_in_db(epub_path, eb, db)
+    epub_ebook_id = epub_eb.id
+
+    # Delete source if requested — re-link any pairs to the new EPUB first
+    if delete_source:
+        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        try:
+            os.remove(eb.file_path)
+        except OSError as e:
+            logger.warning(f"[convert] could not delete source {eb.file_path}: {e}")
+        await db.delete(eb)
+
+    await db.commit()
+
+    return {
+        "status": "converted",
+        "epub_ebook_id": epub_ebook_id,
+        "epub_path": epub_path,
+        "source_deleted": delete_source,
+    }
+
+
+@router.delete("/unsupported/{ebook_id}/source")
+async def delete_unsupported_source(
+    ebook_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Delete the source MOBI/AZW3 file (only if an EPUB version already exists)."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    eb = result.scalar_one_or_none()
+    if not eb:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    epub_sibling = Path(eb.file_path).with_suffix(".epub")
+    if not epub_sibling.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="No converted EPUB found. Convert the file first before deleting the source.",
+        )
+
+    try:
+        os.remove(eb.file_path)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
+
+    # Ensure the EPUB is registered, then re-link any pairs to it (preserves pair + transcript)
+    epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
+    await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
+
+    await db.delete(eb)
+    await db.commit()
+    return {"status": "deleted", "filename": eb.filename}

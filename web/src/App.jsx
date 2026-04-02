@@ -145,10 +145,16 @@ function AppShell({ user, setUser }) {
                     )}
 
                     {/* System */}
-                    <Link to="/system" className={isExact('/system') ? 'nav-link active' : 'nav-link'}>
+                    <Link to="/system/status" className={navClass('/system')}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         System
                     </Link>
+                    {isSection('/system') && (
+                        <div className="nav-sub-group">
+                            <Link to="/system/status" className={subNavClass('/system/status')}>⚙️ Status</Link>
+                            <Link to="/system/unsupported" className={subNavClass('/system/unsupported')}>⚠️ Unsupported Files</Link>
+                        </div>
+                    )}
 
                     {/* Users — admin/superadmin only */}
                     {hasMinRole('admin') && (
@@ -200,7 +206,9 @@ function AppShell({ user, setUser }) {
                     <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
                     {/* System */}
-                    <Route path="/system" element={<SystemPage />} />
+                    <Route path="/system/status" element={<SystemPage tab="status" />} />
+                    <Route path="/system/unsupported" element={<SystemPage tab="unsupported" />} />
+                    <Route path="/system" element={<Navigate to="/system/status" replace />} />
 
                     {/* Book Detail */}
                     <Route path="/book/:type/:id" element={<BookDetailPage />} />

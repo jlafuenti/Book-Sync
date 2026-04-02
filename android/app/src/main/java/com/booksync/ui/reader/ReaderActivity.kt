@@ -241,7 +241,21 @@ class ReaderActivity : AppCompatActivity() {
                     ?: run { Log.e(TAG, "Failed to create URL"); finish(); return@launch }
 
                 val asset = assetRetriever.retrieve(fileUrl).getOrNull()
-                    ?: run { Log.e(TAG, "Failed to retrieve asset"); finish(); return@launch }
+                    ?: run {
+                        val ext = ebookFile.extension.uppercase()
+                        val msg = if (ext != "EPUB") {
+                            "This book is a .$ext file. Only EPUB format is supported by the reader."
+                        } else {
+                            "Failed to open the book file. It may be corrupted — try re-downloading."
+                        }
+                        Log.e(TAG, "Failed to retrieve asset: ${ebookFile.name}")
+                        MaterialAlertDialogBuilder(this@ReaderActivity)
+                            .setTitle("Cannot Open Book")
+                            .setMessage(msg)
+                            .setPositiveButton("OK") { _, _ -> finish() }
+                            .show()
+                        return@launch
+                    }
 
                 val parser = DefaultPublicationParser(
                     context = this@ReaderActivity,

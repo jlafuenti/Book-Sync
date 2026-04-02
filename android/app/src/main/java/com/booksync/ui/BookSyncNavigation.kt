@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.drop
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -60,17 +61,32 @@ fun BookSyncNavigation() {
     val navController = rememberNavController()
     val context = LocalContext.current
 
-    // Check for existing auth token
+    val tokenManager = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            TokenManagerEntryPoint::class.java
+        ).tokenManager()
+    }
+
+    // Check for existing auth token on startup
     var startDestination by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        val entryPoint = EntryPointAccessors.fromApplication(
-            context.applicationContext,
-            TokenManagerEntryPoint::class.java
-        )
-        val tokenManager = entryPoint.tokenManager()
         val existingToken = tokenManager.getAccessToken().firstOrNull()
         startDestination = if (!existingToken.isNullOrEmpty()) "main" else "login"
+    }
+
+    // Observe token changes at runtime — navigate to login when session expires or is cleared
+    LaunchedEffect(Unit) {
+        tokenManager.getAccessToken()
+            .drop(1) // Skip the initial emission handled by startDestination above
+            .collect { token ->
+                if (token.isNullOrEmpty()) {
+                    navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            }
     }
 
     if (startDestination == null) {
