@@ -19,9 +19,9 @@ function TranscriptionPage({ tab }) {
             const p = await getPairs()
             setPairs(p)
 
-            // Load statuses for transcribing pairs
+            // Load statuses for actively transcribing pairs only
             const statusPromises = p
-                .filter(pair => ['transcribing', 'synced', 'error'].includes(pair.status))
+                .filter(pair => pair.status === 'transcribing')
                 .map(async pair => {
                     try {
                         const status = await getTranscriptionStatus(pair.id)
