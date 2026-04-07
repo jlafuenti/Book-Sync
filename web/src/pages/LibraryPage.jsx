@@ -128,8 +128,8 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
                         type="checkbox"
                         className="lib-book-card-checkbox"
                         checked={isSelected}
-                        onChange={(e) => { e.stopPropagation(); onSelect(e) }}
-                        onClick={(e) => e.stopPropagation()}
+                        readOnly
+                        onClick={(e) => { e.stopPropagation(); onSelect(e) }}
                     />
                 )}
                 {coverUrl ? (
@@ -192,7 +192,7 @@ function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onN
         >
             {selectMode && (
                 <div onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={isSelected} onChange={(e) => onSelect(e)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                    <input type="checkbox" checked={isSelected} readOnly onClick={(e) => onSelect(e)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
                 </div>
             )}
             <div>
@@ -269,6 +269,7 @@ function LibraryPage({ tab }) {
     // View state
     const [viewMode, setViewMode] = useState('grid')
     const [activeFilter, setActiveFilter] = useState('all')
+    const [unpairedSubFilter, setUnpairedSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks'
     const [sortBy, setSortBy] = useState('title-asc')
     const [searchTerm, setSearchTerm] = useState('')
 
@@ -403,10 +404,11 @@ function LibraryPage({ tab }) {
         } else if (activeFilter === 'paired') {
             list = pairEntries
         } else if (activeFilter === 'unpaired') {
-            list = [
-                ...annotatedEbooks.filter(b => !b.pair_id),
-                ...annotatedAudiobooks.filter(b => !b.pair_id),
-            ]
+            const unpEl = annotatedEbooks.filter(b => !b.pair_id)
+            const unpAb = annotatedAudiobooks.filter(b => !b.pair_id)
+            if (unpairedSubFilter === 'ebooks') list = unpEl
+            else if (unpairedSubFilter === 'audiobooks') list = unpAb
+            else list = [...unpEl, ...unpAb]
         } else if (activeFilter === 'new') {
             list = [
                 ...annotatedEbooks.filter(b => !b.acknowledged),
@@ -427,7 +429,7 @@ function LibraryPage({ tab }) {
         }
 
         return [...list].sort(sortComparator(sortBy))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, sortBy])
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortBy])
 
     // Stats
     const stats = useMemo(() => {
@@ -749,12 +751,31 @@ function LibraryPage({ tab }) {
                             <button
                                 key={p.key}
                                 className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
-                                onClick={() => setActiveFilter(p.key)}
+                                onClick={() => { setActiveFilter(p.key); if (p.key !== 'unpaired') setUnpairedSubFilter('all') }}
                             >
                                 {p.label} ({p.count})
                             </button>
                         ))}
                     </div>
+
+                    {/* Unpaired sub-filter */}
+                    {activeFilter === 'unpaired' && (
+                        <div className="library-filter-pills library-filter-pills-sub">
+                            {[
+                                { key: 'all', label: 'All' },
+                                { key: 'ebooks', label: 'Ebooks' },
+                                { key: 'audiobooks', label: 'Audiobooks' },
+                            ].map(s => (
+                                <button
+                                    key={s.key}
+                                    className={`library-filter-pill library-filter-pill-sub${unpairedSubFilter === s.key ? ' active' : ''}`}
+                                    onClick={() => setUnpairedSubFilter(s.key)}
+                                >
+                                    {s.label}
+                                </button>
+                            ))}
+                        </div>
+                    )}
 
                     {/* Search */}
                     <input
@@ -861,6 +882,10 @@ function LibraryPage({ tab }) {
                                     </button>
                                     <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleVerify() }} disabled={verifying}>
                                         {verifying ? 'Verifying...' : 'Verify Files'}
+                                    </button>
+                                    <hr style={{ margin: '4px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
+                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); navigate('/pairs/unpaired') }}>
+                                        Pair Ebook + Audiobook
                                     </button>
                                 </div>
                             )}
