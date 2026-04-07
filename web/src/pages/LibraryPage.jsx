@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-    getEbooks, getAudiobooks, uploadEbook, uploadAudiobook, scanLibrary,
+    getEbooks, getAudiobooks, getPairs, uploadEbook, uploadAudiobook, scanLibrary,
     normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata,
     rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles,
     cleanupOrphans, coverSrc
@@ -15,9 +15,10 @@ import './LibraryPage.css'
 
 function sortComparator(sortKey) {
     return (a, b) => {
-        let valA, valB, dir = 'asc'
-        const [field, d] = sortKey.split('-')
-        if (d) dir = d
+        let valA, valB
+        const lastDash = sortKey.lastIndexOf('-')
+        const field = sortKey.slice(0, lastDash)
+        const dir = sortKey.slice(lastDash + 1)
 
         if (field === 'title' || field === 'author') {
             valA = (a[field] || '').toLowerCase()
@@ -59,6 +60,41 @@ function formatSize(bytes) {
     return `${(bytes / 1048576).toFixed(1)} MB`
 }
 
+// ---- Type badge icons ----
+
+function TypeBadge({ mediaType }) {
+    if (mediaType === 'pair') {
+        return (
+            <span className="lib-book-card-type-badge" title="Paired">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+            </span>
+        )
+    }
+    if (mediaType === 'audiobook') {
+        return (
+            <span className="lib-book-card-type-badge" title="Audiobook">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12">
+                    <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
+                    <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+                </svg>
+            </span>
+        )
+    }
+    // ebook
+    return (
+        <span className="lib-book-card-type-badge" title="Ebook">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="12" height="12">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+        </span>
+    )
+}
+
 // ---- Book Card (Grid View) ----
 
 function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
@@ -75,10 +111,9 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
     }, [menuOpen])
 
     const coverUrl = coverSrc(book.cover_path)
-    const isEbook = book.mediaType === 'ebook'
 
-    const handleClick = () => {
-        if (selectMode) { onSelect(); return }
+    const handleClick = (e) => {
+        if (selectMode) { onSelect(e); return }
         onNavigate()
     }
 
@@ -93,7 +128,7 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
                         type="checkbox"
                         className="lib-book-card-checkbox"
                         checked={isSelected}
-                        onChange={(e) => { e.stopPropagation(); onSelect() }}
+                        onChange={(e) => { e.stopPropagation(); onSelect(e) }}
                         onClick={(e) => e.stopPropagation()}
                     />
                 )}
@@ -101,15 +136,10 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
                     <img src={coverUrl} alt={book.title} loading="lazy" />
                 ) : (
                     <div className="lib-book-card-placeholder">
-                        {isEbook ? '📚' : '🎧'}
+                        {book.mediaType === 'pair' ? '🔗' : book.mediaType === 'audiobook' ? '🎧' : '📚'}
                     </div>
                 )}
-                <span className="lib-book-card-type-badge">{isEbook ? 'E' : 'A'}</span>
-                {book.pair_id && (
-                    <span className="lib-book-card-pair-badge" title={`Pair status: ${book.pair_status || 'paired'}`}>
-                        🔗
-                    </span>
-                )}
+                <TypeBadge mediaType={book.mediaType} />
                 {/* Three-dot menu */}
                 {canEdit && !selectMode && (
                     <div className="lib-book-card-menu" ref={menuRef} onClick={e => e.stopPropagation()}>
@@ -126,7 +156,9 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
                             <div className="lib-book-card-dropdown">
                                 <button onClick={() => { setMenuOpen(false); onNavigate() }}>View Details</button>
                                 <button onClick={() => { setMenuOpen(false); onEdit() }}>Edit Metadata</button>
-                                <button className="danger" onClick={() => { setMenuOpen(false); onDelete() }}>Delete</button>
+                                {book.mediaType !== 'pair' && (
+                                    <button className="danger" onClick={() => { setMenuOpen(false); onDelete() }}>Delete</button>
+                                )}
                             </div>
                         )}
                     </div>
@@ -147,10 +179,9 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
 
 function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
     const coverUrl = coverSrc(book.cover_path)
-    const isEbook = book.mediaType === 'ebook'
 
-    const handleClick = () => {
-        if (selectMode) { onSelect(); return }
+    const handleClick = (e) => {
+        if (selectMode) { onSelect(e); return }
         onNavigate()
     }
 
@@ -161,28 +192,33 @@ function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onN
         >
             {selectMode && (
                 <div onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={isSelected} onChange={onSelect} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                    <input type="checkbox" checked={isSelected} onChange={(e) => onSelect(e)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
                 </div>
             )}
             <div>
                 {coverUrl ? (
                     <img className="lib-book-row-thumb" src={coverUrl} alt={book.title} loading="lazy" />
                 ) : (
-                    <div className="lib-book-row-thumb-placeholder">{isEbook ? '📚' : '🎧'}</div>
+                    <div className="lib-book-row-thumb-placeholder">
+                        {book.mediaType === 'pair' ? '🔗' : book.mediaType === 'audiobook' ? '🎧' : '📚'}
+                    </div>
                 )}
             </div>
-            <div className="lib-book-row-title">{book.title}</div>
+            <div className="lib-book-row-title">
+                {book.title}
+                <span style={{ marginLeft: 6 }}><TypeBadge mediaType={book.mediaType} /></span>
+            </div>
             <div className="lib-book-row-cell">{book.author || '\u2014'}</div>
             <div className="lib-book-row-cell">
                 {book.series ? `${book.series}${book.series_index ? ` #${book.series_index}` : ''}` : '\u2014'}
             </div>
             <div className="lib-book-row-cell">
-                <span className="badge badge-auto_matched">{book.format}</span>
+                {book.mediaType !== 'pair' && <span className="badge badge-auto_matched">{book.format}</span>}
             </div>
             <div className="lib-book-row-cell muted">{formatSize(book.file_size)}</div>
             <div className="lib-book-row-cell muted">{new Date(book.uploaded_at).toLocaleDateString()}</div>
             <div className="lib-book-row-actions" onClick={e => e.stopPropagation()}>
-                {canEdit && !selectMode && (
+                {canEdit && !selectMode && book.mediaType !== 'pair' && (
                     <>
                         <button
                             className="btn btn-sm btn-secondary"
@@ -218,6 +254,7 @@ function LibraryPage({ tab }) {
     // Data state
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
+    const [pairs, setPairs] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [scanResult, setScanResult] = useState(null)
@@ -253,7 +290,8 @@ function LibraryPage({ tab }) {
 
     // Select mode & bulk actions
     const [selectMode, setSelectMode] = useState(false)
-    const [selectedIds, setSelectedIds] = useState(new Set()) // stores "ebook-123" or "audiobook-456"
+    const [selectedIds, setSelectedIds] = useState(new Set())
+    const lastSelectedIndexRef = useRef(null)
     const [bulkEditOpen, setBulkEditOpen] = useState(false)
     const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
     const [bulkSaving, setBulkSaving] = useState(false)
@@ -285,48 +323,132 @@ function LibraryPage({ tab }) {
         else if (tab === 'ebooks') setActiveFilter('ebooks')
     }, [tab])
 
-    // Unified book list
-    const books = useMemo(() => [
-        ...ebooks.map(b => ({ ...b, mediaType: 'ebook' })),
-        ...audiobooks.map(b => ({ ...b, mediaType: 'audiobook' })),
-    ], [ebooks, audiobooks])
+    // Pair lookup maps
+    const pairMaps = useMemo(() => {
+        const byEbookId = {}
+        const byAudiobookId = {}
+        pairs.forEach(p => {
+            if (p.ebook?.id) byEbookId[p.ebook.id] = p
+            if (p.audiobook?.id) byAudiobookId[p.audiobook.id] = p
+        })
+        return { byEbookId, byAudiobookId }
+    }, [pairs])
 
-    // Filtered + sorted
+    // Annotated individual book lists (with pair info)
+    const annotatedEbooks = useMemo(() =>
+        ebooks.map(b => ({
+            ...b,
+            mediaType: 'ebook',
+            pair_id: pairMaps.byEbookId[b.id]?.id ?? null,
+            pair_status: pairMaps.byEbookId[b.id]?.status ?? null,
+            paired_audiobook_id: pairMaps.byEbookId[b.id]?.audiobook?.id ?? null,
+        })),
+    [ebooks, pairMaps])
+
+    const annotatedAudiobooks = useMemo(() =>
+        audiobooks.map(b => ({
+            ...b,
+            mediaType: 'audiobook',
+            pair_id: pairMaps.byAudiobookId[b.id]?.id ?? null,
+            pair_status: pairMaps.byAudiobookId[b.id]?.status ?? null,
+            paired_ebook_id: pairMaps.byAudiobookId[b.id]?.ebook?.id ?? null,
+        })),
+    [audiobooks, pairMaps])
+
+    // Merged pair entries (one entry per pair for All/Paired views)
+    const pairEntries = useMemo(() => {
+        const ebookMap = {}
+        const abMap = {}
+        ebooks.forEach(b => { ebookMap[b.id] = b })
+        audiobooks.forEach(b => { abMap[b.id] = b })
+
+        return pairs.map(p => {
+            const eb = p.ebook?.id ? ebookMap[p.ebook.id] : null
+            const ab = p.audiobook?.id ? abMap[p.audiobook.id] : null
+            if (!eb && !ab) return null
+            // Prefer ebook as primary source for metadata/cover
+            const primary = eb || ab
+            return {
+                ...primary,
+                mediaType: 'pair',
+                cover_path: eb?.cover_path || ab?.cover_path,
+                title: eb?.title || ab?.title,
+                author: eb?.author || ab?.author,
+                series: eb?.series || ab?.series,
+                series_index: eb?.series_index ?? ab?.series_index,
+                uploaded_at: eb?.uploaded_at || ab?.uploaded_at,
+                pair_id: p.id,
+                pair_status: p.status,
+                ebook_id: eb?.id ?? null,
+                audiobook_id: ab?.id ?? null,
+            }
+        }).filter(Boolean)
+    }, [pairs, ebooks, audiobooks])
+
+    // Filtered + sorted display list
     const filteredBooks = useMemo(() => {
-        let list = books
+        let list
+
+        if (activeFilter === 'all') {
+            // Pairs as one entry + unpaired individual items
+            const pairedEbookIds = new Set(annotatedEbooks.filter(b => b.pair_id).map(b => b.id))
+            const pairedAudiobookIds = new Set(annotatedAudiobooks.filter(b => b.pair_id).map(b => b.id))
+            const unpairedEbooks = annotatedEbooks.filter(b => !pairedEbookIds.has(b.id))
+            const unpairedAudiobooks = annotatedAudiobooks.filter(b => !pairedAudiobookIds.has(b.id))
+            list = [...pairEntries, ...unpairedEbooks, ...unpairedAudiobooks]
+        } else if (activeFilter === 'ebooks') {
+            list = annotatedEbooks
+        } else if (activeFilter === 'audiobooks') {
+            list = annotatedAudiobooks
+        } else if (activeFilter === 'paired') {
+            list = pairEntries
+        } else if (activeFilter === 'unpaired') {
+            list = [
+                ...annotatedEbooks.filter(b => !b.pair_id),
+                ...annotatedAudiobooks.filter(b => !b.pair_id),
+            ]
+        } else if (activeFilter === 'new') {
+            list = [
+                ...annotatedEbooks.filter(b => !b.acknowledged),
+                ...annotatedAudiobooks.filter(b => !b.acknowledged),
+            ]
+        } else {
+            list = [...annotatedEbooks, ...annotatedAudiobooks]
+        }
+
         // Text search
         if (searchTerm) {
             const term = searchTerm.toLowerCase()
-            list = list.filter(b => {
-                return (b.title?.toLowerCase().includes(term)) ||
-                       (b.author?.toLowerCase().includes(term)) ||
-                       (b.series?.toLowerCase().includes(term))
-            })
+            list = list.filter(b =>
+                b.title?.toLowerCase().includes(term) ||
+                b.author?.toLowerCase().includes(term) ||
+                b.series?.toLowerCase().includes(term)
+            )
         }
-        // Filter pills
-        if (activeFilter === 'ebooks') list = list.filter(b => b.mediaType === 'ebook')
-        else if (activeFilter === 'audiobooks') list = list.filter(b => b.mediaType === 'audiobook')
-        else if (activeFilter === 'paired') list = list.filter(b => b.pair_id)
-        else if (activeFilter === 'unpaired') list = list.filter(b => !b.pair_id)
-        // Sort
-        list = [...list].sort(sortComparator(sortBy))
-        return list
-    }, [books, searchTerm, activeFilter, sortBy])
+
+        return [...list].sort(sortComparator(sortBy))
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, sortBy])
 
     // Stats
-    const stats = useMemo(() => ({
-        totalEbooks: ebooks.length,
-        totalAudiobooks: audiobooks.length,
-        paired: books.filter(b => b.pair_id).length,
-        total: books.length,
-    }), [ebooks, audiobooks, books])
+    const stats = useMemo(() => {
+        const newCount = [...ebooks.filter(b => !b.acknowledged), ...audiobooks.filter(b => !b.acknowledged)].length
+        return {
+            totalEbooks: ebooks.length,
+            totalAudiobooks: audiobooks.length,
+            pairCount: pairs.length,
+            unpaired: ebooks.filter(b => !pairMaps.byEbookId[b.id]).length + audiobooks.filter(b => !pairMaps.byAudiobookId[b.id]).length,
+            newCount,
+            displayTotal: filteredBooks.length,
+        }
+    }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks])
 
     // Data loading
     const loadData = useCallback(async () => {
         try {
-            const [e, a] = await Promise.all([getEbooks(), getAudiobooks()])
+            const [e, a, p] = await Promise.all([getEbooks(), getAudiobooks(), getPairs()])
             setEbooks(e)
             setAudiobooks(a)
+            setPairs(p)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -348,32 +470,62 @@ function LibraryPage({ tab }) {
 
     // ---- Selection helpers ----
 
-    const bookKey = (b) => `${b.mediaType}-${b.id}`
-
-    const toggleSelect = (book) => {
-        const key = bookKey(book)
-        setSelectedIds(prev => {
-            const next = new Set(prev)
-            next.has(key) ? next.delete(key) : next.add(key)
-            return next
-        })
+    const bookKey = (b) => {
+        if (b.mediaType === 'pair') return `pair-${b.pair_id}`
+        return `${b.mediaType}-${b.id}`
     }
+
+    const handleSelect = useCallback((book, idx, shiftKey) => {
+        const key = bookKey(book)
+        if (shiftKey && lastSelectedIndexRef.current !== null) {
+            const start = Math.min(lastSelectedIndexRef.current, idx)
+            const end = Math.max(lastSelectedIndexRef.current, idx)
+            const rangeKeys = filteredBooks.slice(start, end + 1).map(b => bookKey(b))
+            setSelectedIds(prev => {
+                const next = new Set(prev)
+                rangeKeys.forEach(k => next.add(k))
+                return next
+            })
+        } else {
+            setSelectedIds(prev => {
+                const next = new Set(prev)
+                next.has(key) ? next.delete(key) : next.add(key)
+                return next
+            })
+            lastSelectedIndexRef.current = idx
+        }
+    }, [filteredBooks])
 
     const toggleSelectAll = () => {
         const allSelected = filteredBooks.length > 0 && filteredBooks.every(b => selectedIds.has(bookKey(b)))
-        setSelectedIds(allSelected ? new Set() : new Set(filteredBooks.map(b => bookKey(b))))
+        if (allSelected) {
+            setSelectedIds(new Set())
+        } else {
+            setSelectedIds(new Set(filteredBooks.map(b => bookKey(b))))
+            lastSelectedIndexRef.current = null
+        }
     }
 
     const exitSelectMode = () => {
         setSelectMode(false)
         setSelectedIds(new Set())
+        lastSelectedIndexRef.current = null
     }
 
-    // Parse selected IDs back to {mediaType, id} pairs
+    // Parse selected IDs back to {mediaType, id}
     const parseSelectedIds = () => {
-        return [...selectedIds].map(key => {
+        return [...selectedIds].flatMap(key => {
+            if (key.startsWith('pair-')) {
+                const pairId = parseInt(key.slice(5))
+                const pair = pairs.find(p => p.id === pairId)
+                if (!pair) return []
+                const results = []
+                if (pair.ebook?.id) results.push({ mediaType: 'ebook', id: pair.ebook.id })
+                if (pair.audiobook?.id) results.push({ mediaType: 'audiobook', id: pair.audiobook.id })
+                return results
+            }
             const idx = key.lastIndexOf('-')
-            return { mediaType: key.slice(0, idx), id: parseInt(key.slice(idx + 1)) }
+            return [{ mediaType: key.slice(0, idx), id: parseInt(key.slice(idx + 1)) }]
         })
     }
 
@@ -395,9 +547,8 @@ function LibraryPage({ tab }) {
                 const fn = s.mediaType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
                 return fn(s.id, patch)
             }))
-            // Update local state
-            setEbooks(prev => prev.map(b => selectedIds.has(`ebook-${b.id}`) ? { ...b, ...patch } : b))
-            setAudiobooks(prev => prev.map(b => selectedIds.has(`audiobook-${b.id}`) ? { ...b, ...patch } : b))
+            setEbooks(prev => prev.map(b => selected.some(s => s.mediaType === 'ebook' && s.id === b.id) ? { ...b, ...patch } : b))
+            setAudiobooks(prev => prev.map(b => selected.some(s => s.mediaType === 'audiobook' && s.id === b.id) ? { ...b, ...patch } : b))
             setBulkEditOpen(false)
             setBulkEditFields({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
             exitSelectMode()
@@ -416,8 +567,7 @@ function LibraryPage({ tab }) {
                 const fn = s.mediaType === 'ebook' ? deleteEbook : deleteAudiobook
                 return fn(s.id, bulkDeleteSourceFile)
             }))
-            setEbooks(prev => prev.filter(b => !selectedIds.has(`ebook-${b.id}`)))
-            setAudiobooks(prev => prev.filter(b => !selectedIds.has(`audiobook-${b.id}`)))
+            await loadData()
             setBulkDeleteOpen(false)
             exitSelectMode()
         } catch (err) {
@@ -444,7 +594,7 @@ function LibraryPage({ tab }) {
     }
 
     const handleRescanAll = async () => {
-        if (!window.confirm("WARNING: This will force a complete rescan of EVERY file in your library, overwriting all current database metadata (titles, authors, series, etc) with whatever tags are physically embedded inside the files. This cannot be undone!\n\nAre you sure you want to completely overwrite your metadata?")) return
+        if (!window.confirm("WARNING: This will force a complete rescan of EVERY file in your library, overwriting all current database metadata with whatever tags are physically embedded inside the files. This cannot be undone!\n\nAre you sure?")) return
         setRescanningAll(true); setScanResult(null); setError('')
         try { const r = await rescanAllLibrary(); setScanResult(r); await loadData() }
         catch (err) { setError(err.message) }
@@ -483,8 +633,14 @@ function LibraryPage({ tab }) {
     }
 
     const openEdit = (book) => {
-        setEditingBook({ ...book })
-        setEditingType(book.mediaType)
+        if (book.mediaType === 'pair') {
+            // Edit the ebook component of the pair
+            const eb = ebooks.find(b => b.id === book.ebook_id)
+            if (eb) { setEditingBook({ ...eb }); setEditingType('ebook') }
+        } else {
+            setEditingBook({ ...book })
+            setEditingType(book.mediaType)
+        }
     }
 
     const openDeleteModal = (book) => {
@@ -503,6 +659,7 @@ function LibraryPage({ tab }) {
                 await deleteAudiobook(deleteTarget.id, deleteSourceFile)
                 setAudiobooks(prev => prev.filter(b => b.id !== deleteTarget.id))
             }
+            await loadData()
             setDeleteTarget(null)
         } catch (err) {
             alert('Failed to delete: ' + err.message)
@@ -546,20 +703,19 @@ function LibraryPage({ tab }) {
         finally { setCleaningUp(false) }
     }
 
-    // ---- Determine which books are selected for bulk match (need to infer type) ----
+    // ---- Bulk match helper ----
 
     const selectedBooksForMatch = useMemo(() => {
         const parsed = parseSelectedIds()
-        // For bulk match, all must be same type
         const types = new Set(parsed.map(s => s.mediaType))
         if (types.size !== 1) return null
         const type = [...types][0]
         const source = type === 'ebook' ? ebooks : audiobooks
         return {
-            books: source.filter(b => selectedIds.has(`${type}-${b.id}`)),
+            books: source.filter(b => parsed.some(s => s.id === b.id)),
             bookType: type,
         }
-    }, [selectedIds, ebooks, audiobooks])
+    }, [selectedIds, ebooks, audiobooks, pairs])
 
     // ---- Render ----
 
@@ -568,11 +724,12 @@ function LibraryPage({ tab }) {
     }
 
     const filterPills = [
-        { key: 'all', label: 'All', count: books.length },
+        { key: 'all', label: 'All', count: pairEntries.length + ebooks.filter(b => !pairMaps.byEbookId[b.id]).length + audiobooks.filter(b => !pairMaps.byAudiobookId[b.id]).length },
         { key: 'ebooks', label: 'Ebooks', count: ebooks.length },
         { key: 'audiobooks', label: 'Audiobooks', count: audiobooks.length },
-        { key: 'paired', label: 'Paired', count: books.filter(b => b.pair_id).length },
-        { key: 'unpaired', label: 'Unpaired', count: books.filter(b => !b.pair_id).length },
+        { key: 'paired', label: 'Paired', count: pairs.length },
+        { key: 'unpaired', label: 'Unpaired', count: stats.unpaired },
+        ...(stats.newCount > 0 ? [{ key: 'new', label: 'New', count: stats.newCount }] : []),
     ]
 
     return (
@@ -800,20 +957,20 @@ function LibraryPage({ tab }) {
 
             {/* Stats bar */}
             <div className="library-stats">
-                <span className="library-stat"><strong>{stats.totalEbooks}</strong> Ebooks</span>
-                <span className="library-stat"><strong>{stats.totalAudiobooks}</strong> Audiobooks</span>
-                <span className="library-stat"><strong>{stats.paired}</strong> Paired</span>
-                <span className="library-stat">Showing <strong>{filteredBooks.length}</strong> of {stats.total}</span>
+                <span className="library-stat"><strong>{ebooks.length}</strong> Ebooks</span>
+                <span className="library-stat"><strong>{audiobooks.length}</strong> Audiobooks</span>
+                <span className="library-stat"><strong>{pairs.length}</strong> Paired</span>
+                <span className="library-stat">Showing <strong>{filteredBooks.length}</strong></span>
             </div>
 
             {/* Book display */}
             {filteredBooks.length === 0 ? (
                 <div className="library-empty">
                     <div className="library-empty-icon">
-                        {books.length === 0 ? '📚' : '🔍'}
+                        {ebooks.length + audiobooks.length === 0 ? '📚' : '🔍'}
                     </div>
-                    <h3>{books.length === 0 ? 'No books yet' : 'No books match your filters'}</h3>
-                    <p>{books.length === 0
+                    <h3>{ebooks.length + audiobooks.length === 0 ? 'No books yet' : 'No books match your filters'}</h3>
+                    <p>{ebooks.length + audiobooks.length === 0
                         ? 'Scan your directories or upload books to get started.'
                         : 'Try adjusting your search or filters.'
                     }</p>
@@ -821,16 +978,20 @@ function LibraryPage({ tab }) {
             ) : viewMode === 'grid' ? (
                 /* ---- Grid View ---- */
                 <div className="library-grid">
-                    {filteredBooks.map(book => (
+                    {filteredBooks.map((book, idx) => (
                         <BookCard
                             key={bookKey(book)}
                             book={book}
                             selectMode={selectMode}
                             isSelected={selectedIds.has(bookKey(book))}
-                            onSelect={() => toggleSelect(book)}
+                            onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
                             onEdit={() => openEdit(book)}
                             onDelete={() => openDeleteModal(book)}
-                            onNavigate={() => navigate(`/book/${book.mediaType}/${book.id}`)}
+                            onNavigate={() => navigate(
+                                book.mediaType === 'pair'
+                                    ? `/book/ebook/${book.ebook_id}`
+                                    : `/book/${book.mediaType}/${book.id}`
+                            )}
                             canEdit={canEdit}
                         />
                     ))}
@@ -853,16 +1014,20 @@ function LibraryPage({ tab }) {
                         <div>Added</div>
                         <div></div>
                     </div>
-                    {filteredBooks.map(book => (
+                    {filteredBooks.map((book, idx) => (
                         <BookRow
                             key={bookKey(book)}
                             book={book}
                             selectMode={selectMode}
                             isSelected={selectedIds.has(bookKey(book))}
-                            onSelect={() => toggleSelect(book)}
+                            onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
                             onEdit={() => openEdit(book)}
                             onDelete={() => openDeleteModal(book)}
-                            onNavigate={() => navigate(`/book/${book.mediaType}/${book.id}`)}
+                            onNavigate={() => navigate(
+                                book.mediaType === 'pair'
+                                    ? `/book/ebook/${book.ebook_id}`
+                                    : `/book/${book.mediaType}/${book.id}`
+                            )}
                             canEdit={canEdit}
                         />
                     ))}
@@ -937,20 +1102,23 @@ function LibraryPage({ tab }) {
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
                     <div className="card" style={{ padding: '24px', maxWidth: '480px', width: '90%' }}>
                         <h3 style={{ marginTop: 0 }}>Confirm Delete</h3>
-                        <p>Are you sure you want to delete <strong>{selectedIds.size} book{selectedIds.size !== 1 ? 's' : ''}</strong>?</p>
+                        <p>Are you sure you want to delete <strong>{selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}</strong>?</p>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                            For paired items, both the ebook and audiobook will be deleted.
+                        </p>
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '16px 0', cursor: 'pointer' }}>
                             <input type="checkbox" checked={bulkDeleteSourceFile} onChange={(e) => setBulkDeleteSourceFile(e.target.checked)} />
                             <span>Also delete the source files from disk</span>
                         </label>
                         {bulkDeleteSourceFile && (
                             <div className="alert alert-error" style={{ fontSize: '0.85rem', marginBottom: '16px' }}>
-                                This will permanently delete {selectedIds.size} file{selectedIds.size !== 1 ? 's' : ''} from your server!
+                                This will permanently delete files from your server!
                             </div>
                         )}
                         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                             <button className="btn btn-secondary" onClick={() => setBulkDeleteOpen(false)} disabled={bulkDeleting}>Cancel</button>
                             <button className="btn btn-danger" onClick={executeBulkDelete} disabled={bulkDeleting}>
-                                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Book${selectedIds.size !== 1 ? 's' : ''}`}
+                                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
                             </button>
                         </div>
                     </div>
@@ -961,7 +1129,7 @@ function LibraryPage({ tab }) {
             {bulkEditOpen && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
                     <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px', maxWidth: '520px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
-                        <h3 style={{ marginTop: 0 }}>Edit {selectedIds.size} Book{selectedIds.size !== 1 ? 's' : ''}</h3>
+                        <h3 style={{ marginTop: 0 }}>Edit {selectedIds.size} Item{selectedIds.size !== 1 ? 's' : ''}</h3>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 0 }}>
                             Leave fields blank to keep existing values. Only filled fields will be updated.
                         </p>
@@ -992,7 +1160,7 @@ function LibraryPage({ tab }) {
                                 onClick={handleBulkEdit}
                                 disabled={bulkSaving || Object.values(bulkEditFields).every(v => !v.trim())}
                             >
-                                {bulkSaving ? 'Saving...' : `Save to ${selectedIds.size} Book${selectedIds.size !== 1 ? 's' : ''}`}
+                                {bulkSaving ? 'Saving...' : `Save to ${selectedIds.size} Item${selectedIds.size !== 1 ? 's' : ''}`}
                             </button>
                         </div>
                     </div>
