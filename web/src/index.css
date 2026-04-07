@@ -68,8 +68,9 @@ body {
     min-height: 100vh;
 }
 
+/* ---- Sidebar — compact by default, expanded on hover ---- */
 .sidebar {
-    width: 260px;
+    width: 64px;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border);
     padding: 24px 0;
@@ -80,39 +81,39 @@ body {
     left: 0;
     bottom: 0;
     z-index: 100;
-    transition: width 0.2s ease;
+    transition: width 0.22s ease;
     overflow: hidden;
 }
 
-/* ---- Collapsed sidebar ---- */
-.sidebar.collapsed {
-    width: 64px;
-}
-
-.sidebar.collapsed .sidebar-logo-text {
+/* Compact-state cascades (default) */
+.sidebar .sidebar-logo-text {
     display: none;
 }
 
-.sidebar.collapsed .sidebar-logo {
+.sidebar .sidebar-logo {
     justify-content: center;
     padding: 0 0 16px;
 }
 
-.sidebar.collapsed .nav-link {
+.sidebar nav {
+    padding: 0 6px;
+}
+
+.sidebar .nav-link {
     justify-content: center;
     padding: 10px 0;
 }
 
-.sidebar.collapsed .nav-link span {
+.sidebar .nav-link span {
     display: none;
 }
 
-.sidebar.collapsed .sidebar-user .info,
-.sidebar.collapsed .sidebar-user .btn {
+.sidebar .sidebar-user .info,
+.sidebar .sidebar-user .btn {
     display: none;
 }
 
-.sidebar.collapsed .sidebar-footer {
+.sidebar .sidebar-footer {
     padding: 16px 8px;
     display: flex;
     flex-direction: column;
@@ -120,34 +121,57 @@ body {
     gap: 8px;
 }
 
-.sidebar.collapsed .sidebar-user {
+.sidebar .sidebar-user {
     flex-direction: column;
     gap: 0;
 }
 
-/* Collapse toggle button */
-.sidebar-collapse-btn {
-    position: absolute;
-    top: 20px;
-    right: -14px;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-light);
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 101;
-    transition: var(--transition);
+/* ---- Expanded sidebar (on hover) ---- */
+.sidebar.expanded {
+    width: 260px;
 }
 
-.sidebar-collapse-btn:hover {
-    background: var(--accent-light);
-    color: var(--accent);
-    border-color: var(--accent);
+.sidebar.expanded .sidebar-logo-text {
+    display: block;
+}
+
+.sidebar.expanded .sidebar-logo {
+    justify-content: flex-start;
+    padding: 0 24px 24px;
+}
+
+.sidebar.expanded nav {
+    padding: 0 12px;
+}
+
+.sidebar.expanded .nav-link {
+    justify-content: flex-start;
+    padding: 10px 16px;
+}
+
+.sidebar.expanded .nav-link span {
+    display: inline;
+}
+
+.sidebar.expanded .sidebar-user .info {
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar.expanded .sidebar-user .btn {
+    display: flex;
+}
+
+.sidebar.expanded .sidebar-footer {
+    padding: 16px 24px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+}
+
+.sidebar.expanded .sidebar-user {
+    flex-direction: row;
+    gap: 12px;
 }
 
 .sidebar-logo {
@@ -283,19 +307,12 @@ body {
 
 .main-content {
     flex: 1;
-    margin-left: 260px;
-    padding: 32px;
-    width: calc(100vw - 260px);
-    max-width: calc(100vw - 260px);
-    box-sizing: border-box;
-    overflow-x: hidden;
-    transition: margin-left 0.2s ease, width 0.2s ease, max-width 0.2s ease;
-}
-
-.main-content.sidebar-collapsed {
     margin-left: 64px;
+    padding: 32px;
     width: calc(100vw - 64px);
     max-width: calc(100vw - 64px);
+    box-sizing: border-box;
+    overflow-x: hidden;
 }
 
 /* ---- Global search bar ---- */

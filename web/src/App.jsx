@@ -66,17 +66,7 @@ function GlobalSearchBar() {
 function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(
-        () => localStorage.getItem('tandem_sidebar_collapsed') === 'true'
-    )
-
-    const toggleSidebar = () => {
-        setSidebarCollapsed(prev => {
-            const next = !prev
-            localStorage.setItem('tandem_sidebar_collapsed', String(next))
-            return next
-        })
-    }
+    const [sidebarHovered, setSidebarHovered] = useState(false)
 
     const handleLogout = () => {
         logout()
@@ -94,17 +84,11 @@ function AppShell({ user, setUser }) {
 
     return (
         <div className="app-layout">
-            <aside className={sidebarCollapsed ? 'sidebar collapsed' : 'sidebar'}>
-                <button
-                    className="sidebar-collapse-btn"
-                    onClick={toggleSidebar}
-                    title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"
-                        style={{ transform: sidebarCollapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }}>
-                        <polyline points="15 18 9 12 15 6" />
-                    </svg>
-                </button>
+            <aside
+                className={sidebarHovered ? 'sidebar expanded' : 'sidebar'}
+                onMouseEnter={() => setSidebarHovered(true)}
+                onMouseLeave={() => setSidebarHovered(false)}
+            >
                 <div className="sidebar-logo">
                     <svg viewBox="0 0 560 360" width="90" height="58" style={{ flexShrink: 0 }}>
                         <defs>
@@ -166,7 +150,7 @@ function AppShell({ user, setUser }) {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 3h5v5" /><path d="M4 20L21 3" /><path d="M21 16v5h-5" /><path d="M15 15l6 6" /><path d="M4 4l5 5" /></svg>
                         <span>Book Pairs</span>
                     </Link>
-                    {isSection('/pairs') && !sidebarCollapsed && (
+                    {isSection('/pairs') && sidebarHovered && (
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
                             <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
@@ -179,7 +163,7 @@ function AppShell({ user, setUser }) {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
                         <span>Transcription</span>
                     </Link>
-                    {isSection('/transcription') && !sidebarCollapsed && (
+                    {isSection('/transcription') && sidebarHovered && (
                         <div className="nav-sub-group">
                             <Link to="/transcription/not-transcribed" className={subNavClass('/transcription/not-transcribed')}>⏸️ Not Transcribed</Link>
                             <Link to="/transcription/queue" className={subNavClass('/transcription/queue')}>📋 Queue</Link>
@@ -193,7 +177,7 @@ function AppShell({ user, setUser }) {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         <span>System</span>
                     </Link>
-                    {isSection('/system') && !sidebarCollapsed && (
+                    {isSection('/system') && sidebarHovered && (
                         <div className="nav-sub-group">
                             <Link to="/system/status" className={subNavClass('/system/status')}>⚙️ Status</Link>
                             <Link to="/system/unsupported" className={subNavClass('/system/unsupported')}>⚠️ Unsupported Files</Link>
@@ -222,7 +206,7 @@ function AppShell({ user, setUser }) {
                     <ThemePicker />
                 </div>
             </aside>
-            <main className={sidebarCollapsed ? 'main-content sidebar-collapsed' : 'main-content'}>
+            <main className="main-content">
                 <GlobalSearchBar />
                 <Routes>
                     {/* Home */}
