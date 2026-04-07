@@ -8,13 +8,13 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db
 from models.user import User
-from models.book import BookPair
+from models.book import BookPair, EBook, AudioBook
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
 from models.progress import UserProgress, ProgressType
@@ -322,8 +322,13 @@ async def update_progress(
     
     # 1. Verify existence of media
     if media_type == ProgressType.EBOOK:
-        # Check against EBook model (skip actual check here for brevity, assuming foreign keys protect us, but ideally we'd check)
-        pass 
+        result = await db.execute(select(EBook).where(EBook.id == media_id))
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail=f"Ebook {media_id} not found")
+    else:
+        result = await db.execute(select(AudioBook).where(AudioBook.id == media_id))
+        if not result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail=f"Audiobook {media_id} not found")
         
     query = select(UserProgress).where(
         UserProgress.user_id == current_user.id,
@@ -379,6 +384,50 @@ async def update_progress(
     await db.refresh(progress)
 
     return progress
+
+
+@router.delete("/progress/pair/{pair_id}")
+async def reset_pair_progress(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete ALL progress records for a book pair (catches corrupted records too)."""
+    # Verify the pair exists
+    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    pair = result.scalar_one_or_none()
+    if not pair:
+        raise HTTPException(status_code=404, detail="Book pair not found")
+
+    # Delete all progress records linked to this pair for this user
+    await db.execute(
+        delete(UserProgress).where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.book_pair_id == pair_id,
+        )
+    )
+
+    # Also delete any progress records by media ID that belong to this pair
+    # (in case book_pair_id wasn't set on some records)
+    if pair.ebook_id:
+        await db.execute(
+            delete(UserProgress).where(
+                UserProgress.user_id == current_user.id,
+                UserProgress.media_type == ProgressType.EBOOK,
+                UserProgress.ebook_id == pair.ebook_id,
+            )
+        )
+    if pair.audiobook_id:
+        await db.execute(
+            delete(UserProgress).where(
+                UserProgress.user_id == current_user.id,
+                UserProgress.media_type == ProgressType.AUDIOBOOK,
+                UserProgress.audiobook_id == pair.audiobook_id,
+            )
+        )
+
+    await db.commit()
+    return {"status": "ok"}
 
 
 import re

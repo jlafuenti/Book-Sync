@@ -40,7 +40,7 @@ function GlobalSearchBar() {
     const handleSubmit = (e) => {
         e.preventDefault()
         if (query.trim()) {
-            navigate(`/library/ebooks?search=${encodeURIComponent(query.trim())}`)
+            navigate(`/library?search=${encodeURIComponent(query.trim())}`)
             setQuery('')
         }
     }
@@ -150,15 +150,13 @@ function AppShell({ user, setUser }) {
                     </Link>
 
                     {/* Library */}
-                    <Link to="/library/ebooks" className={navClass('/library')} title="Library">
+                    <Link to="/library" className={navClass('/library')} title="Library">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
                         <span>Library</span>
                     </Link>
                     {isSection('/library') && !sidebarCollapsed && (
                         <div className="nav-sub-group">
-                            <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
-                            <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
-                            <Link to="/library/new-items" className={subNavClass('/library/new-items')}>🆕 New Items</Link>
+                            <Link to="/library/new-items" className={subNavClass('/library/new-items')}>New Items</Link>
                         </div>
                     )}
 
@@ -236,6 +234,7 @@ function AppShell({ user, setUser }) {
                     <Route path="/continue" element={<HomePage />} />
 
                     {/* Library routes */}
+                    <Route path="/library" element={<LibraryPage />} />
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
                     <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
                     <Route path="/library/new-items" element={<NewItemsPage />} />
@@ -272,7 +271,7 @@ function AppShell({ user, setUser }) {
 
                     {/* Redirects */}
                     <Route path="/" element={<Navigate to="/continue" replace />} />
-                    <Route path="/library" element={<Navigate to="/library/ebooks" replace />} />
+                    {/* /library is now a direct route, no redirect needed */}
                     <Route path="/pairs" element={<Navigate to="/pairs/paired" replace />} />
                     <Route path="/transcription" element={<Navigate to="/transcription/not-transcribed" replace />} />
                     <Route path="*" element={<Navigate to="/continue" replace />} />

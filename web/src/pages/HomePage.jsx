@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     getAllProgress, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
-    updateProgress, getProgress as apiGetProgress, getBookmark, updateBookmark, coverSrc,
+    updateProgress, resetPairProgress, getProgress as apiGetProgress, getBookmark, updateBookmark, coverSrc,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
@@ -397,16 +397,8 @@ function HomePage() {
         setContinueItems(prev => prev.filter(i => i.itemId !== item.itemId))
         try {
             if (item.itemType === 'pair') {
-                await Promise.all([
-                    item.ebookId ? updateProgress('ebook', item.ebookId, {
-                        is_completed: false, device_id: 'web',
-                        epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
-                    }).catch(() => {}) : null,
-                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, {
-                        is_completed: false, device_id: 'web',
-                        audio_position_ms: 0,
-                    }).catch(() => {}) : null,
-                ].filter(Boolean))
+                // Use pair-level DELETE to catch all records (including corrupted ones)
+                await resetPairProgress(item.book_pair_id)
             } else if (item.itemType === 'ebook') {
                 await updateProgress('ebook', item.mediaId, {
                     is_completed: false, device_id: 'web',
@@ -420,10 +412,8 @@ function HomePage() {
             }
         } catch (err) {
             console.error('Failed to reset progress:', err)
-            // Restore on failure
-            loadData()
         } finally {
-            // Sync true server state (catches any edge cases)
+            // Sync true server state
             loadData()
         }
     }

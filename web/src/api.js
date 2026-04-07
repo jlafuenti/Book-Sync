@@ -427,6 +427,14 @@ export async function updateProgress(mediaType, mediaId, progressData) {
     return resp.json();
 }
 
+export async function resetPairProgress(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/progress/pair/${pairId}`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) throw new Error('Failed to reset pair progress');
+    return resp.json();
+}
+
 // ============ Bookmarks ============
 
 export async function getBookmark(pairId) {
