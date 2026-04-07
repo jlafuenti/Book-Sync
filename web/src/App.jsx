@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { isLoggedIn, getMe, logout } from './api'
 import { useTheme } from './ThemeContext'
 import { DEFAULT_THEME } from './themes'
@@ -17,7 +17,7 @@ import SeriesPage from './pages/SeriesPage'
 import BookDetailPage from './pages/BookDetailPage'
 import UnpairedPage from './pages/UnpairedPage'
 import UserManagementPage from './pages/UserManagementPage'
-import ContinuePage from './pages/ContinuePage'
+import HomePage from './pages/HomePage'
 import NewItemsPage from './pages/NewItemsPage'
 import NewPairsPage from './pages/NewPairsPage'
 import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
@@ -33,9 +33,50 @@ function AppMiniPlayer() {
     return <MiniPlayer onExpand={() => setShowFullPlayer(true)} />
 }
 
+function GlobalSearchBar() {
+    const navigate = useNavigate()
+    const [query, setQuery] = useState('')
+
+    const handleSubmit = (e) => {
+        e.preventDefault()
+        if (query.trim()) {
+            navigate(`/library/ebooks?search=${encodeURIComponent(query.trim())}`)
+            setQuery('')
+        }
+    }
+
+    return (
+        <form className="global-search-bar" onSubmit={handleSubmit}>
+            <div className="global-search-wrap">
+                <svg className="global-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+                <input
+                    type="text"
+                    className="global-search-input"
+                    placeholder="Search library..."
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                />
+            </div>
+        </form>
+    )
+}
+
 function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(
+        () => localStorage.getItem('tandem_sidebar_collapsed') === 'true'
+    )
+
+    const toggleSidebar = () => {
+        setSidebarCollapsed(prev => {
+            const next = !prev
+            localStorage.setItem('tandem_sidebar_collapsed', String(next))
+            return next
+        })
+    }
 
     const handleLogout = () => {
         logout()
@@ -53,7 +94,17 @@ function AppShell({ user, setUser }) {
 
     return (
         <div className="app-layout">
-            <aside className="sidebar">
+            <aside className={sidebarCollapsed ? 'sidebar collapsed' : 'sidebar'}>
+                <button
+                    className="sidebar-collapse-btn"
+                    onClick={toggleSidebar}
+                    title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"
+                        style={{ transform: sidebarCollapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }}>
+                        <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                </button>
                 <div className="sidebar-logo">
                     <svg viewBox="0 0 560 360" width="90" height="58" style={{ flexShrink: 0 }}>
                         <defs>
@@ -86,24 +137,24 @@ function AppShell({ user, setUser }) {
                             <rect x="463" y="98"  width="22" height="120" rx="11" fill="var(--accent-secondary)"/>
                         </g>
                     </svg>
-                    <div>
+                    <div className="sidebar-logo-text">
                         <h1>Tandem</h1>
                         <span>Audio &amp; Text Synchronizer</span>
                     </div>
                 </div>
                 <nav>
-                    {/* Continue */}
-                    <Link to="/continue" className={isExact('/continue') ? 'nav-link active' : 'nav-link'}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-                        Continue
+                    {/* Home */}
+                    <Link to="/continue" className={isExact('/continue') ? 'nav-link active' : 'nav-link'} title="Home">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>
+                        <span>Home</span>
                     </Link>
 
                     {/* Library */}
-                    <Link to="/library/ebooks" className={navClass('/library')}>
+                    <Link to="/library/ebooks" className={navClass('/library')} title="Library">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
-                        Library
+                        <span>Library</span>
                     </Link>
-                    {isSection('/library') && (
+                    {isSection('/library') && !sidebarCollapsed && (
                         <div className="nav-sub-group">
                             <Link to="/library/ebooks" className={subNavClass('/library/ebooks')}>📚 Ebooks</Link>
                             <Link to="/library/audiobooks" className={subNavClass('/library/audiobooks')}>🎧 Audiobooks</Link>
@@ -112,17 +163,17 @@ function AppShell({ user, setUser }) {
                     )}
 
                     {/* Series */}
-                    <Link to="/series" className={navClass('/series')}>
+                    <Link to="/series" className={navClass('/series')} title="Series">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /><path d="M12 2v20" /></svg>
-                        Series
+                        <span>Series</span>
                     </Link>
 
                     {/* Book Pairs */}
-                    <Link to="/pairs/paired" className={navClass('/pairs')}>
+                    <Link to="/pairs/paired" className={navClass('/pairs')} title="Book Pairs">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 3h5v5" /><path d="M4 20L21 3" /><path d="M21 16v5h-5" /><path d="M15 15l6 6" /><path d="M4 4l5 5" /></svg>
-                        Book Pairs
+                        <span>Book Pairs</span>
                     </Link>
-                    {isSection('/pairs') && (
+                    {isSection('/pairs') && !sidebarCollapsed && (
                         <div className="nav-sub-group">
                             <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
                             <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
@@ -131,11 +182,11 @@ function AppShell({ user, setUser }) {
                     )}
 
                     {/* Transcription */}
-                    <Link to="/transcription/not-transcribed" className={navClass('/transcription')}>
+                    <Link to="/transcription/not-transcribed" className={navClass('/transcription')} title="Transcription">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
-                        Transcription
+                        <span>Transcription</span>
                     </Link>
-                    {isSection('/transcription') && (
+                    {isSection('/transcription') && !sidebarCollapsed && (
                         <div className="nav-sub-group">
                             <Link to="/transcription/not-transcribed" className={subNavClass('/transcription/not-transcribed')}>⏸️ Not Transcribed</Link>
                             <Link to="/transcription/queue" className={subNavClass('/transcription/queue')}>📋 Queue</Link>
@@ -145,11 +196,11 @@ function AppShell({ user, setUser }) {
                     )}
 
                     {/* System */}
-                    <Link to="/system/status" className={navClass('/system')}>
+                    <Link to="/system/status" className={navClass('/system')} title="System">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
-                        System
+                        <span>System</span>
                     </Link>
-                    {isSection('/system') && (
+                    {isSection('/system') && !sidebarCollapsed && (
                         <div className="nav-sub-group">
                             <Link to="/system/status" className={subNavClass('/system/status')}>⚙️ Status</Link>
                             <Link to="/system/unsupported" className={subNavClass('/system/unsupported')}>⚠️ Unsupported Files</Link>
@@ -158,9 +209,9 @@ function AppShell({ user, setUser }) {
 
                     {/* Users — admin/superadmin only */}
                     {hasMinRole('admin') && (
-                        <Link to="/admin/users" className={navClass('/admin/users')}>
+                        <Link to="/admin/users" className={navClass('/admin/users')} title="Users">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-                            Users
+                            <span>Users</span>
                         </Link>
                     )}
                 </nav>
@@ -178,10 +229,11 @@ function AppShell({ user, setUser }) {
                     <ThemePicker />
                 </div>
             </aside>
-            <main className="main-content">
+            <main className={sidebarCollapsed ? 'main-content sidebar-collapsed' : 'main-content'}>
+                <GlobalSearchBar />
                 <Routes>
-                    {/* Continue */}
-                    <Route path="/continue" element={<ContinuePage />} />
+                    {/* Home */}
+                    <Route path="/continue" element={<HomePage />} />
 
                     {/* Library routes */}
                     <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
