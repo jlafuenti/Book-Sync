@@ -101,13 +101,13 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
                     <img src={coverUrl} alt={book.title} loading="lazy" />
                 ) : (
                     <div className="lib-book-card-placeholder">
-                        {isEbook ? '\u{1F4DA}' : '\u{1F3A7}'}
+                        {isEbook ? '📚' : '🎧'}
                     </div>
                 )}
                 <span className="lib-book-card-type-badge">{isEbook ? 'E' : 'A'}</span>
                 {book.pair_id && (
                     <span className="lib-book-card-pair-badge" title={`Pair status: ${book.pair_status || 'paired'}`}>
-                        \u{1F517}
+                        🔗
                     </span>
                 )}
                 {/* Three-dot menu */}
@@ -168,7 +168,7 @@ function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onN
                 {coverUrl ? (
                     <img className="lib-book-row-thumb" src={coverUrl} alt={book.title} loading="lazy" />
                 ) : (
-                    <div className="lib-book-row-thumb-placeholder">{isEbook ? '\u{1F4DA}' : '\u{1F3A7}'}</div>
+                    <div className="lib-book-row-thumb-placeholder">{isEbook ? '📚' : '🎧'}</div>
                 )}
             </div>
             <div className="lib-book-row-title">{book.title}</div>
@@ -190,7 +190,7 @@ function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onN
                             title="Edit metadata"
                             style={{ padding: '4px 8px', fontSize: '0.8rem' }}
                         >
-                            \u270F\uFE0F
+                            ✏️
                         </button>
                         <button
                             className="btn btn-sm btn-danger"
@@ -198,7 +198,7 @@ function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onN
                             title="Delete"
                             style={{ padding: '4px 8px', fontSize: '0.8rem' }}
                         >
-                            \u{1F5D1}\uFE0F
+                            🗑️
                         </button>
                     </>
                 )}
@@ -810,7 +810,7 @@ function LibraryPage({ tab }) {
             {filteredBooks.length === 0 ? (
                 <div className="library-empty">
                     <div className="library-empty-icon">
-                        {books.length === 0 ? '\u{1F4DA}' : '\u{1F50D}'}
+                        {books.length === 0 ? '📚' : '🔍'}
                     </div>
                     <h3>{books.length === 0 ? 'No books yet' : 'No books match your filters'}</h3>
                     <p>{books.length === 0
