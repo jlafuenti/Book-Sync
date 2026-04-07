@@ -34,16 +34,14 @@
 
 .library-filter-pills {
     display: flex;
-    gap: 4px;
-    background: var(--bg-secondary);
-    border-radius: 8px;
-    padding: 3px;
+    gap: 6px;
+    flex-wrap: wrap;
 }
 
 .library-filter-pill {
-    padding: 6px 14px;
-    border-radius: 6px;
-    border: none;
+    padding: 7px 16px;
+    border-radius: 20px;
+    border: 1.5px solid var(--border);
     background: transparent;
     color: var(--text-secondary);
     font-size: 0.82rem;
@@ -54,14 +52,16 @@
 }
 
 .library-filter-pill:hover {
-    color: var(--text-primary);
-    background: rgba(255,255,255,0.05);
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
 }
 
 .library-filter-pill.active {
     background: var(--accent);
+    border-color: var(--accent);
     color: white;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 /* ---- Sort / View Toggle ---- */
