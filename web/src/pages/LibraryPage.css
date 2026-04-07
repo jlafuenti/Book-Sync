@@ -64,6 +64,17 @@
     box-shadow: 0 2px 8px var(--accent-glow);
 }
 
+/* Sub-filter pills (shown below main pills when a filter is active) */
+.library-filter-pills-sub {
+    margin-top: 2px;
+}
+
+.library-filter-pill-sub {
+    padding: 4px 12px;
+    font-size: 0.76rem;
+    border-width: 1px;
+}
+
 /* ---- Sort / View Toggle ---- */
 
 .library-sort-select {
