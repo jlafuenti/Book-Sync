@@ -374,6 +374,8 @@ function HomePage() {
     // --- Actions ---
 
     const handleMarkComplete = async (item) => {
+        // Optimistic removal — instant feedback
+        setContinueItems(prev => prev.filter(i => i.itemId !== item.itemId))
         try {
             if (item.itemType === 'pair') {
                 await Promise.all([
@@ -391,6 +393,8 @@ function HomePage() {
     }
 
     const handleResetProgress = async (item) => {
+        // Optimistic removal — instant feedback
+        setContinueItems(prev => prev.filter(i => i.itemId !== item.itemId))
         try {
             if (item.itemType === 'pair') {
                 await Promise.all([
@@ -416,7 +420,10 @@ function HomePage() {
             }
         } catch (err) {
             console.error('Failed to reset progress:', err)
+            // Restore on failure
+            loadData()
         } finally {
+            // Sync true server state (catches any edge cases)
             loadData()
         }
     }
