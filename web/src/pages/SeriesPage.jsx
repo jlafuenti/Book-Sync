@@ -7,6 +7,72 @@ import './SeriesPage.css'
 const SORT_LABELS = { name: 'Name', count: 'Book Count', recent: 'Recently Added' }
 const prefixRe = /^(the|a|an)\s+/i
 
+// ---- FilterPill: pill button that opens a dropdown, shows selected value + X ----
+
+function FilterPill({ label, value, options, onChange }) {
+    const [open, setOpen] = useState(false)
+    const ref = useRef(null)
+
+    useEffect(() => {
+        if (!open) return
+        const handler = (e) => {
+            if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [open])
+
+    return (
+        <div className="filter-pill-wrap" ref={ref}>
+            <button
+                className={`library-filter-pill filter-pill-btn${value ? ' active' : ''}${!value && open ? ' filter-pill-open' : ''}`}
+                onClick={() => setOpen(o => !o)}
+            >
+                {value || label}
+                {value ? (
+                    <span
+                        className="filter-pill-x"
+                        onClick={e => { e.stopPropagation(); onChange(''); setOpen(false) }}
+                        title="Clear filter"
+                    >✕</span>
+                ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="10" height="10" style={{ marginLeft: 2, flexShrink: 0 }}>
+                        <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                )}
+            </button>
+            {open && options.length > 0 && (
+                <div className="filter-pill-dropdown">
+                    {value && (
+                        <button
+                            className="series-sort-option"
+                            onClick={() => { onChange(''); setOpen(false) }}
+                            style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}
+                        >
+                            Clear filter
+                        </button>
+                    )}
+                    {value && <hr className="series-sort-divider" style={{ margin: '2px 0 4px' }} />}
+                    {options.map(o => (
+                        <button
+                            key={o}
+                            className={`series-sort-option${o === value ? ' active' : ''}`}
+                            onClick={() => { onChange(o); setOpen(false) }}
+                        >
+                            {o}
+                            {o === value && (
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12">
+                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                                </svg>
+                            )}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    )
+}
+
 export default function SeriesPage() {
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -24,11 +90,15 @@ export default function SeriesPage() {
     const [viewMode, setViewMode] = useState('grid')
     const [activeFilter, setActiveFilter] = useState('all')
     const [authorFilter, setAuthorFilter] = useState('')
+    const [seriesFilter, setSeriesFilter] = useState('')
     const [sortKey, setSortKey] = useState('name')
     const [sortDir, setSortDir] = useState('asc')
     const [sortOpen, setSortOpen] = useState(false)
     const [searchTerm, setSearchTerm] = useState('')
     const [unsortedOpen, setUnsortedOpen] = useState(false)
+
+    // List view: track which series rows are expanded
+    const [expandedRows, setExpandedRows] = useState(new Set())
 
     // Select mode
     const [selectMode, setSelectMode] = useState(false)
@@ -166,9 +236,14 @@ export default function SeriesPage() {
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
-    // All unique authors for the dropdown
+    // All unique authors for the filter pill
     const allAuthors = useMemo(() =>
         [...new Set(seriesGroups.map(g => g.author).filter(Boolean))].sort(),
+    [seriesGroups])
+
+    // All series names for the filter pill
+    const allSeriesNames = useMemo(() =>
+        seriesGroups.map(g => g.name).sort((a, b) => a.localeCompare(b)),
     [seriesGroups])
 
     // Filter & sort
@@ -183,6 +258,7 @@ export default function SeriesPage() {
                 if (!hits) return false
             }
             if (authorFilter && g.author !== authorFilter) return false
+            if (seriesFilter && g.name !== seriesFilter) return false
             if (activeFilter === 'ebooks') return g.items.every(i => i.type === 'ebook')
             if (activeFilter === 'audiobooks') return g.items.every(i => i.type === 'audiobook')
             return true
@@ -201,7 +277,7 @@ export default function SeriesPage() {
         })
 
         return filtered
-    }, [seriesGroups, searchTerm, authorFilter, activeFilter, sortKey, sortDir])
+    }, [seriesGroups, searchTerm, authorFilter, seriesFilter, activeFilter, sortKey, sortDir])
 
     const filteredUnsorted = useMemo(() => {
         let list = unseriedItems
@@ -238,6 +314,14 @@ export default function SeriesPage() {
         setSelectedKeys(new Set())
     }
 
+    function toggleRowExpand(name) {
+        setExpandedRows(prev => {
+            const next = new Set(prev)
+            next.has(name) ? next.delete(name) : next.add(name)
+            return next
+        })
+    }
+
     const allVisibleItems = useMemo(() => {
         const items = []
         filteredSeries.forEach(g => g.items.forEach(i => items.push(i)))
@@ -272,9 +356,15 @@ export default function SeriesPage() {
         }
     }
 
+    // Navigate to library with explicit series filter
     function navigateToSeries(group) {
         if (selectMode) return
-        navigate(`/library?search=${encodeURIComponent(group.name)}`)
+        navigate(`/library?series=${encodeURIComponent(group.name)}`)
+    }
+
+    // Navigate to library with explicit author filter
+    function navigateToAuthorInLibrary(author) {
+        navigate(`/library?author=${encodeURIComponent(author)}`)
     }
 
     const sortDirLabel = sortDir === 'asc' ? '↑' : '↓'
@@ -309,29 +399,27 @@ export default function SeriesPage() {
                         ))}
                     </div>
 
-                    {/* Author filter dropdown */}
-                    <select
-                        className="library-sort-select"
+                    {/* Author filter pill */}
+                    <FilterPill
+                        label="Author"
                         value={authorFilter}
-                        onChange={e => setAuthorFilter(e.target.value)}
-                    >
-                        <option value="">All Authors</option>
-                        {allAuthors.map(a => <option key={a} value={a}>{a}</option>)}
-                    </select>
+                        options={allAuthors}
+                        onChange={setAuthorFilter}
+                    />
+
+                    {/* Series filter pill */}
+                    <FilterPill
+                        label="Series"
+                        value={seriesFilter}
+                        options={allSeriesNames}
+                        onChange={setSeriesFilter}
+                    />
 
                     {/* Active search chip */}
                     {searchTerm && (
                         <div className="library-search-active">
                             <span>Searching: <strong>{searchTerm}</strong></span>
                             <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
-                        </div>
-                    )}
-
-                    {/* Active author filter chip */}
-                    {authorFilter && (
-                        <div className="library-search-active">
-                            <span>Author: <strong>{authorFilter}</strong></span>
-                            <button className="library-search-clear" onClick={() => setAuthorFilter('')}>✕</button>
                         </div>
                     )}
                 </div>
@@ -444,7 +532,7 @@ export default function SeriesPage() {
                                 selectedKeys={selectedKeys}
                                 onToggleSelect={toggleSelect}
                                 onClick={() => navigateToSeries(group)}
-                                onAuthorClick={(a) => setAuthorFilter(a)}
+                                onAuthorClick={navigateToAuthorInLibrary}
                             />
                         ))}
                     </div>
@@ -457,8 +545,10 @@ export default function SeriesPage() {
                                 selectMode={selectMode}
                                 selectedKeys={selectedKeys}
                                 onToggleSelect={toggleSelect}
-                                onClick={() => navigateToSeries(group)}
-                                onAuthorClick={(a) => setAuthorFilter(a)}
+                                isExpanded={expandedRows.has(group.name)}
+                                onToggleExpand={() => toggleRowExpand(group.name)}
+                                onSeriesClick={() => navigateToSeries(group)}
+                                onAuthorClick={navigateToAuthorInLibrary}
                             />
                         ))}
                     </div>
@@ -628,7 +718,7 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, 
                     <div
                         className="series-card-author series-card-author-link"
                         onClick={e => { e.stopPropagation(); onAuthorClick(author) }}
-                        title={`Filter by ${author}`}
+                        title={`View ${author} in Library`}
                     >
                         {author}
                     </div>
@@ -641,7 +731,7 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, 
                         <span className="series-stat">🎧 {audioCount} audiobook{audioCount !== 1 ? 's' : ''}</span>
                     )}
                     {pairedCount > 0 && (
-                        <span className="series-stat">🔗 {pairedCount} synced</span>
+                        <span className="series-stat">🔗 {pairedCount} paired</span>
                     )}
                 </div>
             </div>
@@ -649,9 +739,9 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, 
     )
 }
 
-// ---- Series List Row ----
+// ---- Series List Row (collapsible) ----
 
-function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, onClick, onAuthorClick }) {
+function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, isExpanded, onToggleExpand, onSeriesClick, onAuthorClick }) {
     const { name, author, items, covers } = group
 
     const ebookCount = items.filter(i => i.hasEbook).length
@@ -672,53 +762,99 @@ function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, onClic
     }
 
     return (
-        <div
-            className={`series-list-row${anySelected ? ' selected' : ''}`}
-            onClick={selectMode ? undefined : onClick}
-        >
-            {selectMode && (
-                <div onClick={e => e.stopPropagation()}>
-                    <input
-                        type="checkbox"
-                        checked={allSelected}
-                        readOnly
-                        onClick={handleCheckbox}
-                        style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
-                    />
-                </div>
-            )}
-            {/* Thumbnail — first cover only */}
-            <div className="series-list-thumb">
-                {covers.length > 0 ? (
-                    <img src={coverSrc(covers[0])} alt="" className="series-list-thumb-img" loading="lazy" />
-                ) : (
-                    <div className="series-list-thumb-placeholder">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="20" height="20">
-                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                        </svg>
-                    </div>
-                )}
-            </div>
-            {/* Title + author */}
-            <div className="series-list-info">
-                <div className="series-list-name">{name}</div>
-                {author && (
-                    <div
-                        className="series-list-author series-card-author-link"
-                        onClick={e => { e.stopPropagation(); onAuthorClick(author) }}
-                        title={`Filter by ${author}`}
+        <>
+            <div className={`series-list-row${anySelected ? ' selected' : ''}`}>
+                {/* Expand/collapse chevron */}
+                <button
+                    className="series-list-chevron-btn"
+                    onClick={onToggleExpand}
+                    title={isExpanded ? 'Collapse' : 'Expand'}
+                >
+                    <svg
+                        className={`series-list-chevron${isExpanded ? ' open' : ''}`}
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14"
                     >
-                        {author}
+                        <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                </button>
+
+                {selectMode && (
+                    <div onClick={e => e.stopPropagation()}>
+                        <input
+                            type="checkbox"
+                            checked={allSelected}
+                            readOnly
+                            onClick={handleCheckbox}
+                            style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+                        />
                     </div>
                 )}
+
+                {/* Thumbnail */}
+                <div className="series-list-thumb" onClick={onSeriesClick} style={{ cursor: 'pointer' }}>
+                    {covers.length > 0 ? (
+                        <img src={coverSrc(covers[0])} alt="" className="series-list-thumb-img" loading="lazy" />
+                    ) : (
+                        <div className="series-list-thumb-placeholder">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="20" height="20">
+                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                            </svg>
+                        </div>
+                    )}
+                </div>
+
+                {/* Title + author */}
+                <div className="series-list-info" onClick={onSeriesClick} style={{ cursor: 'pointer' }}>
+                    <div className="series-list-name">{name}</div>
+                    {author && (
+                        <div
+                            className="series-list-author series-card-author-link"
+                            onClick={e => { e.stopPropagation(); onAuthorClick(author) }}
+                            title={`View ${author} in Library`}
+                        >
+                            {author}
+                        </div>
+                    )}
+                </div>
+
+                {/* Stats */}
+                <div className="series-list-stats">
+                    {ebookCount > 0 && <span className="series-list-stat">📚 {ebookCount}</span>}
+                    {audioCount > 0 && <span className="series-list-stat">🎧 {audioCount}</span>}
+                    {pairedCount > 0 && <span className="series-list-stat">🔗 {pairedCount} paired</span>}
+                </div>
             </div>
-            {/* Stats */}
-            <div className="series-list-stats">
-                {ebookCount > 0 && <span className="series-stat">📚 {ebookCount}</span>}
-                {audioCount > 0 && <span className="series-stat">🎧 {audioCount}</span>}
-                {pairedCount > 0 && <span className="series-stat">🔗 {pairedCount}</span>}
+
+            {/* Expanded book rows */}
+            {isExpanded && items.map(item => (
+                <SeriesBookRow key={item.key} item={item} />
+            ))}
+        </>
+    )
+}
+
+// ---- Individual book row within expanded series ----
+
+function SeriesBookRow({ item }) {
+    const typeIcon = item.type === 'pair'
+        ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        : item.type === 'audiobook'
+            ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+            : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+
+    return (
+        <div className="series-book-row">
+            <div className="series-book-row-thumb">
+                {item.cover_path ? (
+                    <img src={coverSrc(item.cover_path)} alt="" className="series-list-thumb-img" loading="lazy" />
+                ) : (
+                    <div className="series-list-thumb-placeholder" style={{ fontSize: '0.8rem' }}>📖</div>
+                )}
             </div>
+            <span className="series-book-row-type" title={item.type}>{typeIcon}</span>
+            <span className="series-book-row-index">{item.seriesIndex != null ? `#${item.seriesIndex}` : ''}</span>
+            <span className="series-book-row-title">{item.title}</span>
         </div>
     )
 }
