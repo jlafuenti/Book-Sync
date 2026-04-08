@@ -271,7 +271,9 @@ function LibraryPage({ tab }) {
     const [viewMode, setViewMode] = useState('grid')
     const [activeFilter, setActiveFilter] = useState('all')
     const [unpairedSubFilter, setUnpairedSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks'
-    const [sortBy, setSortBy] = useState('title-asc')
+    const [sortField, setSortField] = useState('title')
+    const [sortDir, setSortDir] = useState('asc')
+    const [sortOpen, setSortOpen] = useState(false)
     const [searchTerm, setSearchTerm] = useState('')
     const [authorFilter, setAuthorFilter] = useState('')
     const [seriesFilter, setSeriesFilter] = useState('')
@@ -307,6 +309,7 @@ function LibraryPage({ tab }) {
     // Dropdown refs
     const maintenanceRef = useRef(null)
     const uploadRef = useRef(null)
+    const sortRef = useRef(null)
     const [maintenanceOpen, setMaintenanceOpen] = useState(false)
     const [uploadOpen, setUploadOpen] = useState(false)
     const ebookFileRef = useRef(null)
@@ -437,8 +440,8 @@ function LibraryPage({ tab }) {
         if (authorFilter) list = list.filter(b => b.author === authorFilter)
         if (seriesFilter) list = list.filter(b => b.series === seriesFilter)
 
-        return [...list].sort(sortComparator(sortBy))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortBy, authorFilter, seriesFilter])
+        return [...list].sort(sortComparator(`${sortField}-${sortDir}`))
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortField, sortDir, authorFilter, seriesFilter])
 
     // Stats
     const stats = useMemo(() => {
@@ -487,6 +490,7 @@ function LibraryPage({ tab }) {
         const handler = (e) => {
             if (maintenanceRef.current && !maintenanceRef.current.contains(e.target)) setMaintenanceOpen(false)
             if (uploadRef.current && !uploadRef.current.contains(e.target)) setUploadOpen(false)
+            if (sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false)
         }
         document.addEventListener('mousedown', handler)
         return () => document.removeEventListener('mousedown', handler)
@@ -835,21 +839,16 @@ function LibraryPage({ tab }) {
                 </div>
 
                 <div className="library-toolbar-right">
-                    {/* Sort */}
-                    <select
-                        className="library-sort-select"
-                        value={sortBy}
-                        onChange={e => setSortBy(e.target.value)}
-                    >
-                        <option value="title-asc">Title A-Z</option>
-                        <option value="title-desc">Title Z-A</option>
-                        <option value="author-asc">Author A-Z</option>
-                        <option value="author-desc">Author Z-A</option>
-                        <option value="date-desc">Date Added (Newest)</option>
-                        <option value="date-asc">Date Added (Oldest)</option>
-                        <option value="series-asc">Series</option>
-                        <option value="size-desc">Size (Largest)</option>
-                    </select>
+                    {/* Sort pill */}
+                    <LibrarySortPill
+                        sortField={sortField}
+                        setSortField={setSortField}
+                        sortDir={sortDir}
+                        setSortDir={setSortDir}
+                        sortOpen={sortOpen}
+                        setSortOpen={setSortOpen}
+                        sortRef={sortRef}
+                    />
 
                     {/* View Toggle */}
                     <div className="library-view-toggle">
@@ -1250,6 +1249,53 @@ function LibraryPage({ tab }) {
                         else setAudiobooks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
                     }}
                 />
+            )}
+        </div>
+    )
+}
+
+const LIBRARY_SORT_LABELS = { title: 'Title', author: 'Author', series: 'Series', date: 'Date Added', size: 'Size' }
+
+function LibrarySortPill({ sortField, setSortField, sortDir, setSortDir, sortOpen, setSortOpen, sortRef }) {
+    return (
+        <div className="series-sort-wrap" ref={sortRef}>
+            <button
+                className={`series-sort-btn${sortOpen ? ' open' : ''}`}
+                onClick={() => setSortOpen(o => !o)}
+            >
+                Sort: {LIBRARY_SORT_LABELS[sortField]} {sortDir === 'asc' ? '↑' : '↓'}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+                    <polyline points="6 9 12 15 18 9" />
+                </svg>
+            </button>
+            {sortOpen && (
+                <div className="series-sort-dropdown">
+                    {Object.entries(LIBRARY_SORT_LABELS).map(([key, label]) => (
+                        <button
+                            key={key}
+                            className={`series-sort-option${sortField === key ? ' active' : ''}`}
+                            onClick={() => setSortField(key)}
+                        >
+                            {label}
+                            {sortField === key && (
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                                </svg>
+                            )}
+                        </button>
+                    ))}
+                    <hr className="series-sort-divider" />
+                    <div className="series-sort-dir-toggle">
+                        <button
+                            className={`series-sort-dir-btn${sortDir === 'asc' ? ' active' : ''}`}
+                            onClick={() => setSortDir('asc')}
+                        >↑ Ascending</button>
+                        <button
+                            className={`series-sort-dir-btn${sortDir === 'desc' ? ' active' : ''}`}
+                            onClick={() => setSortDir('desc')}
+                        >↓ Descending</button>
+                    </div>
+                </div>
             )}
         </div>
     )
