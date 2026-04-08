@@ -21,7 +21,9 @@ export default function SeriesPage() {
     const [error, setError] = useState('')
 
     // View state
+    const [viewMode, setViewMode] = useState('grid')
     const [activeFilter, setActiveFilter] = useState('all')
+    const [authorFilter, setAuthorFilter] = useState('')
     const [sortKey, setSortKey] = useState('name')
     const [sortDir, setSortDir] = useState('asc')
     const [sortOpen, setSortOpen] = useState(false)
@@ -92,9 +94,6 @@ export default function SeriesPage() {
                 cover_path: p.ebook.cover_path || p.audiobook.cover_path,
                 hasEbook: true,
                 hasAudiobook: true,
-                ebookFormat: p.ebook.format,
-                audiobookFormat: p.audiobook.format,
-                status: p.status,
                 uploadedAt: p.ebook.uploaded_at,
                 ebookId: p.ebook.id,
                 audiobookId: p.audiobook.id,
@@ -113,7 +112,6 @@ export default function SeriesPage() {
                 cover_path: e.cover_path,
                 hasEbook: true,
                 hasAudiobook: false,
-                ebookFormat: e.format,
                 uploadedAt: e.uploaded_at,
                 ebookId: e.id,
             })
@@ -130,7 +128,6 @@ export default function SeriesPage() {
                 cover_path: a.cover_path,
                 hasEbook: false,
                 hasAudiobook: true,
-                audiobookFormat: a.format,
                 uploadedAt: a.uploaded_at,
                 audiobookId: a.id,
             })
@@ -154,7 +151,6 @@ export default function SeriesPage() {
                 g.items.push(item)
                 if (item.uploadedAt > g.latestUpload) g.latestUpload = item.uploadedAt
                 if (!g.author && item.author) g.author = item.author
-                // Collect up to 4 unique cover_paths (only real ones)
                 if (item.cover_path && g.covers.length < 4 && !g.covers.includes(item.cover_path)) {
                     g.covers.push(item.cover_path)
                 }
@@ -170,21 +166,23 @@ export default function SeriesPage() {
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
+    // All unique authors for the dropdown
+    const allAuthors = useMemo(() =>
+        [...new Set(seriesGroups.map(g => g.author).filter(Boolean))].sort(),
+    [seriesGroups])
+
     // Filter & sort
     const filteredSeries = useMemo(() => {
         const q = searchTerm.toLowerCase()
 
         let filtered = seriesGroups.filter(g => {
-            // Text search
             if (q) {
                 const hits = g.name.toLowerCase().includes(q) ||
                     (g.author && g.author.toLowerCase().includes(q)) ||
                     g.items.some(i => i.title.toLowerCase().includes(q))
                 if (!hits) return false
             }
-            // Category filter
-            if (activeFilter === 'paired') return g.items.every(i => i.type === 'pair')
-            if (activeFilter === 'partial') return g.items.some(i => i.type === 'pair') && !g.items.every(i => i.type === 'pair')
+            if (authorFilter && g.author !== authorFilter) return false
             if (activeFilter === 'ebooks') return g.items.every(i => i.type === 'ebook')
             if (activeFilter === 'audiobooks') return g.items.every(i => i.type === 'audiobook')
             return true
@@ -203,22 +201,26 @@ export default function SeriesPage() {
         })
 
         return filtered
-    }, [seriesGroups, searchTerm, activeFilter, sortKey, sortDir])
+    }, [seriesGroups, searchTerm, authorFilter, activeFilter, sortKey, sortDir])
 
     const filteredUnsorted = useMemo(() => {
-        if (!searchTerm) return unseriedItems
-        const q = searchTerm.toLowerCase()
-        return unseriedItems.filter(i =>
-            i.title.toLowerCase().includes(q) ||
-            (i.author && i.author.toLowerCase().includes(q))
-        )
-    }, [unseriedItems, searchTerm])
+        let list = unseriedItems
+        if (searchTerm) {
+            const q = searchTerm.toLowerCase()
+            list = list.filter(i =>
+                i.title.toLowerCase().includes(q) ||
+                (i.author && i.author.toLowerCase().includes(q))
+            )
+        }
+        if (authorFilter) {
+            list = list.filter(i => i.author === authorFilter)
+        }
+        return list
+    }, [unseriedItems, searchTerm, authorFilter])
 
     // Filter pill counts
     const filterCounts = useMemo(() => ({
         all: seriesGroups.length,
-        paired: seriesGroups.filter(g => g.items.every(i => i.type === 'pair')).length,
-        partial: seriesGroups.filter(g => g.items.some(i => i.type === 'pair') && !g.items.every(i => i.type === 'pair')).length,
         ebooks: seriesGroups.filter(g => g.items.every(i => i.type === 'ebook')).length,
         audiobooks: seriesGroups.filter(g => g.items.every(i => i.type === 'audiobook')).length,
     }), [seriesGroups])
@@ -272,10 +274,7 @@ export default function SeriesPage() {
 
     function navigateToSeries(group) {
         if (selectMode) return
-        const first = group.items[0]
-        if (!first) return
-        if (first.ebookId) navigate(`/book/ebook/${first.ebookId}`)
-        else navigate(`/book/audiobook/${first.audiobookId}`)
+        navigate(`/library?search=${encodeURIComponent(group.name)}`)
     }
 
     const sortDirLabel = sortDir === 'asc' ? '↑' : '↓'
@@ -286,8 +285,6 @@ export default function SeriesPage() {
 
     const filterPills = [
         { key: 'all', label: 'All' },
-        { key: 'paired', label: 'Fully Paired' },
-        { key: 'partial', label: 'Partial' },
         { key: 'ebooks', label: 'Ebooks Only' },
         { key: 'audiobooks', label: 'Audiobooks Only' },
     ]
@@ -312,6 +309,16 @@ export default function SeriesPage() {
                         ))}
                     </div>
 
+                    {/* Author filter dropdown */}
+                    <select
+                        className="library-sort-select"
+                        value={authorFilter}
+                        onChange={e => setAuthorFilter(e.target.value)}
+                    >
+                        <option value="">All Authors</option>
+                        {allAuthors.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+
                     {/* Active search chip */}
                     {searchTerm && (
                         <div className="library-search-active">
@@ -319,9 +326,47 @@ export default function SeriesPage() {
                             <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
                         </div>
                     )}
+
+                    {/* Active author filter chip */}
+                    {authorFilter && (
+                        <div className="library-search-active">
+                            <span>Author: <strong>{authorFilter}</strong></span>
+                            <button className="library-search-clear" onClick={() => setAuthorFilter('')}>✕</button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="series-toolbar-right">
+                    {/* View toggle */}
+                    <div className="library-view-toggle">
+                        <button
+                            className={`library-view-btn${viewMode === 'grid' ? ' active' : ''}`}
+                            onClick={() => setViewMode('grid')}
+                            title="Grid view"
+                        >
+                            <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+                                <rect x="3" y="3" width="7" height="7" rx="1" />
+                                <rect x="14" y="3" width="7" height="7" rx="1" />
+                                <rect x="3" y="14" width="7" height="7" rx="1" />
+                                <rect x="14" y="14" width="7" height="7" rx="1" />
+                            </svg>
+                        </button>
+                        <button
+                            className={`library-view-btn${viewMode === 'list' ? ' active' : ''}`}
+                            onClick={() => setViewMode('list')}
+                            title="List view"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                                <line x1="8" y1="6" x2="21" y2="6" />
+                                <line x1="8" y1="12" x2="21" y2="12" />
+                                <line x1="8" y1="18" x2="21" y2="18" />
+                                <line x1="3" y1="6" x2="3.01" y2="6" />
+                                <line x1="3" y1="12" x2="3.01" y2="12" />
+                                <line x1="3" y1="18" x2="3.01" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
+
                     {/* Sort pill */}
                     <div className="series-sort-wrap" ref={sortRef}>
                         <button
@@ -387,20 +432,37 @@ export default function SeriesPage() {
                 <span><strong>{filteredSeries.reduce((a, g) => a + g.items.length, 0)}</strong> books</span>
             </div>
 
-            {/* Card Grid */}
+            {/* Card Grid / List */}
             {filteredSeries.length > 0 ? (
-                <div className="series-grid">
-                    {filteredSeries.map(group => (
-                        <SeriesCard
-                            key={group.name}
-                            group={group}
-                            selectMode={selectMode}
-                            selectedKeys={selectedKeys}
-                            onToggleSelect={toggleSelect}
-                            onClick={() => navigateToSeries(group)}
-                        />
-                    ))}
-                </div>
+                viewMode === 'grid' ? (
+                    <div className="series-grid">
+                        {filteredSeries.map(group => (
+                            <SeriesCard
+                                key={group.name}
+                                group={group}
+                                selectMode={selectMode}
+                                selectedKeys={selectedKeys}
+                                onToggleSelect={toggleSelect}
+                                onClick={() => navigateToSeries(group)}
+                                onAuthorClick={(a) => setAuthorFilter(a)}
+                            />
+                        ))}
+                    </div>
+                ) : (
+                    <div className="series-list">
+                        {filteredSeries.map(group => (
+                            <SeriesListRow
+                                key={group.name}
+                                group={group}
+                                selectMode={selectMode}
+                                selectedKeys={selectedKeys}
+                                onToggleSelect={toggleSelect}
+                                onClick={() => navigateToSeries(group)}
+                                onAuthorClick={(a) => setAuthorFilter(a)}
+                            />
+                        ))}
+                    </div>
+                )
             ) : (
                 <div className="series-empty">
                     <div className="series-empty-icon">📚</div>
@@ -504,22 +566,15 @@ export default function SeriesPage() {
     )
 }
 
-// ---- Series Card ----
+// ---- Series Card (Grid) ----
 
-function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick }) {
+function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, onAuthorClick }) {
     const { name, author, items, covers } = group
 
+    const ebookCount = items.filter(i => i.hasEbook).length
+    const audioCount = items.filter(i => i.hasAudiobook).length
     const pairedCount = items.filter(i => i.type === 'pair').length
-    const ebookOnlyCount = items.filter(i => i.type === 'ebook').length
-    const audioOnlyCount = items.filter(i => i.type === 'audiobook').length
 
-    // Series range: min index to max index
-    const indices = items.map(i => i.seriesIndex).filter(x => x != null)
-    const rangeStr = indices.length > 0
-        ? `BK ${Math.min(...indices)}–${Math.max(...indices)}`
-        : `${items.length} ${items.length === 1 ? 'book' : 'books'}`
-
-    // Select mode: any item in this series is selected?
     const groupKeys = items.map(i => i.key)
     const anySelected = groupKeys.some(k => selectedKeys.has(k))
     const allSelected = groupKeys.length > 0 && groupKeys.every(k => selectedKeys.has(k))
@@ -550,7 +605,6 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick }
                 />
             )}
 
-            {/* Cover stack */}
             <div className="series-cover-area">
                 {covers.length === 0 ? (
                     <div className="series-cover-placeholder">
@@ -562,54 +616,108 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick }
                 ) : (
                     <div className={stackClass}>
                         {covers.map((c, i) => (
-                            <img
-                                key={i}
-                                className="series-cover-img"
-                                src={coverSrc(c)}
-                                alt=""
-                                loading="lazy"
-                                draggable={false}
-                            />
+                            <img key={i} className="series-cover-img" src={coverSrc(c)} alt="" loading="lazy" draggable={false} />
                         ))}
                     </div>
                 )}
             </div>
 
-            {/* Card body */}
             <div className="series-card-body">
                 <div className="series-card-title" title={name}>{name}</div>
-                {author && <div className="series-card-author">{author}</div>}
-                <div className="series-card-range">{rangeStr} &middot; {items.length} {items.length === 1 ? 'book' : 'books'}</div>
+                {author && (
+                    <div
+                        className="series-card-author series-card-author-link"
+                        onClick={e => { e.stopPropagation(); onAuthorClick(author) }}
+                        title={`Filter by ${author}`}
+                    >
+                        {author}
+                    </div>
+                )}
                 <div className="series-card-stats">
+                    {ebookCount > 0 && (
+                        <span className="series-stat">📚 {ebookCount} ebook{ebookCount !== 1 ? 's' : ''}</span>
+                    )}
+                    {audioCount > 0 && (
+                        <span className="series-stat">🎧 {audioCount} audiobook{audioCount !== 1 ? 's' : ''}</span>
+                    )}
                     {pairedCount > 0 && (
-                        <span className="series-stat" title={`${pairedCount} paired`}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="11" height="11">
-                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                            </svg>
-                            {pairedCount}
-                        </span>
-                    )}
-                    {ebookOnlyCount > 0 && (
-                        <span className="series-stat" title={`${ebookOnlyCount} ebook only`}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="11" height="11">
-                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-                                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-                            </svg>
-                            {ebookOnlyCount}
-                        </span>
-                    )}
-                    {audioOnlyCount > 0 && (
-                        <span className="series-stat" title={`${audioOnlyCount} audiobook only`}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="11" height="11">
-                                <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
-                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z"/>
-                                <path d="M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
-                            </svg>
-                            {audioOnlyCount}
-                        </span>
+                        <span className="series-stat">🔗 {pairedCount} synced</span>
                     )}
                 </div>
+            </div>
+        </div>
+    )
+}
+
+// ---- Series List Row ----
+
+function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, onClick, onAuthorClick }) {
+    const { name, author, items, covers } = group
+
+    const ebookCount = items.filter(i => i.hasEbook).length
+    const audioCount = items.filter(i => i.hasAudiobook).length
+    const pairedCount = items.filter(i => i.type === 'pair').length
+
+    const groupKeys = items.map(i => i.key)
+    const anySelected = groupKeys.some(k => selectedKeys.has(k))
+    const allSelected = groupKeys.length > 0 && groupKeys.every(k => selectedKeys.has(k))
+
+    function handleCheckbox(e) {
+        e.stopPropagation()
+        groupKeys.forEach(k => {
+            const isSelected = selectedKeys.has(k)
+            if (allSelected && isSelected) onToggleSelect(k)
+            else if (!allSelected && !isSelected) onToggleSelect(k)
+        })
+    }
+
+    return (
+        <div
+            className={`series-list-row${anySelected ? ' selected' : ''}`}
+            onClick={selectMode ? undefined : onClick}
+        >
+            {selectMode && (
+                <div onClick={e => e.stopPropagation()}>
+                    <input
+                        type="checkbox"
+                        checked={allSelected}
+                        readOnly
+                        onClick={handleCheckbox}
+                        style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+                    />
+                </div>
+            )}
+            {/* Thumbnail — first cover only */}
+            <div className="series-list-thumb">
+                {covers.length > 0 ? (
+                    <img src={coverSrc(covers[0])} alt="" className="series-list-thumb-img" loading="lazy" />
+                ) : (
+                    <div className="series-list-thumb-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="20" height="20">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                        </svg>
+                    </div>
+                )}
+            </div>
+            {/* Title + author */}
+            <div className="series-list-info">
+                <div className="series-list-name">{name}</div>
+                {author && (
+                    <div
+                        className="series-list-author series-card-author-link"
+                        onClick={e => { e.stopPropagation(); onAuthorClick(author) }}
+                        title={`Filter by ${author}`}
+                    >
+                        {author}
+                    </div>
+                )}
+            </div>
+            {/* Stats */}
+            <div className="series-list-stats">
+                {ebookCount > 0 && <span className="series-stat">📚 {ebookCount}</span>}
+                {audioCount > 0 && <span className="series-stat">🎧 {audioCount}</span>}
+                {pairedCount > 0 && <span className="series-stat">🔗 {pairedCount}</span>}
             </div>
         </div>
     )
