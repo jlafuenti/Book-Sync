@@ -73,7 +73,15 @@
     gap: 4px;
 }
 
-/* Sub-filter pills row — sits below the parent pill, no layout disruption */
+/* Sub-filter row — full-width row below the main toolbar */
+.library-sub-filter-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+/* Sub-filter pills row — kept for any inline use */
 .library-filter-pills-sub {
     display: flex;
     gap: 4px;

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-    getEbooks, getAudiobooks, getPairs, uploadEbook, uploadAudiobook, scanLibrary,
+    getEbooks, getAudiobooks, getPairs, getNewPairs, uploadEbook, uploadAudiobook, scanLibrary,
     normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata,
     rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles,
-    cleanupOrphans, coverSrc
+    cleanupOrphans, coverSrc, acknowledgeNewItems, acknowledgeNewPairs
 } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
@@ -271,6 +271,9 @@ function LibraryPage({ tab }) {
     const [viewMode, setViewMode] = useState('grid')
     const [activeFilter, setActiveFilter] = useState('all')
     const [unpairedSubFilter, setUnpairedSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks'
+    const [newSubFilter, setNewSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks' | 'pairs'
+    const [newPairs, setNewPairs] = useState([])
+    const [acknowledging, setAcknowledging] = useState(false)
     const [sortField, setSortField] = useState('title')
     const [sortDir, setSortDir] = useState('asc')
     const [sortOpen, setSortOpen] = useState(false)
@@ -418,10 +421,15 @@ function LibraryPage({ tab }) {
             else if (unpairedSubFilter === 'audiobooks') list = unpAb
             else list = [...unpEl, ...unpAb]
         } else if (activeFilter === 'new') {
-            list = [
-                ...annotatedEbooks.filter(b => !b.acknowledged),
-                ...annotatedAudiobooks.filter(b => !b.acknowledged),
-            ]
+            const newEbooks = annotatedEbooks.filter(b => !b.acknowledged)
+            const newAudiobooks = annotatedAudiobooks.filter(b => !b.acknowledged)
+            if (newSubFilter === 'ebooks') list = newEbooks
+            else if (newSubFilter === 'audiobooks') list = newAudiobooks
+            else if (newSubFilter === 'pairs') {
+                // Show new pairs as pairEntries filtered to new pair IDs
+                const newPairIds = new Set(newPairs.map(p => p.id))
+                list = pairEntries.filter(p => newPairIds.has(p.pair_id))
+            } else list = [...newEbooks, ...newAudiobooks]
         } else {
             list = [...annotatedEbooks, ...annotatedAudiobooks]
         }
@@ -441,20 +449,25 @@ function LibraryPage({ tab }) {
         if (seriesFilter) list = list.filter(b => b.series === seriesFilter)
 
         return [...list].sort(sortComparator(`${sortField}-${sortDir}`))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortField, sortDir, authorFilter, seriesFilter])
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, newSubFilter, newPairs, sortField, sortDir, authorFilter, seriesFilter])
 
     // Stats
     const stats = useMemo(() => {
-        const newCount = [...ebooks.filter(b => !b.acknowledged), ...audiobooks.filter(b => !b.acknowledged)].length
+        const newEbooksCount = ebooks.filter(b => !b.acknowledged).length
+        const newAudiobooksCount = audiobooks.filter(b => !b.acknowledged).length
+        const newCount = newEbooksCount + newAudiobooksCount + newPairs.length
         return {
             totalEbooks: ebooks.length,
             totalAudiobooks: audiobooks.length,
             pairCount: pairs.length,
             unpaired: ebooks.filter(b => !pairMaps.byEbookId[b.id]).length + audiobooks.filter(b => !pairMaps.byAudiobookId[b.id]).length,
             newCount,
+            newEbooksCount,
+            newAudiobooksCount,
+            newPairsCount: newPairs.length,
             displayTotal: filteredBooks.length,
         }
-    }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks])
+    }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks, newPairs])
 
     // Author / series option lists for FilterPill dropdowns
     const allAuthors = useMemo(() => {
@@ -472,10 +485,11 @@ function LibraryPage({ tab }) {
     // Data loading
     const loadData = useCallback(async () => {
         try {
-            const [e, a, p] = await Promise.all([getEbooks(), getAudiobooks(), getPairs()])
+            const [e, a, p, np] = await Promise.all([getEbooks(), getAudiobooks(), getPairs(), getNewPairs()])
             setEbooks(e)
             setAudiobooks(a)
             setPairs(p)
+            setNewPairs(np)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -696,6 +710,37 @@ function LibraryPage({ tab }) {
         }
     }
 
+    // ---- Acknowledge new items ----
+
+    const handleAcknowledgeAll = async () => {
+        setAcknowledging(true)
+        try {
+            if (newSubFilter === 'pairs') {
+                await acknowledgeNewPairs(newPairs.map(p => p.id))
+            } else if (newSubFilter === 'ebooks') {
+                const ids = filteredBooks.map(b => b.id)
+                await acknowledgeNewItems(ids, [])
+            } else if (newSubFilter === 'audiobooks') {
+                const ids = filteredBooks.map(b => b.id)
+                await acknowledgeNewItems([], ids)
+            } else {
+                // all: ebooks + audiobooks + pairs
+                const ebookIds = ebooks.filter(b => !b.acknowledged).map(b => b.id)
+                const audioIds = audiobooks.filter(b => !b.acknowledged).map(b => b.id)
+                const pairIds = newPairs.map(p => p.id)
+                await Promise.all([
+                    acknowledgeNewItems(ebookIds, audioIds),
+                    ...(pairIds.length ? [acknowledgeNewPairs(pairIds)] : []),
+                ])
+            }
+            await loadData()
+        } catch (err) {
+            alert('Failed to acknowledge: ' + err.message)
+        } finally {
+            setAcknowledging(false)
+        }
+    }
+
     // ---- Verify handlers ----
 
     const handleVerify = async () => {
@@ -773,46 +818,15 @@ function LibraryPage({ tab }) {
                 <div className="library-toolbar-left">
                     {/* Filter Pills */}
                     <div className="library-filter-pills">
-                        {filterPills.map(p => {
-                            if (p.key === 'unpaired') {
-                                return (
-                                    <div key="unpaired" className="library-filter-pill-wrapper">
-                                        <button
-                                            className={`library-filter-pill${activeFilter === 'unpaired' ? ' active' : ''}`}
-                                            onClick={() => setActiveFilter('unpaired')}
-                                        >
-                                            {p.label} ({p.count})
-                                        </button>
-                                        {activeFilter === 'unpaired' && (
-                                            <div className="library-filter-pills-sub">
-                                                {[
-                                                    { key: 'all', label: 'All' },
-                                                    { key: 'ebooks', label: 'Ebooks' },
-                                                    { key: 'audiobooks', label: 'Audiobooks' },
-                                                ].map(s => (
-                                                    <button
-                                                        key={s.key}
-                                                        className={`library-filter-pill library-filter-pill-sub${unpairedSubFilter === s.key ? ' active' : ''}`}
-                                                        onClick={() => setUnpairedSubFilter(s.key)}
-                                                    >
-                                                        {s.label}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
-                                )
-                            }
-                            return (
-                                <button
-                                    key={p.key}
-                                    className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
-                                    onClick={() => { setActiveFilter(p.key); setUnpairedSubFilter('all') }}
-                                >
-                                    {p.label} ({p.count})
-                                </button>
-                            )
-                        })}
+                        {filterPills.map(p => (
+                            <button
+                                key={p.key}
+                                className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
+                                onClick={() => { setActiveFilter(p.key); setUnpairedSubFilter('all'); setNewSubFilter('all') }}
+                            >
+                                {p.label} ({p.count})
+                            </button>
+                        ))}
                     </div>
 
                     {/* Author / Series filter pills */}
@@ -950,6 +964,43 @@ function LibraryPage({ tab }) {
                     )}
                 </div>
             </div>
+
+            {/* Sub-filter row — shown when Unpaired or New is active */}
+            {activeFilter === 'unpaired' && (
+                <div className="library-sub-filter-row">
+                    {[
+                        { key: 'all', label: 'All' },
+                        { key: 'ebooks', label: 'Ebooks' },
+                        { key: 'audiobooks', label: 'Audiobooks' },
+                    ].map(s => (
+                        <button
+                            key={s.key}
+                            className={`library-filter-pill library-filter-pill-sub${unpairedSubFilter === s.key ? ' active' : ''}`}
+                            onClick={() => setUnpairedSubFilter(s.key)}
+                        >
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+            )}
+            {activeFilter === 'new' && (
+                <div className="library-sub-filter-row">
+                    {[
+                        { key: 'all', label: `All (${stats.newEbooksCount + stats.newAudiobooksCount + stats.newPairsCount})` },
+                        { key: 'ebooks', label: `Ebooks (${stats.newEbooksCount})` },
+                        { key: 'audiobooks', label: `Audiobooks (${stats.newAudiobooksCount})` },
+                        { key: 'pairs', label: `Pairs (${stats.newPairsCount})` },
+                    ].map(s => (
+                        <button
+                            key={s.key}
+                            className={`library-filter-pill library-filter-pill-sub${newSubFilter === s.key ? ' active' : ''}`}
+                            onClick={() => setNewSubFilter(s.key)}
+                        >
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {/* Hidden file inputs */}
             <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
@@ -1146,6 +1197,29 @@ function LibraryPage({ tab }) {
                     onClose={() => { setEditingBook(null); setEditingType(null) }}
                     onSave={handleSaveMetadata}
                 />
+            )}
+
+            {/* Floating acknowledge bar — shown when New filter is active */}
+            {activeFilter === 'new' && filteredBooks.length > 0 && !selectMode && (
+                <div style={{
+                    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                    borderRadius: '12px', padding: '12px 20px',
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100, whiteSpace: 'nowrap'
+                }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {filteredBooks.length} new item{filteredBooks.length !== 1 ? 's' : ''}
+                    </span>
+                    <button
+                        className="btn btn-primary"
+                        onClick={handleAcknowledgeAll}
+                        disabled={acknowledging}
+                        style={{ fontSize: '0.85rem', padding: '6px 14px' }}
+                    >
+                        {acknowledging ? 'Acknowledging...' : 'Acknowledge All'}
+                    </button>
+                </div>
             )}
 
             {/* Floating bulk action bar */}
