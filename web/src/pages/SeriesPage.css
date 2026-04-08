@@ -409,49 +409,6 @@
     text-decoration: underline;
 }
 
-/* ---- Filter Pill Dropdown ---- */
-
-.filter-pill-wrap {
-    position: relative;
-}
-
-.filter-pill-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.filter-pill-btn.filter-pill-open {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-light);
-}
-
-.filter-pill-x {
-    margin-left: 4px;
-    opacity: 0.75;
-    font-size: 0.7rem;
-    line-height: 1;
-}
-
-.filter-pill-x:hover {
-    opacity: 1;
-}
-
-.filter-pill-dropdown {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 200;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 6px;
-    min-width: 180px;
-    max-height: 280px;
-    overflow-y: auto;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
 
 /* ---- List View ---- */
 
