@@ -151,32 +151,11 @@ function AppShell({ user, setUser }) {
                         <span>Series</span>
                     </Link>
 
-                    {/* Book Pairs */}
-                    <Link to="/pairs/paired" className={navClass('/pairs')} title="Book Pairs">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 3h5v5" /><path d="M4 20L21 3" /><path d="M21 16v5h-5" /><path d="M15 15l6 6" /><path d="M4 4l5 5" /></svg>
-                        <span>Book Pairs</span>
-                    </Link>
-                    {isSection('/pairs') && sidebarHovered && (
-                        <div className="nav-sub-group">
-                            <Link to="/pairs/paired" className={subNavClass('/pairs/paired')}>🔗 Paired Files</Link>
-                            <Link to="/pairs/unpaired" className={subNavClass('/pairs/unpaired')}>🔀 Unpaired Items</Link>
-                            <Link to="/pairs/new-pairs" className={subNavClass('/pairs/new-pairs')}>🆕 New Pairs</Link>
-                        </div>
-                    )}
-
                     {/* Transcription */}
-                    <Link to="/transcription/not-transcribed" className={navClass('/transcription')} title="Transcription">
+                    <Link to="/transcription" className={navClass('/transcription')} title="Transcription">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
                         <span>Transcription</span>
                     </Link>
-                    {isSection('/transcription') && sidebarHovered && (
-                        <div className="nav-sub-group">
-                            <Link to="/transcription/not-transcribed" className={subNavClass('/transcription/not-transcribed')}>⏸️ Not Transcribed</Link>
-                            <Link to="/transcription/queue" className={subNavClass('/transcription/queue')}>📋 Queue</Link>
-                            <Link to="/transcription/in-progress" className={subNavClass('/transcription/in-progress')}>⏳ In Progress</Link>
-                            <Link to="/transcription/transcribed" className={subNavClass('/transcription/transcribed')}>✅ Transcribed</Link>
-                        </div>
-                    )}
 
                     {/* System */}
                     <Link to="/system/status" className={navClass('/system')} title="System">
@@ -235,10 +214,11 @@ function AppShell({ user, setUser }) {
                     <Route path="/pairs/unpaired-audiobooks" element={<Navigate to="/pairs/unpaired" replace />} />
 
                     {/* Transcription routes */}
+                    <Route path="/transcription" element={<TranscriptionPage tab="not-transcribed" />} />
                     <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />
                     <Route path="/transcription/in-progress" element={<TranscriptionPage tab="in-progress" />} />
                     <Route path="/transcription/transcribed" element={<TranscriptionPage tab="transcribed" />} />
-                    <Route path="/transcription/queue" element={<TranscriptionQueuePage />} />
+                    <Route path="/transcription/queue" element={<TranscriptionPage tab="queue" />} />
                     <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
                     {/* System */}
@@ -258,7 +238,6 @@ function AppShell({ user, setUser }) {
                     <Route path="/" element={<Navigate to="/continue" replace />} />
                     {/* /library is now a direct route, no redirect needed */}
                     <Route path="/pairs" element={<Navigate to="/pairs/paired" replace />} />
-                    <Route path="/transcription" element={<Navigate to="/transcription/not-transcribed" replace />} />
                     <Route path="*" element={<Navigate to="/continue" replace />} />
                 </Routes>
             </main>
