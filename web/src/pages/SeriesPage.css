@@ -409,6 +409,50 @@
     text-decoration: underline;
 }
 
+/* ---- Filter Pill Dropdown ---- */
+
+.filter-pill-wrap {
+    position: relative;
+}
+
+.filter-pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filter-pill-btn.filter-pill-open {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.filter-pill-x {
+    margin-left: 4px;
+    opacity: 0.75;
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+.filter-pill-x:hover {
+    opacity: 1;
+}
+
+.filter-pill-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 200;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    max-height: 280px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
 /* ---- List View ---- */
 
 .series-list {
@@ -425,16 +469,89 @@
     gap: 14px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
-    cursor: pointer;
     transition: background 0.12s ease;
-}
-
-.series-list-row:last-child {
-    border-bottom: none;
 }
 
 .series-list-row:hover {
     background: var(--bg-card-hover);
+}
+
+.series-list-chevron-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+    transition: var(--transition);
+}
+
+.series-list-chevron-btn:hover {
+    color: var(--text-primary);
+    background: var(--accent-light);
+}
+
+.series-list-chevron {
+    transition: transform 0.2s ease;
+}
+
+.series-list-chevron.open {
+    transform: rotate(90deg);
+}
+
+/* ---- Individual book row (inside expanded series) ---- */
+
+.series-book-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px 7px 54px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    transition: background 0.12s ease;
+}
+
+.series-book-row:hover {
+    background: var(--bg-card-hover);
+}
+
+.series-book-row-thumb {
+    flex-shrink: 0;
+    width: 26px;
+    height: 36px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.series-book-row-type {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+}
+
+.series-book-row-index {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    min-width: 28px;
+}
+
+.series-book-row-title {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
 }
 
 .series-list-thumb {

@@ -272,6 +272,8 @@ function LibraryPage({ tab }) {
     const [unpairedSubFilter, setUnpairedSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks'
     const [sortBy, setSortBy] = useState('title-asc')
     const [searchTerm, setSearchTerm] = useState('')
+    const [authorFilter, setAuthorFilter] = useState('')
+    const [seriesFilter, setSeriesFilter] = useState('')
 
     // Edit state
     const [editingBook, setEditingBook] = useState(null)
@@ -309,13 +311,15 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
-    // Read search param from URL (from global search bar) — runs whenever searchParams changes
+    // Read search/author/series params from URL — runs whenever searchParams changes
     useEffect(() => {
         const urlSearch = searchParams.get('search')
-        if (urlSearch) {
-            setSearchTerm(urlSearch)
-            setSearchParams({}, { replace: true })
-        }
+        const urlAuthor = searchParams.get('author')
+        const urlSeries = searchParams.get('series')
+        if (urlSearch) setSearchTerm(urlSearch)
+        if (urlAuthor) setAuthorFilter(urlAuthor)
+        if (urlSeries) setSeriesFilter(urlSeries)
+        if (urlSearch || urlAuthor || urlSeries) setSearchParams({}, { replace: true })
     }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Set initial filter based on tab prop
@@ -428,8 +432,12 @@ function LibraryPage({ tab }) {
             )
         }
 
+        // Explicit author / series filters (from SeriesPage navigation)
+        if (authorFilter) list = list.filter(b => b.author === authorFilter)
+        if (seriesFilter) list = list.filter(b => b.series === seriesFilter)
+
         return [...list].sort(sortComparator(sortBy))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortBy])
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, sortBy, authorFilter, seriesFilter])
 
     // Stats
     const stats = useMemo(() => {
@@ -794,6 +802,18 @@ function LibraryPage({ tab }) {
                         <div className="library-search-active">
                             <span>Searching: <strong>{searchTerm}</strong></span>
                             <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
+                        </div>
+                    )}
+                    {authorFilter && (
+                        <div className="library-search-active">
+                            <span>Author: <strong>{authorFilter}</strong></span>
+                            <button className="library-search-clear" onClick={() => setAuthorFilter('')}>✕</button>
+                        </div>
+                    )}
+                    {seriesFilter && (
+                        <div className="library-search-active">
+                            <span>Series: <strong>{seriesFilter}</strong></span>
+                            <button className="library-search-clear" onClick={() => setSeriesFilter('')}>✕</button>
                         </div>
                     )}
                 </div>
