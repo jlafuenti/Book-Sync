@@ -64,15 +64,54 @@
     box-shadow: 0 2px 8px var(--accent-glow);
 }
 
-/* Sub-filter pills (shown below main pills when a filter is active) */
+/* Wrapper for pills that have sub-filters (positions sub-row below) */
+.library-filter-pill-wrapper {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+/* Sub-filter pills row — sits below the parent pill, no layout disruption */
 .library-filter-pills-sub {
-    margin-top: 2px;
+    display: flex;
+    gap: 4px;
 }
 
 .library-filter-pill-sub {
-    padding: 4px 12px;
-    font-size: 0.76rem;
+    padding: 3px 10px;
+    font-size: 0.74rem;
     border-width: 1px;
+}
+
+/* Active search indicator (shown when global search has populated the filter) */
+.library-search-active {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: var(--accent-light);
+    border: 1.5px solid var(--accent);
+    border-radius: 20px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.library-search-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 0.75rem;
+    line-height: 1;
+    transition: var(--transition);
+}
+
+.library-search-clear:hover {
+    color: var(--accent);
 }
 
 /* ---- Sort / View Toggle ---- */
@@ -167,28 +206,6 @@
     color: var(--error);
 }
 
-/* ---- Search in toolbar ---- */
-
-.library-search-input {
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg-card);
-    color: var(--text-primary);
-    font-size: 0.82rem;
-    width: 180px;
-    outline: none;
-    transition: var(--transition);
-}
-
-.library-search-input:focus {
-    border-color: var(--accent);
-    width: 240px;
-}
-
-.library-search-input::placeholder {
-    color: var(--text-muted);
-}
 
 /* ---- Stats Bar ---- */
 
