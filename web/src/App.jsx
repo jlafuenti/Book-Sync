@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { isLoggedIn, getMe, logout } from './api'
 import { useTheme } from './ThemeContext'
 import { DEFAULT_THEME } from './themes'
@@ -35,14 +35,20 @@ function AppMiniPlayer() {
 
 function GlobalSearchBar() {
     const navigate = useNavigate()
+    const location = useLocation()
     const [query, setQuery] = useState('')
+    const [, setSearchParams] = useSearchParams()
 
     const handleSubmit = (e) => {
         e.preventDefault()
-        if (query.trim()) {
+        if (!query.trim()) return
+        if (location.pathname === '/library') {
+            // Already on library — update the search param directly so LibraryPage picks it up
+            setSearchParams({ search: query.trim() }, { replace: true })
+        } else {
             navigate(`/library?search=${encodeURIComponent(query.trim())}`)
-            setQuery('')
         }
+        setQuery('')
     }
 
     return (

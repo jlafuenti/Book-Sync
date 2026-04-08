@@ -309,14 +309,14 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
-    // Read search param from URL (from global search bar)
+    // Read search param from URL (from global search bar) — runs whenever searchParams changes
     useEffect(() => {
         const urlSearch = searchParams.get('search')
         if (urlSearch) {
             setSearchTerm(urlSearch)
             setSearchParams({}, { replace: true })
         }
-    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Set initial filter based on tab prop
     useEffect(() => {
@@ -747,44 +747,55 @@ function LibraryPage({ tab }) {
                 <div className="library-toolbar-left">
                     {/* Filter Pills */}
                     <div className="library-filter-pills">
-                        {filterPills.map(p => (
-                            <button
-                                key={p.key}
-                                className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
-                                onClick={() => { setActiveFilter(p.key); if (p.key !== 'unpaired') setUnpairedSubFilter('all') }}
-                            >
-                                {p.label} ({p.count})
-                            </button>
-                        ))}
+                        {filterPills.map(p => {
+                            if (p.key === 'unpaired') {
+                                return (
+                                    <div key="unpaired" className="library-filter-pill-wrapper">
+                                        <button
+                                            className={`library-filter-pill${activeFilter === 'unpaired' ? ' active' : ''}`}
+                                            onClick={() => setActiveFilter('unpaired')}
+                                        >
+                                            {p.label} ({p.count})
+                                        </button>
+                                        {activeFilter === 'unpaired' && (
+                                            <div className="library-filter-pills-sub">
+                                                {[
+                                                    { key: 'all', label: 'All' },
+                                                    { key: 'ebooks', label: 'Ebooks' },
+                                                    { key: 'audiobooks', label: 'Audiobooks' },
+                                                ].map(s => (
+                                                    <button
+                                                        key={s.key}
+                                                        className={`library-filter-pill library-filter-pill-sub${unpairedSubFilter === s.key ? ' active' : ''}`}
+                                                        onClick={() => setUnpairedSubFilter(s.key)}
+                                                    >
+                                                        {s.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )
+                            }
+                            return (
+                                <button
+                                    key={p.key}
+                                    className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
+                                    onClick={() => { setActiveFilter(p.key); setUnpairedSubFilter('all') }}
+                                >
+                                    {p.label} ({p.count})
+                                </button>
+                            )
+                        })}
                     </div>
 
-                    {/* Unpaired sub-filter */}
-                    {activeFilter === 'unpaired' && (
-                        <div className="library-filter-pills library-filter-pills-sub">
-                            {[
-                                { key: 'all', label: 'All' },
-                                { key: 'ebooks', label: 'Ebooks' },
-                                { key: 'audiobooks', label: 'Audiobooks' },
-                            ].map(s => (
-                                <button
-                                    key={s.key}
-                                    className={`library-filter-pill library-filter-pill-sub${unpairedSubFilter === s.key ? ' active' : ''}`}
-                                    onClick={() => setUnpairedSubFilter(s.key)}
-                                >
-                                    {s.label}
-                                </button>
-                            ))}
+                    {/* Search — uses the global search bar in the header */}
+                    {searchTerm && (
+                        <div className="library-search-active">
+                            <span>Searching: <strong>{searchTerm}</strong></span>
+                            <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
                         </div>
                     )}
-
-                    {/* Search */}
-                    <input
-                        type="text"
-                        className="library-search-input"
-                        placeholder="Search title, author, series..."
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                    />
                 </div>
 
                 <div className="library-toolbar-right">
