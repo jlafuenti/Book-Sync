@@ -8,6 +8,7 @@ import {
 } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
+import FilterPill from '../components/FilterPill'
 import { useAuth } from '../contexts/AuthContext'
 import './LibraryPage.css'
 
@@ -452,6 +453,19 @@ function LibraryPage({ tab }) {
         }
     }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks])
 
+    // Author / series option lists for FilterPill dropdowns
+    const allAuthors = useMemo(() => {
+        const set = new Set()
+        ;[...ebooks, ...audiobooks].forEach(b => { if (b.author) set.add(b.author) })
+        return [...set].sort()
+    }, [ebooks, audiobooks])
+
+    const allSeriesNames = useMemo(() => {
+        const set = new Set()
+        ;[...ebooks, ...audiobooks].forEach(b => { if (b.series) set.add(b.series) })
+        return [...set].sort()
+    }, [ebooks, audiobooks])
+
     // Data loading
     const loadData = useCallback(async () => {
         try {
@@ -797,23 +811,25 @@ function LibraryPage({ tab }) {
                         })}
                     </div>
 
+                    {/* Author / Series filter pills */}
+                    <FilterPill
+                        label="Author"
+                        value={authorFilter}
+                        options={allAuthors}
+                        onChange={setAuthorFilter}
+                    />
+                    <FilterPill
+                        label="Series"
+                        value={seriesFilter}
+                        options={allSeriesNames}
+                        onChange={setSeriesFilter}
+                    />
+
                     {/* Search — uses the global search bar in the header */}
                     {searchTerm && (
                         <div className="library-search-active">
                             <span>Searching: <strong>{searchTerm}</strong></span>
                             <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
-                        </div>
-                    )}
-                    {authorFilter && (
-                        <div className="library-search-active">
-                            <span>Author: <strong>{authorFilter}</strong></span>
-                            <button className="library-search-clear" onClick={() => setAuthorFilter('')}>✕</button>
-                        </div>
-                    )}
-                    {seriesFilter && (
-                        <div className="library-search-active">
-                            <span>Series: <strong>{seriesFilter}</strong></span>
-                            <button className="library-search-clear" onClick={() => setSeriesFilter('')}>✕</button>
                         </div>
                     )}
                 </div>
