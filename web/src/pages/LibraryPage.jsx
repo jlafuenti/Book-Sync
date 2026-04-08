@@ -274,6 +274,9 @@ function LibraryPage({ tab }) {
     const [newSubFilter, setNewSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks' | 'pairs'
     const [newPairs, setNewPairs] = useState([])
     const [acknowledging, setAcknowledging] = useState(false)
+    const [gridPage, setGridPage] = useState(1)
+
+    const GRID_PAGE_SIZE = 50
     const [sortField, setSortField] = useState('title')
     const [sortDir, setSortDir] = useState('asc')
     const [sortOpen, setSortOpen] = useState(false)
@@ -498,6 +501,9 @@ function LibraryPage({ tab }) {
     }, [])
 
     useEffect(() => { loadData() }, [loadData])
+
+    // Reset grid pagination whenever the filtered list changes
+    useEffect(() => { setGridPage(1) }, [filteredBooks])
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -1099,25 +1105,38 @@ function LibraryPage({ tab }) {
                 </div>
             ) : viewMode === 'grid' ? (
                 /* ---- Grid View ---- */
-                <div className="library-grid">
-                    {filteredBooks.map((book, idx) => (
-                        <BookCard
-                            key={bookKey(book)}
-                            book={book}
-                            selectMode={selectMode}
-                            isSelected={selectedIds.has(bookKey(book))}
-                            onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
-                            onEdit={() => openEdit(book)}
-                            onDelete={() => openDeleteModal(book)}
-                            onNavigate={() => navigate(
-                                book.mediaType === 'pair'
-                                    ? `/book/ebook/${book.ebook_id}`
-                                    : `/book/${book.mediaType}/${book.id}`
-                            )}
-                            canEdit={canEdit}
-                        />
-                    ))}
-                </div>
+                <>
+                    <div className="library-grid">
+                        {filteredBooks.slice(0, gridPage * GRID_PAGE_SIZE).map((book, idx) => (
+                            <BookCard
+                                key={bookKey(book)}
+                                book={book}
+                                selectMode={selectMode}
+                                isSelected={selectedIds.has(bookKey(book))}
+                                onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
+                                onEdit={() => openEdit(book)}
+                                onDelete={() => openDeleteModal(book)}
+                                onNavigate={() => navigate(
+                                    book.mediaType === 'pair'
+                                        ? `/book/ebook/${book.ebook_id}`
+                                        : `/book/${book.mediaType}/${book.id}`
+                                )}
+                                canEdit={canEdit}
+                            />
+                        ))}
+                    </div>
+                    {filteredBooks.length > gridPage * GRID_PAGE_SIZE && (
+                        <div style={{ textAlign: 'center', marginTop: '24px' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setGridPage(p => p + 1)}
+                                style={{ padding: '8px 32px' }}
+                            >
+                                Show more ({filteredBooks.length - gridPage * GRID_PAGE_SIZE} remaining)
+                            </button>
+                        </div>
+                    )}
+                </>
             ) : (
                 /* ---- List View ---- */
                 <div className="library-list">
