@@ -321,15 +321,23 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
-    // Read search/author/series params from URL — runs whenever searchParams changes
+    // Sync search from URL (global search bar owns it — don't clear it)
+    // One-time navigation params (author/series from SeriesPage links) are cleared after reading
     useEffect(() => {
         const urlSearch = searchParams.get('search')
         const urlAuthor = searchParams.get('author')
         const urlSeries = searchParams.get('series')
-        if (urlSearch) setSearchTerm(urlSearch)
+        setSearchTerm(urlSearch || '')
         if (urlAuthor) setAuthorFilter(urlAuthor)
         if (urlSeries) setSeriesFilter(urlSeries)
-        if (urlSearch || urlAuthor || urlSeries) setSearchParams({}, { replace: true })
+        if (urlAuthor || urlSeries) {
+            setSearchParams(prev => {
+                const n = new URLSearchParams(prev)
+                n.delete('author')
+                n.delete('series')
+                return n
+            }, { replace: true })
+        }
     }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Set initial filter based on tab prop
@@ -472,18 +480,48 @@ function LibraryPage({ tab }) {
         }
     }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks, newPairs])
 
-    // Author / series option lists for FilterPill dropdowns
+    // Base list for filter pill options — scoped to current activeFilter (no search/author/series applied)
+    const baseListForOptions = useMemo(() => {
+        if (activeFilter === 'ebooks')    return annotatedEbooks
+        if (activeFilter === 'audiobooks') return annotatedAudiobooks
+        if (activeFilter === 'paired')    return pairEntries
+        if (activeFilter === 'unpaired') {
+            const unpEl = annotatedEbooks.filter(b => !b.pair_id)
+            const unpAb = annotatedAudiobooks.filter(b => !b.pair_id)
+            if (unpairedSubFilter === 'ebooks') return unpEl
+            if (unpairedSubFilter === 'audiobooks') return unpAb
+            return [...unpEl, ...unpAb]
+        }
+        if (activeFilter === 'new') {
+            const newEb = annotatedEbooks.filter(b => !b.acknowledged)
+            const newAb = annotatedAudiobooks.filter(b => !b.acknowledged)
+            if (newSubFilter === 'ebooks') return newEb
+            if (newSubFilter === 'audiobooks') return newAb
+            if (newSubFilter === 'pairs') {
+                const ids = new Set(newPairs.map(p => p.id))
+                return pairEntries.filter(p => ids.has(p.pair_id))
+            }
+            return [...newEb, ...newAb]
+        }
+        // 'all'
+        const pairedEbookIds = new Set(annotatedEbooks.filter(b => b.pair_id).map(b => b.id))
+        const pairedAudiobookIds = new Set(annotatedAudiobooks.filter(b => b.pair_id).map(b => b.id))
+        return [
+            ...pairEntries,
+            ...annotatedEbooks.filter(b => !pairedEbookIds.has(b.id)),
+            ...annotatedAudiobooks.filter(b => !pairedAudiobookIds.has(b.id)),
+        ]
+    }, [activeFilter, annotatedEbooks, annotatedAudiobooks, pairEntries, unpairedSubFilter, newSubFilter, newPairs])
+
     const allAuthors = useMemo(() => {
-        const set = new Set()
-        ;[...ebooks, ...audiobooks].forEach(b => { if (b.author) set.add(b.author) })
+        const set = new Set(baseListForOptions.map(b => b.author).filter(Boolean))
         return [...set].sort()
-    }, [ebooks, audiobooks])
+    }, [baseListForOptions])
 
     const allSeriesNames = useMemo(() => {
-        const set = new Set()
-        ;[...ebooks, ...audiobooks].forEach(b => { if (b.series) set.add(b.series) })
+        const set = new Set(baseListForOptions.map(b => b.series).filter(Boolean))
         return [...set].sort()
-    }, [ebooks, audiobooks])
+    }, [baseListForOptions])
 
     // Data loading
     const loadData = useCallback(async () => {
@@ -849,15 +887,13 @@ function LibraryPage({ tab }) {
                         onChange={setSeriesFilter}
                     />
 
-                    {/* Live search input */}
-                    <input
-                        type="text"
-                        className="library-sort-select"
-                        placeholder="Search..."
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                        style={{ width: 155, borderRadius: 20 }}
-                    />
+                    {/* Active search chip (cleared via global search bar or ✕) */}
+                    {searchTerm && (
+                        <div className="library-search-active">
+                            <span>Search: <strong>{searchTerm}</strong></span>
+                            <button className="library-search-clear" onClick={() => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('search'); return n }, { replace: true })}>✕</button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="library-toolbar-right">

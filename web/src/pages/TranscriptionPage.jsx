@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
     getPairs, coverSrc,
     startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue,
@@ -109,18 +109,20 @@ function TranscriptionPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canManageQueue = hasMinRole('admin')
 
+    const [searchParams, setSearchParams] = useSearchParams()
+    const searchQuery = searchParams.get('search') || ''
+
     /* ── pairs state ── */
     const [pairs,          setPairs]          = useState([])
     const [loading,        setLoading]        = useState(true)
     const [error,          setError]          = useState('')
     const [statuses,       setStatuses]       = useState({})
     const [expandedSeries, setExpandedSeries] = useState(new Set())
-    const [searchQuery,    setSearchQuery]    = useState('')
     const [activeTab,      setActiveTab]      = useState(tab || 'not-transcribed')
 
-    /* ── per-tab view modes ── */
+    /* ── per-tab view modes (all default to grid/visual) ── */
     const [tabViewModes, setTabViewModes] = useState({
-        'not-transcribed': 'series',
+        'not-transcribed': 'grid',
         queue:             'grid',
         'in-progress':     'grid',
         transcribed:       'grid',
@@ -210,6 +212,8 @@ function TranscriptionPage({ tab }) {
 
     useEffect(() => { if (tab) setActiveTab(tab) }, [tab])
     useEffect(() => { if (showHistory && !historyLoaded) loadHistory() }, [showHistory]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Reset author/series filters when switching tabs (options change per tab)
+    useEffect(() => { setAuthorFilter(''); setSeriesFilter('') }, [activeTab])
 
     /* ── per-pair polling ── */
     const startPairPolling = (pairId) => {
@@ -333,15 +337,23 @@ function TranscriptionPage({ tab }) {
         pairs.filter(p => p.status !== 'unmatched'),
     [pairs])
 
+    // Options scoped to the current tab's status (before search/author/series filters)
+    const tabBasePairs = useMemo(() => {
+        if (activeTab === 'not-transcribed') return matchedPairs.filter(p => ['auto_matched', 'manual_matched', 'error'].includes(p.status))
+        if (activeTab === 'in-progress')     return matchedPairs.filter(p => p.status === 'transcribing')
+        if (activeTab === 'transcribed')     return matchedPairs.filter(p => p.status === 'synced')
+        return matchedPairs
+    }, [activeTab, matchedPairs])
+
     const allAuthors = useMemo(() => {
-        const s = new Set(matchedPairs.map(p => p.ebook?.author || p.audiobook?.author).filter(Boolean))
+        const s = new Set(tabBasePairs.map(p => p.ebook?.author || p.audiobook?.author).filter(Boolean))
         return [...s].sort()
-    }, [matchedPairs])
+    }, [tabBasePairs])
 
     const allSeriesNames = useMemo(() => {
-        const s = new Set(matchedPairs.map(p => p.ebook?.series || p.audiobook?.series).filter(Boolean))
+        const s = new Set(tabBasePairs.map(p => p.ebook?.series || p.audiobook?.series).filter(Boolean))
         return [...s].sort()
-    }, [matchedPairs])
+    }, [tabBasePairs])
 
     const filteredPairs = useMemo(() => matchedPairs.filter(p => {
         if (searchQuery) {
@@ -790,25 +802,16 @@ function TranscriptionPage({ tab }) {
                     <FilterPill label="Author" value={authorFilter} options={allAuthors} onChange={setAuthorFilter} />
                     <FilterPill label="Series" value={seriesFilter} options={allSeriesNames} onChange={setSeriesFilter} />
 
-                    {/* Search chip when active */}
+                    {/* Active search chip */}
                     {searchQuery && (
                         <div className="library-search-active">
                             <span>Search: <strong>{searchQuery}</strong></span>
-                            <button className="library-search-clear" onClick={() => setSearchQuery('')}>✕</button>
+                            <button className="library-search-clear" onClick={() => setSearchParams({}, { replace: true })}>✕</button>
                         </div>
                     )}
                 </div>
 
                 <div className="transcription-toolbar-right">
-                    {/* Live search input */}
-                    <input
-                        type="text"
-                        className="transcription-search-input"
-                        placeholder="Search..."
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                    />
-
                     {/* Sort pill — shown on tabs with sortable content */}
                     {(activeTab === 'not-transcribed' || activeTab === 'transcribed' || activeTab === 'in-progress') && (
                         <SortPill
@@ -819,8 +822,8 @@ function TranscriptionPage({ tab }) {
 
                     {/* View toggle */}
                     {activeTab === 'not-transcribed' && renderViewToggle([
-                        { mode: 'series', icon: <ListIcon /> },
                         { mode: 'grid',   icon: <GridIcon /> },
+                        { mode: 'series', icon: <ListIcon /> },
                     ])}
                     {(activeTab === 'in-progress' || activeTab === 'transcribed' || activeTab === 'queue') && renderViewToggle([
                         { mode: 'grid', icon: <GridIcon /> },
