@@ -786,6 +786,11 @@ async def scan_library(
                         meta, abs_changed, _ = enrich_from_abs(
                             meta, filepath, abs_index, audiobook_dir
                         )
+                        # Respect user-cleared fields: empty string means user explicitly
+                        # cleared the value — don't let ABS restore it or write it to file.
+                        if existing_audiobook.series == "":
+                            meta.pop("series", None)
+                            meta.pop("series_index", None)
                         if abs_changed:
                             await asyncio.to_thread(write_metadata_to_file, filepath, meta)
 
@@ -798,7 +803,9 @@ async def scan_library(
                          existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
                          updated = True
 
-                    if meta.get("series") and not existing_audiobook.series:
+                    # Only set series if it has never been set (None) — empty string means
+                    # the user explicitly cleared it and we must not overwrite that.
+                    if meta.get("series") and existing_audiobook.series is None:
                          existing_audiobook.series = meta["series"]
                          existing_audiobook.series_index = meta.get("series_index")
                          updated = True
@@ -914,21 +921,23 @@ async def rescan_all_files(
             
             book.title = meta.get("title") or book.title
             book.author = meta.get("author") or book.author
-            book.series = meta.get("series") or book.series
-            book.series_index = meta.get("series_index") or book.series_index
+            # Respect user-cleared series: empty string = user cleared it, don't overwrite
+            if book.series is None:
+                book.series = meta.get("series") or book.series
+                book.series_index = meta.get("series_index") or book.series_index
             book.description = meta.get("description") or book.description
             book.publisher = meta.get("publisher") or book.publisher
             book.publish_year = meta.get("publish_year") or book.publish_year
             book.language = meta.get("language") or book.language
             book.genres = meta.get("genres") or book.genres
             book.tags = meta.get("tags") or book.tags
-            
+
             if meta.get("isbn"): book.isbn = meta["isbn"]
             if meta.get("asin"): book.asin = meta["asin"]
-                
+
             book.metadata_source = meta.get("_metadata_source")
             book.metadata_pattern = meta.get("_metadata_pattern")
-            
+
             if not book.cover_path:
                 try:
                     cover_path = await asyncio.to_thread(_extract_and_save_cover, book.file_path, "ebook", book.id, book.title)
@@ -936,7 +945,7 @@ async def rescan_all_files(
                         book.cover_path = cover_path
                 except Exception as e:
                     pass
-            
+
             db.add(book)
             updated_ebooks += 1
         except Exception as e:
@@ -954,20 +963,22 @@ async def rescan_all_files(
             
             book.title = meta.get("title") or book.title
             book.author = meta.get("author") or book.author
-            book.series = meta.get("series") or book.series
-            book.series_index = meta.get("series_index") or book.series_index
+            # Respect user-cleared series: empty string = user cleared it, don't overwrite
+            if book.series is None:
+                book.series = meta.get("series") or book.series
+                book.series_index = meta.get("series_index") or book.series_index
             book.description = meta.get("description") or book.description
             book.publisher = meta.get("publisher") or book.publisher
             book.publish_year = meta.get("publish_year") or book.publish_year
             book.language = meta.get("language") or book.language
             book.genres = meta.get("genres") or book.genres
             book.tags = meta.get("tags") or book.tags
-            
+
             if meta.get("narrators"): book.narrators = meta["narrators"]
-                
+
             book.metadata_source = meta.get("_metadata_source")
             book.metadata_pattern = meta.get("_metadata_pattern")
-            
+
             if not book.cover_path:
                 try:
                     cover_path = await asyncio.to_thread(_extract_and_save_cover, book.file_path, "audiobook", book.id)
@@ -1021,8 +1032,10 @@ async def rescan_book_file(
     # Overwrite DB with extracted data
     book.title = meta.get("title") or book.title
     book.author = meta.get("author") or book.author
-    book.series = meta.get("series") or book.series
-    book.series_index = meta.get("series_index") or book.series_index
+    # Respect user-cleared series: empty string = user cleared it, don't overwrite
+    if book.series is None:
+        book.series = meta.get("series") or book.series
+        book.series_index = meta.get("series_index") or book.series_index
     book.description = meta.get("description") or book.description
     book.publisher = meta.get("publisher") or book.publisher
     book.publish_year = meta.get("publish_year") or book.publish_year
@@ -1663,7 +1676,24 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
             # iTunes-style atoms for M4B/M4A
             if book.title is not None: audio['\xa9nam'] = [book.title]
             if book.author is not None: audio['\xa9ART'] = [book.author]
-            if book.series is not None: audio['\xa9alb'] = [book.series]
+            # Write series to the tags that extract_metadata reads (©grp, SERIES atom)
+            # so that clearing series actually takes effect on subsequent scans.
+            if book.series is not None:
+                if book.series:
+                    grp = (f"{book.series} #{int(book.series_index)}"
+                           if book.series_index is not None else book.series)
+                    audio['\xa9grp'] = [grp]
+                    audio['----:com.apple.iTunes:SERIES'] = [book.series.encode('utf-8')]
+                    if book.series_index is not None:
+                        audio['----:com.apple.iTunes:SERIES-PART'] = [
+                            str(int(book.series_index)).encode('utf-8')
+                        ]
+                else:
+                    # Empty string = user cleared series; delete all series tags from file
+                    for tag in ('\xa9grp', '\xa9alb', '----:com.apple.iTunes:SERIES',
+                                '----:com.apple.iTunes:SERIES-PART'):
+                        if tag in audio:
+                            del audio[tag]
             if book.series_index is not None:
                 audio['trkn'] = [(int(book.series_index), 0)]
             if getattr(book, 'description', None) is not None: audio['desc'] = [book.description]
@@ -1678,7 +1708,11 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
             
             if book.title is not None: audio.tags['TIT2'] = TIT2(encoding=3, text=book.title)
             if book.author is not None: audio.tags['TPE1'] = TPE1(encoding=3, text=book.author)
-            if book.series is not None: audio.tags['TALB'] = TALB(encoding=3, text=book.series)
+            if book.series is not None:
+                if book.series:
+                    audio.tags['TALB'] = TALB(encoding=3, text=book.series)
+                elif 'TALB' in audio.tags:
+                    del audio.tags['TALB']
             if book.series_index is not None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
             if getattr(book, 'description', None) is not None:
@@ -1691,7 +1725,11 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
             # Vorbis comments
             if book.title is not None: audio['title'] = [book.title]
             if book.author is not None: audio['artist'] = [book.author]
-            if book.series is not None: audio['album'] = [book.series]
+            if book.series is not None:
+                if book.series:
+                    audio['album'] = [book.series]
+                elif 'album' in audio:
+                    del audio['album']
             if book.series_index is not None:
                 audio['tracknumber'] = [str(int(book.series_index))]
             if getattr(book, 'description', None) is not None: audio['description'] = [book.description]

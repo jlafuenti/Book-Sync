@@ -9,6 +9,7 @@ import {
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
 import FilterPill from '../components/FilterPill'
+import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
 import './LibraryPage.css'
 
@@ -274,6 +275,7 @@ function LibraryPage({ tab }) {
     const [newSubFilter, setNewSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks' | 'pairs'
     const [newPairs, setNewPairs] = useState([])
     const [acknowledging, setAcknowledging] = useState(false)
+    const [showMetadataCleanup, setShowMetadataCleanup] = useState(false)
     const [gridPage, setGridPage] = useState(1)
 
     const GRID_PAGE_SIZE = 50
@@ -1268,6 +1270,15 @@ function LibraryPage({ tab }) {
                     <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
                         {filteredBooks.length} new item{filteredBooks.length !== 1 ? 's' : ''}
                     </span>
+                    {(newSubFilter === 'pairs' || newSubFilter === 'all') && newPairs.length > 0 && (
+                        <button
+                            className="btn btn-secondary"
+                            onClick={() => setShowMetadataCleanup(true)}
+                            style={{ fontSize: '0.85rem', padding: '6px 14px' }}
+                        >
+                            Resolve Mismatches
+                        </button>
+                    )}
                     <button
                         className="btn btn-primary"
                         onClick={handleAcknowledgeAll}
@@ -1277,6 +1288,16 @@ function LibraryPage({ tab }) {
                         {acknowledging ? 'Acknowledging...' : 'Acknowledge All'}
                     </button>
                 </div>
+            )}
+
+            {showMetadataCleanup && (
+                <MetadataCleanupModal
+                    onClose={() => setShowMetadataCleanup(false)}
+                    onComplete={() => {
+                        setShowMetadataCleanup(false)
+                        loadData()
+                    }}
+                />
             )}
 
             {/* Floating bulk action bar */}
