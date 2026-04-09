@@ -1,0 +1,226 @@
+/* ── Toolbar ─────────────────────────────────────────────────────── */
+.system-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.system-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.system-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* ── Stat grid ───────────────────────────────────────────────────── */
+.system-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.system-stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+
+.system-stat-card-top {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.system-stat-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.system-stat-icon.purple { background: rgba(124, 58, 237, 0.15); color: var(--accent); }
+.system-stat-icon.green  { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+.system-stat-icon.blue   { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+
+.system-stat-title {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: 2px;
+}
+
+.system-stat-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.system-stat-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.system-stat-pct {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 6px;
+    text-align: right;
+}
+
+/* ── Section card ────────────────────────────────────────────────── */
+.system-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 20px;
+}
+
+.system-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+}
+
+.system-card-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.system-card-body {
+    padding: 18px;
+}
+
+.system-card-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+/* ── Table card wrapper (reuse admin pattern) ────────────────────── */
+.system-table-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+/* ── Calibre status ──────────────────────────────────────────────── */
+.system-calibre-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.system-calibre-available { color: var(--success); font-weight: 600; }
+.system-calibre-unavailable { color: var(--error); font-weight: 600; }
+
+/* ── Settings form helpers ───────────────────────────────────────── */
+.system-form-row {
+    margin-bottom: 20px;
+}
+
+.system-form-label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.system-form-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.system-form-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.system-form-toggle input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.system-form-toggle-label {
+    font-weight: 600;
+    cursor: pointer;
+    display: block;
+    margin-bottom: 2px;
+}
+
+.system-form-toggle-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.system-form-indent {
+    border-left: 2px solid var(--border);
+    padding-left: 16px;
+    margin-bottom: 20px;
+}
+
+.system-form-inline {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.system-test-result {
+    margin-top: 8px;
+    font-size: 0.85rem;
+}
+
+.system-test-result.success { color: var(--success); }
+.system-test-result.error   { color: var(--error); }
+
+/* ── Unsupported files ───────────────────────────────────────────── */
+.system-file-format-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+}
+
+.system-file-converted { color: var(--success); font-weight: 500; font-size: 0.85rem; }
+.system-file-pending   { color: var(--text-muted); font-size: 0.85rem; }
+
+.system-file-msg {
+    font-size: 0.8rem;
+    margin-top: 4px;
+}
+.system-file-msg.success { color: var(--success); }
+.system-file-msg.error   { color: var(--error); }
