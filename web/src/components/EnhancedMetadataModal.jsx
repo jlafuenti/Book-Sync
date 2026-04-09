@@ -121,7 +121,9 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
             await onSave(book.id, {
                 title: formData.title,
                 author: formData.author,
-                series: formData.series || null,
+                // If user cleared a previously-set series, send "" so the backend
+                // knows to explicitly clear it (null = "don't change", "" = "clear").
+                series: formData.series || (book.series ? '' : null),
                 series_index: formData.series_index ? parseFloat(formData.series_index) : null,
                 description: formData.description || null,
                 publisher: formData.publisher || null,
