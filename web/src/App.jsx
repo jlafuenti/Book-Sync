@@ -33,22 +33,41 @@ function AppMiniPlayer() {
     return <MiniPlayer onExpand={() => setShowFullPlayer(true)} />
 }
 
+const FILTERABLE_PATHS = ['/library', '/series', '/transcription']
+
 function GlobalSearchBar() {
     const navigate = useNavigate()
     const location = useLocation()
     const [query, setQuery] = useState('')
-    const [, setSearchParams] = useSearchParams()
+    const [searchParams, setSearchParams] = useSearchParams()
+
+    const isFilterable = FILTERABLE_PATHS.some(p => location.pathname.startsWith(p))
+    const urlSearch = searchParams.get('search') || ''
+
+    // Keep the input in sync with the URL param so chip-✕ clears the global bar too
+    useEffect(() => {
+        if (isFilterable) setQuery(urlSearch)
+        else setQuery('')
+    }, [urlSearch, isFilterable]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleChange = (e) => {
+        const val = e.target.value
+        setQuery(val)
+        if (isFilterable) {
+            setSearchParams(val ? { search: val } : {}, { replace: true })
+        }
+    }
 
     const handleSubmit = (e) => {
         e.preventDefault()
-        if (!query.trim()) return
-        if (location.pathname === '/library') {
-            // Already on library — update the search param directly so LibraryPage picks it up
-            setSearchParams({ search: query.trim() }, { replace: true })
+        const q = query.trim()
+        if (!q) return
+        if (isFilterable) {
+            setSearchParams({ search: q }, { replace: true })
         } else {
-            navigate(`/library?search=${encodeURIComponent(query.trim())}`)
+            navigate(`/library?search=${encodeURIComponent(q)}`)
+            setQuery('')
         }
-        setQuery('')
     }
 
     return (
@@ -60,9 +79,9 @@ function GlobalSearchBar() {
                 <input
                     type="text"
                     className="global-search-input"
-                    placeholder="Search library..."
+                    placeholder="Search..."
                     value={query}
-                    onChange={e => setQuery(e.target.value)}
+                    onChange={handleChange}
                 />
             </div>
         </form>

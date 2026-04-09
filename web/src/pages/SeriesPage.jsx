@@ -46,13 +46,9 @@ export default function SeriesPage() {
 
     const sortRef = useRef(null)
 
-    // URL search param (from global search bar)
+    // Sync searchTerm from URL param — global search bar owns it, don't clear
     useEffect(() => {
-        const urlSearch = searchParams.get('search')
-        if (urlSearch) {
-            setSearchTerm(urlSearch)
-            setSearchParams({}, { replace: true })
-        }
+        setSearchTerm(searchParams.get('search') || '')
     }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Close sort dropdown on outside click
@@ -171,15 +167,22 @@ export default function SeriesPage() {
         return { seriesGroups: Object.values(groups), unseriedItems: unsorted }
     }, [ebooks, audiobooks, pairs])
 
-    // All unique authors for the filter pill
-    const allAuthors = useMemo(() =>
-        [...new Set(seriesGroups.map(g => g.author).filter(Boolean))].sort(),
-    [seriesGroups])
+    // Options scoped to current activeFilter (before author/series pill filters)
+    const baseSeriesForOptions = useMemo(() =>
+        seriesGroups.filter(g => {
+            if (activeFilter === 'ebooks')    return g.items.every(i => i.type === 'ebook')
+            if (activeFilter === 'audiobooks') return g.items.every(i => i.type === 'audiobook')
+            return true
+        }),
+    [seriesGroups, activeFilter])
 
-    // All series names for the filter pill
+    const allAuthors = useMemo(() =>
+        [...new Set(baseSeriesForOptions.map(g => g.author).filter(Boolean))].sort(),
+    [baseSeriesForOptions])
+
     const allSeriesNames = useMemo(() =>
-        seriesGroups.map(g => g.name).sort((a, b) => a.localeCompare(b)),
-    [seriesGroups])
+        baseSeriesForOptions.map(g => g.name).sort((a, b) => a.localeCompare(b)),
+    [baseSeriesForOptions])
 
     // Filter & sort
     const filteredSeries = useMemo(() => {
@@ -350,15 +353,13 @@ export default function SeriesPage() {
                         onChange={setSeriesFilter}
                     />
 
-                    {/* Live search input */}
-                    <input
-                        type="text"
-                        className="library-sort-select"
-                        placeholder="Search..."
-                        value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
-                        style={{ width: 155, borderRadius: 20 }}
-                    />
+                    {/* Active search chip */}
+                    {searchTerm && (
+                        <div className="library-search-active">
+                            <span>Search: <strong>{searchTerm}</strong></span>
+                            <button className="library-search-clear" onClick={() => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('search'); return n }, { replace: true })}>✕</button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="series-toolbar-right">
