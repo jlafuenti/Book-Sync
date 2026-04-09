@@ -1,0 +1,76 @@
+/* ---- FilterPill shared component ---- */
+
+.filter-pill-wrap {
+    position: relative;
+}
+
+.filter-pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.filter-pill-btn.filter-pill-open {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.filter-pill-x {
+    margin-left: 4px;
+    opacity: 0.75;
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+.filter-pill-x:hover {
+    opacity: 1;
+}
+
+.filter-pill-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 200;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    max-height: 280px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.filter-pill-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.83rem;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: var(--transition);
+}
+
+.filter-pill-option:hover {
+    background: var(--accent-light);
+    color: var(--text-primary);
+}
+
+.filter-pill-option.active {
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.filter-pill-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 4px 0;
+}
