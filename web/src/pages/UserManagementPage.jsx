@@ -310,8 +310,8 @@ function AuditLogTab() {
     )
 }
 
-/* ── UserManagementPage ────────────────────────────────────────────── */
-function UserManagementPage() {
+/* ── UserManagementSection (named export for embedding) ───────────── */
+export function UserManagementSection() {
     const { user: currentUser } = useAuth()
     const [users, setUsers] = useState([])
     const [filter, setFilter] = useState('all')
@@ -547,6 +547,10 @@ function UserManagementPage() {
             )}
         </div>
     )
+}
+
+function UserManagementPage() {
+    return <UserManagementSection />
 }
 
 export default UserManagementPage
