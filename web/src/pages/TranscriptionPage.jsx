@@ -6,6 +6,7 @@ import {
     getTranscriptionQueue, getQueueHistory, removeFromQueue, updateQueuePriority,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import FilterPill from '../components/FilterPill'
 import './TranscriptionPage.css'
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -31,25 +32,76 @@ function formatDuration(startStr, endStr) {
     return `${secs}s`
 }
 
-/* ── ChevronIcon ─────────────────────────────────────────────────────────── */
-function ChevronIcon({ open }) {
-    return (
-        <svg
-            className={`transcription-series-chevron${open ? ' open' : ''}`}
-            viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" width="14" height="14"
-        >
-            <polyline points="9 18 15 12 9 6" />
-        </svg>
-    )
-}
+/* ── Icons ───────────────────────────────────────────────────────────────── */
+const GridIcon = () => (
+    <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+)
+const ListIcon = () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+        <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+    </svg>
+)
+const ChevronIcon = ({ open }) => (
+    <svg
+        className={`transcription-series-chevron${open ? ' open' : ''}`}
+        viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="2" width="14" height="14"
+    >
+        <polyline points="9 18 15 12 9 6" />
+    </svg>
+)
 
-/* ── CoverImg ────────────────────────────────────────────────────────────── */
-function CoverImg({ path, className, placeholder = '📚' }) {
-    if (path) {
-        return <img src={coverSrc(path)} alt="" className={className} />
-    }
-    return <div className={className + '-placeholder'}>{placeholder}</div>
+/* ── Sort Pill ───────────────────────────────────────────────────────────── */
+const SORT_LABELS = { title: 'Title', author: 'Author', series: 'Series' }
+
+function SortPill({ sortField, setSortField, sortDir, setSortDir }) {
+    const [open, setOpen] = useState(false)
+    const ref = useRef(null)
+    useEffect(() => {
+        const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+        document.addEventListener('mousedown', h)
+        return () => document.removeEventListener('mousedown', h)
+    }, [])
+    const dirLabel = sortDir === 'asc' ? '↑' : '↓'
+    return (
+        <div className="transcription-sort-wrap" ref={ref}>
+            <button
+                className={`transcription-sort-btn${open ? ' open' : ''}`}
+                onClick={() => setOpen(o => !o)}
+            >
+                Sort: {SORT_LABELS[sortField]} {dirLabel}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+                    <polyline points="6 9 12 15 18 9" />
+                </svg>
+            </button>
+            {open && (
+                <div className="transcription-sort-dropdown">
+                    {Object.entries(SORT_LABELS).map(([key, label]) => (
+                        <button
+                            key={key}
+                            className={`transcription-sort-option${sortField === key ? ' active' : ''}`}
+                            onClick={() => { setSortField(key); setOpen(false) }}
+                        >{label}</button>
+                    ))}
+                    <div className="transcription-sort-divider" />
+                    <button
+                        className={`transcription-sort-option${sortDir === 'asc' ? ' active' : ''}`}
+                        onClick={() => { setSortDir('asc'); setOpen(false) }}
+                    >A → Z ↑</button>
+                    <button
+                        className={`transcription-sort-option${sortDir === 'desc' ? ' active' : ''}`}
+                        onClick={() => { setSortDir('desc'); setOpen(false) }}
+                    >Z → A ↓</button>
+                </div>
+            )}
+        </div>
+    )
 }
 
 /* ── Main Component ──────────────────────────────────────────────────────── */
@@ -62,10 +114,23 @@ function TranscriptionPage({ tab }) {
     const [loading,        setLoading]        = useState(true)
     const [error,          setError]          = useState('')
     const [statuses,       setStatuses]       = useState({})
-    const [viewMode,       setViewMode]       = useState('series')    // 'series' | 'flat'
     const [expandedSeries, setExpandedSeries] = useState(new Set())
     const [searchQuery,    setSearchQuery]    = useState('')
     const [activeTab,      setActiveTab]      = useState(tab || 'not-transcribed')
+
+    /* ── per-tab view modes ── */
+    const [tabViewModes, setTabViewModes] = useState({
+        'not-transcribed': 'series',
+        queue:             'grid',
+        'in-progress':     'grid',
+        transcribed:       'grid',
+    })
+
+    /* ── filters & sort ── */
+    const [authorFilter, setAuthorFilter] = useState('')
+    const [seriesFilter, setSeriesFilter] = useState('')
+    const [sortField,    setSortField]    = useState('title')
+    const [sortDir,      setSortDir]      = useState('asc')
 
     /* ── queue state ── */
     const [queue,          setQueue]          = useState([])
@@ -76,15 +141,22 @@ function TranscriptionPage({ tab }) {
     const [historySortCol, setHistorySortCol] = useState('started_at')
     const [historySortDir, setHistorySortDir] = useState('desc')
 
-    const pollingRef    = useRef(null)
-    const pairPollRef   = useRef({})
+    /* ── drag-and-drop for queue ── */
+    const [draggedQueueId,  setDraggedQueueId]  = useState(null)
+    const [dragOverQueueId, setDragOverQueueId] = useState(null)
+
+    const pollingRef  = useRef(null)
+    const pairPollRef = useRef({})
+
+    /* ── derived helpers ── */
+    const viewMode    = tabViewModes[activeTab] || 'grid'
+    const setViewMode = (mode) => setTabViewModes(prev => ({ ...prev, [activeTab]: mode }))
 
     /* ── data loading ── */
     const loadPairs = async () => {
         try {
             const p = await getPairs()
             setPairs(p)
-            // resume polling for any still-transcribing pairs
             p.filter(pair => pair.status === 'transcribing').forEach(pair => {
                 if (!pairPollRef.current[pair.id]) startPairPolling(pair.id)
             })
@@ -97,7 +169,7 @@ function TranscriptionPage({ tab }) {
         try {
             const data = await getTranscriptionQueue()
             setQueue(data)
-        } catch { /* silent — queue polling should not show errors on poll */ }
+        } catch { /* silent */ }
     }
 
     const loadHistory = async () => {
@@ -129,27 +201,17 @@ function TranscriptionPage({ tab }) {
                 setLoading(false)
             }
         })()
-
-        // queue polling
         pollingRef.current = setInterval(loadQueue, 3000)
-
         return () => {
             if (pollingRef.current) clearInterval(pollingRef.current)
             Object.values(pairPollRef.current).forEach(clearInterval)
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // sync activeTab when prop changes (deep-link)
-    useEffect(() => {
-        if (tab) setActiveTab(tab)
-    }, [tab])
+    useEffect(() => { if (tab) setActiveTab(tab) }, [tab])
+    useEffect(() => { if (showHistory && !historyLoaded) loadHistory() }, [showHistory]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // lazy-load history when showHistory toggled on
-    useEffect(() => {
-        if (showHistory && !historyLoaded) loadHistory()
-    }, [showHistory]) // eslint-disable-line react-hooks/exhaustive-deps
-
-    /* ── per-pair polling (status endpoint) ── */
+    /* ── per-pair polling ── */
     const startPairPolling = (pairId) => {
         if (pairPollRef.current[pairId]) return
         pairPollRef.current[pairId] = setInterval(async () => {
@@ -174,70 +236,41 @@ function TranscriptionPage({ tab }) {
     /* ── action handlers ── */
     const handleAddToQueue = async (pairId) => {
         setError('')
-        try {
-            await addToQueue([pairId])
-            loadPairs()
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await addToQueue([pairId]); loadPairs(); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
     const handleQueueSeries = async (seriesPairs) => {
         setError('')
-        try {
-            await addToQueue(seriesPairs.map(p => p.id))
-            loadPairs()
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await addToQueue(seriesPairs.map(p => p.id)); loadPairs(); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
-    const handleAddAllToQueue = async () => {
+    const handleAddVisibleToQueue = async () => {
         if (notTranscribedPairs.length === 0) return
         setError('')
-        try {
-            await addToQueue(notTranscribedPairs.map(p => p.id))
-            loadPairs()
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await addToQueue(notTranscribedPairs.map(p => p.id)); loadPairs(); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
     const handleCancel = async (pairId) => {
         if (!confirm('Cancel this transcription?')) return
-        try {
-            await cancelTranscription(pairId)
-            stopPairPolling(pairId)
-            loadPairs()
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await cancelTranscription(pairId); stopPairPolling(pairId); loadPairs(); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
     const handleRemove = async (itemId) => {
         if (!confirm('Remove this item from the queue?')) return
-        try {
-            await removeFromQueue(itemId)
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await removeFromQueue(itemId); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
     const handleMovePriority = async (itemId, direction) => {
         const item = queue.find(q => q.id === itemId)
         if (!item) return
         const newPriority = direction === 'up' ? Math.max(1, item.priority - 10) : item.priority + 10
-        try {
-            await updateQueuePriority(itemId, newPriority)
-            loadQueue()
-        } catch (err) {
-            setError(err.message)
-        }
+        try { await updateQueuePriority(itemId, newPriority); loadQueue() }
+        catch (err) { setError(err.message) }
     }
 
     const toggleSeriesExpanded = (name) => {
@@ -257,6 +290,41 @@ function TranscriptionPage({ tab }) {
         }
     }
 
+    /* ── drag-and-drop ── */
+    const handleQueueDragStart = (id) => setDraggedQueueId(id)
+    const handleQueueDragOver  = (e, id) => { e.preventDefault(); setDragOverQueueId(id) }
+    const handleQueueDragEnd   = () => { setDraggedQueueId(null); setDragOverQueueId(null) }
+
+    const handleQueueDrop = async (targetId) => {
+        if (!draggedQueueId || draggedQueueId === targetId) { handleQueueDragEnd(); return }
+        const pending = pendingQueueItems // captured from render scope via ref-stable approach
+        const draggedIdx = pending.findIndex(q => q.id === draggedQueueId)
+        const targetIdx  = pending.findIndex(q => q.id === targetId)
+        if (draggedIdx === -1 || targetIdx === -1) { handleQueueDragEnd(); return }
+
+        // Place dragged item just before the target
+        let newPriority
+        if (targetIdx === 0) {
+            newPriority = Math.max(1, pending[0].priority - 10)
+        } else {
+            // Find the item just before targetIdx, ignoring the dragged item
+            const withoutDragged = pending.filter(q => q.id !== draggedQueueId)
+            const adjTargetIdx = withoutDragged.findIndex(q => q.id === targetId)
+            const before = withoutDragged[adjTargetIdx - 1]
+            const after  = withoutDragged[adjTargetIdx]
+            if (before) {
+                newPriority = Math.round((before.priority + after.priority) / 2)
+                if (newPriority === before.priority) newPriority = after.priority - 1
+            } else {
+                newPriority = Math.max(1, after.priority - 10)
+            }
+        }
+
+        try { await updateQueuePriority(draggedQueueId, Math.max(1, newPriority)); loadQueue() }
+        catch (err) { setError(err.message) }
+        handleQueueDragEnd()
+    }
+
     /* ── derived data ── */
     const canQueue = (pair) =>
         ['auto_matched', 'manual_matched', 'error'].includes(pair.status)
@@ -265,17 +333,37 @@ function TranscriptionPage({ tab }) {
         pairs.filter(p => p.status !== 'unmatched'),
     [pairs])
 
+    const allAuthors = useMemo(() => {
+        const s = new Set(matchedPairs.map(p => p.ebook?.author || p.audiobook?.author).filter(Boolean))
+        return [...s].sort()
+    }, [matchedPairs])
+
+    const allSeriesNames = useMemo(() => {
+        const s = new Set(matchedPairs.map(p => p.ebook?.series || p.audiobook?.series).filter(Boolean))
+        return [...s].sort()
+    }, [matchedPairs])
+
     const filteredPairs = useMemo(() => matchedPairs.filter(p => {
-        if (!searchQuery) return true
-        const q = searchQuery.toLowerCase()
-        const series = (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
-        return (
-            (p.ebook?.title   || '').toLowerCase().includes(q) ||
-            (p.audiobook?.title || '').toLowerCase().includes(q) ||
-            (p.ebook?.author  || '').toLowerCase().includes(q) ||
-            series.includes(q)
-        )
-    }), [matchedPairs, searchQuery])
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase()
+            const series = (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
+            if (!(
+                (p.ebook?.title    || '').toLowerCase().includes(q) ||
+                (p.audiobook?.title || '').toLowerCase().includes(q) ||
+                (p.ebook?.author   || '').toLowerCase().includes(q) ||
+                series.includes(q)
+            )) return false
+        }
+        if (authorFilter) {
+            const a = p.ebook?.author || p.audiobook?.author || ''
+            if (a !== authorFilter) return false
+        }
+        if (seriesFilter) {
+            const s = p.ebook?.series || p.audiobook?.series || ''
+            if (s !== seriesFilter) return false
+        }
+        return true
+    }), [matchedPairs, searchQuery, authorFilter, seriesFilter])
 
     const notTranscribedPairs = useMemo(() =>
         filteredPairs.filter(p => ['auto_matched', 'manual_matched', 'error'].includes(p.status)),
@@ -288,6 +376,24 @@ function TranscriptionPage({ tab }) {
     const transcribed = useMemo(() =>
         filteredPairs.filter(p => p.status === 'synced'),
     [filteredPairs])
+
+    const isFiltered = !!(searchQuery || authorFilter || seriesFilter)
+
+    // Sort helper
+    const sortPairs = (arr) => [...arr].sort((a, b) => {
+        const getV = p => {
+            if (sortField === 'author') return (p.ebook?.author || p.audiobook?.author || '').toLowerCase()
+            if (sortField === 'series') return (p.ebook?.series || p.audiobook?.series || '').toLowerCase()
+            return (p.ebook?.title || p.audiobook?.title || '').toLowerCase()
+        }
+        const va = getV(a), vb = getV(b)
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0
+        return sortDir === 'asc' ? cmp : -cmp
+    })
+
+    const sortedNotTranscribed = useMemo(() => sortPairs(notTranscribedPairs), [notTranscribedPairs, sortField, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+    const sortedTranscribed    = useMemo(() => sortPairs(transcribed),         [transcribed,         sortField, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+    const sortedInProgress     = useMemo(() => sortPairs(inProgress),          [inProgress,          sortField, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Series grouping for Not Transcribed
     const { seriesGroups, noSeriesPairs } = useMemo(() => {
@@ -313,8 +419,15 @@ function TranscriptionPage({ tab }) {
     }, [notTranscribedPairs])
 
     // Queue derived
-    const activeQueueItem  = queue.find(q => q.status === 'in_progress')
+    const activeQueueItem   = queue.find(q => q.status === 'in_progress')
     const pendingQueueItems = queue.filter(q => q.status === 'pending')
+
+    // Pair-by-id map for queue covers
+    const pairById = useMemo(() => {
+        const m = {}
+        pairs.forEach(p => { m[p.id] = p })
+        return m
+    }, [pairs])
 
     const sortedHistory = useMemo(() => {
         return [...queueHistory].sort((a, b) => {
@@ -327,12 +440,12 @@ function TranscriptionPage({ tab }) {
         })
     }, [queueHistory, historySortCol, historySortDir])
 
-    /* ── tabs config ── */
+    /* ── tabs config (order: Not Transcribed → Queue → In Progress → Transcribed) ── */
     const tabs = [
         { id: 'not-transcribed', label: 'Not Transcribed', count: notTranscribedPairs.length },
+        { id: 'queue',           label: 'Queue',           count: queue.length },
         { id: 'in-progress',     label: 'In Progress',     count: inProgress.length },
         { id: 'transcribed',     label: 'Transcribed',     count: transcribed.length },
-        { id: 'queue',           label: 'Queue',           count: queue.length },
     ]
 
     if (loading) {
@@ -348,51 +461,29 @@ function TranscriptionPage({ tab }) {
         return <span className="transcription-status-badge ready">Ready</span>
     }
 
-    /* ── Not Transcribed — Flat Card ── */
-    const renderFlatCard = (pair) => (
-        <div key={pair.id} className="transcription-card">
-            <div className="transcription-card-cover">
-                {pair.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
-                    : <div className="transcription-card-placeholder">📚</div>
-                }
-                {renderStatusBadge(pair)}
-                {canQueue(pair) && (
-                    <div className="transcription-card-action">
-                        <button
-                            className="btn btn-primary btn-sm"
-                            onClick={(e) => { e.stopPropagation(); handleAddToQueue(pair.id) }}
-                        >
-                            + Queue
-                        </button>
-                    </div>
-                )}
-            </div>
-            <div className="transcription-card-title">
-                {pair.ebook?.title || pair.audiobook?.title || `Pair #${pair.id}`}
-            </div>
-            <div className="transcription-card-author">
-                {pair.ebook?.author || pair.audiobook?.author || ''}
-            </div>
-            {pair.ebook?.format && (
-                <div className="transcription-card-meta">
-                    {pair.ebook.format} · {pair.audiobook?.format || ''}
-                </div>
-            )}
+    /* ── View toggle widget ── */
+    const renderViewToggle = (modes) => (
+        <div className="library-view-toggle">
+            {modes.map(({ mode, icon }) => (
+                <button
+                    key={mode}
+                    className={`library-view-btn${viewMode === mode ? ' active' : ''}`}
+                    onClick={() => setViewMode(mode)}
+                    title={mode === 'grid' ? 'Grid view' : mode === 'series' ? 'Series view' : 'List view'}
+                >
+                    {icon}
+                </button>
+            ))}
         </div>
     )
 
     /* ── Not Transcribed — Series Card ── */
     const renderSeriesCard = (name, seriesPairs) => {
-        const isOpen     = expandedSeries.has(name)
-        const queueable  = seriesPairs.filter(p => canQueue(p))
-
+        const isOpen    = expandedSeries.has(name)
+        const queueable = seriesPairs.filter(p => canQueue(p))
         return (
             <div key={name} className="transcription-series-card">
-                <div
-                    className="transcription-series-header"
-                    onClick={() => toggleSeriesExpanded(name)}
-                >
+                <div className="transcription-series-header" onClick={() => toggleSeriesExpanded(name)}>
                     <ChevronIcon open={isOpen} />
                     <span className="transcription-series-title">{name}</span>
                     <span className="transcription-series-count">{seriesPairs.length}</span>
@@ -405,7 +496,6 @@ function TranscriptionPage({ tab }) {
                         </button>
                     )}
                 </div>
-
                 {isOpen && seriesPairs.map(pair => (
                     <div key={pair.id} className="transcription-book-row">
                         {pair.ebook?.cover_path
@@ -441,13 +531,83 @@ function TranscriptionPage({ tab }) {
         )
     }
 
-    /* ── In Progress Card ── */
-    const renderProgressCard = (pair) => {
+    /* ── Not Transcribed — Flat Grid Card ── */
+    const renderFlatCard = (pair) => (
+        <div key={pair.id} className="transcription-card">
+            <div className="transcription-card-cover">
+                {pair.ebook?.cover_path
+                    ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
+                    : <div className="transcription-card-placeholder">📚</div>
+                }
+                {renderStatusBadge(pair)}
+                {canQueue(pair) && (
+                    <div className="transcription-card-action">
+                        <button
+                            className="btn btn-primary btn-sm"
+                            onClick={(e) => { e.stopPropagation(); handleAddToQueue(pair.id) }}
+                        >
+                            + Queue
+                        </button>
+                    </div>
+                )}
+            </div>
+            <div className="transcription-card-title">
+                {pair.ebook?.title || pair.audiobook?.title || `Pair #${pair.id}`}
+            </div>
+            <div className="transcription-card-author">
+                {pair.ebook?.author || pair.audiobook?.author || ''}
+            </div>
+            {pair.ebook?.format && (
+                <div className="transcription-card-meta">
+                    {pair.ebook.format} · {pair.audiobook?.format || ''}
+                </div>
+            )}
+        </div>
+    )
+
+    /* ── In Progress — Grid Card ── */
+    const renderProgressGridCard = (pair) => {
+        const loc      = statuses[pair.id] || {}
+        const progress = loc.progress
+        const isError  = loc.status === 'error'
+        return (
+            <div key={pair.id} className="transcription-card">
+                <div className="transcription-card-cover">
+                    {pair.ebook?.cover_path
+                        ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
+                        : <div className="transcription-card-placeholder">📚</div>
+                    }
+                    {progress != null && !isError && (
+                        <div className="transcription-ip-overlay">
+                            <div className="progress-bar" style={{ margin: '0 8px' }}>
+                                <div
+                                    className="progress-fill"
+                                    style={{ width: `${(progress * 100).toFixed(1)}%`, transition: 'width 0.5s ease' }}
+                                />
+                            </div>
+                            <div className="transcription-ip-pct">{(progress * 100).toFixed(0)}%</div>
+                        </div>
+                    )}
+                    <div className="transcription-card-action">
+                        <button className="btn btn-sm btn-danger" onClick={() => handleCancel(pair.id)}>
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+                <div className="transcription-card-title">
+                    {pair.ebook?.title || `Pair #${pair.id}`}
+                </div>
+                <div className="transcription-card-author">{pair.ebook?.author || ''}</div>
+            </div>
+        )
+    }
+
+    /* ── In Progress — List Card (horizontal) ── */
+    const renderProgressListCard = (pair) => {
         const loc      = statuses[pair.id] || {}
         const message  = loc.message || 'Transcribing...'
         const progress = loc.progress
         const isError  = loc.status === 'error'
-
         return (
             <div key={pair.id} className="transcription-progress-card">
                 {pair.ebook?.cover_path
@@ -458,9 +618,7 @@ function TranscriptionPage({ tab }) {
                     <div className="transcription-progress-title">
                         {pair.ebook?.title || `Pair #${pair.id}`}
                     </div>
-                    <div className="transcription-progress-author">
-                        {pair.ebook?.author || ''}
-                    </div>
+                    <div className="transcription-progress-author">{pair.ebook?.author || ''}</div>
                     <div className={`transcription-progress-message${isError ? ' error' : ''}`}>
                         {isError ? '❌ ' : ''}{message}
                     </div>
@@ -489,8 +647,8 @@ function TranscriptionPage({ tab }) {
         )
     }
 
-    /* ── Transcribed Card ── */
-    const renderTranscribedCard = (pair) => (
+    /* ── Transcribed — Grid Card ── */
+    const renderTranscribedGridCard = (pair) => (
         <div key={pair.id} className="transcription-card">
             <div className="transcription-card-cover">
                 {pair.ebook?.cover_path
@@ -502,19 +660,17 @@ function TranscriptionPage({ tab }) {
                     <Link
                         to={`/transcription/edit/${pair.id}`}
                         className="btn btn-secondary btn-sm"
-                        style={{ textDecoration: 'none' }}
+                        style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}
                         onClick={e => e.stopPropagation()}
                     >
-                        Edit
+                        Edit Transcription
                     </Link>
                 </div>
             </div>
             <div className="transcription-card-title">
                 {pair.ebook?.title || `Pair #${pair.id}`}
             </div>
-            <div className="transcription-card-author">
-                {pair.ebook?.author || ''}
-            </div>
+            <div className="transcription-card-author">{pair.ebook?.author || ''}</div>
             {pair.synced_at && (
                 <div className="transcription-card-meta">
                     {new Date(pair.synced_at).toLocaleDateString()}
@@ -522,6 +678,71 @@ function TranscriptionPage({ tab }) {
             )}
         </div>
     )
+
+    /* ── Transcribed — List Row ── */
+    const renderTranscribedListRow = (pair) => (
+        <div key={pair.id} className="transcription-book-row">
+            {pair.ebook?.cover_path
+                ? <img src={coverSrc(pair.ebook.cover_path)} className="transcription-book-thumb" alt="" />
+                : <div className="transcription-book-thumb">📚</div>
+            }
+            <div className="transcription-book-info">
+                <div className="transcription-book-title">
+                    {pair.ebook?.title || `Pair #${pair.id}`}
+                </div>
+                <div className="transcription-book-formats">{pair.ebook?.author || ''}</div>
+            </div>
+            {pair.synced_at && (
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    {new Date(pair.synced_at).toLocaleDateString()}
+                </div>
+            )}
+            <Link
+                to={`/transcription/edit/${pair.id}`}
+                className="btn btn-secondary btn-sm"
+                style={{ textDecoration: 'none', flexShrink: 0 }}
+            >
+                Edit Transcription
+            </Link>
+        </div>
+    )
+
+    /* ── Queue — Grid Card (draggable) ── */
+    const renderQueueGridCard = (item, idx) => {
+        const coverPath = pairById[item.book_pair_id]?.ebook?.cover_path
+        return (
+            <div
+                key={item.id}
+                className={`transcription-card transcription-queue-card${dragOverQueueId === item.id ? ' drag-over' : ''}`}
+                draggable={canManageQueue}
+                onDragStart={() => handleQueueDragStart(item.id)}
+                onDragOver={e => handleQueueDragOver(e, item.id)}
+                onDrop={() => handleQueueDrop(item.id)}
+                onDragEnd={handleQueueDragEnd}
+            >
+                <div className="transcription-card-cover">
+                    {coverPath
+                        ? <img src={coverSrc(coverPath)} alt="" />
+                        : <div className="transcription-card-placeholder">📚</div>
+                    }
+                    <span className="transcription-queue-badge">{idx + 1}</span>
+                    {canManageQueue && (
+                        <div className="transcription-card-action">
+                            <button
+                                className="btn btn-sm btn-danger"
+                                onClick={e => { e.stopPropagation(); handleRemove(item.id) }}
+                            >
+                                Remove
+                            </button>
+                        </div>
+                    )}
+                </div>
+                <div className="transcription-card-title">
+                    {item.book_title || `Pair #${item.book_pair_id}`}
+                </div>
+            </div>
+        )
+    }
 
     /* ── History sort indicator ── */
     const SortIndicator = ({ col }) => {
@@ -538,12 +759,13 @@ function TranscriptionPage({ tab }) {
             in_progress: '🔄 In Progress',
             pending:     '⏳ Pending',
         }
-        return (
-            <span className={`transcription-history-badge ${status}`}>
-                {labels[status] || status}
-            </span>
-        )
+        return <span className={`transcription-history-badge ${status}`}>{labels[status] || status}</span>
     }
+
+    /* ── Queue visible/all button ── */
+    const queueBtnLabel = isFiltered
+        ? `Queue Visible ${notTranscribedPairs.length}`
+        : `Queue All ${notTranscribedPairs.length}`
 
     /* ── JSX ── */
     return (
@@ -551,7 +773,7 @@ function TranscriptionPage({ tab }) {
             {/* ── Toolbar ── */}
             <div className="transcription-toolbar">
                 <div className="transcription-toolbar-left">
-                    {/* Filter pills */}
+                    {/* Tab pills */}
                     <div className="library-filter-pills">
                         {tabs.map(t => (
                             <button
@@ -564,7 +786,11 @@ function TranscriptionPage({ tab }) {
                         ))}
                     </div>
 
-                    {/* Search chip */}
+                    {/* Author/Series filter pills */}
+                    <FilterPill label="Author" value={authorFilter} options={allAuthors} onChange={setAuthorFilter} />
+                    <FilterPill label="Series" value={seriesFilter} options={allSeriesNames} onChange={setSeriesFilter} />
+
+                    {/* Search chip when active */}
                     {searchQuery && (
                         <div className="library-search-active">
                             <span>Search: <strong>{searchQuery}</strong></span>
@@ -574,48 +800,37 @@ function TranscriptionPage({ tab }) {
                 </div>
 
                 <div className="transcription-toolbar-right">
-                    {/* Search input (hidden when chip active) */}
-                    {!searchQuery && (
-                        <input
-                            type="text"
-                            className="library-sort-select"
-                            placeholder="Search..."
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
-                            style={{ width: '160px' }}
+                    {/* Live search input */}
+                    <input
+                        type="text"
+                        className="transcription-search-input"
+                        placeholder="Search..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                    />
+
+                    {/* Sort pill — shown on tabs with sortable content */}
+                    {(activeTab === 'not-transcribed' || activeTab === 'transcribed' || activeTab === 'in-progress') && (
+                        <SortPill
+                            sortField={sortField} setSortField={setSortField}
+                            sortDir={sortDir} setSortDir={setSortDir}
                         />
                     )}
 
-                    {/* View toggle — Not Transcribed only */}
-                    {activeTab === 'not-transcribed' && (
-                        <div className="library-view-toggle">
-                            <button
-                                className={`library-view-btn${viewMode === 'series' ? ' active' : ''}`}
-                                onClick={() => setViewMode('series')}
-                                title="Series view"
-                            >
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                                    <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
-                                    <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
-                                </svg>
-                            </button>
-                            <button
-                                className={`library-view-btn${viewMode === 'flat' ? ' active' : ''}`}
-                                onClick={() => setViewMode('flat')}
-                                title="Grid view"
-                            >
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-                                    <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
-                                    <rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
-                                </svg>
-                            </button>
-                        </div>
-                    )}
+                    {/* View toggle */}
+                    {activeTab === 'not-transcribed' && renderViewToggle([
+                        { mode: 'series', icon: <ListIcon /> },
+                        { mode: 'grid',   icon: <GridIcon /> },
+                    ])}
+                    {(activeTab === 'in-progress' || activeTab === 'transcribed' || activeTab === 'queue') && renderViewToggle([
+                        { mode: 'grid', icon: <GridIcon /> },
+                        { mode: 'list', icon: <ListIcon /> },
+                    ])}
 
-                    {/* Queue All button */}
-                    {activeTab === 'not-transcribed' && notTranscribedPairs.length > 1 && (
-                        <button className="btn btn-primary btn-sm" onClick={handleAddAllToQueue}>
-                            Queue All {notTranscribedPairs.length}
+                    {/* Queue All / Queue Visible */}
+                    {activeTab === 'not-transcribed' && notTranscribedPairs.length > 0 && (
+                        <button className="btn btn-primary btn-sm" onClick={handleAddVisibleToQueue}>
+                            {queueBtnLabel}
                         </button>
                     )}
                 </div>
@@ -623,19 +838,11 @@ function TranscriptionPage({ tab }) {
 
             {/* ── Stats bar ── */}
             <div className="transcription-stats">
-                <span className="transcription-stat">
-                    <strong>{notTranscribedPairs.length}</strong> not transcribed
-                </span>
-                <span className="transcription-stat">
-                    <strong>{inProgress.length}</strong> in progress
-                </span>
-                <span className="transcription-stat">
-                    <strong>{transcribed.length}</strong> transcribed
-                </span>
+                <span className="transcription-stat"><strong>{notTranscribedPairs.length}</strong> not transcribed</span>
+                <span className="transcription-stat"><strong>{inProgress.length}</strong> in progress</span>
+                <span className="transcription-stat"><strong>{transcribed.length}</strong> transcribed</span>
                 {queue.length > 0 && (
-                    <span className="transcription-stat">
-                        <strong>{queue.length}</strong> in queue
-                    </span>
+                    <span className="transcription-stat"><strong>{queue.length}</strong> in queue</span>
                 )}
             </div>
 
@@ -652,7 +859,9 @@ function TranscriptionPage({ tab }) {
                             <p>
                                 {matchedPairs.length === 0
                                     ? 'Match some ebooks with audiobooks first.'
-                                    : 'All matched pairs have been transcribed or are in progress.'}
+                                    : isFiltered
+                                        ? 'No results match the current filters.'
+                                        : 'All matched pairs have been transcribed or are in progress.'}
                             </p>
                         </div>
                     ) : viewMode === 'series' ? (
@@ -662,41 +871,7 @@ function TranscriptionPage({ tab }) {
                         </div>
                     ) : (
                         <div className="transcription-grid">
-                            {notTranscribedPairs.map(renderFlatCard)}
-                        </div>
-                    )}
-                </>
-            )}
-
-            {/* ══════════════ IN PROGRESS ══════════════ */}
-            {activeTab === 'in-progress' && (
-                <>
-                    {inProgress.length === 0 ? (
-                        <div className="transcription-empty">
-                            <div className="transcription-empty-icon">⏳</div>
-                            <h3>No transcriptions in progress</h3>
-                            <p>Add books to the queue from the Not Transcribed tab.</p>
-                        </div>
-                    ) : (
-                        <div className="transcription-progress-list">
-                            {inProgress.map(renderProgressCard)}
-                        </div>
-                    )}
-                </>
-            )}
-
-            {/* ══════════════ TRANSCRIBED ══════════════ */}
-            {activeTab === 'transcribed' && (
-                <>
-                    {transcribed.length === 0 ? (
-                        <div className="transcription-empty">
-                            <div className="transcription-empty-icon">✅</div>
-                            <h3>No transcribed pairs yet</h3>
-                            <p>Once transcription completes, pairs will appear here.</p>
-                        </div>
-                    ) : (
-                        <div className="transcription-grid">
-                            {transcribed.map(renderTranscribedCard)}
+                            {sortedNotTranscribed.map(renderFlatCard)}
                         </div>
                     )}
                 </>
@@ -753,9 +928,14 @@ function TranscriptionPage({ tab }) {
                         </>
                     )}
 
-                    {/* Pending Queue */}
+                    {/* Pending */}
                     <p className="transcription-queue-section-title">
                         Pending ({pendingQueueItems.length})
+                        {canManageQueue && viewMode === 'grid' && pendingQueueItems.length > 1 && (
+                            <span style={{ fontSize: '0.75rem', fontWeight: 400, marginLeft: 8, color: 'var(--text-muted)' }}>
+                                drag to reorder
+                            </span>
+                        )}
                     </p>
 
                     {pendingQueueItems.length === 0 && !activeQueueItem ? (
@@ -766,7 +946,11 @@ function TranscriptionPage({ tab }) {
                         </div>
                     ) : pendingQueueItems.length === 0 ? (
                         <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', padding: '12px 0' }}>
-                            No more items waiting. The active job is the last one.
+                            No more items waiting.
+                        </div>
+                    ) : viewMode === 'grid' ? (
+                        <div className="transcription-grid">
+                            {pendingQueueItems.map((item, idx) => renderQueueGridCard(item, idx))}
                         </div>
                     ) : (
                         <>
@@ -788,23 +972,9 @@ function TranscriptionPage({ tab }) {
                                     </div>
                                     {canManageQueue && (
                                         <div className="transcription-queue-actions">
-                                            <button
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={() => handleMovePriority(item.id, 'up')}
-                                                disabled={idx === 0}
-                                                title="Move up"
-                                            >↑</button>
-                                            <button
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={() => handleMovePriority(item.id, 'down')}
-                                                disabled={idx === pendingQueueItems.length - 1}
-                                                title="Move down"
-                                            >↓</button>
-                                            <button
-                                                className="btn btn-danger btn-sm"
-                                                onClick={() => handleRemove(item.id)}
-                                                title="Remove"
-                                            >✕</button>
+                                            <button className="btn btn-secondary btn-sm" onClick={() => handleMovePriority(item.id, 'up')} disabled={idx === 0} title="Move up">↑</button>
+                                            <button className="btn btn-secondary btn-sm" onClick={() => handleMovePriority(item.id, 'down')} disabled={idx === pendingQueueItems.length - 1} title="Move down">↓</button>
+                                            <button className="btn btn-danger btn-sm" onClick={() => handleRemove(item.id)} title="Remove">✕</button>
                                         </div>
                                     )}
                                 </div>
@@ -819,13 +989,14 @@ function TranscriptionPage({ tab }) {
                     >
                         <svg
                             className={`transcription-history-chevron${showHistory ? ' open' : ''}`}
-                            viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            strokeWidth="2" width="14" height="14"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"
                         >
                             <polyline points="9 18 15 12 9 6" />
                         </svg>
                         History {queueHistory.length > 0 ? `(${queueHistory.length})` : ''}
-                        {historyLoading && <span style={{ fontSize: '0.78rem', marginLeft: 8, color: 'var(--text-muted)' }}>Loading...</span>}
+                        {historyLoading && (
+                            <span style={{ fontSize: '0.78rem', marginLeft: 8, color: 'var(--text-muted)' }}>Loading...</span>
+                        )}
                     </div>
 
                     {showHistory && !historyLoading && queueHistory.length === 0 && (
@@ -844,15 +1015,9 @@ function TranscriptionPage({ tab }) {
                                         <th>Book</th>
                                         <th>Status</th>
                                         <th>Retries</th>
-                                        <th className="sortable" onClick={() => toggleHistorySort('created_at')}>
-                                            Created<SortIndicator col="created_at" />
-                                        </th>
-                                        <th className="sortable" onClick={() => toggleHistorySort('started_at')}>
-                                            Started<SortIndicator col="started_at" />
-                                        </th>
-                                        <th className="sortable" onClick={() => toggleHistorySort('completed_at')}>
-                                            Completed<SortIndicator col="completed_at" />
-                                        </th>
+                                        <th className="sortable" onClick={() => toggleHistorySort('created_at')}>Created<SortIndicator col="created_at" /></th>
+                                        <th className="sortable" onClick={() => toggleHistorySort('started_at')}>Started<SortIndicator col="started_at" /></th>
+                                        <th className="sortable" onClick={() => toggleHistorySort('completed_at')}>Completed<SortIndicator col="completed_at" /></th>
                                         <th>Duration</th>
                                         <th>Message</th>
                                     </tr>
@@ -878,11 +1043,7 @@ function TranscriptionPage({ tab }) {
                                             <td style={{ fontSize: '0.78rem', fontWeight: 500 }}>{formatDuration(item.started_at, item.completed_at)}</td>
                                             <td>
                                                 <div
-                                                    style={{
-                                                        maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis',
-                                                        whiteSpace: 'nowrap', fontSize: '0.78rem',
-                                                        color: item.status === 'failed' ? 'var(--error)' : 'var(--text-secondary)',
-                                                    }}
+                                                    style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem', color: item.status === 'failed' ? 'var(--error)' : 'var(--text-secondary)' }}
                                                     title={item.error_message || item.message || ''}
                                                 >
                                                     {item.error_message || item.message || '—'}
@@ -892,6 +1053,48 @@ function TranscriptionPage({ tab }) {
                                     ))}
                                 </tbody>
                             </table>
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* ══════════════ IN PROGRESS ══════════════ */}
+            {activeTab === 'in-progress' && (
+                <>
+                    {inProgress.length === 0 ? (
+                        <div className="transcription-empty">
+                            <div className="transcription-empty-icon">⏳</div>
+                            <h3>No transcriptions in progress</h3>
+                            <p>Add books to the queue from the Not Transcribed tab.</p>
+                        </div>
+                    ) : viewMode === 'grid' ? (
+                        <div className="transcription-grid">
+                            {sortedInProgress.map(renderProgressGridCard)}
+                        </div>
+                    ) : (
+                        <div className="transcription-progress-list">
+                            {sortedInProgress.map(renderProgressListCard)}
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* ══════════════ TRANSCRIBED ══════════════ */}
+            {activeTab === 'transcribed' && (
+                <>
+                    {transcribed.length === 0 ? (
+                        <div className="transcription-empty">
+                            <div className="transcription-empty-icon">✅</div>
+                            <h3>No transcribed pairs yet</h3>
+                            <p>{isFiltered ? 'No results match the current filters.' : 'Once transcription completes, pairs will appear here.'}</p>
+                        </div>
+                    ) : viewMode === 'grid' ? (
+                        <div className="transcription-grid">
+                            {sortedTranscribed.map(renderTranscribedGridCard)}
+                        </div>
+                    ) : (
+                        <div className="transcription-series-card" style={{ overflow: 'hidden' }}>
+                            {sortedTranscribed.map(renderTranscribedListRow)}
                         </div>
                     )}
                 </>
