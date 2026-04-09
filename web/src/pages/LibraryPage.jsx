@@ -849,13 +849,15 @@ function LibraryPage({ tab }) {
                         onChange={setSeriesFilter}
                     />
 
-                    {/* Search — uses the global search bar in the header */}
-                    {searchTerm && (
-                        <div className="library-search-active">
-                            <span>Searching: <strong>{searchTerm}</strong></span>
-                            <button className="library-search-clear" onClick={() => setSearchTerm('')}>✕</button>
-                        </div>
-                    )}
+                    {/* Live search input */}
+                    <input
+                        type="text"
+                        className="library-sort-select"
+                        placeholder="Search..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        style={{ width: 155, borderRadius: 20 }}
+                    />
                 </div>
 
                 <div className="library-toolbar-right">

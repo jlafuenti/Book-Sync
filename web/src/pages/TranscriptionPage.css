@@ -581,3 +581,149 @@
     padding: 16px;
     margin-bottom: 16px;
 }
+
+/* ---- Search input ---- */
+
+.transcription-search-input {
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    width: 155px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.transcription-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+.transcription-search-input:focus,
+.transcription-search-input:hover {
+    border-color: var(--accent);
+}
+
+/* ---- Sort pill ---- */
+
+.transcription-sort-wrap {
+    position: relative;
+}
+
+.transcription-sort-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 20px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.transcription-sort-btn:hover,
+.transcription-sort-btn.open {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.transcription-sort-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    z-index: 100;
+    min-width: 150px;
+    overflow: hidden;
+}
+
+.transcription-sort-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 9px 16px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.83rem;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.transcription-sort-option:hover {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.transcription-sort-option.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.transcription-sort-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+}
+
+/* ---- In-progress grid overlay ---- */
+
+.transcription-ip-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    padding: 22px 8px 8px;
+    pointer-events: none;
+}
+
+.transcription-ip-pct {
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.75);
+    text-align: right;
+    margin-top: 3px;
+}
+
+/* ---- Queue drag-and-drop card ---- */
+
+.transcription-queue-card {
+    cursor: grab;
+    user-select: none;
+}
+
+.transcription-queue-card:active {
+    cursor: grabbing;
+}
+
+.transcription-queue-card.drag-over .transcription-card-cover {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Queue position badge on cover */
+.transcription-queue-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
