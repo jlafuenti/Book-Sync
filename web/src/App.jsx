@@ -34,6 +34,7 @@ function AppMiniPlayer() {
 }
 
 const FILTERABLE_PATHS = ['/library', '/series', '/transcription']
+const SEARCH_HIDDEN_PATHS = ['/system', '/admin']
 
 function GlobalSearchBar() {
     const navigate = useNavigate()
@@ -41,6 +42,7 @@ function GlobalSearchBar() {
     const [query, setQuery] = useState('')
     const [searchParams, setSearchParams] = useSearchParams()
 
+    const isHidden = SEARCH_HIDDEN_PATHS.some(p => location.pathname.startsWith(p))
     const isFilterable = FILTERABLE_PATHS.some(p => location.pathname.startsWith(p))
     const urlSearch = searchParams.get('search') || ''
 
@@ -69,6 +71,8 @@ function GlobalSearchBar() {
             setQuery('')
         }
     }
+
+    if (isHidden) return null
 
     return (
         <form className="global-search-bar" onSubmit={handleSubmit}>
@@ -181,12 +185,6 @@ function AppShell({ user, setUser }) {
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         <span>System</span>
                     </Link>
-                    {isSection('/system') && sidebarHovered && (
-                        <div className="nav-sub-group">
-                            <Link to="/system/status" className={subNavClass('/system/status')}>⚙️ Status</Link>
-                            <Link to="/system/unsupported" className={subNavClass('/system/unsupported')}>⚠️ Unsupported Files</Link>
-                        </div>
-                    )}
 
                     {/* Users — admin/superadmin only */}
                     {hasMinRole('admin') && (
