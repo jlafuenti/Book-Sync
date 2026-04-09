@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getSyncMap, updateTranscriptionText, getPairs } from '../api'
+import './TranscriptionPage.css'
 
 function TranscriptionEditorPage() {
     const { pairId } = useParams()
@@ -129,25 +130,23 @@ function TranscriptionEditorPage() {
     }
 
     return (
-        <div style={{ padding: '0 20px 20px 20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <div className="page-header" style={{ marginBottom: '15px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <Link to="/transcription/transcribed" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
-                        ← Back
-                    </Link>
-                    <h2 style={{ margin: 0 }}>Edit Transcription</h2>
-                </div>
-                {pair && (
-                    <p style={{ margin: '5px 0 0 0', color: 'var(--text-secondary)' }}>
-                        {pair.ebook.title} {pair.ebook.author && `by ${pair.ebook.author}`}
-                    </p>
-                )}
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '4px' }}>
+                <Link to="/transcription/transcribed" className="btn btn-secondary btn-sm" style={{ textDecoration: 'none' }}>
+                    ← Back
+                </Link>
+                <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700 }}>Edit Transcription</h2>
             </div>
+            {pair && (
+                <p style={{ margin: '0 0 16px 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    {pair.ebook.title}{pair.ebook.author && ` by ${pair.ebook.author}`}
+                </p>
+            )}
 
-            {error && <div className="alert alert-error">⚠️ {error}</div>}
-            {successMessage && <div className="alert" style={{ backgroundColor: 'var(--success)', color: 'white', padding: '12px', borderRadius: '4px', marginBottom: '15px' }}>✅ {successMessage}</div>}
+            {error && <div className="alert alert-error" style={{ marginBottom: '12px' }}>⚠️ {error}</div>}
+            {successMessage && <div className="alert alert-success" style={{ marginBottom: '12px' }}>✅ {successMessage}</div>}
 
-            <div className="card" style={{ marginBottom: '20px', padding: '15px' }}>
+            <div className="transcription-editor-card" style={{ marginBottom: '16px' }}>
                 <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>Find & Replace</h3>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div style={{ flex: '1', minWidth: '150px' }}>
@@ -181,12 +180,10 @@ function TranscriptionEditorPage() {
 
             <div
                 ref={listRef}
-                className="card"
+                className="transcription-editor-card"
                 style={{
                     flex: '1',
                     overflowY: 'auto',
-                    padding: '20px',
-                    backgroundColor: 'var(--surface-color)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '15px'
@@ -198,7 +195,7 @@ function TranscriptionEditorPage() {
                     </div>
                 ) : (
                     points.map(pt => (
-                        <div key={pt.id} style={{ display: 'flex', gap: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--border-color)' }}>
+                        <div key={pt.id} style={{ display: 'flex', gap: '15px', paddingBottom: '15px', borderBottom: '1px solid var(--border)' }}>
                             <div style={{ width: '80px', flexShrink: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                 <div>{formatTime(pt.start_ms)}</div>
                                 <div>↓</div>
@@ -214,8 +211,8 @@ function TranscriptionEditorPage() {
                                         width: '100%',
                                         minHeight: '60px',
                                         resize: 'vertical',
-                                        backgroundColor: pt.text !== pt.originalText ? '#fff8e1' : 'var(--bg-color)',
-                                        borderColor: pt.text !== pt.originalText ? '#ffb300' : 'var(--border-color)'
+                                        backgroundColor: pt.text !== pt.originalText ? 'var(--accent-light)' : 'var(--bg-card)',
+                                        borderColor: pt.text !== pt.originalText ? 'var(--accent)' : 'var(--border)'
                                     }}
                                     value={pt.text}
                                     onChange={(e) => handleTextChange(pt.id, e.target.value)}

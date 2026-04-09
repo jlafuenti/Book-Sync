@@ -1,0 +1,579 @@
+/* ============================================================
+   SeriesPage — Card Grid Layout
+   ============================================================ */
+
+.series-page {
+    padding: 0;
+}
+
+/* ---- Toolbar (mirrors LibraryPage) ---- */
+
+.series-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.series-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.series-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* ---- Sort Pill + Dropdown ---- */
+
+.series-sort-wrap {
+    position: relative;
+}
+
+.series-sort-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 20px;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+}
+
+.series-sort-btn:hover,
+.series-sort-btn.open {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.series-sort-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 200;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.series-sort-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.83rem;
+    font-weight: 500;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    transition: var(--transition);
+}
+
+.series-sort-option:hover {
+    background: var(--accent-light);
+    color: var(--text-primary);
+}
+
+.series-sort-option.active {
+    color: var(--accent);
+    background: var(--accent-light);
+}
+
+.series-sort-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 4px 0;
+}
+
+.series-sort-dir-toggle {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+}
+
+.series-sort-dir-btn {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.series-sort-dir-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+/* ---- Card Grid ---- */
+
+.series-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 20px;
+}
+
+/* ---- Series Card ---- */
+
+.series-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.series-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.series-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
+}
+
+.series-card-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+/* ---- Cover Stack Area ---- */
+
+.series-cover-area {
+    background: var(--bg-secondary);
+    height: 176px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+    position: relative;
+}
+
+.series-cover-stack {
+    position: relative;
+    width: 120px;
+    height: 152px;
+}
+
+/* Resting stagger */
+.series-cover-img {
+    position: absolute;
+    width: 108px;
+    height: 148px;
+    object-fit: cover;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    transition: transform 0.25s ease;
+}
+
+.series-cover-img:nth-child(1) { transform: translate(0px, 0px);   z-index: 4; }
+.series-cover-img:nth-child(2) { transform: translate(5px, 5px);   z-index: 3; }
+.series-cover-img:nth-child(3) { transform: translate(10px, 10px); z-index: 2; }
+.series-cover-img:nth-child(4) { transform: translate(15px, 15px); z-index: 1; }
+
+/* Fan-out on card hover */
+.series-card:hover .series-cover-img:nth-child(1) { transform: translateX(-18px) rotate(-6deg); }
+.series-card:hover .series-cover-img:nth-child(2) { transform: translateX(-6px)  rotate(-2deg); }
+.series-card:hover .series-cover-img:nth-child(3) { transform: translateX(6px)   rotate(2deg);  }
+.series-card:hover .series-cover-img:nth-child(4) { transform: translateX(18px)  rotate(6deg);  }
+
+/* Single cover — no stack effect */
+.series-cover-stack.single .series-cover-img:nth-child(1) {
+    transform: translate(6px, 0px);
+}
+.series-card:hover .series-cover-stack.single .series-cover-img:nth-child(1) {
+    transform: translate(6px, -4px);
+}
+
+/* Placeholder when no covers */
+.series-cover-placeholder {
+    width: 108px;
+    height: 148px;
+    background: var(--bg-primary);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+/* ---- Card Body ---- */
+
+.series-card-body {
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.series-card-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.series-card-author {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.series-card-range {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.series-card-stats {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+.series-stat {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+/* ---- No Series Section ---- */
+
+.series-unsorted-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 32px 0 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.series-unsorted-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.series-unsorted-count {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.series-unsorted-chevron {
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+
+.series-unsorted-chevron.open {
+    transform: rotate(90deg);
+}
+
+/* ---- Empty State ---- */
+
+.series-empty {
+    text-align: center;
+    padding: 64px 0;
+    color: var(--text-muted);
+}
+
+.series-empty-icon {
+    font-size: 3rem;
+    margin-bottom: 12px;
+}
+
+.series-empty h3 {
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    margin: 0 0 8px;
+}
+
+.series-empty p {
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+/* ---- Stats bar ---- */
+
+.series-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.series-stats strong {
+    color: var(--text-primary);
+}
+
+/* ---- Unsorted item rows ---- */
+
+.series-unsorted-list {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.series-unsorted-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.series-unsorted-row:last-child {
+    border-bottom: none;
+}
+
+.series-unsorted-row:hover {
+    background: var(--accent-light);
+}
+
+.series-unsorted-row-title {
+    flex: 1;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.series-unsorted-row-author {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* ---- Author link hover ---- */
+
+.series-card-author-link {
+    cursor: pointer;
+}
+
+.series-card-author-link:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+
+/* ---- List View ---- */
+
+.series-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.series-list-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.12s ease;
+}
+
+.series-list-row:hover {
+    background: var(--bg-card-hover);
+}
+
+.series-list-chevron-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    border-radius: 4px;
+    transition: var(--transition);
+}
+
+.series-list-chevron-btn:hover {
+    color: var(--text-primary);
+    background: var(--accent-light);
+}
+
+.series-list-chevron {
+    transition: transform 0.2s ease;
+}
+
+.series-list-chevron.open {
+    transform: rotate(90deg);
+}
+
+/* ---- Individual book row (inside expanded series) ---- */
+
+.series-book-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px 7px 54px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    transition: background 0.12s ease;
+}
+
+.series-book-row:hover {
+    background: var(--bg-card-hover);
+}
+
+.series-book-row-thumb {
+    flex-shrink: 0;
+    width: 26px;
+    height: 36px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.series-book-row-type {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+}
+
+.series-book-row-index {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    min-width: 28px;
+}
+
+.series-book-row-title {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+.series-list-thumb {
+    flex-shrink: 0;
+    width: 34px;
+    height: 48px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.series-list-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.series-list-thumb-placeholder {
+    font-size: 1rem;
+    color: var(--text-muted);
+}
+
+.series-list-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.series-list-name {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.series-list-author {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.series-list-author:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.series-list-stats {
+    display: flex;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.series-list-stat {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
