@@ -1,94 +1,94 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
-    getCalibreStatus
+    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
 import './SystemPage.css'
 
-/* ── StatCard ──────────────────────────────────────────────────────── */
-function StatCard({ title, icon, color, usedHuman, totalHuman, usedBytes, totalBytes }) {
-    const percent = totalBytes > 0 ? Math.min(100, (usedBytes / totalBytes) * 100) : 0
+/* ── Helpers ───────────────────────────────────────────────────────── */
+function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B'
+    if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
+    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
+    return `${Math.round(bytes / 1024)} KB`
+}
 
-    const icons = {
-        book: (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="24" height="24">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-            </svg>
-        ),
-        headphones: (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="24" height="24">
-                <circle cx="12" cy="12" r="10" />
-                <polygon points="10 8 16 12 10 16 10 8" />
-            </svg>
-        ),
-        database: (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="24" height="24">
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                <line x1="12" y1="22.08" x2="12" y2="12" />
-            </svg>
-        )
-    }
-
+/* ── CollapsibleCard ───────────────────────────────────────────────── */
+function CollapsibleCard({ title, defaultOpen = false, children }) {
+    const [open, setOpen] = useState(defaultOpen)
     return (
-        <div className="system-stat-card">
-            <div className="system-stat-card-top">
-                <div className={`system-stat-icon ${color}`}>
-                    {icons[icon]}
-                </div>
-                <div>
-                    <div className="system-stat-title">{title}</div>
-                    <div className="system-stat-value">{usedHuman}</div>
-                    <div className="system-stat-sub">of {totalHuman}</div>
-                </div>
+        <div className="system-card">
+            <div className="system-card-header system-card-header-clickable" onClick={() => setOpen(o => !o)}>
+                <h3>{title}</h3>
+                <svg
+                    className={`system-chevron${open ? ' open' : ''}`}
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                    width="16" height="16"
+                >
+                    <polyline points="6 9 12 15 18 9" />
+                </svg>
             </div>
-            <div className="progress-bar" style={{ height: '6px', background: 'var(--bg-input)' }}>
-                <div
-                    className="progress-fill"
-                    style={{
-                        width: `${percent}%`,
-                        background: percent > 90 ? 'var(--error)' : percent > 75 ? 'var(--warning)' : 'var(--accent)'
-                    }}
-                />
-            </div>
-            <div className="system-stat-pct">{percent.toFixed(1)}% used</div>
+            {open && <div className="system-card-body">{children}</div>}
         </div>
     )
 }
 
-/* ── TableRow ──────────────────────────────────────────────────────── */
-function TableRow({ label, used, total, free, percent }) {
+/* ── DiskUsageCard ─────────────────────────────────────────────────── */
+function DiskUsageCard({ stats }) {
+    const usedBytes = (stats.ebook_used_bytes || 0) + (stats.audiobook_used_bytes || 0) + (stats.app_data_used_bytes || 0)
+    const totalBytes = (stats.ebook_total_bytes || 0) + (stats.audiobook_total_bytes || 0) + (stats.app_data_total_bytes || 0)
+    const freeBytes = totalBytes - usedBytes
+    const percent = totalBytes > 0 ? Math.min(100, (usedBytes / totalBytes) * 100) : 0
+    const r = 28
+    const circ = 2 * Math.PI * r
+    const dashOffset = circ * (1 - percent / 100)
+    const fillColor = percent > 90 ? 'var(--error)' : percent > 75 ? 'var(--warning)' : 'var(--accent)'
+
     return (
-        <tr>
-            <td>{label}</td>
-            <td style={{ fontWeight: 600 }}>{used}</td>
-            <td style={{ color: 'var(--text-secondary)' }}>{total}</td>
-            <td style={{ color: 'var(--success)' }}>{free} available</td>
-            <td>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div className="progress-bar" style={{ width: '60px', height: '4px' }}>
-                        <div
-                            className="progress-fill"
-                            style={{
-                                width: `${Math.min(100, percent)}%`,
-                                background: percent > 90 ? 'var(--error)' : percent > 75 ? 'var(--warning)' : 'var(--accent)'
-                            }}
-                        />
-                    </div>
-                    <span style={{ fontSize: '0.8rem' }}>{percent.toFixed(1)}%</span>
-                </div>
-            </td>
-        </tr>
+        <div className="system-stat-card system-stat-card-disk">
+            <div>
+                <p className="system-stat-badge-label">Disk Usage</p>
+                <h4 className="system-stat-badge-value">{formatBytes(usedBytes)}</h4>
+                <p className="system-stat-badge-sub">{formatBytes(freeBytes)} free</p>
+            </div>
+            <div className="system-donut-wrap">
+                <svg viewBox="0 0 64 64" className="system-donut" style={{ transform: 'rotate(-90deg)' }}>
+                    <circle cx="32" cy="32" r={r} fill="transparent" className="system-donut-track"
+                        strokeWidth="6" />
+                    <circle cx="32" cy="32" r={r} fill="transparent"
+                        strokeWidth="6"
+                        strokeDasharray={circ}
+                        strokeDashoffset={dashOffset}
+                        style={{ stroke: fillColor, transition: 'stroke-dashoffset 0.5s ease' }}
+                    />
+                </svg>
+                <span className="system-donut-pct">{Math.round(percent)}%</span>
+            </div>
+        </div>
     )
 }
 
-/* ── CalibreStatusSection ──────────────────────────────────────────── */
-function CalibreStatusSection() {
+/* ── StatBadgeCard ─────────────────────────────────────────────────── */
+function StatBadgeCard({ icon, color, label, value, sub, trend }) {
+    return (
+        <div className="system-stat-card">
+            <div className={`system-stat-icon ${color}`}>{icon}</div>
+            <p className="system-stat-badge-label">{label}</p>
+            <h4 className="system-stat-badge-value">{value}</h4>
+            {trend && <p className={`system-stat-badge-trend ${trend.positive ? 'positive' : ''}`}>{trend.text}</p>}
+            {sub && !trend && <p className="system-stat-badge-sub">{sub}</p>}
+        </div>
+    )
+}
+
+/* ── CalibreStatusCard ─────────────────────────────────────────────── */
+function CalibreStatusCard() {
     const [status, setStatus] = useState(null)
     const [checking, setChecking] = useState(false)
 
@@ -96,45 +96,79 @@ function CalibreStatusSection() {
 
     const checkStatus = async () => {
         setChecking(true)
-        try {
-            const data = await getCalibreStatus()
-            setStatus(data)
-        } catch (err) {
-            setStatus({ available: false, error: err.message })
-        } finally {
-            setChecking(false)
-        }
+        try { setStatus(await getCalibreStatus()) }
+        catch (err) { setStatus({ available: false, error: err.message }) }
+        finally { setChecking(false) }
     }
 
     return (
-        <div className="system-card">
-            <div className="system-card-header">
-                <h3>Calibre (MOBI/AZW3 Conversion)</h3>
-                <button className="btn btn-secondary" onClick={checkStatus} disabled={checking}>
-                    {checking ? 'Checking...' : 'Check'}
+        <div className="system-status-card">
+            <div className="system-status-card-left">
+                {status === null || checking ? (
+                    <div className="system-status-dot checking" />
+                ) : status.available ? (
+                    <div className="system-status-dot active" />
+                ) : (
+                    <div className="system-status-dot error" />
+                )}
+                <div>
+                    <h5 className="system-status-title">Calibre Status</h5>
+                    <p className="system-status-desc">
+                        {status === null ? 'Checking…' :
+                         status.available ? `Available — ${status.version || 'installed'}` :
+                         status.error || 'Not available'}
+                    </p>
+                </div>
+            </div>
+            <div className="system-status-card-right">
+                {status !== null && (
+                    <span className={`system-status-badge ${status.available ? 'active' : 'error'}`}>
+                        {status.available ? 'ACTIVE' : 'OFFLINE'}
+                    </span>
+                )}
+                <button className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '3px 10px' }}
+                    onClick={checkStatus} disabled={checking}>
+                    {checking ? '…' : 'Check'}
                 </button>
             </div>
-            <div className="system-card-body">
-                <p className="system-card-desc">
-                    Calibre's <code>ebook-convert</code> is used to convert MOBI and AZW3 files to EPUB.
-                    It must be installed in the server container.
-                </p>
-                {status === null ? (
-                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Checking…</span>
-                ) : status.available ? (
-                    <div className="system-calibre-status">
-                        <span className="system-calibre-available">Available</span>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{status.version}</span>
-                    </div>
-                ) : (
-                    <div>
-                        <span className="system-calibre-unavailable">Not Available</span>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
-                            {status.error}
-                        </p>
-                    </div>
-                )}
+        </div>
+    )
+}
+
+/* ── UnsupportedFilesCard ──────────────────────────────────────────── */
+function UnsupportedFilesCard({ count, onViewItems }) {
+    const hasItems = count > 0
+    return (
+        <div className="system-status-card">
+            <div className="system-status-card-left">
+                <div className={`system-status-icon-sm ${hasItems ? 'error' : 'ok'}`}>
+                    {hasItems ? (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                        </svg>
+                    ) : (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                            <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                    )}
+                </div>
+                <div>
+                    <h5 className="system-status-title">Unsupported Files</h5>
+                    <p className="system-status-desc">
+                        {count === null ? 'Loading…' :
+                         hasItems ? <><span className="system-status-count-error">{count} items</span> require conversion</> :
+                         'No unsupported files found'}
+                    </p>
+                </div>
             </div>
+            {hasItems && (
+                <button className="system-status-link" onClick={onViewItems}>
+                    VIEW ITEMS
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                </button>
+            )}
         </div>
     )
 }
@@ -155,9 +189,7 @@ function SettingsSection() {
             const settings = await getSettings()
             if (settings.ebook_filename_patterns) setEbookPatterns(settings.ebook_filename_patterns.join('\n'))
             if (settings.audiobook_filename_patterns) setAudiobookPatterns(settings.audiobook_filename_patterns.join('\n'))
-        } catch (err) {
-            console.error(err)
-        }
+        } catch (err) { console.error(err) }
     }
 
     const handleSave = async () => {
@@ -168,66 +200,37 @@ function SettingsSection() {
                 ebook_filename_patterns: ebookPatterns.split('\n').filter(p => p.trim() !== ''),
                 audiobook_filename_patterns: audiobookPatterns.split('\n').filter(p => p.trim() !== ''),
             })
-            setMsg({ type: 'success', text: 'Settings saved successfully' })
+            setMsg({ type: 'success', text: 'Settings saved' })
         } catch (err) {
-            setMsg({ type: 'error', text: 'Failed to save settings' })
-        } finally {
-            setLoading(false)
-        }
+            setMsg({ type: 'error', text: 'Failed to save' })
+        } finally { setLoading(false) }
     }
 
     return (
-        <div className="system-card">
-            <div className="system-card-header">
-                <h3>Library Settings</h3>
+        <>
+            <p className="system-card-desc">
+                One pattern per line. Tokens: <code>&lt;Author&gt;</code>, <code>&lt;Series&gt;</code>,{' '}
+                <code>&lt;Book Number&gt;</code>, <code>&lt;Title&gt;</code>. Use <code>/</code> for directories.
+            </p>
+            <div className="system-form-row">
+                <label className="system-form-label">EBook Patterns</label>
+                <textarea className="input" rows={4} value={ebookPatterns}
+                    onChange={e => setEbookPatterns(e.target.value)}
+                    placeholder="<Author> - [<Series> <Book Number>] - <Title>"
+                    style={{ fontFamily: 'monospace', width: '100%' }} />
             </div>
-            <div className="system-card-body">
-                <p className="system-card-desc">
-                    Enter one pattern per line. Tokens: <code>&lt;Author&gt;</code>, <code>&lt;Series&gt;</code>, <code>&lt;Book Number&gt;</code>, <code>&lt;Title&gt;</code>.
-                    Use <code>/</code> to match directory structure (e.g. <code>&lt;Author&gt;/&lt;Series&gt;/&lt;Title&gt;</code>).
-                </p>
-
-                <div className="system-form-row">
-                    <label className="system-form-label">EBook Filename Patterns</label>
-                    <textarea
-                        className="input"
-                        rows={5}
-                        value={ebookPatterns}
-                        onChange={e => setEbookPatterns(e.target.value)}
-                        placeholder="<Author> - [<Series> <Book Number>] - <Title>"
-                        style={{ fontFamily: 'monospace', width: '100%' }}
-                    />
-                </div>
-
-                <div className="system-form-row">
-                    <label className="system-form-label">Audiobook Filename Patterns</label>
-                    <textarea
-                        className="input"
-                        rows={5}
-                        value={audiobookPatterns}
-                        onChange={e => setAudiobookPatterns(e.target.value)}
-                        placeholder="<Author> - [<Series> <Book Number>] - <Title>"
-                        style={{ fontFamily: 'monospace', width: '100%' }}
-                    />
-                </div>
-
-                {msg && (
-                    <div className={`alert alert-${msg.type}`} style={{ marginBottom: '16px' }}>
-                        {msg.text}
-                    </div>
-                )}
-
-                {canAdmin ? (
-                    <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
-                        {loading ? 'Saving...' : 'Save Settings'}
-                    </button>
-                ) : (
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                        Admin role required to change settings.
-                    </p>
-                )}
+            <div className="system-form-row">
+                <label className="system-form-label">Audiobook Patterns</label>
+                <textarea className="input" rows={4} value={audiobookPatterns}
+                    onChange={e => setAudiobookPatterns(e.target.value)}
+                    placeholder="<Author> - [<Series> <Book Number>] - <Title>"
+                    style={{ fontFamily: 'monospace', width: '100%' }} />
             </div>
-        </div>
+            {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
+            {canAdmin
+                ? <button className="btn btn-primary" onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save'}</button>
+                : <p className="system-form-hint">Admin role required.</p>}
+        </>
     )
 }
 
@@ -247,15 +250,13 @@ function TranscriptionSettingsSection() {
 
     const loadSettings = async () => {
         try {
-            const settings = await getSettings()
-            if (settings.transcription_provider) setProvider(settings.transcription_provider)
-            if (settings.transcription_remote_url !== undefined) setRemoteUrl(settings.transcription_remote_url)
-            if (settings.transcription_remote_timeout !== undefined) setRemoteTimeout(settings.transcription_remote_timeout)
-            if (settings.auto_transcribe_enabled !== undefined) setAutoTranscribe(settings.auto_transcribe_enabled)
-            if (settings.whisper_model) setWhisperModel(settings.whisper_model)
-        } catch (err) {
-            console.error(err)
-        }
+            const s = await getSettings()
+            if (s.transcription_provider) setProvider(s.transcription_provider)
+            if (s.transcription_remote_url !== undefined) setRemoteUrl(s.transcription_remote_url)
+            if (s.transcription_remote_timeout !== undefined) setRemoteTimeout(s.transcription_remote_timeout)
+            if (s.auto_transcribe_enabled !== undefined) setAutoTranscribe(s.auto_transcribe_enabled)
+            if (s.whisper_model) setWhisperModel(s.whisper_model)
+        } catch (err) { console.error(err) }
     }
 
     const handleSave = async () => {
@@ -269,152 +270,75 @@ function TranscriptionSettingsSection() {
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
             })
-            setMsg({ type: 'success', text: 'Transcription settings saved' })
-        } catch (err) {
-            setMsg({ type: 'error', text: 'Failed to save transcription settings' })
-        } finally {
-            setLoading(false)
-        }
+            setMsg({ type: 'success', text: 'Saved' })
+        } catch (err) { setMsg({ type: 'error', text: 'Failed to save' }) }
+        finally { setLoading(false) }
     }
 
-    const handleTestConnection = async () => {
-        if (!remoteUrl) {
-            setTestResult({ success: false, text: "You didn't enter a URL yet!" })
-            return
-        }
-        setIsTesting(true)
-        setTestResult(null)
+    const handleTest = async () => {
+        if (!remoteUrl) { setTestResult({ success: false, text: "Enter a URL first" }); return }
+        setIsTesting(true); setTestResult(null)
         try {
-            const result = await testRemoteConnection(remoteUrl)
-            if (result.success === true) {
-                setTestResult({
-                    success: true,
-                    text: `Connection successful! GPU: ${result.gpu_name || 'None'}. Model: ${result.model_loaded ? 'Loaded' : 'Not Loaded'}`
-                })
-            } else {
-                setTestResult({ success: false, text: 'Server responded, but status is not healthy.' })
-            }
-        } catch (err) {
-            setTestResult({ success: false, text: `Connection failed: ${err.message}` })
-        } finally {
-            setIsTesting(false)
-        }
+            const r = await testRemoteConnection(remoteUrl)
+            setTestResult(r.success === true
+                ? { success: true, text: `✅ Connected! GPU: ${r.gpu_name || 'None'}, Model: ${r.model_loaded ? 'Loaded' : 'Not Loaded'}` }
+                : { success: false, text: '❌ Server responded but not healthy' })
+        } catch (err) { setTestResult({ success: false, text: `❌ ${err.message}` }) }
+        finally { setIsTesting(false) }
     }
 
     return (
-        <div className="system-card">
-            <div className="system-card-header">
-                <h3>Transcription Settings</h3>
+        <>
+            <div className="system-form-row">
+                <label className="system-form-label">Backend</label>
+                <select className="input" value={provider} onChange={e => setProvider(e.target.value)} style={{ maxWidth: 360 }}>
+                    <option value="remote_with_fallback">Remote with Fallback (Recommended)</option>
+                    <option value="remote">Remote Only</option>
+                    <option value="local">Local Only</option>
+                </select>
             </div>
-            <div className="system-card-body">
-                <p className="system-card-desc">
-                    Configure how books are transcribed and synchronized. Remote transcription via Jetson Orin Nano is highly recommended for speed.
-                </p>
-
+            {provider !== 'local' && (
                 <div className="system-form-row">
-                    <label className="system-form-label">Transcription Backend</label>
-                    <select
-                        className="input"
-                        value={provider}
-                        onChange={e => setProvider(e.target.value)}
-                        style={{ width: '100%', maxWidth: '400px' }}
-                    >
-                        <option value="remote_with_fallback">Remote with Fallback (Recommended)</option>
-                        <option value="remote">Remote Only</option>
-                        <option value="local">Local Only</option>
-                    </select>
-                </div>
-
-                {provider !== 'local' && (
-                    <div className="system-form-row">
-                        <label className="system-form-label">Jetson Remote URL</label>
-                        <div className="system-form-inline">
-                            <input
-                                type="text"
-                                className="input"
-                                value={remoteUrl}
-                                onChange={e => setRemoteUrl(e.target.value)}
-                                placeholder="http://192.168.1.100:9000"
-                                style={{ flex: '1 1 300px' }}
-                            />
-                            <button
-                                className="btn btn-secondary"
-                                onClick={handleTestConnection}
-                                disabled={isTesting}
-                                style={{ whiteSpace: 'nowrap' }}
-                            >
-                                {isTesting ? 'Testing...' : 'Test Connection'}
-                            </button>
-                        </div>
-                        {testResult && (
-                            <div className={`system-test-result ${testResult.success ? 'success' : 'error'}`}>
-                                {testResult.success ? '✅ ' : '❌ '}{testResult.text}
-                            </div>
-                        )}
-
-                        <div className="system-form-row" style={{ marginTop: '16px' }}>
-                            <label className="system-form-label">Remote Timeout (Seconds)</label>
-                            <input
-                                type="number"
-                                className="input"
-                                value={remoteTimeout}
-                                onChange={e => setRemoteTimeout(e.target.value)}
-                                style={{ width: '150px' }}
-                            />
-                            <p className="system-form-hint">
-                                How long to wait for a 10+ hour audiobook before failing (default: 7200s / 2 hours).
-                            </p>
-                        </div>
+                    <label className="system-form-label">Jetson Remote URL</label>
+                    <div className="system-form-inline">
+                        <input type="text" className="input" value={remoteUrl}
+                            onChange={e => setRemoteUrl(e.target.value)}
+                            placeholder="http://192.168.1.100:9000"
+                            style={{ flex: '1 1 240px' }} />
+                        <button className="btn btn-secondary" onClick={handleTest} disabled={isTesting} style={{ whiteSpace: 'nowrap' }}>
+                            {isTesting ? 'Testing…' : 'Test Connection'}
+                        </button>
                     </div>
-                )}
-
-                <div className="system-form-row">
-                    <label className="system-form-label">Local Whisper Model</label>
-                    <select
-                        className="input"
-                        value={whisperModel}
-                        onChange={e => setWhisperModel(e.target.value)}
-                        style={{ width: '100%', maxWidth: '200px' }}
-                    >
-                        <option value="tiny">Tiny (Fastest, least accurate)</option>
-                        <option value="base">Base</option>
-                        <option value="small">Small</option>
-                        <option value="medium">Medium (Recommended)</option>
-                        <option value="large-v3">Large v3 (Slowest, most accurate)</option>
-                    </select>
-                    <p className="system-form-hint">
-                        Takes effect only when using the Local Whisper backend.
-                    </p>
-                </div>
-
-                <div className="system-form-toggle">
-                    <input
-                        type="checkbox"
-                        id="autoTranscribeToggle"
-                        checked={autoTranscribe}
-                        onChange={e => setAutoTranscribe(e.target.checked)}
-                    />
-                    <div>
-                        <label htmlFor="autoTranscribeToggle" className="system-form-toggle-label">
-                            Auto-transcribe new books
-                        </label>
-                        <p className="system-form-toggle-hint">
-                            Automatically add newly matched book pairs to the transcription queue during library scans.
-                        </p>
+                    {testResult && <p className={`system-form-hint ${testResult.success ? 'success' : 'error'}`} style={{ marginTop: 6 }}>{testResult.text}</p>}
+                    <div className="system-form-row" style={{ marginTop: 12 }}>
+                        <label className="system-form-label">Remote Timeout (s)</label>
+                        <input type="number" className="input" value={remoteTimeout}
+                            onChange={e => setRemoteTimeout(e.target.value)} style={{ width: 120 }} />
+                        <p className="system-form-hint">Default: 7200s (2 hours)</p>
                     </div>
                 </div>
-
-                {msg && (
-                    <div className={`alert alert-${msg.type}`} style={{ marginBottom: '16px' }}>
-                        {msg.text}
-                    </div>
-                )}
-
-                <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
-                    {loading ? 'Saving...' : 'Save Transcription Settings'}
-                </button>
+            )}
+            <div className="system-form-row">
+                <label className="system-form-label">Local Whisper Model</label>
+                <select className="input" value={whisperModel} onChange={e => setWhisperModel(e.target.value)} style={{ maxWidth: 240 }}>
+                    <option value="tiny">Tiny (Fastest)</option>
+                    <option value="base">Base</option>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium (Recommended)</option>
+                    <option value="large-v3">Large v3 (Most Accurate)</option>
+                </select>
             </div>
-        </div>
+            <div className="system-form-toggle">
+                <input type="checkbox" id="autoTranscribeToggle" checked={autoTranscribe}
+                    onChange={e => setAutoTranscribe(e.target.checked)} />
+                <div>
+                    <label htmlFor="autoTranscribeToggle" className="system-form-toggle-label">Auto-transcribe new books</label>
+                    <p className="system-form-toggle-hint">Auto-queue newly matched pairs during library scans.</p>
+                </div>
+            </div>
+            {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
+            <button className="btn btn-primary" onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save'}</button>
+        </>
     )
 }
 
@@ -439,171 +363,129 @@ function ABSSettingsSection() {
             if (s.abs_url !== undefined) setUrl(s.abs_url || '')
             if (s.abs_api_token !== undefined) setToken(s.abs_api_token || '')
             if (s.abs_audiobooks_prefix !== undefined) setPrefix(s.abs_audiobooks_prefix || '')
-        } catch (err) {
-            console.error(err)
-        }
+        } catch (err) { console.error(err) }
     }
 
     const handleSave = async () => {
-        setLoading(true)
-        setMsg(null)
+        setLoading(true); setMsg(null)
         try {
             await updateSettings({ abs_enabled: enabled, abs_url: url, abs_api_token: token, abs_audiobooks_prefix: prefix })
-            setMsg({ type: 'success', text: 'Audiobookshelf settings saved' })
-        } catch (err) {
-            setMsg({ type: 'error', text: 'Failed to save settings' })
-        } finally {
-            setLoading(false)
-        }
+            setMsg({ type: 'success', text: 'Saved' })
+        } catch { setMsg({ type: 'error', text: 'Failed to save' }) }
+        finally { setLoading(false) }
     }
 
     const handleTest = async () => {
-        if (!url || !token) {
-            setTestResult({ success: false, text: 'Enter a URL and API token first' })
-            return
-        }
-        setIsTesting(true)
-        setTestResult(null)
+        if (!url || !token) { setTestResult({ success: false, text: 'Enter URL and token first' }); return }
+        setIsTesting(true); setTestResult(null)
         try {
-            const result = await testAbsConnection(url, token)
-            const libs = result.book_libraries?.join(', ') || 'none found'
-            setTestResult({ success: true, text: `Connected! Book libraries: ${libs}` })
-        } catch (err) {
-            setTestResult({ success: false, text: err.message })
-        } finally {
-            setIsTesting(false)
-        }
+            const r = await testAbsConnection(url, token)
+            setTestResult({ success: true, text: `✅ Connected! Libraries: ${r.book_libraries?.join(', ') || 'none'}` })
+        } catch (err) { setTestResult({ success: false, text: `❌ ${err.message}` }) }
+        finally { setIsTesting(false) }
     }
 
     const handleEnrichAll = async () => {
-        setIsEnriching(true)
-        setMsg(null)
-        try {
-            const result = await enrichLibraryFromAbs()
-            setMsg({ type: 'success', text: result.message })
-        } catch (err) {
-            setMsg({ type: 'error', text: `Enrichment failed: ${err.message}` })
-        } finally {
-            setIsEnriching(false)
-        }
+        setIsEnriching(true); setMsg(null)
+        try { const r = await enrichLibraryFromAbs(); setMsg({ type: 'success', text: r.message }) }
+        catch (err) { setMsg({ type: 'error', text: `Enrichment failed: ${err.message}` }) }
+        finally { setIsEnriching(false) }
     }
 
     return (
-        <div className="system-card">
-            <div className="system-card-header">
-                <h3>Audiobookshelf Integration</h3>
+        <>
+            <p className="system-card-desc">Enrich audiobook metadata from your Audiobookshelf library.</p>
+            <div className="system-form-toggle">
+                <input type="checkbox" id="absEnabledToggle" checked={enabled} onChange={e => setEnabled(e.target.checked)} />
+                <div>
+                    <label htmlFor="absEnabledToggle" className="system-form-toggle-label">Enable ABS enrichment</label>
+                    <p className="system-form-toggle-hint">Auto-enrich audiobooks during scans.</p>
+                </div>
             </div>
-            <div className="system-card-body">
-                <p className="system-card-desc">
-                    Enrich audiobook metadata (descriptions, narrators, series, genres, etc.) from your Audiobookshelf library.
-                    Enriched data is written back into audio file tags so future scans don't need to re-query ABS.
-                </p>
-
-                <div className="system-form-toggle">
-                    <input
-                        type="checkbox"
-                        id="absEnabledToggle"
-                        checked={enabled}
-                        onChange={e => setEnabled(e.target.checked)}
-                    />
-                    <div>
-                        <label htmlFor="absEnabledToggle" className="system-form-toggle-label">
-                            Enrich metadata with Audiobookshelf
-                        </label>
-                        <p className="system-form-toggle-hint">
-                            Automatically enrich audiobooks during library scans.
-                        </p>
+            {enabled && (
+                <div className="system-form-indent">
+                    <div className="system-form-row">
+                        <label className="system-form-label">ABS URL</label>
+                        <input type="text" className="input" value={url} onChange={e => setUrl(e.target.value)}
+                            placeholder="http://audiobookshelf:80" style={{ maxWidth: 360, width: '100%' }} />
+                        <p className="system-form-hint">Internal Docker hostname or LAN IP.</p>
+                    </div>
+                    <div className="system-form-row">
+                        <label className="system-form-label">API Token</label>
+                        <div className="system-form-inline">
+                            <input type="password" className="input" value={token} onChange={e => setToken(e.target.value)}
+                                placeholder="Paste your ABS API token" style={{ flex: '1 1 240px' }} />
+                            <button className="btn btn-secondary" onClick={handleTest} disabled={isTesting} style={{ whiteSpace: 'nowrap' }}>
+                                {isTesting ? 'Testing…' : 'Test Connection'}
+                            </button>
+                        </div>
+                        {testResult && <p className="system-form-hint" style={{ marginTop: 6 }}>{testResult.text}</p>}
+                    </div>
+                    <div className="system-form-row">
+                        <label className="system-form-label">Audiobooks Path Prefix</label>
+                        <input type="text" className="input" value={prefix} onChange={e => setPrefix(e.target.value)}
+                            placeholder="/audiobooks" style={{ maxWidth: 240, width: '100%' }} />
+                        <p className="system-form-hint">ABS container path for your library (e.g. <code>/audiobooks</code>).</p>
                     </div>
                 </div>
-
+            )}
+            {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-primary" onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save'}</button>
                 {enabled && (
-                    <div className="system-form-indent">
-                        <div className="system-form-row">
-                            <label className="system-form-label">Audiobookshelf URL</label>
-                            <input
-                                type="text"
-                                className="input"
-                                value={url}
-                                onChange={e => setUrl(e.target.value)}
-                                placeholder="http://audiobookshelf:80"
-                                style={{ width: '100%', maxWidth: '400px' }}
-                            />
-                            <p className="system-form-hint">
-                                Internal Docker hostname (e.g. <code>http://audiobookshelf:80</code>) or LAN IP.
-                            </p>
-                        </div>
-
-                        <div className="system-form-row">
-                            <label className="system-form-label">API Token</label>
-                            <div className="system-form-inline">
-                                <input
-                                    type="password"
-                                    className="input"
-                                    value={token}
-                                    onChange={e => setToken(e.target.value)}
-                                    placeholder="Paste your ABS API token"
-                                    style={{ flex: '1 1 300px' }}
-                                />
-                                <button
-                                    className="btn btn-secondary"
-                                    onClick={handleTest}
-                                    disabled={isTesting}
-                                    style={{ whiteSpace: 'nowrap' }}
-                                >
-                                    {isTesting ? 'Testing...' : 'Test Connection'}
-                                </button>
-                            </div>
-                            <p className="system-form-hint">
-                                Found in ABS → Settings → Users → your user → API Token.
-                            </p>
-                            {testResult && (
-                                <div className={`system-test-result ${testResult.success ? 'success' : 'error'}`}>
-                                    {testResult.success ? '✅ ' : '❌ '}{testResult.text}
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="system-form-row">
-                            <label className="system-form-label">Audiobooks Path Prefix (ABS internal)</label>
-                            <input
-                                type="text"
-                                className="input"
-                                value={prefix}
-                                onChange={e => setPrefix(e.target.value)}
-                                placeholder="/audiobooks"
-                                style={{ width: '100%', maxWidth: '400px' }}
-                            />
-                            <p className="system-form-hint">
-                                The path prefix ABS uses inside its container (e.g. <code>/audiobooks</code>).
-                                Check ABS → Libraries → your library → folder path.
-                            </p>
-                        </div>
-                    </div>
-                )}
-
-                {msg && (
-                    <div className={`alert alert-${msg.type}`} style={{ marginBottom: '16px' }}>
-                        {msg.text}
-                    </div>
-                )}
-
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
-                        {loading ? 'Saving...' : 'Save Settings'}
+                    <button className="btn btn-secondary" onClick={handleEnrichAll} disabled={isEnriching}>
+                        {isEnriching ? 'Enriching…' : 'Re-enrich All from ABS'}
                     </button>
-                    {enabled && (
-                        <button
-                            className="btn btn-secondary"
-                            onClick={handleEnrichAll}
-                            disabled={isEnriching}
-                            title="Force re-enrich all audiobooks from ABS, overwriting existing metadata"
-                        >
-                            {isEnriching ? 'Enriching...' : 'Re-enrich All from ABS'}
-                        </button>
-                    )}
-                </div>
+                )}
             </div>
-        </div>
+        </>
+    )
+}
+
+/* ── DetailedBreakdown ─────────────────────────────────────────────── */
+function DetailedBreakdown({ stats }) {
+    if (!stats) return null
+    const rows = [
+        { label: 'Ebooks', used: stats.ebook_used_human, total: stats.ebook_total_human, free: stats.ebook_free_human,
+          percent: stats.ebook_total_bytes > 0 ? stats.ebook_used_bytes / stats.ebook_total_bytes * 100 : 0 },
+        { label: 'Audiobooks', used: stats.audiobook_used_human, total: stats.audiobook_total_human, free: stats.audiobook_free_human,
+          percent: stats.audiobook_total_bytes > 0 ? stats.audiobook_used_bytes / stats.audiobook_total_bytes * 100 : 0 },
+        { label: 'Data & DB', used: stats.app_data_used_human, total: stats.app_data_total_human, free: stats.app_data_free_human,
+          percent: stats.app_data_total_bytes > 0 ? stats.app_data_used_bytes / stats.app_data_total_bytes * 100 : 0 },
+    ]
+    return (
+        <table className="data-table">
+            <thead>
+                <tr>
+                    <th>Category</th>
+                    <th>Used</th>
+                    <th>Capacity</th>
+                    <th>Free</th>
+                    <th>% Used</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows.map(row => (
+                    <tr key={row.label}>
+                        <td>{row.label}</td>
+                        <td style={{ fontWeight: 600 }}>{row.used}</td>
+                        <td style={{ color: 'var(--text-secondary)' }}>{row.total}</td>
+                        <td style={{ color: 'var(--success)' }}>{row.free} free</td>
+                        <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div className="progress-bar" style={{ width: 60, height: 4 }}>
+                                    <div className="progress-fill" style={{
+                                        width: `${Math.min(100, row.percent)}%`,
+                                        background: row.percent > 90 ? 'var(--error)' : row.percent > 75 ? 'var(--warning)' : 'var(--accent)'
+                                    }} />
+                                </div>
+                                <span style={{ fontSize: '0.8rem' }}>{row.percent.toFixed(1)}%</span>
+                            </div>
+                        </td>
+                    </tr>
+                ))}
+            </tbody>
+        </table>
     )
 }
 
@@ -621,69 +503,43 @@ function UnsupportedFilesTab({ canAdmin }) {
     useEffect(() => { loadFiles() }, [])
 
     const loadFiles = async () => {
-        setLoading(true)
-        setError(null)
-        try {
-            const data = await getUnsupportedFiles()
-            setFiles(data)
-        } catch (err) {
-            setError(err.message)
-        } finally {
-            setLoading(false)
-        }
+        setLoading(true); setError(null)
+        try { setFiles(await getUnsupportedFiles()) }
+        catch (err) { setError(err.message) }
+        finally { setLoading(false) }
     }
 
-    const setFileBusy = (id, busy) => {
-        setBusyIds(prev => {
-            const next = new Set(prev)
-            busy ? next.add(id) : next.delete(id)
-            return next
-        })
-    }
-
+    const setFileBusy = (id, busy) => setBusyIds(prev => {
+        const next = new Set(prev); busy ? next.add(id) : next.delete(id); return next
+    })
     const setFileMsg = (id, msg) => setFileMessages(prev => ({ ...prev, [id]: msg }))
 
     const handleConvert = async (file, deleteSource) => {
-        setFileBusy(file.id, true)
-        setFileMsg(file.id, null)
+        setFileBusy(file.id, true); setFileMsg(file.id, null)
         try {
             await convertUnsupportedFile(file.id, deleteSource)
-            setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & source deleted' : 'Converted to EPUB' })
+            setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & deleted' : 'Converted to EPUB' })
             await loadFiles()
-        } catch (err) {
-            setFileMsg(file.id, { type: 'error', text: err.message })
-        } finally {
-            setFileBusy(file.id, false)
-        }
+        } catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
+        finally { setFileBusy(file.id, false) }
     }
 
     const handleDeleteSource = async (file) => {
-        setFileBusy(file.id, true)
-        setFileMsg(file.id, null)
-        try {
-            await deleteUnsupportedSource(file.id)
-            await loadFiles()
-        } catch (err) {
-            setFileMsg(file.id, { type: 'error', text: err.message })
-        } finally {
-            setFileBusy(file.id, false)
-        }
+        setFileBusy(file.id, true); setFileMsg(file.id, null)
+        try { await deleteUnsupportedSource(file.id); await loadFiles() }
+        catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
+        finally { setFileBusy(file.id, false) }
     }
 
     const handleBatchConvert = async (deleteSource) => {
-        setBatchBusy(true)
-        setBatchResult(null)
+        setBatchBusy(true); setBatchResult(null)
         try {
             const result = await convertAllUnsupportedFiles(deleteSource)
-            const msg = `Converted ${result.succeeded.length} of ${result.total} files.` +
-                (result.failed.length > 0 ? ` ${result.failed.length} failed.` : '')
+            const msg = `Converted ${result.succeeded.length} of ${result.total}.${result.failed.length > 0 ? ` ${result.failed.length} failed.` : ''}`
             setBatchResult({ type: result.failed.length > 0 ? 'error' : 'success', text: msg, detail: result })
             await loadFiles()
-        } catch (err) {
-            setBatchResult({ type: 'error', text: err.message })
-        } finally {
-            setBatchBusy(false)
-        }
+        } catch (err) { setBatchResult({ type: 'error', text: err.message }) }
+        finally { setBatchBusy(false) }
     }
 
     const formatBytes = (bytes) => {
@@ -696,31 +552,26 @@ function UnsupportedFilesTab({ canAdmin }) {
 
     return (
         <div>
-            {/* Sub-toolbar */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <button className="btn btn-secondary" onClick={loadFiles} disabled={loading || batchBusy}>
-                    Refresh
-                </button>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button className="btn btn-secondary" onClick={loadFiles} disabled={loading || batchBusy}>Refresh</button>
                 {canAdmin && unconverted.length > 0 && (
                     <>
                         <button className="btn btn-primary" onClick={() => handleBatchConvert(false)} disabled={batchBusy}>
-                            {batchBusy ? 'Converting...' : 'Convert All'}
+                            {batchBusy ? 'Converting…' : 'Convert All'}
                         </button>
                         <button className="btn btn-danger" onClick={() => handleBatchConvert(true)} disabled={batchBusy}>
-                            {batchBusy ? 'Converting...' : 'Convert All & Delete Original'}
+                            {batchBusy ? 'Converting…' : 'Convert All & Delete Original'}
                         </button>
                     </>
                 )}
             </div>
 
             {batchResult && (
-                <div className={`alert alert-${batchResult.type}`} style={{ marginBottom: '16px' }}>
+                <div className={`alert alert-${batchResult.type}`} style={{ marginBottom: 16 }}>
                     {batchResult.text}
                     {batchResult.detail?.failed?.length > 0 && (
-                        <ul style={{ marginTop: '8px', paddingLeft: '20px', fontSize: '0.8rem' }}>
-                            {batchResult.detail.failed.map((f, i) => (
-                                <li key={i}>{f.filename}: {f.error}</li>
-                            ))}
+                        <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: '0.8rem' }}>
+                            {batchResult.detail.failed.map((f, i) => <li key={i}>{f.filename}: {f.error}</li>)}
                         </ul>
                     )}
                 </div>
@@ -730,28 +581,22 @@ function UnsupportedFilesTab({ canAdmin }) {
                 <div className="system-card-header">
                     <h3>MOBI / AZW3 Files</h3>
                 </div>
-                <div className="system-card-body" style={{ paddingTop: '12px', paddingBottom: '12px' }}>
+                <div className="system-card-body" style={{ paddingTop: 10, paddingBottom: 10 }}>
                     <p className="system-card-desc" style={{ marginBottom: 0 }}>
-                        MOBI and AZW3 files cannot be read directly. Convert them to EPUB using Calibre (if installed) or the built-in Python converter.
+                        MOBI and AZW3 files cannot be read directly. Convert them to EPUB using Calibre or the built-in Python converter.
                     </p>
                 </div>
-
                 {loading ? (
-                    <div style={{ padding: '32px', textAlign: 'center' }}><div className="spinner"></div></div>
+                    <div style={{ padding: 32, textAlign: 'center' }}><div className="spinner" /></div>
                 ) : error ? (
-                    <div className="alert alert-error" style={{ margin: '16px' }}>{error}</div>
+                    <div className="alert alert-error" style={{ margin: 16 }}>{error}</div>
                 ) : files.length === 0 ? (
-                    <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                        No unsupported files found in your library.
-                    </div>
+                    <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>No unsupported files found.</div>
                 ) : (
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th>File</th>
-                                <th>Format</th>
-                                <th>Size</th>
-                                <th>Status</th>
+                                <th>File</th><th>Format</th><th>Size</th><th>Status</th>
                                 {canAdmin && <th>Actions</th>}
                             </tr>
                         </thead>
@@ -760,64 +605,38 @@ function UnsupportedFilesTab({ canAdmin }) {
                                 <tr key={file.id}>
                                     <td>
                                         <div style={{ fontWeight: 500 }}>{file.title || file.filename}</div>
-                                        {file.author && (
-                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>
-                                        )}
+                                        {file.author && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>}
                                         {fileMessages[file.id] && (
-                                            <div className={`system-file-msg ${fileMessages[file.id].type}`}>
-                                                {fileMessages[file.id].text}
-                                            </div>
+                                            <div className={`system-file-msg ${fileMessages[file.id].type}`}>{fileMessages[file.id].text}</div>
                                         )}
                                     </td>
-                                    <td>
-                                        <span className="system-file-format-badge">{file.format}</span>
-                                    </td>
+                                    <td><span className="system-file-format-badge">{file.format}</span></td>
                                     <td style={{ color: 'var(--text-secondary)' }}>{formatBytes(file.file_size)}</td>
                                     <td>
-                                        {file.already_converted ? (
-                                            <span className="system-file-converted">Converted</span>
-                                        ) : (
-                                            <span className="system-file-pending">Not converted</span>
-                                        )}
+                                        {file.already_converted
+                                            ? <span className="system-file-converted">Converted</span>
+                                            : <span className="system-file-pending">Not converted</span>}
                                     </td>
                                     {canAdmin && (
                                         <td>
-                                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                                                 {!file.already_converted && (
                                                     <>
-                                                        <button
-                                                            className="btn btn-sm btn-primary"
-                                                            onClick={() => handleConvert(file, false)}
-                                                            disabled={busyIds.has(file.id)}
-                                                        >
-                                                            {busyIds.has(file.id) ? '...' : 'Convert'}
+                                                        <button className="btn btn-sm btn-primary" onClick={() => handleConvert(file, false)} disabled={busyIds.has(file.id)}>
+                                                            {busyIds.has(file.id) ? '…' : 'Convert'}
                                                         </button>
-                                                        <button
-                                                            className="btn btn-sm btn-secondary"
-                                                            onClick={() => handleConvert(file, true)}
-                                                            disabled={busyIds.has(file.id)}
-                                                        >
-                                                            {busyIds.has(file.id) ? '...' : 'Convert & Delete'}
+                                                        <button className="btn btn-sm btn-secondary" onClick={() => handleConvert(file, true)} disabled={busyIds.has(file.id)}>
+                                                            {busyIds.has(file.id) ? '…' : 'Convert & Delete'}
                                                         </button>
                                                     </>
                                                 )}
                                                 {file.already_converted && (
                                                     <>
                                                         {file.epub_ebook_id && (
-                                                            <button
-                                                                className="btn btn-sm btn-secondary"
-                                                                onClick={() => setPreviewFile(file)}
-                                                                disabled={busyIds.has(file.id)}
-                                                            >
-                                                                Preview
-                                                            </button>
+                                                            <button className="btn btn-sm btn-secondary" onClick={() => setPreviewFile(file)} disabled={busyIds.has(file.id)}>Preview</button>
                                                         )}
-                                                        <button
-                                                            className="btn btn-sm btn-danger"
-                                                            onClick={() => handleDeleteSource(file)}
-                                                            disabled={busyIds.has(file.id)}
-                                                        >
-                                                            {busyIds.has(file.id) ? '...' : 'Delete Original'}
+                                                        <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSource(file)} disabled={busyIds.has(file.id)}>
+                                                            {busyIds.has(file.id) ? '…' : 'Delete Original'}
                                                         </button>
                                                     </>
                                                 )}
@@ -832,11 +651,7 @@ function UnsupportedFilesTab({ canAdmin }) {
             </div>
 
             {previewFile?.epub_ebook_id && (
-                <EbookReader
-                    ebookId={previewFile.epub_ebook_id}
-                    bookTitle={previewFile.title || previewFile.filename}
-                    onClose={() => setPreviewFile(null)}
-                />
+                <EbookReader ebookId={previewFile.epub_ebook_id} bookTitle={previewFile.title || previewFile.filename} onClose={() => setPreviewFile(null)} />
             )}
         </div>
     )
@@ -846,32 +661,52 @@ function UnsupportedFilesTab({ canAdmin }) {
 function SystemPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canAdmin = hasMinRole('admin')
+
     const [activeTab, setActiveTab] = useState(tab || 'status')
+    useEffect(() => { if (tab) setActiveTab(tab) }, [tab])
+
+    // Status tab data
     const [stats, setStats] = useState(null)
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState(null)
+    const [counts, setCounts] = useState(null)   // { ebooks, audiobooks, pairs, pendingQueue, inProgressQueue }
+    const [unsupportedCount, setUnsupportedCount] = useState(null)
+    const [statusLoading, setStatusLoading] = useState(true)
+    const [statusError, setStatusError] = useState(null)
 
-    // Sync activeTab when the route prop changes (deep links still work)
-    useEffect(() => {
-        if (tab) setActiveTab(tab)
-    }, [tab])
-
-    useEffect(() => {
-        if (activeTab === 'status') loadStats()
-    }, [activeTab])
-
-    const loadStats = async () => {
-        setLoading(true)
+    const loadStatus = useCallback(async () => {
+        setStatusLoading(true)
+        setStatusError(null)
         try {
-            const data = await getDiskUsage()
-            setStats(data)
-            setError(null)
+            const [diskData, ebooks, audiobooks, pairs, queue, unsupported] = await Promise.all([
+                getDiskUsage(),
+                getEbooks(),
+                getAudiobooks(),
+                getPairs(),
+                getTranscriptionQueue(),
+                getUnsupportedFiles(),
+            ])
+            setStats(diskData)
+            setCounts({
+                ebooks: ebooks.length,
+                audiobooks: audiobooks.length,
+                pairs: pairs.length,
+                pendingQueue: queue.filter(q => q.status === 'pending').length,
+                inProgressQueue: queue.filter(q => q.status === 'in_progress').length,
+            })
+            setUnsupportedCount(unsupported.length)
         } catch (err) {
-            setError('Failed to load system statistics')
+            setStatusError('Failed to load system status')
+            console.error(err)
         } finally {
-            setLoading(false)
+            setStatusLoading(false)
         }
-    }
+    }, [])
+
+    useEffect(() => {
+        if (activeTab === 'status') loadStatus()
+    }, [activeTab, loadStatus])
+
+    const totalBooks = counts ? counts.ebooks + counts.audiobooks : 0
+    const pairRate = counts ? Math.round(counts.pairs / Math.max(counts.ebooks, 1) * 100) : 0
 
     return (
         <div>
@@ -879,112 +714,128 @@ function SystemPage({ tab }) {
             <div className="system-toolbar">
                 <div className="system-toolbar-left">
                     <div className="library-filter-pills">
-                        <button
-                            className={`library-filter-pill${activeTab === 'status' ? ' active' : ''}`}
-                            onClick={() => setActiveTab('status')}
-                        >
+                        <button className={`library-filter-pill${activeTab === 'status' ? ' active' : ''}`} onClick={() => setActiveTab('status')}>
                             Status
                         </button>
-                        <button
-                            className={`library-filter-pill${activeTab === 'unsupported' ? ' active' : ''}`}
-                            onClick={() => setActiveTab('unsupported')}
-                        >
+                        <button className={`library-filter-pill${activeTab === 'unsupported' ? ' active' : ''}`} onClick={() => setActiveTab('unsupported')}>
                             Unsupported Files
+                            {unsupportedCount > 0 && <span className="badge badge-error" style={{ marginLeft: 6 }}>{unsupportedCount}</span>}
                         </button>
                     </div>
                 </div>
+                {activeTab === 'status' && (
+                    <div className="system-toolbar-right">
+                        <button className="btn btn-secondary" onClick={loadStatus} disabled={statusLoading} style={{ fontSize: '0.8rem' }}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14" style={{ marginRight: 4 }}>
+                                <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                )}
             </div>
 
-            {/* ── Status tab ── */}
+            {/* ── Status Tab ── */}
             {activeTab === 'status' && (
-                loading ? (
-                    <div className="loading-page"><div className="spinner"></div></div>
-                ) : error ? (
+                statusLoading ? (
+                    <div className="loading-page"><div className="spinner" /></div>
+                ) : statusError ? (
                     <div className="alert alert-error">
-                        {error}
-                        <button className="btn btn-sm btn-secondary" onClick={loadStats} style={{ marginLeft: 'auto' }}>Retry</button>
+                        {statusError}
+                        <button className="btn btn-sm btn-secondary" onClick={loadStatus} style={{ marginLeft: 'auto' }}>Retry</button>
                     </div>
                 ) : (
                     <>
+                        {/* ── Section: System Status ── */}
+                        <div className="system-section-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                            <h3>System Status</h3>
+                        </div>
+
+                        {/* 4 stat badges */}
                         <div className="system-stat-grid">
-                            <StatCard
-                                title="EBook Library"
-                                icon="book"
-                                color="purple"
-                                usedHuman={stats.ebook_used_human}
-                                totalHuman={stats.ebook_total_human}
-                                usedBytes={stats.ebook_used_bytes}
-                                totalBytes={stats.ebook_total_bytes}
-                            />
-                            <StatCard
-                                title="Audiobook Library"
-                                icon="headphones"
-                                color="green"
-                                usedHuman={stats.audiobook_used_human}
-                                totalHuman={stats.audiobook_total_human}
-                                usedBytes={stats.audiobook_used_bytes}
-                                totalBytes={stats.audiobook_total_bytes}
-                            />
-                            <StatCard
-                                title="App Data & DB"
-                                icon="database"
+                            <DiskUsageCard stats={stats} />
+                            <StatBadgeCard
+                                icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>}
                                 color="blue"
-                                usedHuman={stats.app_data_used_human}
-                                totalHuman={stats.app_data_total_human}
-                                usedBytes={stats.app_data_used_bytes}
-                                totalBytes={stats.app_data_total_bytes}
+                                label="Total Books"
+                                value={totalBooks.toLocaleString()}
+                                sub={`${counts.ebooks.toLocaleString()} ebooks · ${counts.audiobooks.toLocaleString()} audio`}
+                            />
+                            <StatBadgeCard
+                                icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>}
+                                color="purple"
+                                label="Total Pairs"
+                                value={counts.pairs.toLocaleString()}
+                                sub={`${pairRate}% of ebooks paired`}
+                            />
+                            <StatBadgeCard
+                                icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>}
+                                color="amber"
+                                label="Transcription Queue"
+                                value={counts.pendingQueue}
+                                sub={counts.inProgressQueue > 0 ? `${counts.inProgressQueue} processing now` : 'Queue is idle'}
                             />
                         </div>
 
-                        <CalibreStatusSection />
-                        <SettingsSection />
-                        <TranscriptionSettingsSection />
-                        <ABSSettingsSection />
-
-                        <div className="system-card">
-                            <div className="system-card-header">
-                                <h3>Detailed Breakdown</h3>
-                            </div>
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Category</th>
-                                        <th>Used</th>
-                                        <th>Total Capacity</th>
-                                        <th>Free</th>
-                                        <th>% Used</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <TableRow
-                                        label="Ebooks"
-                                        used={stats.ebook_used_human}
-                                        total={stats.ebook_total_human}
-                                        free={stats.ebook_free_human}
-                                        percent={stats.ebook_total_bytes > 0 ? (stats.ebook_used_bytes / stats.ebook_total_bytes * 100) : 0}
-                                    />
-                                    <TableRow
-                                        label="Audiobooks"
-                                        used={stats.audiobook_used_human}
-                                        total={stats.audiobook_total_human}
-                                        free={stats.audiobook_free_human}
-                                        percent={stats.audiobook_total_bytes > 0 ? (stats.audiobook_used_bytes / stats.audiobook_total_bytes * 100) : 0}
-                                    />
-                                    <TableRow
-                                        label="Data & Database"
-                                        used={stats.app_data_used_human}
-                                        total={stats.app_data_total_human}
-                                        free={stats.app_data_free_human}
-                                        percent={stats.app_data_total_bytes > 0 ? (stats.app_data_used_bytes / stats.app_data_total_bytes * 100) : 0}
-                                    />
-                                </tbody>
-                            </table>
+                        {/* Calibre + Unsupported side by side */}
+                        <div className="system-two-col" style={{ marginBottom: 24 }}>
+                            <CalibreStatusCard />
+                            <UnsupportedFilesCard
+                                count={unsupportedCount}
+                                onViewItems={() => setActiveTab('unsupported')}
+                            />
                         </div>
+
+                        {/* ── Section: Configuration ── */}
+                        <div className="system-section-header">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
+                                <circle cx="12" cy="12" r="3" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14" />
+                            </svg>
+                            <h3>Configuration</h3>
+                        </div>
+
+                        {/* Library + Transcription side by side (collapsible) */}
+                        <div className="system-two-col">
+                            <CollapsibleCard title="Library Settings">
+                                <SettingsSection />
+                            </CollapsibleCard>
+                            <CollapsibleCard title="Transcription Settings">
+                                <TranscriptionSettingsSection />
+                            </CollapsibleCard>
+                        </div>
+
+                        {/* ABS + Detailed Breakdown side by side (collapsible) */}
+                        <div className="system-two-col">
+                            <CollapsibleCard title="Audiobookshelf Integration">
+                                <ABSSettingsSection />
+                            </CollapsibleCard>
+                            <CollapsibleCard title="Detailed Disk Breakdown">
+                                <DetailedBreakdown stats={stats} />
+                            </CollapsibleCard>
+                        </div>
+
+                        {/* ── Section: User Management (admin only) ── */}
+                        {canAdmin && (
+                            <>
+                                <div className="system-section-header" style={{ marginTop: 8 }}>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
+                                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+                                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                                    </svg>
+                                    <h3>User Management</h3>
+                                </div>
+                                <UserManagementSection />
+                            </>
+                        )}
                     </>
                 )
             )}
 
-            {/* ── Unsupported Files tab ── */}
+            {/* ── Unsupported Files Tab ── */}
             {activeTab === 'unsupported' && <UnsupportedFilesTab canAdmin={canAdmin} />}
         </div>
     )

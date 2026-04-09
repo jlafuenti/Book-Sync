@@ -186,13 +186,6 @@ function AppShell({ user, setUser }) {
                         <span>System</span>
                     </Link>
 
-                    {/* Users — admin/superadmin only */}
-                    {hasMinRole('admin') && (
-                        <Link to="/admin/users" className={navClass('/admin/users')} title="Users">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-                            <span>Users</span>
-                        </Link>
-                    )}
                 </nav>
                 <div className="sidebar-footer">
                     <div className="sidebar-user">
@@ -239,17 +232,16 @@ function AppShell({ user, setUser }) {
                     <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
                     {/* System */}
+                    <Route path="/system" element={<SystemPage tab="status" />} />
                     <Route path="/system/status" element={<SystemPage tab="status" />} />
                     <Route path="/system/unsupported" element={<SystemPage tab="unsupported" />} />
-                    <Route path="/system" element={<Navigate to="/system/status" replace />} />
 
                     {/* Book Detail */}
                     <Route path="/book/:type/:id" element={<BookDetailPage />} />
 
-                    {/* Admin routes */}
-                    {hasMinRole('admin') && (
-                        <Route path="/admin/users" element={<UserManagementPage />} />
-                    )}
+                    {/* Admin redirect — user management is now embedded in System */}
+                    <Route path="/admin/users" element={<Navigate to="/system" replace />} />
+                    <Route path="/admin/*" element={<Navigate to="/system" replace />} />
 
                     {/* Redirects */}
                     <Route path="/" element={<Navigate to="/continue" replace />} />
