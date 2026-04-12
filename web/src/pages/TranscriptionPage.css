@@ -727,3 +727,431 @@
     justify-content: center;
     pointer-events: none;
 }
+
+/* ============================================================
+   Mobile Transcription Page (≤768px)
+   ============================================================ */
+
+@media (max-width: 768px) {
+
+    .transcription-page {
+        padding: 0;
+    }
+
+    /* ---- Toolbar: horizontal pills + hide right controls ---- */
+    .transcription-toolbar {
+        flex-direction: column;
+        gap: 0;
+        margin-bottom: 16px;
+    }
+
+    .transcription-toolbar-left {
+        width: 100%;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 8px;
+        padding-bottom: 4px;
+    }
+
+    .transcription-toolbar-left::-webkit-scrollbar {
+        display: none;
+    }
+
+    .transcription-toolbar-left .library-filter-pills {
+        flex-wrap: nowrap;
+    }
+
+    .transcription-toolbar-left .library-filter-pill {
+        flex-shrink: 0;
+    }
+
+    /* Hide desktop filter pills and search on mobile */
+    .transcription-toolbar-left .filter-pill-wrap,
+    .transcription-toolbar-left .library-search-active {
+        display: none;
+    }
+
+    .transcription-toolbar-right {
+        display: none !important;
+    }
+
+    /* ---- Hide desktop stats ---- */
+    .transcription-stats {
+        display: none;
+    }
+
+    /* ---- Mobile Collapsible Section Headers ---- */
+    .tx-mobile-section {
+        margin-bottom: 16px;
+    }
+
+    .tx-mobile-section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 0;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .tx-mobile-section-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .tx-mobile-section-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .tx-mobile-section-dot.amber { background: var(--warning); }
+    .tx-mobile-section-dot.blue { background: var(--info); }
+    .tx-mobile-section-dot.gray { background: var(--text-muted); }
+    .tx-mobile-section-dot.green { background: var(--success); }
+
+    .tx-mobile-section-label {
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-primary);
+    }
+
+    .tx-mobile-section-count {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    .tx-mobile-section-chevron {
+        color: var(--text-muted);
+        transition: transform 0.2s ease;
+    }
+
+    .tx-mobile-section-chevron.open {
+        transform: rotate(180deg);
+    }
+
+    /* ---- Grid: single column on mobile ---- */
+    .transcription-grid {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .transcription-card:hover {
+        transform: none;
+    }
+
+    .transcription-card:active {
+        transform: scale(0.98);
+    }
+
+    .transcription-card:hover .transcription-card-cover {
+        box-shadow: none;
+    }
+
+    /* ---- Mobile transcription item row ---- */
+    .tx-mobile-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .tx-mobile-item:last-child {
+        border-bottom: none;
+    }
+
+    .tx-mobile-item-thumb {
+        width: 48px;
+        height: 68px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+    }
+
+    .tx-mobile-item-thumb-placeholder {
+        width: 48px;
+        height: 68px;
+        border-radius: 8px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        color: var(--text-muted);
+        flex-shrink: 0;
+    }
+
+    .tx-mobile-item-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .tx-mobile-item-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .tx-mobile-item-author {
+        font-size: 0.78rem;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    .tx-mobile-item-action {
+        flex-shrink: 0;
+    }
+
+    /* ---- Active transcription card (mobile) ---- */
+    .tx-mobile-active-card {
+        background: rgba(30, 30, 45, 0.6);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(71, 71, 84, 0.1);
+        border-radius: 16px;
+        padding: 16px;
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .tx-mobile-active-thumb {
+        width: 80px;
+        height: 112px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .tx-mobile-active-body {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .tx-mobile-active-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 2px;
+    }
+
+    .tx-mobile-active-author {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+    }
+
+    .tx-mobile-active-progress {
+        margin-bottom: 4px;
+    }
+
+    .tx-mobile-active-progress .progress-bar {
+        height: 6px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .tx-mobile-active-progress .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--warning), var(--accent));
+        border-radius: 3px;
+        transition: width 0.5s ease;
+    }
+
+    .tx-mobile-active-pct {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-top: 4px;
+    }
+
+    .tx-mobile-active-time {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    /* ---- Show All button ---- */
+    .tx-mobile-show-all {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-align: center;
+        cursor: pointer;
+        margin-top: 12px;
+        transition: all 0.2s ease;
+    }
+
+    .tx-mobile-show-all:active {
+        background: var(--accent-light);
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    /* ---- Queue items ---- */
+    .transcription-queue-item {
+        border-radius: 12px;
+    }
+
+    /* ---- History table ---- */
+    .transcription-history-table {
+        font-size: 0.78rem;
+    }
+
+    .transcription-history-table th,
+    .transcription-history-table td {
+        padding: 8px;
+    }
+
+    /* ---- Series cards ---- */
+    .transcription-series-card {
+        border-radius: 12px;
+    }
+
+    /* ---- Progress cards ---- */
+    .transcription-progress-card {
+        border-radius: 12px;
+    }
+
+    /* ---- Empty state ---- */
+    .transcription-empty {
+        padding: 40px 16px;
+    }
+
+    /* ---- Hide hover action overlays ---- */
+    .transcription-card-action {
+        display: none !important;
+    }
+
+    /* ---- Hide desktop toolbar & stats on mobile (mobile layout replaces them) ---- */
+    .transcription-toolbar {
+        display: none !important;
+    }
+
+    .transcription-stats {
+        display: none !important;
+    }
+
+    /* ---- Mobile layout container ---- */
+    .tx-mobile-layout {
+        padding: 0 16px 120px 16px;
+    }
+
+    /* ---- Section content wrapper ---- */
+    .tx-mobile-section-content {
+        padding-bottom: 8px;
+    }
+
+    /* ---- Empty hint within sections ---- */
+    .tx-mobile-empty-hint {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        padding: 16px 0;
+        text-align: center;
+    }
+
+    /* ---- Mobile Queue / Action buttons ---- */
+    .tx-mobile-queue-btn {
+        background: var(--bg-card);
+        color: var(--accent);
+        border: 1px solid var(--border);
+        border-radius: 9999px;
+        padding: 6px 16px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+    }
+
+    .tx-mobile-queue-btn:active {
+        background: var(--accent);
+        color: var(--bg-primary);
+    }
+
+    .tx-mobile-queue-btn.remove {
+        color: var(--text-muted);
+        padding: 6px 10px;
+        font-size: 0.85rem;
+    }
+
+    .tx-mobile-queue-btn.remove:active {
+        color: var(--error);
+        border-color: var(--error);
+        background: transparent;
+    }
+
+    /* ---- View link for transcribed items ---- */
+    .tx-mobile-view-link {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        text-decoration: underline;
+        text-underline-offset: 4px;
+        text-decoration-color: var(--accent-50, rgba(189, 157, 255, 0.5));
+    }
+
+    /* ---- Active card glow ---- */
+    .tx-mobile-active-glow {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 128px;
+        height: 128px;
+        background: rgba(245, 158, 11, 0.05);
+        filter: blur(48px);
+        border-radius: 50%;
+        margin-right: -64px;
+        margin-top: -64px;
+        pointer-events: none;
+    }
+
+    /* ---- Start / Queue All FAB ---- */
+    .tx-mobile-start-fab {
+        position: fixed;
+        bottom: calc(var(--mobile-bottomnav-height, 80px) + 16px);
+        right: 20px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-hover, #8a4cfc));
+        color: #fff;
+        border: none;
+        border-radius: 9999px;
+        padding: 12px 28px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        box-shadow: 0 4px 20px rgba(189, 157, 255, 0.3);
+        cursor: pointer;
+        z-index: 40;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .tx-mobile-start-fab:active {
+        transform: scale(0.95);
+        box-shadow: 0 2px 12px rgba(189, 157, 255, 0.4);
+    }
+}

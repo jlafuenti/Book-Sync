@@ -569,3 +569,294 @@
 .library-alerts {
     margin-bottom: 16px;
 }
+
+/* ============================================================
+   Mobile Library Page (≤768px)
+   ============================================================ */
+
+@media (max-width: 768px) {
+
+    .library-page {
+        padding: 0;
+    }
+
+    /* ---- Mobile Search Input ---- */
+    .library-mobile-search {
+        position: relative;
+        margin-bottom: 16px;
+    }
+
+    .library-mobile-search .search-icon {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        pointer-events: none;
+    }
+
+    .library-mobile-search input {
+        width: 100%;
+        padding: 14px 16px 14px 48px;
+        border-radius: 16px;
+        border: none;
+        background: rgba(36, 36, 52, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        outline: none;
+        transition: box-shadow 0.2s ease;
+    }
+
+    .library-mobile-search input:focus {
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 189, 157, 255), 0.4);
+    }
+
+    .library-mobile-search input::placeholder {
+        color: var(--text-muted);
+        opacity: 0.6;
+    }
+
+    /* ---- Filter Pills: horizontal scroll ---- */
+    .library-toolbar {
+        flex-wrap: nowrap;
+        margin-bottom: 16px;
+        gap: 0;
+        flex-direction: column;
+    }
+
+    .library-toolbar-left {
+        width: 100%;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 8px;
+        padding-bottom: 4px;
+    }
+
+    .library-toolbar-left::-webkit-scrollbar {
+        display: none;
+    }
+
+    .library-filter-pills {
+        flex-wrap: nowrap;
+        gap: 8px;
+    }
+
+    .library-filter-pill {
+        white-space: nowrap;
+        flex-shrink: 0;
+        padding: 8px 20px;
+        border-radius: 999px;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .library-filter-pill.active {
+        box-shadow: 0 0 15px rgba(138, 76, 252, 0.4);
+    }
+
+    /* Hide desktop-only search chip on mobile (we have mobile search instead) */
+    .library-search-active {
+        display: none;
+    }
+
+    /* Hide desktop author/series filter pills on mobile toolbar */
+    .library-toolbar-left .filter-pill-wrap {
+        display: none;
+    }
+
+    /* ---- Hide desktop toolbar right on mobile ---- */
+    .library-toolbar-right {
+        display: none !important;
+    }
+
+    /* ---- Mobile View Controls ---- */
+    .library-mobile-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+    }
+
+    .library-mobile-controls .showing-count {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+    }
+
+    .library-mobile-controls .control-buttons {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        background: rgba(18, 18, 30, 0.5);
+        padding: 4px;
+        border-radius: 12px;
+    }
+
+    .library-mobile-controls .control-btn {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 8px;
+        transition: all 0.2s ease;
+    }
+
+    .library-mobile-controls .control-btn.active {
+        background: rgba(var(--accent-rgb, 189, 157, 255), 0.2);
+        color: var(--accent);
+    }
+
+    .library-mobile-controls .control-btn:active {
+        transform: scale(0.95);
+    }
+
+    .library-mobile-controls .control-divider {
+        width: 1px;
+        height: 16px;
+        background: rgba(71, 71, 84, 0.3);
+        margin: 0 4px;
+    }
+
+    /* ---- Hide desktop stats bar ---- */
+    .library-stats {
+        display: none;
+    }
+
+    /* ---- Sub-filter rows ---- */
+    .library-sub-filter-row {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+
+    .library-sub-filter-row::-webkit-scrollbar {
+        display: none;
+    }
+
+    .library-sub-filter-row .library-filter-pill {
+        flex-shrink: 0;
+    }
+
+    /* ---- Grid: 2 columns ---- */
+    .library-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px 16px;
+    }
+
+    /* Card mobile tweaks */
+    .lib-book-card {
+        transition: none;
+    }
+
+    .lib-book-card:hover {
+        transform: none;
+    }
+
+    .lib-book-card:active {
+        transform: scale(0.97);
+    }
+
+    .lib-book-card-cover {
+        border-radius: 16px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .lib-book-card:hover .lib-book-card-cover {
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Hide desktop hover 3-dot menu on mobile; tap navigates to detail */
+    .lib-book-card-menu {
+        display: none !important;
+    }
+
+    /* Type badge: always visible, styled for mobile */
+    .lib-book-card-type-badge {
+        bottom: auto;
+        top: 8px;
+        right: 8px;
+        left: auto;
+        background: rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 8px;
+        width: 28px;
+        height: 28px;
+    }
+
+    .lib-book-card-title {
+        font-size: 0.875rem;
+        font-weight: 700;
+    }
+
+    .lib-book-card-author {
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    /* ---- Hide list view on mobile ---- */
+    .library-list {
+        display: none !important;
+    }
+
+    /* ---- Floating bars: adjust position above bottom nav ---- */
+
+    /* ---- Mobile Upload Menu (in top bar) ---- */
+    .library-mobile-upload-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        z-index: 300;
+        min-width: 200px;
+        overflow: hidden;
+    }
+
+    .library-mobile-upload-menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 14px 16px;
+        background: transparent;
+        border: none;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    }
+
+    .library-mobile-upload-menu button:active {
+        background: var(--accent-light);
+    }
+
+    /* ---- Verify report: stack on mobile ---- */
+    .library-verify-report {
+        padding: 16px;
+    }
+
+    .library-verify-report .table-wrapper {
+        overflow-x: auto;
+    }
+
+    /* ---- Empty state ---- */
+    .library-empty {
+        padding: 40px 24px;
+    }
+}

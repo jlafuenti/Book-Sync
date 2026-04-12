@@ -5,6 +5,7 @@ import {
     updateProgress, resetPairProgress, getProgress as apiGetProgress, getBookmark, updateBookmark, coverSrc,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
+import useIsMobile from '../hooks/useIsMobile'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
 import './HomePage.css'
@@ -183,6 +184,7 @@ function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onList
 function HomePage() {
     const navigate = useNavigate()
     const audioPlayer = useAudioPlayer()
+    const isMobile = useIsMobile()
 
     const [continueItems, setContinueItems] = useState([])
     const [seriesItems, setSeriesItems] = useState([])
@@ -538,6 +540,14 @@ function HomePage() {
     return (
         <div className="home-page">
 
+            {/* ── Welcome Hero (mobile only) ── */}
+            {isMobile && (
+                <div className="home-hero">
+                    <div className="home-hero-label">Your Library</div>
+                    <h1 className="home-hero-title">Welcome back.</h1>
+                </div>
+            )}
+
             {/* ── Transcription Status ── */}
             {txData && (
                 <section className="home-section">
@@ -570,6 +580,26 @@ function HomePage() {
                             <span className="home-tx-dot transcribed">{txData.counts.transcribed} Transcribed</span>
                             <span className="home-tx-dot not-transcribed">{txData.counts.notTranscribed} Not Transcribed</span>
                         </div>
+                        {/* Mobile: 3-column stat blocks */}
+                        {isMobile && (
+                            <div className="home-tx-stats-mobile">
+                                <div className="home-tx-stat-block">
+                                    <div className="home-tx-stat-dot queued" />
+                                    <span className="home-tx-stat-number">{String(txData.counts.queued).padStart(2, '0')}</span>
+                                    <span className="home-tx-stat-label">Queued</span>
+                                </div>
+                                <div className="home-tx-stat-block">
+                                    <div className="home-tx-stat-dot active" />
+                                    <span className="home-tx-stat-number">{String(txData.counts.inProgress).padStart(2, '0')}</span>
+                                    <span className="home-tx-stat-label">Active</span>
+                                </div>
+                                <div className="home-tx-stat-block">
+                                    <div className="home-tx-stat-dot done" />
+                                    <span className="home-tx-stat-number">{String(txData.counts.transcribed).padStart(2, '0')}</span>
+                                    <span className="home-tx-stat-label">Done</span>
+                                </div>
+                            </div>
+                        )}
                         {txData.activeItem && (
                             <div className="home-tx-active">
                                 <div className="home-tx-active-label">
@@ -591,6 +621,9 @@ function HomePage() {
             <section className="home-section">
                 <div className="home-section-header">
                     <h3>Continue Reading</h3>
+                    {isMobile && continueItems.length > 0 && (
+                        <a className="home-view-all" href="#" onClick={e => { e.preventDefault(); navigate('/library') }}>VIEW ALL</a>
+                    )}
                 </div>
                 {continueItems.length === 0 ? (
                     <div className="home-empty">Nothing in progress — start reading!</div>
@@ -637,6 +670,30 @@ function HomePage() {
                         {seriesItems.map(s => {
                             const book = s.nextBook
                             const coverUrl = coverSrc(book?.cover_path)
+
+                            if (isMobile) {
+                                return (
+                                    <div
+                                        key={s.seriesName}
+                                        className="home-series-card-mobile"
+                                        onClick={() => navigate('/series')}
+                                    >
+                                        {coverUrl ? (
+                                            <img src={coverUrl} alt={s.seriesName} loading="lazy" />
+                                        ) : (
+                                            <div className="series-card-placeholder">
+                                                <span>📖</span>
+                                            </div>
+                                        )}
+                                        <div className="series-card-gradient" />
+                                        <div className="series-card-title">{s.seriesName}</div>
+                                        {s.seriesIndex != null && (
+                                            <div className="series-card-badge">BK {Math.round(s.seriesIndex)}</div>
+                                        )}
+                                    </div>
+                                )
+                            }
+
                             return (
                                 <div
                                     key={s.seriesName}
@@ -671,25 +728,51 @@ function HomePage() {
                         <h3>Recently Added</h3>
                     </div>
                     <Carousel>
-                        {recentItems.map(book => (
-                            <div
-                                key={`${book.mediaType}_${book.id}`}
-                                className="home-book-card recent-size"
-                                onClick={() => navigate(`/book/${book.mediaType}/${book.id}`)}
-                            >
-                                <div className="home-book-card-cover">
-                                    {book.cover_path ? (
-                                        <img src={coverSrc(book.cover_path)} alt={book.title} loading="lazy" />
-                                    ) : (
-                                        <div className="home-book-card-placeholder">
-                                            <span>{book.mediaType === 'ebook' ? '📚' : '🎧'}</span>
+                        {recentItems.map(book => {
+                            if (isMobile) {
+                                return (
+                                    <div
+                                        key={`${book.mediaType}_${book.id}`}
+                                        className="home-recent-card-mobile"
+                                        onClick={() => navigate(`/book/${book.mediaType}/${book.id}`)}
+                                    >
+                                        <div className="recent-card-thumb">
+                                            {book.cover_path ? (
+                                                <img src={coverSrc(book.cover_path)} alt={book.title} loading="lazy" />
+                                            ) : (
+                                                <div className="recent-card-thumb-placeholder">
+                                                    <span>{book.mediaType === 'ebook' ? '📚' : '🎧'}</span>
+                                                </div>
+                                            )}
                                         </div>
-                                    )}
+                                        <div className="recent-card-info">
+                                            <div className="recent-card-title">{book.title}</div>
+                                            {book.author && <div className="recent-card-author">{book.author}</div>}
+                                        </div>
+                                    </div>
+                                )
+                            }
+
+                            return (
+                                <div
+                                    key={`${book.mediaType}_${book.id}`}
+                                    className="home-book-card recent-size"
+                                    onClick={() => navigate(`/book/${book.mediaType}/${book.id}`)}
+                                >
+                                    <div className="home-book-card-cover">
+                                        {book.cover_path ? (
+                                            <img src={coverSrc(book.cover_path)} alt={book.title} loading="lazy" />
+                                        ) : (
+                                            <div className="home-book-card-placeholder">
+                                                <span>{book.mediaType === 'ebook' ? '📚' : '🎧'}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="home-book-card-title" title={book.title}>{book.title}</div>
+                                    {book.author && <div className="home-book-card-author">{book.author}</div>}
                                 </div>
-                                <div className="home-book-card-title" title={book.title}>{book.title}</div>
-                                {book.author && <div className="home-book-card-author">{book.author}</div>}
-                            </div>
-                        ))}
+                            )
+                        })}
                     </Carousel>
                 </section>
             )}
