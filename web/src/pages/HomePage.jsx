@@ -321,15 +321,29 @@ function HomePage() {
                 )
                 if (!hasProgress) return
 
-                // Find next unread book (lowest series_index not in progress and not completed)
+                // Find next unread book: skip anything completed OR currently in progress.
+                // Also skip by series_index so a book that exists as both ebook+audiobook
+                // is fully skipped if either version is completed/in-progress.
                 const completedIds = new Set(
                     progress.filter(p => p.is_completed).map(p =>
                         p.media_type === 'ebook' ? `ebook_${p.ebook_id}` : `audiobook_${p.audiobook_id}`
                     )
                 )
+                // Combine completed + in-progress into one skip set
+                const skipIds = new Set([...completedIds, ...inProgressMediaIds])
+                // Collect series_indices that should be skipped (either version is done/active)
+                const skipIndices = new Set()
+                series.books.forEach(b => {
+                    if (skipIds.has(`${b.mediaType}_${b.id}`) && b.series_index != null) {
+                        skipIndices.add(b.series_index)
+                    }
+                })
                 const sorted = [...series.books].sort((a, b) => (a.series_index || 0) - (b.series_index || 0))
-                const nextBook = sorted.find(b => !completedIds.has(`${b.mediaType}_${b.id}`))
-                if (!nextBook) return // all completed
+                const nextBook = sorted.find(b =>
+                    !skipIds.has(`${b.mediaType}_${b.id}`) &&
+                    (b.series_index == null || !skipIndices.has(b.series_index))
+                )
+                if (!nextBook) return // all completed or in progress
 
                 seriesInProgress.push({
                     seriesName: series.name,
