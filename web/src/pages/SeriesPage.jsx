@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata, coverSrc } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import './SeriesPage.css'
 
@@ -13,6 +14,8 @@ export default function SeriesPage() {
     const [searchParams, setSearchParams] = useSearchParams()
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
+    const isMobile = useIsMobile()
+    const [mobileSearch, setMobileSearch] = useState('')
 
     // Data
     const [ebooks, setEbooks] = useState([])
@@ -186,7 +189,8 @@ export default function SeriesPage() {
 
     // Filter & sort
     const filteredSeries = useMemo(() => {
-        const q = searchTerm.toLowerCase()
+        const effectiveSearch = searchTerm || mobileSearch
+        const q = effectiveSearch.toLowerCase()
 
         let filtered = seriesGroups.filter(g => {
             if (q) {
@@ -215,7 +219,7 @@ export default function SeriesPage() {
         })
 
         return filtered
-    }, [seriesGroups, searchTerm, authorFilter, seriesFilter, activeFilter, sortKey, sortDir])
+    }, [seriesGroups, searchTerm, mobileSearch, authorFilter, seriesFilter, activeFilter, sortKey, sortDir])
 
     const filteredUnsorted = useMemo(() => {
         let list = unseriedItems
@@ -452,6 +456,41 @@ export default function SeriesPage() {
                 </div>
             </div>
 
+            {/* Mobile search */}
+            {isMobile && (
+                <div className="series-mobile-search">
+                    <span className="search-icon material-symbols-outlined" style={{ fontSize: 20 }}>search</span>
+                    <input
+                        type="text"
+                        placeholder="Search series..."
+                        value={mobileSearch}
+                        onChange={e => setMobileSearch(e.target.value)}
+                    />
+                </div>
+            )}
+
+            {/* Mobile sort pills */}
+            {isMobile && (
+                <div className="series-mobile-sort-pills">
+                    {[
+                        { key: 'name', label: 'Name' },
+                        { key: 'count', label: 'Book Count' },
+                        { key: 'recent', label: 'Recent' },
+                    ].map(opt => (
+                        <button
+                            key={opt.key}
+                            className={`series-mobile-sort-pill${sortKey === opt.key ? ' active' : ''}`}
+                            onClick={() => {
+                                if (sortKey === opt.key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+                                else { setSortKey(opt.key); setSortDir('asc') }
+                            }}
+                        >
+                            {opt.label} {sortKey === opt.key ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {/* Stats */}
             <div className="series-stats">
                 <span>Showing <strong>{filteredSeries.length}</strong> series</span>
@@ -460,7 +499,7 @@ export default function SeriesPage() {
 
             {/* Card Grid / List */}
             {filteredSeries.length > 0 ? (
-                viewMode === 'grid' ? (
+                (viewMode === 'grid' || isMobile) ? (
                     <div className="series-grid">
                         {filteredSeries.map(group => (
                             <SeriesCard

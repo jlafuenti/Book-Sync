@@ -401,3 +401,340 @@
     border-radius: 2px;
     transition: width 0.5s ease;
 }
+
+/* ============================================================
+   Mobile Home Page (≤768px)
+   ============================================================ */
+
+@media (max-width: 768px) {
+
+    .home-page {
+        padding: 0 0 16px 0;
+    }
+
+    /* ---- Welcome Hero Section ---- */
+    .home-hero {
+        padding: 16px 24px 0;
+        margin-bottom: 32px;
+    }
+
+    .home-hero-label {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--accent);
+        margin-bottom: 4px;
+    }
+
+    .home-hero-title {
+        font-size: 2.25rem;
+        font-weight: 900;
+        letter-spacing: -0.025em;
+        color: var(--text-primary);
+        line-height: 1.1;
+    }
+
+    /* ---- Section Spacing ---- */
+    .home-section {
+        margin-bottom: 40px;
+    }
+
+    /* ---- Section Headers ---- */
+    .home-section-header {
+        padding: 0 24px;
+        margin-bottom: 16px;
+    }
+
+    .home-section-header h3 {
+        font-size: 1.25rem;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+    }
+
+    .home-section-header .home-view-all {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: var(--accent);
+        text-decoration: none;
+        letter-spacing: 0.05em;
+    }
+
+    .home-section-header .home-view-all:active {
+        opacity: 0.7;
+    }
+
+    /* ---- Transcription Status Card (mobile: 3-column stats) ---- */
+    .home-tx-card {
+        margin: 0 24px;
+        max-width: none;
+        background: rgba(30, 30, 45, 0.6);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(71, 71, 84, 0.1);
+        border-radius: 12px;
+        padding: 20px;
+    }
+
+    .home-tx-card .home-tx-header {
+        margin-bottom: 16px;
+    }
+
+    .home-tx-card .home-tx-title {
+        font-size: 0.875rem;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+    }
+
+    /* Mobile stat blocks layout */
+    .home-tx-stats-mobile {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .home-tx-stat-block {
+        flex: 1;
+        background: rgba(18, 18, 30, 0.8);
+        padding: 12px;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .home-tx-stat-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-bottom: 4px;
+    }
+
+    .home-tx-stat-dot.queued { background: var(--text-muted); }
+    .home-tx-stat-dot.active { background: var(--accent); }
+    .home-tx-stat-dot.done { background: var(--accent); }
+
+    .home-tx-stat-number {
+        font-size: 1.125rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        line-height: 1;
+    }
+
+    .home-tx-stat-label {
+        font-size: 9px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
+    }
+
+    /* Hide the desktop pill-style counts on mobile */
+    .home-tx-counts {
+        display: none;
+    }
+
+    /* Hide the active transcription bar on mobile (stats only) */
+    .home-tx-active {
+        display: none;
+    }
+
+    /* ---- Carousels ---- */
+
+    /* Hide carousel arrows on mobile */
+    .home-carousel-arrow {
+        display: none !important;
+    }
+
+    .home-carousel-wrap {
+        position: relative;
+    }
+
+    .home-carousel {
+        padding: 0 24px;
+        gap: 20px;
+        padding-bottom: 4px;
+        scroll-snap-type: x proximity;
+    }
+
+    /* ---- Continue Reading Cards (mobile) ---- */
+    .home-book-card.continue-size {
+        width: 120px;
+    }
+
+    .home-book-card.continue-size .home-book-card-cover {
+        width: 120px;
+        height: 180px;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Hide desktop hover overlay on mobile */
+    .home-book-card-overlay {
+        display: none !important;
+    }
+
+    /* Hide desktop 3-dot menu on mobile */
+    .home-book-card-menu {
+        display: none !important;
+    }
+
+    /* Disable desktop hover scale on mobile */
+    .home-book-card:hover {
+        transform: none;
+    }
+
+    .home-book-card:hover .home-book-card-cover {
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Active press feedback on mobile */
+    .home-book-card:active {
+        transform: scale(0.95);
+    }
+
+    .home-book-card-title {
+        font-size: 0.75rem;
+        font-weight: 700;
+        line-height: 1.3;
+    }
+
+    .home-book-card-author {
+        font-size: 10px;
+    }
+
+    /* ---- Continue Series Cards (mobile) — landscape ---- */
+    .home-series-card-mobile {
+        flex-shrink: 0;
+        width: 176px;
+        height: 112px;
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+        transition: transform 0.2s ease;
+    }
+
+    .home-series-card-mobile:active {
+        transform: scale(0.95);
+    }
+
+    .home-series-card-mobile img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        opacity: 0.6;
+    }
+
+    .home-series-card-mobile .series-card-gradient {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(to top, var(--bg-primary) 0%, transparent 60%);
+    }
+
+    .home-series-card-mobile .series-card-title {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        font-size: 10px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-primary);
+    }
+
+    .home-series-card-mobile .series-card-badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: var(--accent);
+        color: white;
+        font-size: 9px;
+        font-weight: 900;
+        padding: 4px 8px;
+        border-radius: 999px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        line-height: 1;
+    }
+
+    .home-series-card-mobile .series-card-placeholder {
+        width: 100%;
+        height: 100%;
+        background: var(--bg-card);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+        color: var(--text-muted);
+    }
+
+    /* ---- Recently Added Cards (mobile) — compact horizontal ---- */
+    .home-recent-card-mobile {
+        flex-shrink: 0;
+        width: 192px;
+        background: var(--bg-card);
+        padding: 8px;
+        border-radius: 8px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        transition: transform 0.2s ease;
+    }
+
+    .home-recent-card-mobile:active {
+        transform: scale(0.95);
+    }
+
+    .home-recent-card-mobile .recent-card-thumb {
+        width: 48px;
+        height: 64px;
+        border-radius: 4px;
+        overflow: hidden;
+        flex-shrink: 0;
+        background: linear-gradient(to bottom, rgba(var(--accent-rgb, 189, 157, 255), 0.3), var(--bg-primary));
+    }
+
+    .home-recent-card-mobile .recent-card-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .home-recent-card-mobile .recent-card-thumb-placeholder {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+    }
+
+    .home-recent-card-mobile .recent-card-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+
+    .home-recent-card-mobile .recent-card-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .home-recent-card-mobile .recent-card-author {
+        font-size: 9px;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    /* ---- Empty States ---- */
+    .home-empty {
+        padding: 20px 24px;
+    }
+}

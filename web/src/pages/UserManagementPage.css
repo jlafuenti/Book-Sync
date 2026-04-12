@@ -160,3 +160,87 @@
     color: var(--accent);
     font-weight: 600;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE: ≤ 768px
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    /* ---- Toolbar ---- */
+    .admin-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .admin-toolbar-left {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        gap: 6px;
+    }
+
+    .admin-toolbar-left::-webkit-scrollbar {
+        display: none;
+    }
+
+    .admin-toolbar-left .library-filter-pill {
+        flex-shrink: 0;
+        font-size: 0.8rem;
+    }
+
+    .admin-toolbar-right {
+        margin-left: 0;
+    }
+
+    .admin-toolbar-right .btn {
+        width: 100%;
+        text-align: center;
+    }
+
+    /* ---- Table card: make table scroll horizontally ---- */
+    .admin-table-card {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .admin-table-card .data-table {
+        font-size: 0.78rem;
+        min-width: 520px;
+    }
+
+    .admin-table-card .data-table th,
+    .admin-table-card .data-table td {
+        padding: 8px 10px;
+        white-space: nowrap;
+    }
+
+    /* ---- Modal adjustments ---- */
+    .admin-modal-footer {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .admin-modal-footer .btn {
+        width: 100%;
+    }
+
+    /* ---- Audit toolbar ---- */
+    .admin-audit-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .admin-audit-count {
+        margin-left: 0;
+        text-align: center;
+    }
+
+    /* ---- Pagination ---- */
+    .admin-pagination {
+        flex-wrap: wrap;
+    }
+}

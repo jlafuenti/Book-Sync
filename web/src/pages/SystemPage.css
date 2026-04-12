@@ -424,3 +424,154 @@
 }
 .system-file-msg.success { color: var(--success); }
 .system-file-msg.error   { color: var(--error); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE: ≤ 768px
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    /* ---- Toolbar: compact ---- */
+    .system-toolbar {
+        margin-bottom: 16px;
+    }
+
+    .system-toolbar-right .btn {
+        font-size: 0.75rem;
+        padding: 6px 12px;
+    }
+
+    /* ---- Section headers ---- */
+    .system-section-header {
+        margin-bottom: 12px;
+    }
+
+    .system-section-header h3 {
+        font-size: 0.92rem;
+    }
+
+    /* ---- Stat grid: 2x2 ---- */
+    .system-stat-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+
+    .system-stat-card {
+        padding: 14px;
+    }
+
+    .system-stat-badge-value {
+        font-size: 1.25rem;
+    }
+
+    .system-stat-badge-label {
+        font-size: 0.65rem;
+    }
+
+    .system-stat-badge-sub {
+        font-size: 0.7rem;
+    }
+
+    .system-stat-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+    }
+
+    .system-stat-icon svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    /* Donut sizing on mobile */
+    .system-donut-wrap {
+        width: 56px;
+        height: 56px;
+    }
+
+    .system-donut-pct {
+        font-size: 0.7rem;
+    }
+
+    /* ---- Two-column: already 1fr at 900px, ensure at 768px too ---- */
+    .system-two-col {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    /* ---- Status cards: stack ---- */
+    .system-status-card {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 12px 14px;
+    }
+
+    .system-status-card-left {
+        gap: 10px;
+    }
+
+    .system-status-card-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+    }
+
+    .system-status-badge {
+        font-size: 0.68rem;
+    }
+
+    /* ---- Collapsible cards ---- */
+    .system-card-header {
+        padding: 12px 14px;
+    }
+
+    .system-card-header h3 {
+        font-size: 0.85rem;
+    }
+
+    .system-card-body {
+        padding: 12px 14px;
+    }
+
+    /* ---- Forms ---- */
+    .system-form-inline {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .system-form-inline input,
+    .system-form-inline select {
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    .system-form-inline .btn {
+        width: 100%;
+    }
+
+    .system-form-row input,
+    .system-form-row select,
+    .system-form-row textarea {
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+
+    .system-form-row .btn {
+        width: 100%;
+    }
+
+    /* ---- Data tables: horizontal scroll ---- */
+    .data-table {
+        font-size: 0.78rem;
+    }
+
+    /* ---- Unsupported files ---- */
+    .system-file-format-badge {
+        font-size: 0.65rem;
+        padding: 1px 6px;
+    }
+}

@@ -11,6 +11,7 @@ import BulkMatchModal from '../components/BulkMatchModal'
 import FilterPill from '../components/FilterPill'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
+import useIsMobile from '../hooks/useIsMobile'
 import './LibraryPage.css'
 
 // ---- Sort helper ----
@@ -252,6 +253,10 @@ function LibraryPage({ tab }) {
     const [searchParams, setSearchParams] = useSearchParams()
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
+    const isMobile = useIsMobile()
+    const [mobileSearch, setMobileSearch] = useState('')
+    const [mobileUploadOpen, setMobileUploadOpen] = useState(false)
+    const mobileUploadRef = useRef(null)
 
     // Data state
     const [ebooks, setEbooks] = useState([])
@@ -447,9 +452,10 @@ function LibraryPage({ tab }) {
             list = [...annotatedEbooks, ...annotatedAudiobooks]
         }
 
-        // Text search
-        if (searchTerm) {
-            const term = searchTerm.toLowerCase()
+        // Text search (desktop uses URL param, mobile uses local state)
+        const effectiveSearch = searchTerm || mobileSearch
+        if (effectiveSearch) {
+            const term = effectiveSearch.toLowerCase()
             list = list.filter(b =>
                 b.title?.toLowerCase().includes(term) ||
                 b.author?.toLowerCase().includes(term) ||
@@ -462,7 +468,7 @@ function LibraryPage({ tab }) {
         if (seriesFilter) list = list.filter(b => b.series === seriesFilter)
 
         return [...list].sort(sortComparator(`${sortField}-${sortDir}`))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, activeFilter, unpairedSubFilter, newSubFilter, newPairs, sortField, sortDir, authorFilter, seriesFilter])
+    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, mobileSearch, activeFilter, unpairedSubFilter, newSubFilter, newPairs, sortField, sortDir, authorFilter, seriesFilter])
 
     // Stats
     const stats = useMemo(() => {
@@ -551,6 +557,7 @@ function LibraryPage({ tab }) {
             if (maintenanceRef.current && !maintenanceRef.current.contains(e.target)) setMaintenanceOpen(false)
             if (uploadRef.current && !uploadRef.current.contains(e.target)) setUploadOpen(false)
             if (sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false)
+            if (mobileUploadRef.current && !mobileUploadRef.current.contains(e.target)) setMobileUploadOpen(false)
         }
         document.addEventListener('mousedown', handler)
         return () => document.removeEventListener('mousedown', handler)
@@ -1048,6 +1055,80 @@ function LibraryPage({ tab }) {
                 </div>
             )}
 
+            {/* Mobile search input */}
+            {isMobile && (
+                <div className="library-mobile-search">
+                    <span className="search-icon material-symbols-outlined" style={{ fontSize: 20 }}>search</span>
+                    <input
+                        type="text"
+                        placeholder="Search books..."
+                        value={mobileSearch}
+                        onChange={e => setMobileSearch(e.target.value)}
+                    />
+                </div>
+            )}
+
+            {/* Mobile view controls */}
+            {isMobile && (
+                <div className="library-mobile-controls">
+                    <span className="showing-count">Showing {filteredBooks.length} items</span>
+                    <div className="control-buttons">
+                        <button
+                            className={`control-btn${viewMode === 'grid' ? ' active' : ''}`}
+                            onClick={() => setViewMode('grid')}
+                        >
+                            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>grid_view</span>
+                        </button>
+                        <button
+                            className={`control-btn${viewMode === 'list' ? ' active' : ''}`}
+                            onClick={() => setViewMode('list')}
+                        >
+                            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>view_list</span>
+                        </button>
+                        <div className="control-divider" />
+                        <button
+                            className="control-btn"
+                            onClick={() => setSortOpen(o => !o)}
+                        >
+                            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>sort</span>
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Mobile sort dropdown (when opened from mobile controls) */}
+            {isMobile && sortOpen && (
+                <div style={{ position: 'relative', marginBottom: 16 }} ref={sortRef}>
+                    <div className="series-sort-dropdown" style={{ position: 'relative', top: 0, width: '100%' }}>
+                        {Object.entries(LIBRARY_SORT_LABELS).map(([key, label]) => (
+                            <button
+                                key={key}
+                                className={`series-sort-option${sortField === key ? ' active' : ''}`}
+                                onClick={() => { setSortField(key); setSortOpen(false) }}
+                            >
+                                {label}
+                                {sortField === key && (
+                                    <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                                    </svg>
+                                )}
+                            </button>
+                        ))}
+                        <hr className="series-sort-divider" />
+                        <div className="series-sort-dir-toggle">
+                            <button
+                                className={`series-sort-dir-btn${sortDir === 'asc' ? ' active' : ''}`}
+                                onClick={() => { setSortDir('asc'); setSortOpen(false) }}
+                            >↑ Ascending</button>
+                            <button
+                                className={`series-sort-dir-btn${sortDir === 'desc' ? ' active' : ''}`}
+                                onClick={() => { setSortDir('desc'); setSortOpen(false) }}
+                            >↓ Descending</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Hidden file inputs */}
             <input ref={ebookFileRef} type="file" accept=".epub,.pdf,.mobi" hidden onChange={handleEbookUpload} />
             <input ref={audiobookFileRef} type="file" accept=".mp3,.m4a,.m4b,.flac,.ogg,.wav" hidden onChange={handleAudiobookUpload} />
@@ -1143,7 +1224,7 @@ function LibraryPage({ tab }) {
                         : 'Try adjusting your search or filters.'
                     }</p>
                 </div>
-            ) : viewMode === 'grid' ? (
+            ) : (viewMode === 'grid' || isMobile) ? (
                 /* ---- Grid View ---- */
                 <>
                     <div className="library-grid">
@@ -1387,6 +1468,36 @@ function LibraryPage({ tab }) {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Mobile Upload FAB */}
+            {isMobile && canEdit && (
+                <div ref={mobileUploadRef} style={{ position: 'fixed', bottom: 'calc(var(--mobile-bottomnav-height, 80px) + 16px)', right: 16, zIndex: 150 }}>
+                    <button
+                        onClick={() => setMobileUploadOpen(o => !o)}
+                        style={{
+                            width: 56, height: 56, borderRadius: '50%',
+                            background: 'var(--accent)', color: 'white', border: 'none',
+                            boxShadow: '0 4px 20px var(--accent-glow)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            cursor: 'pointer', fontSize: 28, fontWeight: 300,
+                            transition: 'transform 0.2s ease',
+                            transform: mobileUploadOpen ? 'rotate(45deg)' : 'none',
+                        }}
+                    >
+                        +
+                    </button>
+                    {mobileUploadOpen && (
+                        <div className="library-mobile-upload-menu" style={{ position: 'absolute', bottom: 64, right: 0 }}>
+                            <button onClick={() => { setMobileUploadOpen(false); ebookFileRef.current?.click() }} disabled={uploadingEbook}>
+                                {uploadingEbook ? 'Uploading...' : 'Upload Ebook'}
+                            </button>
+                            <button onClick={() => { setMobileUploadOpen(false); audiobookFileRef.current?.click() }} disabled={uploadingAudiobook}>
+                                {uploadingAudiobook ? 'Uploading...' : 'Upload Audiobook'}
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 

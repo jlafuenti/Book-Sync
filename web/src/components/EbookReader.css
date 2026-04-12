@@ -282,3 +282,105 @@
     background: var(--accent);
     transition: width 0.3s ease;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE: ≤ 768px — EBook Reader
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    /* ---- Toolbar ---- */
+    .ebook-toolbar {
+        padding: 0 8px;
+        min-height: 48px;
+        gap: 4px;
+    }
+
+    .ebook-toolbar .btn-icon {
+        min-width: 40px;
+        min-height: 40px;
+        padding: 8px;
+    }
+
+    .ebook-book-title {
+        font-size: 0.82rem;
+        max-width: 120px;
+    }
+
+    .ebook-toolbar-center {
+        font-size: 0.75rem;
+    }
+
+    .ebook-progress-text {
+        font-size: 0.72rem;
+    }
+
+    /* Hide the switch-to-audio text, keep icon */
+    .switch-format-btn span:not(.material-symbols-outlined) {
+        display: none;
+    }
+
+    /* Font size controls: compact */
+    .font-size-controls button {
+        min-width: 36px;
+        min-height: 36px;
+        font-size: 0.82rem;
+    }
+
+    /* ---- Reader container ---- */
+    .ebook-reader-container {
+        /* No side nav button margins */
+    }
+
+    /* ---- Navigation buttons: narrower ---- */
+    .ebook-nav-btn {
+        width: 40px;
+        min-width: 40px;
+        opacity: 0.3;
+    }
+
+    .ebook-nav-btn:active {
+        opacity: 1;
+    }
+
+    .ebook-nav-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    /* ---- Viewer: reduced margins for nav buttons ---- */
+    .ebook-viewer {
+        margin-left: 40px;
+        margin-right: 40px;
+    }
+
+    /* ---- TOC panel: full-screen overlay ---- */
+    .ebook-toc-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+    }
+
+    .ebook-toc-panel {
+        width: 85vw;
+        max-width: 320px;
+    }
+
+    .ebook-toc-header {
+        padding: 16px;
+        min-height: 48px;
+    }
+
+    .ebook-toc-header button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .ebook-toc-item {
+        padding: 12px 16px;
+        min-height: 44px;
+    }
+
+    .ebook-toc-item button {
+        font-size: 0.85rem;
+    }
+}
