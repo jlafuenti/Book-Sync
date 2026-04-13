@@ -1489,7 +1489,7 @@ function LibraryPage({ tab }) {
                         +
                     </button>
                     {mobileUploadOpen && (
-                        <div className="library-mobile-upload-menu" style={{ position: 'absolute', bottom: 64, right: 0 }}>
+                        <div className="library-mobile-upload-menu">
                             <button onClick={() => { setMobileUploadOpen(false); ebookFileRef.current?.click() }} disabled={uploadingEbook}>
                                 {uploadingEbook ? 'Uploading...' : 'Upload Ebook'}
                             </button>

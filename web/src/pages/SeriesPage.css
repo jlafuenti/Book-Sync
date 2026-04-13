@@ -585,7 +585,7 @@
 @media (max-width: 768px) {
 
     .series-page {
-        padding: 0;
+        padding: 0 16px;
     }
 
     /* ---- Mobile Search Input ---- */
@@ -650,6 +650,7 @@
 
     .series-toolbar-left .library-filter-pills {
         flex-wrap: nowrap;
+        min-width: max-content;
     }
 
     .series-toolbar-left .library-filter-pill {

@@ -13,13 +13,9 @@ export default function MobileTopBar({ title, onMenuOpen, leftIcon, onBack, righ
     return (
         <header className="mobile-top-bar mobile-only">
             <div className="topbar-left">
-                {leftIcon === 'back' ? (
+                {leftIcon === 'back' && (
                     <button className="topbar-btn" onClick={onBack} aria-label="Go back">
                         <span className="material-symbols-outlined">arrow_back</span>
-                    </button>
-                ) : (
-                    <button className="topbar-btn" onClick={onMenuOpen} aria-label="Open menu">
-                        <span className="material-symbols-outlined">menu</span>
                     </button>
                 )}
                 <span className="topbar-title">{title}</span>
