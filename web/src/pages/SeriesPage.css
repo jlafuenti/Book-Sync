@@ -577,3 +577,168 @@
     color: var(--text-muted);
     white-space: nowrap;
 }
+
+/* ============================================================
+   Mobile Series Page (≤768px)
+   ============================================================ */
+
+@media (max-width: 768px) {
+
+    .series-page {
+        padding: 0 12px;
+    }
+
+    /* ---- Mobile Search Input ---- */
+    .series-mobile-search {
+        position: relative;
+        margin-bottom: 16px;
+    }
+
+    .series-mobile-search .search-icon {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        pointer-events: none;
+    }
+
+    .series-mobile-search input {
+        width: 100%;
+        padding: 14px 16px 14px 48px;
+        border-radius: 16px;
+        border: none;
+        background: rgba(36, 36, 52, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        outline: none;
+        transition: box-shadow 0.2s ease;
+    }
+
+    .series-mobile-search input:focus {
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 189, 157, 255), 0.4);
+    }
+
+    .series-mobile-search input::placeholder {
+        color: var(--text-muted);
+        opacity: 0.6;
+    }
+
+    /* ---- Hide desktop toolbar on mobile — replaced by dropdown filter button ---- */
+    .series-toolbar {
+        display: none !important;
+    }
+
+    /* ---- Mobile Filter Dropdown (reuses library-mobile-filter-* classes) ---- */
+
+    /* ---- Mobile Sort Pills ---- */
+    .series-mobile-sort-pills {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .series-mobile-sort-pills::-webkit-scrollbar {
+        display: none;
+    }
+
+    .series-mobile-sort-pill {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1.5px solid var(--border);
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 0.82rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    .series-mobile-sort-pill.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+        box-shadow: 0 2px 8px var(--accent-glow);
+    }
+
+    .series-mobile-sort-pill:active {
+        transform: scale(0.95);
+    }
+
+    /* ---- Hide desktop stats ---- */
+    .series-stats {
+        display: none;
+    }
+
+    /* ---- Cards: full-width vertical stack ---- */
+    .series-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+    }
+
+    .series-card {
+        border-radius: 16px;
+    }
+
+    .series-card:hover {
+        transform: none;
+    }
+
+    .series-card:active {
+        transform: scale(0.98);
+    }
+
+    /* ---- Hide list view on mobile ---- */
+    .series-list {
+        display: none !important;
+    }
+
+    /* Cover area mobile adjustments */
+    .series-cover-area {
+        height: 160px;
+    }
+
+    .series-card-body {
+        padding: 16px 20px 20px;
+    }
+
+    .series-card-title {
+        font-size: 1.1rem;
+        font-weight: 700;
+    }
+
+    .series-card-stats {
+        gap: 12px;
+    }
+
+    .series-stat {
+        font-size: 0.78rem;
+    }
+
+    /* ---- Book Range Badge (mobile) ---- */
+    .series-card .series-card-range-badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        background: var(--accent);
+        color: white;
+        font-size: 9px;
+        font-weight: 900;
+        padding: 4px 10px;
+        border-radius: 999px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        z-index: 5;
+    }
+
+    /* ---- Unsorted section ---- */
+    .series-unsorted-header {
+        margin: 24px 0 12px;
+    }
+}

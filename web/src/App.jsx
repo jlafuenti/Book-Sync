@@ -23,6 +23,10 @@ import NewPairsPage from './pages/NewPairsPage'
 import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
 import { MiniPlayer } from './components/AudioPlayer'
 import { AudioPlayerView } from './components/AudioPlayer'
+import useIsMobile from './hooks/useIsMobile'
+import BottomNavBar from './components/BottomNavBar'
+import MobileTopBar from './components/MobileTopBar'
+import MobileDrawer from './components/MobileDrawer'
 
 function AppMiniPlayer() {
     const player = useAudioPlayer()
@@ -92,10 +96,26 @@ function GlobalSearchBar() {
     )
 }
 
+// Map route paths to mobile top bar titles
+function getMobilePageTitle(pathname) {
+    if (pathname === '/continue') return 'Home'
+    if (pathname.startsWith('/library')) return 'Library'
+    if (pathname.startsWith('/series')) return 'Series'
+    if (pathname.startsWith('/pairs')) return 'Book Pairs'
+    if (pathname.startsWith('/transcription/edit')) return 'Transcription Editor'
+    if (pathname.startsWith('/transcription')) return 'Transcription'
+    if (pathname.startsWith('/system')) return 'Admin Console'
+    if (pathname.startsWith('/book/')) return 'Book Details'
+    return 'Tandem'
+}
+
 function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
     const [sidebarHovered, setSidebarHovered] = useState(false)
+    const isMobile = useIsMobile()
+    const [drawerOpen, setDrawerOpen] = useState(false)
+    const navigate = useNavigate()
 
     const handleLogout = () => {
         logout()
@@ -111,8 +131,34 @@ function AppShell({ user, setUser }) {
         ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
         : 'User'
 
+    // Determine if current page uses a back button instead of hamburger
+    const isDetailPage = location.pathname.startsWith('/book/')
+    const isEditorPage = location.pathname.startsWith('/transcription/edit')
+    const useBackButton = isDetailPage || isEditorPage
+
+    const mobileTitle = getMobilePageTitle(location.pathname)
+
     return (
         <div className="app-layout">
+            {/* Mobile Navigation */}
+            {isMobile && (
+                <>
+                    <MobileTopBar
+                        title={mobileTitle}
+                        onMenuOpen={() => setDrawerOpen(true)}
+                        leftIcon={useBackButton ? 'back' : 'menu'}
+                        onBack={() => navigate(-1)}
+                    />
+                    <MobileDrawer
+                        open={drawerOpen}
+                        onClose={() => setDrawerOpen(false)}
+                        user={user}
+                        onLogout={handleLogout}
+                    />
+                    <BottomNavBar />
+                </>
+            )}
+
             <aside
                 className={sidebarHovered ? 'sidebar expanded' : 'sidebar'}
                 onMouseEnter={() => setSidebarHovered(true)}
