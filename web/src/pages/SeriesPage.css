@@ -585,7 +585,7 @@
 @media (max-width: 768px) {
 
     .series-page {
-        padding: 0 16px;
+        padding: 0 12px;
     }
 
     /* ---- Mobile Search Input ---- */
@@ -626,51 +626,12 @@
         opacity: 0.6;
     }
 
-    /* ---- Toolbar: horizontal scroll pills ---- */
+    /* ---- Hide desktop toolbar on mobile — replaced by dropdown filter button ---- */
     .series-toolbar {
-        flex-wrap: nowrap;
-        margin-bottom: 16px;
-        gap: 0;
-        flex-direction: column;
-    }
-
-    .series-toolbar-left {
-        width: 100%;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-        gap: 8px;
-        padding-bottom: 4px;
-    }
-
-    .series-toolbar-left::-webkit-scrollbar {
-        display: none;
-    }
-
-    .series-toolbar-left .library-filter-pills {
-        flex-wrap: nowrap;
-        min-width: max-content;
-    }
-
-    .series-toolbar-left .library-filter-pill {
-        flex-shrink: 0;
-    }
-
-    /* Hide desktop author/series filter pills on mobile */
-    .series-toolbar-left .filter-pill-wrap {
-        display: none;
-    }
-
-    /* Hide desktop search chip */
-    .series-toolbar-left .library-search-active {
-        display: none;
-    }
-
-    /* ---- Hide desktop toolbar right on mobile ---- */
-    .series-toolbar-right {
         display: none !important;
     }
+
+    /* ---- Mobile Filter Dropdown (reuses library-mobile-filter-* classes) ---- */
 
     /* ---- Mobile Sort Pills ---- */
     .series-mobile-sort-pills {

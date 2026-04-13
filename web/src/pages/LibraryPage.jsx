@@ -257,6 +257,8 @@ function LibraryPage({ tab }) {
     const [mobileSearch, setMobileSearch] = useState('')
     const [mobileUploadOpen, setMobileUploadOpen] = useState(false)
     const mobileUploadRef = useRef(null)
+    const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
+    const mobileFilterRef = useRef(null)
 
     // Data state
     const [ebooks, setEbooks] = useState([])
@@ -558,6 +560,7 @@ function LibraryPage({ tab }) {
             if (uploadRef.current && !uploadRef.current.contains(e.target)) setUploadOpen(false)
             if (sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false)
             if (mobileUploadRef.current && !mobileUploadRef.current.contains(e.target)) setMobileUploadOpen(false)
+            if (mobileFilterRef.current && !mobileFilterRef.current.contains(e.target)) setMobileFilterOpen(false)
         }
         document.addEventListener('mousedown', handler)
         return () => document.removeEventListener('mousedown', handler)
@@ -857,6 +860,7 @@ function LibraryPage({ tab }) {
         { key: 'unpaired', label: 'Unpaired', count: stats.unpaired },
         ...(stats.newCount > 0 ? [{ key: 'new', label: 'New', count: stats.newCount }] : []),
     ]
+    const activePill = filterPills.find(p => p.key === activeFilter) || filterPills[0]
 
     return (
         <div className="library-page">
@@ -1017,6 +1021,42 @@ function LibraryPage({ tab }) {
                     )}
                 </div>
             </div>
+
+            {/* Mobile filter dropdown — replaces desktop filter pills toolbar */}
+            {isMobile && (
+                <div className="library-mobile-filter-wrap" ref={mobileFilterRef}>
+                    <button
+                        className={`library-mobile-filter-btn${mobileFilterOpen ? ' open' : ''}`}
+                        onClick={() => setMobileFilterOpen(o => !o)}
+                    >
+                        {activePill.label}
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.8rem' }}>({activePill.count})</span>
+                        <span className="material-symbols-outlined">expand_more</span>
+                    </button>
+                    {mobileFilterOpen && (
+                        <div className="library-mobile-filter-dropdown">
+                            {filterPills.map(p => (
+                                <button
+                                    key={p.key}
+                                    className={`library-mobile-filter-option${activeFilter === p.key ? ' active' : ''}`}
+                                    onClick={() => {
+                                        setActiveFilter(p.key)
+                                        setUnpairedSubFilter('all')
+                                        setNewSubFilter('all')
+                                        setMobileFilterOpen(false)
+                                    }}
+                                >
+                                    {p.label}
+                                    <span className="filter-opt-count">{p.count}</span>
+                                    {activeFilter === p.key && (
+                                        <span className="material-symbols-outlined filter-opt-check">check</span>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Sub-filter row — shown when Unpaired or New is active */}
             {activeFilter === 'unpaired' && (

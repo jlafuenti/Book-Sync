@@ -16,6 +16,8 @@ export default function SeriesPage() {
     const canEdit = hasMinRole('editor')
     const isMobile = useIsMobile()
     const [mobileSearch, setMobileSearch] = useState('')
+    const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
+    const mobileFilterRef = useRef(null)
 
     // Data
     const [ebooks, setEbooks] = useState([])
@@ -54,10 +56,11 @@ export default function SeriesPage() {
         setSearchTerm(searchParams.get('search') || '')
     }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Close sort dropdown on outside click
+    // Close dropdowns on outside click
     useEffect(() => {
         const handler = (e) => {
             if (sortRef.current && !sortRef.current.contains(e.target)) setSortOpen(false)
+            if (mobileFilterRef.current && !mobileFilterRef.current.contains(e.target)) setMobileFilterOpen(false)
         }
         document.addEventListener('mousedown', handler)
         return () => document.removeEventListener('mousedown', handler)
@@ -320,6 +323,7 @@ export default function SeriesPage() {
         { key: 'ebooks', label: 'Ebooks Only' },
         { key: 'audiobooks', label: 'Audiobooks Only' },
     ]
+    const activePill = filterPills.find(p => p.key === activeFilter) || filterPills[0]
 
     return (
         <div className="series-page">
@@ -455,6 +459,37 @@ export default function SeriesPage() {
                     )}
                 </div>
             </div>
+
+            {/* Mobile filter dropdown — replaces desktop filter pills toolbar */}
+            {isMobile && (
+                <div className="library-mobile-filter-wrap" ref={mobileFilterRef}>
+                    <button
+                        className={`library-mobile-filter-btn${mobileFilterOpen ? ' open' : ''}`}
+                        onClick={() => setMobileFilterOpen(o => !o)}
+                    >
+                        {activePill.label}
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.8rem' }}>({filterCounts[activePill.key]})</span>
+                        <span className="material-symbols-outlined">expand_more</span>
+                    </button>
+                    {mobileFilterOpen && (
+                        <div className="library-mobile-filter-dropdown">
+                            {filterPills.map(p => (
+                                <button
+                                    key={p.key}
+                                    className={`library-mobile-filter-option${activeFilter === p.key ? ' active' : ''}`}
+                                    onClick={() => { setActiveFilter(p.key); setMobileFilterOpen(false) }}
+                                >
+                                    {p.label}
+                                    <span className="filter-opt-count">{filterCounts[p.key]}</span>
+                                    {activeFilter === p.key && (
+                                        <span className="material-symbols-outlined filter-opt-check">check</span>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Mobile search */}
             {isMobile && (

@@ -577,7 +577,7 @@
 @media (max-width: 768px) {
 
     .library-page {
-        padding: 0 16px;
+        padding: 0 12px;
     }
 
     /* ---- Mobile Search Input ---- */
@@ -618,60 +618,92 @@
         opacity: 0.6;
     }
 
-    /* ---- Filter Pills: horizontal scroll ---- */
+    /* ---- Hide desktop toolbar on mobile — replaced by dropdown filter button ---- */
     .library-toolbar {
-        flex-wrap: nowrap;
-        margin-bottom: 16px;
-        gap: 0;
-        flex-direction: column;
-    }
-
-    .library-toolbar-left {
-        width: 100%;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-        gap: 8px;
-        padding-bottom: 4px;
-    }
-
-    .library-toolbar-left::-webkit-scrollbar {
-        display: none;
-    }
-
-    .library-filter-pills {
-        flex-wrap: nowrap;
-        gap: 8px;
-        min-width: max-content;
-    }
-
-    .library-filter-pill {
-        white-space: nowrap;
-        flex-shrink: 0;
-        padding: 8px 20px;
-        border-radius: 999px;
-        font-size: 0.875rem;
-        font-weight: 500;
-    }
-
-    .library-filter-pill.active {
-        box-shadow: 0 0 15px rgba(138, 76, 252, 0.4);
-    }
-
-    /* Hide desktop-only search chip on mobile (we have mobile search instead) */
-    .library-search-active {
-        display: none;
-    }
-
-    /* Hide desktop author/series filter pills on mobile toolbar */
-    .library-toolbar-left .filter-pill-wrap {
-        display: none;
-    }
-
-    /* ---- Hide desktop toolbar right on mobile ---- */
-    .library-toolbar-right {
         display: none !important;
+    }
+
+    /* ---- Mobile Filter Dropdown ---- */
+    .library-mobile-filter-wrap {
+        position: relative;
+        margin-bottom: 12px;
+    }
+
+    .library-mobile-filter-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1.5px solid var(--accent);
+        background: var(--accent-light);
+        color: var(--accent-secondary);
+        font-size: 0.875rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.2s ease;
+    }
+
+    .library-mobile-filter-btn .material-symbols-outlined {
+        font-size: 18px;
+        transition: transform 0.2s ease;
+    }
+
+    .library-mobile-filter-btn.open .material-symbols-outlined {
+        transform: rotate(180deg);
+    }
+
+    .library-mobile-filter-btn:active {
+        transform: scale(0.95);
+    }
+
+    .library-mobile-filter-dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        z-index: 200;
+        min-width: 220px;
+        overflow: hidden;
+    }
+
+    .library-mobile-filter-option {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        text-align: left;
+        padding: 13px 16px;
+        background: transparent;
+        border: none;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: background 0.15s ease;
+        gap: 8px;
+    }
+
+    .library-mobile-filter-option:active {
+        background: var(--accent-light);
+    }
+
+    .library-mobile-filter-option.active {
+        color: var(--accent);
+        font-weight: 600;
+    }
+
+    .library-mobile-filter-option .filter-opt-count {
+        color: var(--text-muted);
+        font-size: 0.82rem;
+        margin-left: auto;
+    }
+
+    .library-mobile-filter-option .filter-opt-check {
+        font-size: 16px;
+        color: var(--accent);
     }
 
     /* ---- Mobile View Controls ---- */
