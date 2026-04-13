@@ -121,6 +121,7 @@ function TranscriptionPage({ tab }) {
     const toggleMobileSection = (key) => setMobileSections(prev => ({ ...prev, [key]: !prev[key] }))
     const [mobileShowAllNT, setMobileShowAllNT] = useState(false)
     const [mobileShowAllTx, setMobileShowAllTx] = useState(false)
+    const [mobileSearch, setMobileSearch] = useState('')
 
     const [searchParams, setSearchParams] = useSearchParams()
     const searchQuery = searchParams.get('search') || ''
@@ -792,6 +793,34 @@ function TranscriptionPage({ tab }) {
         ? `Queue Visible ${notTranscribedPairs.length}`
         : `Queue All ${notTranscribedPairs.length}`
 
+    /* ── Mobile search filtering ── */
+    const mobileQ = mobileSearch.toLowerCase()
+    const mobileFilterPair = (p) => {
+        if (!mobileQ) return true
+        return (
+            (p.ebook?.title  || p.audiobook?.title  || '').toLowerCase().includes(mobileQ) ||
+            (p.ebook?.author || p.audiobook?.author || '').toLowerCase().includes(mobileQ) ||
+            (p.ebook?.series || p.audiobook?.series || '').toLowerCase().includes(mobileQ)
+        )
+    }
+    const mobileFilterQueue = (item) => {
+        if (!mobileQ) return true
+        const pair = pairById[item.book_pair_id]
+        return (
+            (item.book_title || '').toLowerCase().includes(mobileQ) ||
+            (pair?.ebook?.title  || pair?.audiobook?.title  || '').toLowerCase().includes(mobileQ) ||
+            (pair?.ebook?.author || pair?.audiobook?.author || '').toLowerCase().includes(mobileQ) ||
+            (pair?.ebook?.series || pair?.audiobook?.series || '').toLowerCase().includes(mobileQ)
+        )
+    }
+    const mobileInProgress       = mobileQ ? inProgress.filter(mobileFilterPair)             : inProgress
+    const mobilePendingQueue      = mobileQ ? pendingQueueItems.filter(mobileFilterQueue)     : pendingQueueItems
+    const mobileNotTranscribed    = mobileQ ? sortedNotTranscribed.filter(mobileFilterPair)  : sortedNotTranscribed
+    const mobileTranscribed       = mobileQ ? sortedTranscribed.filter(mobileFilterPair)     : sortedTranscribed
+    const mobileActiveQueueItem   = mobileQ
+        ? (activeQueueItem && mobileFilterQueue(activeQueueItem) ? activeQueueItem : null)
+        : activeQueueItem
+
     /* ── Mobile item renderers ── */
     const MOBILE_NOT_TRANSCRIBED_LIMIT = 5
     const MOBILE_TRANSCRIBED_LIMIT = 5
@@ -891,12 +920,28 @@ function TranscriptionPage({ tab }) {
             {/* ══════════════ MOBILE LAYOUT ══════════════ */}
             {isMobile && (
                 <div className="tx-mobile-layout">
+                    {/* ── Mobile Search ── */}
+                    <div className="tx-mobile-search">
+                        <span className="search-icon material-symbols-outlined" style={{ fontSize: 20 }}>search</span>
+                        <input
+                            type="text"
+                            placeholder="Search transcriptions..."
+                            value={mobileSearch}
+                            onChange={e => setMobileSearch(e.target.value)}
+                        />
+                        {mobileSearch && (
+                            <button className="tx-mobile-search-clear" onClick={() => setMobileSearch('')}>
+                                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>close</span>
+                            </button>
+                        )}
+                    </div>
+
                     {/* ── In Progress Section ── */}
                     <div className="tx-mobile-section">
                         <div className="tx-mobile-section-header" onClick={() => toggleMobileSection('in-progress')}>
                             <div className="tx-mobile-section-header-left">
                                 <span className="tx-mobile-section-dot amber" />
-                                <span className="tx-mobile-section-label">In Progress ({inProgress.length})</span>
+                                <span className="tx-mobile-section-label">In Progress ({mobileInProgress.length})</span>
                             </div>
                             <span className={`material-symbols-outlined tx-mobile-section-chevron${mobileSections['in-progress'] ? ' open' : ''}`}>
                                 expand_more
@@ -904,16 +949,16 @@ function TranscriptionPage({ tab }) {
                         </div>
                         {mobileSections['in-progress'] && (
                             <div className="tx-mobile-section-content">
-                                {inProgress.length === 0 && !activeQueueItem ? (
-                                    <div className="tx-mobile-empty-hint">No active transcriptions</div>
+                                {mobileInProgress.length === 0 && !mobileActiveQueueItem ? (
+                                    <div className="tx-mobile-empty-hint">{mobileQ ? 'No matches' : 'No active transcriptions'}</div>
                                 ) : (
                                     <>
                                         {/* Active queue item card (processing) */}
-                                        {activeQueueItem && pairById[activeQueueItem.book_pair_id] && (
+                                        {mobileActiveQueueItem && pairById[mobileActiveQueueItem.book_pair_id] && (
                                             (() => {
-                                                const pair = pairById[activeQueueItem.book_pair_id]
-                                                const progress = activeQueueItem.progress
-                                                const message = activeQueueItem.message || 'Processing...'
+                                                const pair = pairById[mobileActiveQueueItem.book_pair_id]
+                                                const progress = mobileActiveQueueItem.progress
+                                                const message = mobileActiveQueueItem.message || 'Processing...'
                                                 return (
                                                     <div className="tx-mobile-active-card">
                                                         {pair.ebook?.cover_path
@@ -922,7 +967,7 @@ function TranscriptionPage({ tab }) {
                                                         }
                                                         <div className="tx-mobile-active-body">
                                                             <div className="tx-mobile-active-title">
-                                                                {activeQueueItem.book_title || pair.ebook?.title || `Pair #${pair.id}`}
+                                                                {mobileActiveQueueItem.book_title || pair.ebook?.title || `Pair #${pair.id}`}
                                                             </div>
                                                             <div className="tx-mobile-active-author">
                                                                 {pair.ebook?.author || ''}
@@ -949,7 +994,7 @@ function TranscriptionPage({ tab }) {
                                             })()
                                         )}
                                         {/* In-progress pairs (from pair status) */}
-                                        {sortedInProgress.map(pair => renderMobileActiveCard(pair))}
+                                        {mobileInProgress.map(pair => renderMobileActiveCard(pair))}
                                     </>
                                 )}
                             </div>
@@ -961,7 +1006,7 @@ function TranscriptionPage({ tab }) {
                         <div className="tx-mobile-section-header" onClick={() => toggleMobileSection('queue')}>
                             <div className="tx-mobile-section-header-left">
                                 <span className="tx-mobile-section-dot blue" />
-                                <span className="tx-mobile-section-label">Queued ({pendingQueueItems.length})</span>
+                                <span className="tx-mobile-section-label">Queued ({mobilePendingQueue.length})</span>
                             </div>
                             <span className={`material-symbols-outlined tx-mobile-section-chevron${mobileSections['queue'] ? ' open' : ''}`}>
                                 expand_more
@@ -969,10 +1014,10 @@ function TranscriptionPage({ tab }) {
                         </div>
                         {mobileSections['queue'] && (
                             <div className="tx-mobile-section-content">
-                                {pendingQueueItems.length === 0 ? (
-                                    <div className="tx-mobile-empty-hint">No items in queue</div>
+                                {mobilePendingQueue.length === 0 ? (
+                                    <div className="tx-mobile-empty-hint">{mobileQ ? 'No matches' : 'No items in queue'}</div>
                                 ) : (
-                                    pendingQueueItems.map((item, idx) => renderMobileQueueItem(item, idx))
+                                    mobilePendingQueue.map((item, idx) => renderMobileQueueItem(item, idx))
                                 )}
                             </div>
                         )}
@@ -983,7 +1028,7 @@ function TranscriptionPage({ tab }) {
                         <div className="tx-mobile-section-header" onClick={() => toggleMobileSection('not-transcribed')}>
                             <div className="tx-mobile-section-header-left">
                                 <span className="tx-mobile-section-dot gray" />
-                                <span className="tx-mobile-section-label">Not Transcribed ({notTranscribedPairs.length})</span>
+                                <span className="tx-mobile-section-label">Not Transcribed ({mobileNotTranscribed.length})</span>
                             </div>
                             <span className={`material-symbols-outlined tx-mobile-section-chevron${mobileSections['not-transcribed'] ? ' open' : ''}`}>
                                 expand_more
@@ -991,11 +1036,11 @@ function TranscriptionPage({ tab }) {
                         </div>
                         {mobileSections['not-transcribed'] && (
                             <div className="tx-mobile-section-content">
-                                {notTranscribedPairs.length === 0 ? (
-                                    <div className="tx-mobile-empty-hint">All pairs have been transcribed</div>
+                                {mobileNotTranscribed.length === 0 ? (
+                                    <div className="tx-mobile-empty-hint">{mobileQ ? 'No matches' : 'All pairs have been transcribed'}</div>
                                 ) : (
                                     <>
-                                        {(mobileShowAllNT ? sortedNotTranscribed : sortedNotTranscribed.slice(0, MOBILE_NOT_TRANSCRIBED_LIMIT)).map(pair =>
+                                        {(mobileShowAllNT || mobileQ ? mobileNotTranscribed : mobileNotTranscribed.slice(0, MOBILE_NOT_TRANSCRIBED_LIMIT)).map(pair =>
                                             renderMobileItem(pair,
                                                 canQueue(pair) && (
                                                     <button
@@ -1005,9 +1050,9 @@ function TranscriptionPage({ tab }) {
                                                 )
                                             )
                                         )}
-                                        {!mobileShowAllNT && sortedNotTranscribed.length > MOBILE_NOT_TRANSCRIBED_LIMIT && (
+                                        {!mobileShowAllNT && !mobileQ && mobileNotTranscribed.length > MOBILE_NOT_TRANSCRIBED_LIMIT && (
                                             <button className="tx-mobile-show-all" onClick={() => setMobileShowAllNT(true)}>
-                                                Show all {sortedNotTranscribed.length}
+                                                Show all {mobileNotTranscribed.length}
                                             </button>
                                         )}
                                     </>
@@ -1021,7 +1066,7 @@ function TranscriptionPage({ tab }) {
                         <div className="tx-mobile-section-header" onClick={() => toggleMobileSection('transcribed')}>
                             <div className="tx-mobile-section-header-left">
                                 <span className="tx-mobile-section-dot green" />
-                                <span className="tx-mobile-section-label">Transcribed ({transcribed.length})</span>
+                                <span className="tx-mobile-section-label">Transcribed ({mobileTranscribed.length})</span>
                             </div>
                             <span className={`material-symbols-outlined tx-mobile-section-chevron${mobileSections['transcribed'] ? ' open' : ''}`}>
                                 expand_more
@@ -1029,11 +1074,11 @@ function TranscriptionPage({ tab }) {
                         </div>
                         {mobileSections['transcribed'] && (
                             <div className="tx-mobile-section-content">
-                                {transcribed.length === 0 ? (
-                                    <div className="tx-mobile-empty-hint">No transcribed pairs yet</div>
+                                {mobileTranscribed.length === 0 ? (
+                                    <div className="tx-mobile-empty-hint">{mobileQ ? 'No matches' : 'No transcribed pairs yet'}</div>
                                 ) : (
                                     <>
-                                        {(mobileShowAllTx ? sortedTranscribed : sortedTranscribed.slice(0, MOBILE_TRANSCRIBED_LIMIT)).map(pair =>
+                                        {(mobileShowAllTx || mobileQ ? mobileTranscribed : mobileTranscribed.slice(0, MOBILE_TRANSCRIBED_LIMIT)).map(pair =>
                                             renderMobileItem(pair,
                                                 <Link
                                                     to={`/transcription/edit/${pair.id}`}
@@ -1042,9 +1087,9 @@ function TranscriptionPage({ tab }) {
                                                 >View</Link>
                                             )
                                         )}
-                                        {!mobileShowAllTx && sortedTranscribed.length > MOBILE_TRANSCRIBED_LIMIT && (
+                                        {!mobileShowAllTx && !mobileQ && mobileTranscribed.length > MOBILE_TRANSCRIBED_LIMIT && (
                                             <button className="tx-mobile-show-all" onClick={() => setMobileShowAllTx(true)}>
-                                                Show all {sortedTranscribed.length}
+                                                Show all {mobileTranscribed.length}
                                             </button>
                                         )}
                                     </>
@@ -1052,13 +1097,6 @@ function TranscriptionPage({ tab }) {
                             </div>
                         )}
                     </div>
-
-                    {/* ── Queue All FAB (shown when not-transcribed has items) ── */}
-                    {notTranscribedPairs.length > 0 && (
-                        <button className="tx-mobile-start-fab" onClick={handleAddVisibleToQueue}>
-                            Start
-                        </button>
-                    )}
                 </div>
             )}
 

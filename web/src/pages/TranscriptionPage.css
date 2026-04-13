@@ -1058,7 +1058,60 @@
 
     /* ---- Mobile layout container ---- */
     .tx-mobile-layout {
-        padding: 0 16px 120px 16px;
+        padding: 0 0 80px 0;
+    }
+
+    /* ---- Mobile Search ---- */
+    .tx-mobile-search {
+        position: relative;
+        margin-bottom: 16px;
+    }
+
+    .tx-mobile-search .search-icon {
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        pointer-events: none;
+    }
+
+    .tx-mobile-search input {
+        width: 100%;
+        padding: 14px 40px 14px 48px;
+        border-radius: 16px;
+        border: none;
+        background: rgba(36, 36, 52, 0.4);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        outline: none;
+        transition: box-shadow 0.2s ease;
+        box-sizing: border-box;
+    }
+
+    .tx-mobile-search input:focus {
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 189, 157, 255), 0.4);
+    }
+
+    .tx-mobile-search input::placeholder {
+        color: var(--text-muted);
+        opacity: 0.6;
+    }
+
+    .tx-mobile-search-clear {
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        padding: 4px;
     }
 
     /* ---- Section content wrapper ---- */
@@ -1132,11 +1185,9 @@
         pointer-events: none;
     }
 
-    /* ---- Start / Queue All FAB ---- */
+    /* ---- Start / Queue All FAB (removed — auto-queue handles this) ---- */
     .tx-mobile-start-fab {
-        position: fixed;
-        bottom: calc(var(--mobile-bottomnav-height, 80px) + 16px);
-        right: 20px;
+        display: none;
         background: linear-gradient(135deg, var(--accent), var(--accent-hover, #8a4cfc));
         color: #fff;
         border: none;
