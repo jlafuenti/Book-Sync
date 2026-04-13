@@ -787,7 +787,12 @@
     /* ---- Grid: 2 columns ---- */
     .library-grid {
         grid-template-columns: repeat(2, 1fr);
-        gap: 16px 16px;
+        gap: 12px;
+        overflow-x: hidden;
+    }
+
+    .library-grid .lib-book-card {
+        min-width: 0;
     }
 
     /* Card mobile tweaks */

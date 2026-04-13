@@ -1932,9 +1932,12 @@ tr:hover td {
     .main-content {
         margin-left: 0 !important;
         width: 100% !important;
+        max-width: 100% !important;
         padding: 0 8px !important;
         padding-top: calc(var(--mobile-topbar-height) + 12px) !important;
         padding-bottom: calc(var(--mobile-bottomnav-height) + 12px) !important;
+        box-sizing: border-box !important;
+        overflow-x: hidden !important;
     }
 
     /* ---- Hide desktop global search bar on mobile ---- */
