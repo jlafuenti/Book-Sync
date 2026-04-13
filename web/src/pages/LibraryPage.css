@@ -577,7 +577,7 @@
 @media (max-width: 768px) {
 
     .library-page {
-        padding: 0;
+        padding: 0 16px;
     }
 
     /* ---- Mobile Search Input ---- */
@@ -643,6 +643,7 @@
     .library-filter-pills {
         flex-wrap: nowrap;
         gap: 8px;
+        min-width: max-content;
     }
 
     .library-filter-pill {
@@ -815,10 +816,10 @@
 
     /* ---- Floating bars: adjust position above bottom nav ---- */
 
-    /* ---- Mobile Upload Menu (in top bar) ---- */
+    /* ---- Mobile Upload Menu — opens upward above the FAB ---- */
     .library-mobile-upload-menu {
         position: absolute;
-        top: calc(100% + 4px);
+        bottom: calc(100% + 8px);
         right: 0;
         background: var(--bg-card);
         border: 1px solid var(--border);

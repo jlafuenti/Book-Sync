@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
+import useIsMobile from '../hooks/useIsMobile'
 import './SystemPage.css'
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -666,6 +667,7 @@ function UnsupportedFilesTab({ canAdmin }) {
 function SystemPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canAdmin = hasMinRole('admin')
+    const isMobile = useIsMobile()
 
     // Show unsupported files view vs main status view
     const [showUnsupported, setShowUnsupported] = useState(tab === 'unsupported')
@@ -812,28 +814,54 @@ function SystemPage({ tab }) {
                         <h3>Configuration</h3>
                     </div>
 
-                    {/* Library + Transcription side by side — synced expand/collapse */}
+                    {/* Library + Transcription side by side — synced on desktop, independent on mobile */}
                     <div className="system-two-col">
-                        <CollapsibleCard title="Library Settings"
-                            open={libraryOpen} onToggle={() => setLibraryOpen(o => !o)}>
-                            <SettingsSection />
-                        </CollapsibleCard>
-                        <CollapsibleCard title="Transcription Settings"
-                            open={libraryOpen} onToggle={() => setLibraryOpen(o => !o)}>
-                            <TranscriptionSettingsSection />
-                        </CollapsibleCard>
+                        {isMobile ? (
+                            <>
+                                <CollapsibleCard title="Library Settings">
+                                    <SettingsSection />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Transcription Settings">
+                                    <TranscriptionSettingsSection />
+                                </CollapsibleCard>
+                            </>
+                        ) : (
+                            <>
+                                <CollapsibleCard title="Library Settings"
+                                    open={libraryOpen} onToggle={() => setLibraryOpen(o => !o)}>
+                                    <SettingsSection />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Transcription Settings"
+                                    open={libraryOpen} onToggle={() => setLibraryOpen(o => !o)}>
+                                    <TranscriptionSettingsSection />
+                                </CollapsibleCard>
+                            </>
+                        )}
                     </div>
 
-                    {/* ABS + Detailed Breakdown side by side — synced expand/collapse */}
+                    {/* ABS + Detailed Breakdown side by side — synced on desktop, independent on mobile */}
                     <div className="system-two-col">
-                        <CollapsibleCard title="Audiobookshelf Integration"
-                            open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
-                            <ABSSettingsSection />
-                        </CollapsibleCard>
-                        <CollapsibleCard title="Detailed Disk Breakdown"
-                            open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
-                            <DetailedBreakdown stats={stats} />
-                        </CollapsibleCard>
+                        {isMobile ? (
+                            <>
+                                <CollapsibleCard title="Audiobookshelf Integration">
+                                    <ABSSettingsSection />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Detailed Disk Breakdown">
+                                    <DetailedBreakdown stats={stats} />
+                                </CollapsibleCard>
+                            </>
+                        ) : (
+                            <>
+                                <CollapsibleCard title="Audiobookshelf Integration"
+                                    open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
+                                    <ABSSettingsSection />
+                                </CollapsibleCard>
+                                <CollapsibleCard title="Detailed Disk Breakdown"
+                                    open={absOpen} onToggle={() => setAbsOpen(o => !o)}>
+                                    <DetailedBreakdown stats={stats} />
+                                </CollapsibleCard>
+                            </>
+                        )}
                     </div>
 
                     {/* ── Section: User Management (admin only) ── */}

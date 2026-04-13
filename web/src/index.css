@@ -1932,9 +1932,9 @@ tr:hover td {
     .main-content {
         margin-left: 0 !important;
         width: 100% !important;
-        padding: 16px !important;
-        padding-top: calc(var(--mobile-topbar-height) + 16px) !important;
-        padding-bottom: calc(var(--mobile-bottomnav-height) + 16px) !important;
+        padding: 0 8px !important;
+        padding-top: calc(var(--mobile-topbar-height) + 12px) !important;
+        padding-bottom: calc(var(--mobile-bottomnav-height) + 12px) !important;
     }
 
     /* ---- Hide desktop global search bar on mobile ---- */
@@ -2241,7 +2241,7 @@ tr:hover td {
 
     /* ---- Adjust bottom nav when mini player is visible ---- */
     .main-content.has-mini-player {
-        padding-bottom: calc(var(--mobile-bottomnav-height) + var(--mobile-mini-player-height) + 16px) !important;
+        padding-bottom: calc(var(--mobile-bottomnav-height) + var(--mobile-mini-player-height) + 12px) !important;
     }
 
     /* ============================================================
@@ -2284,6 +2284,7 @@ tr:hover td {
 
     .book-detail-page {
         max-width: none;
+        padding: 0 16px;
     }
 
     /* Hide desktop back button on mobile (MobileTopBar handles it) */
@@ -2359,30 +2360,34 @@ tr:hover td {
         padding: 0 8px;
     }
 
-    /* Actions row: mobile layout */
+    /* Actions row: mobile layout — wrap into rows */
     .book-detail-actions {
         width: 100%;
-        justify-content: center;
-        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: 10px;
         margin-top: 20px;
     }
 
     .book-detail-actions .btn {
-        height: 56px;
-        border-radius: 16px;
-        font-size: 0.95rem;
+        height: 48px;
+        border-radius: 12px;
+        font-size: 0.875rem;
         font-weight: 600;
     }
 
+    /* Primary action (Read / Listen) — full width */
     .book-detail-actions .btn-primary {
-        flex: 1;
+        flex: 0 0 100%;
         min-width: 0;
         max-width: none;
     }
 
+    /* Secondary actions — two per row */
     .book-detail-actions .btn-secondary {
-        flex: 1;
+        flex: 0 0 calc(50% - 5px);
         min-width: 0;
+        font-size: 0.8rem;
     }
 
     /* Progress section: mobile card style */
