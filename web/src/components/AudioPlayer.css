@@ -443,3 +443,193 @@
 .has-mini-player .main-content {
     padding-bottom: 56px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE: ≤ 768px — Full-Screen Audio Player
+   ═══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+
+    /* ---- Full-screen overlay ---- */
+    .audio-player-overlay {
+        padding: 0;
+    }
+
+    /* ---- Toolbar ---- */
+    .audio-player-toolbar {
+        padding: 12px 16px;
+        min-height: 48px;
+    }
+
+    .audio-player-toolbar button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .audio-player-title {
+        font-size: 0.85rem;
+    }
+
+    /* ---- Body: stack vertically ---- */
+    .audio-player-body {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    /* ---- Main: centered, reduced padding ---- */
+    .audio-player-main {
+        padding: 16px 24px;
+        gap: 16px;
+        max-width: 100%;
+    }
+
+    /* ---- Cover: responsive, full width ---- */
+    .audio-player-cover {
+        width: 100%;
+        max-width: 280px;
+        height: auto;
+        aspect-ratio: 1;
+        margin: 0 auto;
+    }
+
+    .audio-player-cover img {
+        border-radius: 20px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .cover-placeholder {
+        border-radius: 20px;
+    }
+
+    /* ---- Info ---- */
+    .audio-player-info {
+        text-align: center;
+    }
+
+    .audio-player-info h2 {
+        font-size: 1.5rem;
+    }
+
+    .audio-player-info p {
+        font-size: 0.9rem;
+    }
+
+    /* ---- Seek bar: full width ---- */
+    .audio-seek-container {
+        max-width: 100%;
+        width: 100%;
+    }
+
+    .audio-seek-bar {
+        height: 6px;
+    }
+
+    /* ---- Transport controls: larger touch targets ---- */
+    .audio-transport {
+        gap: 24px;
+    }
+
+    .audio-transport button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .audio-transport .play-btn {
+        width: 72px;
+        height: 72px;
+    }
+
+    .audio-transport .play-btn svg {
+        width: 32px;
+        height: 32px;
+    }
+
+    /* ---- Speed selector: horizontal row ---- */
+    .speed-selector {
+        gap: 4px;
+    }
+
+    .speed-btn {
+        padding: 6px 12px;
+        font-size: 0.78rem;
+        min-height: 36px;
+    }
+
+    /* ---- Sleep timer ---- */
+    .sleep-timer-btn {
+        min-height: 44px;
+    }
+
+    .sleep-timer-dropdown {
+        bottom: auto;
+        top: calc(100% + 8px);
+    }
+
+    /* ---- Chapters panel: full width below ---- */
+    .audio-chapters-panel {
+        width: 100%;
+        max-width: 100%;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        max-height: 50vh;
+        overflow-y: auto;
+    }
+
+    .audio-chapters-list {
+        max-height: none;
+    }
+
+    .audio-chapter-item {
+        padding: 12px 16px;
+        min-height: 44px;
+    }
+
+    /* ---- Secondary controls: bottom actions row ---- */
+    .audio-secondary-controls {
+        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    /* ---- Mini player: full width, above bottom nav ---- */
+    .mini-player {
+        left: 0;
+        bottom: var(--mobile-bottomnav-height, 80px);
+        width: 100%;
+        height: 64px;
+        border-radius: 0;
+        background: rgba(15, 15, 26, 0.85);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-top: 1px solid rgba(74, 68, 85, 0.15);
+        border-bottom: none;
+        box-shadow: none;
+    }
+
+    .mini-player-cover {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+    }
+
+    .mini-player-info .title {
+        font-size: 13px;
+    }
+
+    .mini-player-info .author {
+        font-size: 11px;
+    }
+
+    .mini-player-controls button {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    .mini-player-time {
+        display: none;
+    }
+
+    /* ---- Main content adjustment ---- */
+    .has-mini-player .main-content {
+        padding-bottom: calc(var(--mobile-bottomnav-height, 80px) + 64px + 16px);
+    }
+}
