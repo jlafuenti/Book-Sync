@@ -111,9 +111,11 @@ class LibraryViewModel @Inject constructor(
             _refreshing.value = true
             try {
                 repository.refreshPairs()
-                // After pairs are in the DB, bidirectionally sync bookmarks & progress
+                // After pairs are in the DB, push any pending offline data then
+                // bidirectionally sync bookmarks & progress
                 val pairs = repository.getPairsFlow().first()
                 viewModelScope.launch(Dispatchers.IO) {
+                    repository.processPendingSync()
                     repository.syncAllBookmarksAndProgress(pairs)
                 }
                 if (!silent) _refreshMessage.value = "Library refreshed"
