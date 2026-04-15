@@ -32,6 +32,7 @@ class BookSyncRepository @Inject constructor(
     private val pendingSyncDao: PendingSyncDao,
     private val userProgressDao: UserProgressDao,
     private val acknowledgedItemDao: AcknowledgedItemDao,
+    private val bookmarkLogDao: BookmarkLogDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
 ) {
@@ -437,37 +438,66 @@ class BookSyncRepository @Inject constructor(
     fun getBookmarkFlow(pairId: Int): Flow<BookmarkEntity?> =
         bookmarkDao.getBookmarkFlow(pairId)
 
-    /** Refresh the bookmark from the server. */
+    /** Refresh the bookmark from the server, respecting unsynced local data. */
     suspend fun refreshBookmark(pairId: Int) {
         try {
             val remote = api.getBookmark(pairId)
             val existing = bookmarkDao.getBookmark(pairId)
-            bookmarkDao.upsertBookmark(
-                BookmarkEntity(
-                    bookPairId = pairId,
-                    source = remote.source,
-                    epubChapter = remote.epub_chapter,
-                    epubSentenceIndex = remote.epub_sentence_index,
-                    audioPositionMs = remote.audio_position_ms,
-                    epubLocator = remote.epub_locator ?: existing?.epubLocator,
-                    updatedAt = remote.updated_at,
-                    syncedToServer = true,
+
+            // Never overwrite unsynced local data — offline progress must survive
+            if (existing != null && !existing.syncedToServer) {
+                log("refreshBookmark pair=$pairId: local has unsynced changes, skipping server pull")
+                return
+            }
+
+            // Only pull if server is newer or no local data exists
+            val remoteTs = parseTimestamp(remote.updated_at)
+            val localTs = parseTimestamp(existing?.updatedAt)
+
+            if (existing == null || remoteTs >= localTs) {
+                bookmarkDao.upsertBookmark(
+                    BookmarkEntity(
+                        bookPairId = pairId,
+                        source = remote.source,
+                        epubChapter = remote.epub_chapter,
+                        epubSentenceIndex = remote.epub_sentence_index,
+                        audioPositionMs = remote.audio_position_ms,
+                        epubLocator = remote.epub_locator ?: existing?.epubLocator,
+                        updatedAt = remote.updated_at,
+                        syncedToServer = true,
+                    )
                 )
-            )
+            } else {
+                log("refreshBookmark pair=$pairId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
+            }
         } catch (e: Exception) {
             logW("refreshBookmark offline — using local cache (${e.message})")
         }
     }
 
     /**
-     * Fetch bookmark history from the server.
+     * Fetch bookmark history.
+     *
+     * Offline-first: on server success the local cache is upserted and the newest server
+     * timestamp prunes local-only rows it has superseded. On failure the call falls through
+     * to the local cache so offline users still see their own recent bookmark changes
+     * (written by [updateBookmark]).
      */
     suspend fun getBookmarkHistory(pairId: Int, limit: Int = 50): List<BookmarkLogResponse> {
-        return try {
-            api.getBookmarkLog(pairId, limit)
+        try {
+            val serverEntries = api.getBookmarkLog(pairId, limit)
+            for (entry in serverEntries) {
+                val existingLocalId = bookmarkLogDao.findByServerId(pairId, entry.id)
+                val row = entry.toEntity(pairId).copy(localId = existingLocalId ?: 0L)
+                if (existingLocalId != null) bookmarkLogDao.update(row) else bookmarkLogDao.insertLocal(row)
+            }
+            serverEntries.maxByOrNull { it.changed_at }?.let { newest ->
+                bookmarkLogDao.deleteLocalOnlyOlderThan(pairId, newest.changed_at)
+            }
         } catch (e: Exception) {
-            emptyList()
+            logW("getBookmarkHistory offline — using local cache (${e.message})")
         }
+        return bookmarkLogDao.getForPair(pairId, limit).map { it.toResponse() }
     }
 
     /**
@@ -498,6 +528,24 @@ class BookSyncRepository @Inject constructor(
 
         // Save locally
         bookmarkDao.upsertBookmark(merged)
+
+        // Record a local history entry so the user's own offline changes appear in the
+        // history UI immediately. Server-sourced rows replace/supersede these on next
+        // successful getBookmarkHistory() call.
+        bookmarkLogDao.insertLocal(
+            BookmarkLogEntity(
+                serverId = null,
+                bookPairId = pairId,
+                source = source,
+                prevEpubChapter = existing?.epubChapter,
+                prevEpubSentenceIndex = existing?.epubSentenceIndex,
+                prevAudioPositionMs = existing?.audioPositionMs,
+                newEpubChapter = merged.epubChapter,
+                newEpubSentenceIndex = merged.epubSentenceIndex,
+                newAudioPositionMs = merged.audioPositionMs,
+                changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+            )
+        )
 
         // Try immediate sync
         try {
@@ -773,6 +821,30 @@ class BookSyncRepository @Inject constructor(
         }
     }
 
+    // ============ Timestamp Helpers ============
+
+    /**
+     * Parse a timestamp string that may be either epoch millis (local format)
+     * or ISO 8601 datetime (server format) into epoch millis.
+     */
+    private fun parseTimestamp(ts: String?): Long {
+        if (ts.isNullOrBlank()) return 0L
+        // Try epoch millis first (local format, e.g. "1712880000000")
+        ts.toLongOrNull()?.let { return it }
+        // Try ISO 8601 with zone (e.g. "2026-04-12T15:30:00Z")
+        return try {
+            java.time.Instant.parse(ts).toEpochMilli()
+        } catch (_: Exception) {
+            // Try ISO 8601 without zone (e.g. "2026-04-12T15:30:00") — assume UTC
+            try {
+                java.time.LocalDateTime.parse(ts)
+                    .atZone(java.time.ZoneOffset.UTC)
+                    .toInstant()
+                    .toEpochMilli()
+            } catch (_: Exception) { 0L }
+        }
+    }
+
     // ============ Startup Bidirectional Sync ============
 
     /**
@@ -790,10 +862,22 @@ class BookSyncRepository @Inject constructor(
             try {
                 val remote = api.getBookmark(pair.id)
                 val local = bookmarkDao.getBookmark(pair.id)
-                val remoteTs = remote.updated_at.toLongOrNull() ?: 0L
-                val localTs  = local?.updatedAt?.toLongOrNull() ?: 0L
+                val remoteTs = parseTimestamp(remote.updated_at)
+                val localTs  = parseTimestamp(local?.updatedAt)
 
                 when {
+                    // Unsynced local data always wins — push to server
+                    local != null && !local.syncedToServer -> {
+                        api.updateBookmark(pair.id, BookmarkUpdateRequest(
+                            source              = local.source,
+                            epub_chapter        = local.epubChapter,
+                            epub_sentence_index = local.epubSentenceIndex,
+                            audio_position_ms   = local.audioPositionMs,
+                            epub_locator        = local.epubLocator,
+                        ))
+                        bookmarkDao.upsertBookmark(local.copy(syncedToServer = true))
+                        log("syncBookmark pair=${pair.id}: pushed unsynced local")
+                    }
                     local == null || remoteTs > localTs -> {
                         bookmarkDao.upsertBookmark(BookmarkEntity(
                             bookPairId          = pair.id,
@@ -825,10 +909,21 @@ class BookSyncRepository @Inject constructor(
             try {
                 val remote = api.getProgress("audiobook", pair.audiobookId)
                 val local  = userProgressDao.getProgress("audiobook", pair.audiobookId)
-                val remoteTs = remote.updated_at.toLongOrNull() ?: 0L
+                val remoteTs = parseTimestamp(remote.updated_at)
                 val localTs  = local?.updatedAt ?: 0L
 
                 when {
+                    // Unsynced local data always wins — push to server
+                    local != null && !local.syncedToServer -> {
+                        api.updateProgress("audiobook", pair.audiobookId, ProgressUpdateRequest(
+                            book_pair_id        = local.bookPairId,
+                            audio_position_ms   = local.audioPositionMs,
+                            is_completed        = local.isCompleted,
+                            device_id           = local.deviceId,
+                        ))
+                        userProgressDao.upsertProgress(local.copy(syncedToServer = true))
+                        log("syncProgress audiobook=${pair.audiobookId}: pushed unsynced local")
+                    }
                     local == null || remoteTs > localTs -> {
                         userProgressDao.upsertProgress(UserProgressEntity(
                             mediaType            = "audiobook",
@@ -923,3 +1018,30 @@ class BookSyncRepository @Inject constructor(
         acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
     }
 }
+
+// ============ BookmarkLog mappers ============
+
+private fun BookmarkLogResponse.toEntity(pairId: Int) = BookmarkLogEntity(
+    serverId = id,
+    bookPairId = pairId,
+    source = source,
+    prevEpubChapter = prev_epub_chapter,
+    prevEpubSentenceIndex = prev_epub_sentence_index,
+    prevAudioPositionMs = prev_audio_position_ms,
+    newEpubChapter = new_epub_chapter,
+    newEpubSentenceIndex = new_epub_sentence_index,
+    newAudioPositionMs = new_audio_position_ms,
+    changedAt = changed_at,
+)
+
+private fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
+    id = serverId ?: -localId.toInt(),
+    source = source,
+    prev_epub_chapter = prevEpubChapter,
+    prev_epub_sentence_index = prevEpubSentenceIndex,
+    prev_audio_position_ms = prevAudioPositionMs,
+    new_epub_chapter = newEpubChapter,
+    new_epub_sentence_index = newEpubSentenceIndex,
+    new_audio_position_ms = newAudioPositionMs,
+    changed_at = changedAt,
+)

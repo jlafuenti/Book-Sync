@@ -222,6 +222,24 @@ interface UserProgressDao {
 }
 
 @Dao
+interface BookmarkLogDao {
+    @Query("SELECT * FROM bookmark_log WHERE bookPairId = :pairId ORDER BY changedAt DESC LIMIT :limit")
+    suspend fun getForPair(pairId: Int, limit: Int): List<BookmarkLogEntity>
+
+    @Insert
+    suspend fun insertLocal(entry: BookmarkLogEntity): Long
+
+    @Query("SELECT localId FROM bookmark_log WHERE bookPairId = :pairId AND serverId = :serverId LIMIT 1")
+    suspend fun findByServerId(pairId: Int, serverId: Int): Long?
+
+    @Update
+    suspend fun update(entry: BookmarkLogEntity)
+
+    @Query("DELETE FROM bookmark_log WHERE bookPairId = :pairId AND serverId IS NULL AND changedAt <= :cutoff")
+    suspend fun deleteLocalOnlyOlderThan(pairId: Int, cutoff: String)
+}
+
+@Dao
 interface AcknowledgedItemDao {
     @Upsert
     suspend fun acknowledge(items: List<AcknowledgedItemEntity>)
