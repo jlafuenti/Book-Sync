@@ -147,8 +147,8 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
+        // Load local bookmark immediately — don't wait for server
         viewModelScope.launch {
-            repository.refreshBookmark(pairId)
             repository.getBookmarkFlow(pairId).collect { bm ->
                 bm?.audioPositionMs?.let { pos ->
                     Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")
@@ -171,6 +171,10 @@ class PlayerViewModel @Inject constructor(
                     }
                 }
             }
+        }
+        // Refresh from server in background — won't block local bookmark loading
+        viewModelScope.launch {
+            repository.refreshBookmark(pairId)
         }
         connectToService()
     }

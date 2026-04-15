@@ -110,6 +110,9 @@ object AppModule {
     fun provideAcknowledgedItemDao(db: BookSyncDatabase): AcknowledgedItemDao = db.acknowledgedItemDao()
 
     @Provides
+    fun provideBookmarkLogDao(db: BookSyncDatabase): BookmarkLogDao = db.bookmarkLogDao()
+
+    @Provides
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
         context.dataStore

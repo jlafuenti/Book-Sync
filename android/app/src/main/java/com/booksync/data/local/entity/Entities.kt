@@ -113,3 +113,25 @@ data class UserProgressEntity(
     val deviceId: String?,
     val syncedToServer: Boolean = true
 )
+
+/**
+ * Local cache of bookmark change history.
+ * Holds two kinds of rows:
+ *   - Server-sourced (serverId != null), populated from GET /api/sync/bookmark/{pair}/log
+ *   - Local-only (serverId == null), inserted when the user changes a bookmark offline
+ * changedAt is normalized to ISO 8601 so lexicographic DESC sorts are correct across both origins.
+ */
+@Entity(tableName = "bookmark_log")
+data class BookmarkLogEntity(
+    @PrimaryKey(autoGenerate = true) val localId: Long = 0,
+    val serverId: Int? = null,
+    val bookPairId: Int,
+    val source: String,
+    val prevEpubChapter: Int?,
+    val prevEpubSentenceIndex: Int?,
+    val prevAudioPositionMs: Int?,
+    val newEpubChapter: Int?,
+    val newEpubSentenceIndex: Int?,
+    val newAudioPositionMs: Int?,
+    val changedAt: String
+)
