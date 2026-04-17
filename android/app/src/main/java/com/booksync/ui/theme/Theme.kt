@@ -270,9 +270,9 @@ fun BookSyncTheme(
 ) {
     val tandemColors = tandemColorsFor(appTheme)
     CompositionLocalProvider(
-        LocalTandemColors to tandemColors,
-        LocalTandemShapes to TandemShapes,
-        LocalTandemElevation to TandemElevation,
+        LocalTandemColors provides tandemColors,
+        LocalTandemShapes provides TandemShapes,
+        LocalTandemElevation provides TandemElevation,
     ) {
         MaterialTheme(
             colorScheme = colorSchemeFrom(tandemColors),
