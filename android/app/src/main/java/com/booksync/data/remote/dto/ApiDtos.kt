@@ -50,6 +50,16 @@ data class UpdateMeRequest(
     val theme: String? = null
 )
 
+/**
+ * Body for `POST /api/auth/change-password`.
+ * Field names match the server's Pydantic `PasswordChange` model (snake_case).
+ */
+@Serializable
+data class PasswordChangeRequest(
+    val old_password: String,
+    val new_password: String,
+)
+
 // ============ Library ============
 
 @Serializable
