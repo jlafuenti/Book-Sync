@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -32,12 +34,17 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -77,6 +84,7 @@ import com.booksync.ui.theme.Tandem
 fun LibraryScreen(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
+    onStandaloneAudioSelect: (Int) -> Unit = {},
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,    // kept for back-compat, unused by new nav
     initialFilter: LibraryFilter? = null,
@@ -105,6 +113,7 @@ fun LibraryScreen(
     val activeTxPairIds   by viewModel.activeTranscribingPairIds.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
+    var searchActive by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshMsg) {
         refreshMsg?.let {
@@ -132,7 +141,11 @@ fun LibraryScreen(
         topBar = {
             LibraryTopBar(
                 uiState = ui,
-                onSearchClick = onSearchClick,
+                searchActive = searchActive,
+                onSearchToggle = {
+                    searchActive = !searchActive
+                    if (!searchActive) viewModel.setSearchQuery("")
+                },
                 onRefreshClick = { viewModel.refresh() },
                 onSortChange = { viewModel.setSort(it) },
                 onClearSeries = { viewModel.clearSeriesFilter() },
@@ -147,6 +160,14 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxWidth().height(2.dp),
                     color = colors.accent,
                     trackColor = colors.border,
+                )
+            }
+
+            // Inline search bar (shown when search is active)
+            if (searchActive) {
+                InlineSearchBar(
+                    query = ui.searchQuery,
+                    onQueryChange = { viewModel.setSearchQuery(it) },
                 )
             }
 
@@ -199,7 +220,7 @@ fun LibraryScreen(
                 else -> ItemGrid(
                     items = items,
                     downloadingPercent = downloading,
-                    onItemClick = { item -> openItem(item, onBookSelect, onAudioSelect) },
+                    onItemClick = { item -> openItem(item, onBookSelect, onAudioSelect, onStandaloneAudioSelect) },
                     onItemOverflow = { item -> overflowTarget = item.toOverflowTarget(activeTxPairIds) },
                 )
             }
@@ -210,7 +231,7 @@ fun LibraryScreen(
         if (target != null) {
             CardOverflowMenu(
                 target = target,
-                actions = buildOverflowActions(target, viewModel, onBookSelect, onAudioSelect),
+                actions = buildOverflowActions(target, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect),
                 onDismiss = { overflowTarget = null },
             )
         }
@@ -225,7 +246,8 @@ fun LibraryScreen(
 @Composable
 private fun LibraryTopBar(
     uiState: LibraryUiState,
-    onSearchClick: () -> Unit,
+    searchActive: Boolean,
+    onSearchToggle: () -> Unit,
     onRefreshClick: () -> Unit,
     onSortChange: (LibrarySort) -> Unit,
     onClearSeries: () -> Unit,
@@ -260,32 +282,38 @@ private fun LibraryTopBar(
             }
         },
         actions = {
-            IconButton(onClick = onSearchClick) {
-                Icon(Icons.Default.Search, contentDescription = "Search", tint = colors.textPrimary)
+            IconButton(onClick = onSearchToggle) {
+                Icon(
+                    if (searchActive) Icons.Default.Close else Icons.Default.Search,
+                    contentDescription = if (searchActive) "Close search" else "Search",
+                    tint = colors.textPrimary,
+                )
             }
-            Box {
-                IconButton(onClick = { sortOpen = true }) {
-                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
-                }
-                DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                    LibrarySort.values().forEach { sort ->
-                        DropdownMenuItem(
-                            text = { Text(sort.label) },
-                            trailingIcon = {
-                                if (uiState.sort == sort) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
-                                }
-                            },
-                            onClick = {
-                                sortOpen = false
-                                onSortChange(sort)
-                            },
-                        )
+            if (!searchActive) {
+                Box {
+                    IconButton(onClick = { sortOpen = true }) {
+                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
+                    }
+                    DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                        LibrarySort.values().forEach { sort ->
+                            DropdownMenuItem(
+                                text = { Text(sort.label) },
+                                trailingIcon = {
+                                    if (uiState.sort == sort) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
+                                    }
+                                },
+                                onClick = {
+                                    sortOpen = false
+                                    onSortChange(sort)
+                                },
+                            )
+                        }
                     }
                 }
-            }
-            IconButton(onClick = onRefreshClick) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = colors.textPrimary)
+                IconButton(onClick = onRefreshClick) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = colors.textPrimary)
+                }
             }
         },
     )
@@ -367,6 +395,55 @@ private fun ToggleChip(label: String, checked: Boolean, onCheckedChange: (Boolea
     }
 }
 
+// ============================================================================
+// Inline search bar
+// ============================================================================
+
+@Composable
+private fun InlineSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+) {
+    val colors = Tandem.colors
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        try { focusRequester.requestFocus() } catch (_: Exception) {}
+    }
+
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .focusRequester(focusRequester),
+        placeholder = { Text("Filter library…", color = colors.textMuted, fontSize = 14.sp) },
+        singleLine = true,
+        leadingIcon = {
+            Icon(Icons.Default.Search, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(18.dp))
+        },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = colors.textMuted, modifier = Modifier.size(16.dp))
+                }
+            }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            cursorColor = colors.accent,
+            focusedBorderColor = colors.accent,
+            unfocusedBorderColor = colors.border,
+            focusedContainerColor = colors.bgInput,
+            unfocusedContainerColor = colors.bgInput,
+        ),
+        shape = Tandem.shapes.input,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+    )
+}
+
 @Composable
 private fun AcknowledgeAllBar(count: Int, onClick: () -> Unit) {
     val colors = Tandem.colors
@@ -424,7 +501,8 @@ private fun ItemGrid(
                 when {
                     localFile != null && localFile.exists() -> localFile
                     coverPath != null ->
-                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/$coverPath"
+                        // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
+                        "${BuildConfig.SERVER_BASE_URL}$coverPath"
                     else -> null
                 }
             }
@@ -478,13 +556,16 @@ private fun openItem(
     item: LibraryItem,
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
+    onStandaloneAudioSelect: (Int) -> Unit = {},
 ) {
     val pair = item.pair
     when {
         pair != null && pair.ebookDownloaded      -> onBookSelect(pair.id)
         pair != null && pair.audiobookDownloaded  -> onAudioSelect(pair.id)
         pair != null                              -> onBookSelect(pair.id) // will show "Download ebook" launcher
-        else                                      -> { /* standalone — handled in Phase D follow-up */ }
+        item.audiobook != null                    -> onStandaloneAudioSelect(item.audiobook.id)
+        // Standalone ebooks: reader is pair-based; tap does nothing until standalone reader support is added
+        else                                      -> { }
     }
 }
 
@@ -556,6 +637,7 @@ private fun buildOverflowActions(
     vm: LibraryViewModel,
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
+    onStandaloneAudioSelect: (Int) -> Unit = {},
 ): OverflowActions {
     // Resolve the live pair from the VM so per-action state is accurate.
     val items by vm.items.collectAsState()
@@ -583,23 +665,26 @@ private fun buildOverflowActions(
             onResetProgress   = pair?.let { { vm.resetProgress(it) } },
             onUnlinkPair      = pair?.let { { vm.unlinkPair(it) } },
         )
-        is OverflowTarget.Ebook -> OverflowActions(
-            isOnline = isOnline,
-            onRead          = null, // standalone ebook reader wired in Phase D.6
-            onDownloadEbook = null, // download-by-standalone-id wired in Phase D.6
-            onDeleteEbook   = null,
-            onMarkComplete  = null,
-            onResetProgress = null,
-            onPairWith      = null, // pairing sheet reused from SearchScreen in Phase D.6
-        )
-        is OverflowTarget.Audiobook -> OverflowActions(
-            isOnline = isOnline,
-            onListen            = null,
-            onDownloadAudiobook = null,
-            onDeleteAudiobook   = null,
-            onMarkComplete      = null,
-            onResetProgress     = null,
-            onPairWith          = null,
-        )
+        is OverflowTarget.Ebook -> {
+            val ebook = items.firstOrNull { it.ebook?.id == target.ebookId }?.ebook
+            OverflowActions(
+                isOnline          = isOnline,
+                onDownloadEbook   = if (!target.isDownloaded) ebook?.let { { vm.downloadStandaloneEbook(it) } } else null,
+                onDeleteEbook     = if (target.isDownloaded) ebook?.let { { vm.deleteStandaloneEbook(it) } } else null,
+                onMarkComplete    = ebook?.let { { vm.markCompleteEbook(it.id) } },
+                onResetProgress   = ebook?.let { { vm.resetProgressEbook(it.id) } },
+            )
+        }
+        is OverflowTarget.Audiobook -> {
+            val audio = items.firstOrNull { it.audiobook?.id == target.audiobookId }?.audiobook
+            OverflowActions(
+                isOnline              = isOnline,
+                onListen              = if (target.isDownloaded) audio?.let { { onStandaloneAudioSelect(it.id) } } else null,
+                onDownloadAudiobook   = if (!target.isDownloaded) audio?.let { { vm.downloadStandaloneAudiobook(it) } } else null,
+                onDeleteAudiobook     = if (target.isDownloaded) audio?.let { { vm.deleteStandaloneAudiobook(it) } } else null,
+                onMarkComplete        = audio?.let { { vm.markCompleteAudiobook(it.id) } },
+                onResetProgress       = audio?.let { { vm.resetProgressAudiobook(it.id) } },
+            )
+        }
     }
 }
