@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.BuildConfig
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
@@ -415,10 +416,17 @@ private fun ItemGrid(
         modifier = Modifier.fillMaxSize(),
     ) {
         items(items, key = { it.key }) { item ->
-            // Cover art cached at filesDir/covers/{audiobookId}.jpg by CoverArtHelper.
+            // Cover: local cached file (CoverArtHelper) first → server URL as fallback.
             val audiobookId = item.pair?.audiobookId ?: item.audiobook?.id
-            val coverModel = remember(audiobookId) {
-                audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+            val coverPath   = item.pair?.audiobookCoverPath ?: item.audiobook?.coverFilename
+            val coverModel = remember(audiobookId, coverPath) {
+                val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+                when {
+                    localFile != null && localFile.exists() -> localFile
+                    coverPath != null ->
+                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/$coverPath"
+                    else -> null
+                }
             }
             val variant = item.toVariant(coverModel)
             val dlPct: Int? = item.pair?.id?.let { downloadingPercent[it] }

@@ -25,7 +25,10 @@ data class BookPairEntity(
     val status: String,
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
-    val syncMapDownloaded: Boolean = false
+    val syncMapDownloaded: Boolean = false,
+    // Audiobook cover filename as served by /api/files/covers/{filename}.
+    // Populated from AudioBookResponse.cover_path on library sync.
+    val audiobookCoverPath: String? = null,
 )
 
 @Entity(tableName = "ebooks")

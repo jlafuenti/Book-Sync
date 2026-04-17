@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.BuildConfig
 import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.ui.components.BadgeStatus
@@ -230,10 +231,15 @@ private fun ContinueRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items, key = { it.id }) { item ->
-            // Cover art: cached at filesDir/covers/{audiobookId}.jpg by CoverArtHelper.
-            // Coil loads the File and falls back to the placeholder icon if absent.
-            val coverModel = remember(item.audiobookId) {
-                item.audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+            // Cover: prefer local cached file (CoverArtHelper) → fall back to server URL.
+            val coverModel = remember(item.audiobookId, item.audiobookCoverPath) {
+                val localFile = item.audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+                when {
+                    localFile != null && localFile.exists() -> localFile
+                    item.audiobookCoverPath != null ->
+                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${item.audiobookCoverPath}"
+                    else -> null
+                }
             }
             val variant = when (item.mediaType) {
                 HomeItem.MediaType.PAIR -> BookCardVariant.Pair(
@@ -280,8 +286,14 @@ private fun PairRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(pairs, key = { it.id }) { pair ->
-            val coverModel = remember(pair.audiobookId) {
-                File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+            val coverModel = remember(pair.audiobookId, pair.audiobookCoverPath) {
+                val localFile = File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+                when {
+                    localFile.exists() -> localFile
+                    pair.audiobookCoverPath != null ->
+                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${pair.audiobookCoverPath}"
+                    else -> null
+                }
             }
             Box(modifier = Modifier.width(140.dp)) {
                 BookCard(

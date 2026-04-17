@@ -43,6 +43,7 @@ import java.io.File
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.BuildConfig
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
@@ -147,8 +148,14 @@ fun DownloadedScreen(
             if (pairs.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader("Matched Sets", pairs.size) }
                 items(pairs, key = { "pair_${it.id}" }) { pair ->
-                    val coverModel = remember(pair.audiobookId) {
-                        File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+                    val coverModel = remember(pair.audiobookId, pair.audiobookCoverPath) {
+                        val localFile = File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+                        when {
+                            localFile.exists() -> localFile
+                            pair.audiobookCoverPath != null ->
+                                "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${pair.audiobookCoverPath}"
+                            else -> null
+                        }
                     }
                     BookCard(
                         variant = BookCardVariant.Pair(
@@ -190,8 +197,14 @@ fun DownloadedScreen(
             if (audiobooks.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader("Standalone Audiobooks", audiobooks.size) }
                 items(audiobooks, key = { "audio_${it.id}" }) { audio ->
-                    val coverModel = remember(audio.id) {
-                        File(context.filesDir, "covers/${audio.id}.jpg")
+                    val coverModel = remember(audio.id, audio.coverFilename) {
+                        val localFile = File(context.filesDir, "covers/${audio.id}.jpg")
+                        when {
+                            localFile.exists() -> localFile
+                            audio.coverFilename != null ->
+                                "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${audio.coverFilename}"
+                            else -> null
+                        }
                     }
                     BookCard(
                         variant = BookCardVariant.SingleMedia(
