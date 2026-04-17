@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import java.io.File
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -405,6 +406,7 @@ private fun ItemGrid(
     onItemClick: (LibraryItem) -> Unit,
     onItemOverflow: (LibraryItem) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 140.dp),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
@@ -413,7 +415,12 @@ private fun ItemGrid(
         modifier = Modifier.fillMaxSize(),
     ) {
         items(items, key = { it.key }) { item ->
-            val variant = item.toVariant()
+            // Cover art cached at filesDir/covers/{audiobookId}.jpg by CoverArtHelper.
+            val audiobookId = item.pair?.audiobookId ?: item.audiobook?.id
+            val coverModel = remember(audiobookId) {
+                audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+            }
+            val variant = item.toVariant(coverModel)
             val dlPct: Int? = item.pair?.id?.let { downloadingPercent[it] }
             BookCard(
                 variant = variant,
@@ -473,11 +480,12 @@ private fun openItem(
     }
 }
 
-private fun LibraryItem.toVariant(): BookCardVariant = when {
+private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = when {
     pair != null       -> BookCardVariant.Pair(
         id = pair.id,
         title = pair.ebookTitle,
         author = pair.ebookAuthor ?: pair.audiobookAuthor,
+        coverImageModel = coverModel,
         hasEbookDownloaded = pair.ebookDownloaded,
         hasAudiobookDownloaded = pair.audiobookDownloaded,
     )
@@ -487,12 +495,14 @@ private fun LibraryItem.toVariant(): BookCardVariant = when {
         title = ebook.title,
         author = ebook.author,
         isDownloaded = ebook.isDownloaded,
+        // No cover model for standalone ebooks (no audiobook ID to extract from)
     )
     audiobook != null  -> BookCardVariant.SingleMedia(
         id = audiobook.id,
         kind = BookCardVariant.SingleMedia.MediaKind.AUDIOBOOK,
         title = audiobook.title,
         author = audiobook.author,
+        coverImageModel = coverModel,
         isDownloaded = audiobook.isDownloaded,
     )
     else -> error("LibraryItem must carry at least one entity")

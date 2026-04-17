@@ -29,6 +29,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
@@ -222,16 +224,23 @@ private fun ContinueRow(
     onItemClick: (HomeItem) -> Unit,
     onItemLongClick: (HomeItem) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items, key = { it.id }) { item ->
+            // Cover art: cached at filesDir/covers/{audiobookId}.jpg by CoverArtHelper.
+            // Coil loads the File and falls back to the placeholder icon if absent.
+            val coverModel = remember(item.audiobookId) {
+                item.audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+            }
             val variant = when (item.mediaType) {
                 HomeItem.MediaType.PAIR -> BookCardVariant.Pair(
                     id = item.pairId ?: 0,
                     title = item.title,
                     author = item.author,
+                    coverImageModel = coverModel,
                 )
                 HomeItem.MediaType.EBOOK -> BookCardVariant.SingleMedia(
                     id = item.ebookId ?: 0,
@@ -244,6 +253,7 @@ private fun ContinueRow(
                     kind = BookCardVariant.SingleMedia.MediaKind.AUDIOBOOK,
                     title = item.title,
                     author = item.author,
+                    coverImageModel = coverModel,
                 )
             }
             Box(modifier = Modifier.width(140.dp)) {
@@ -264,17 +274,22 @@ private fun PairRow(
     showNewBadge: Boolean,
     onPairClick: (BookPairEntity) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(pairs, key = { it.id }) { pair ->
+            val coverModel = remember(pair.audiobookId) {
+                File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+            }
             Box(modifier = Modifier.width(140.dp)) {
                 BookCard(
                     variant = BookCardVariant.Pair(
                         id = pair.id,
                         title = pair.ebookTitle,
                         author = pair.ebookAuthor ?: pair.audiobookAuthor,
+                        coverImageModel = coverModel,
                         hasEbookDownloaded = pair.ebookDownloaded,
                         hasAudiobookDownloaded = pair.audiobookDownloaded,
                         hasMismatchWarning = pair.hasMetadataMismatch(),

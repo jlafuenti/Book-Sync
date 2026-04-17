@@ -1,7 +1,5 @@
 package com.booksync.ui.components
 
-import android.graphics.Bitmap
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,7 +64,7 @@ sealed class BookCardVariant {
         val id: Int,
         val title: String,
         val author: String?,
-        val coverBitmap: Bitmap? = null,
+        val coverImageModel: Any? = null,      // File, Uri, URL string — loaded by Coil
         val hasEbookDownloaded: Boolean = false,
         val hasAudiobookDownloaded: Boolean = false,
         val hasMismatchWarning: Boolean = false,
@@ -77,7 +75,7 @@ sealed class BookCardVariant {
         val kind: MediaKind,
         val title: String,
         val author: String?,
-        val coverBitmap: Bitmap? = null,
+        val coverImageModel: Any? = null,      // File, Uri, URL string — loaded by Coil
         val isDownloaded: Boolean = false,
     ) : BookCardVariant() {
         enum class MediaKind { EBOOK, AUDIOBOOK }
@@ -90,7 +88,7 @@ sealed class BookCardVariant {
         val pairCount: Int,
         val ebookCount: Int,
         val audiobookCount: Int,
-        val coverBitmaps: List<Bitmap?> = emptyList(), // up to 3, back-to-front
+        val coverImageModels: List<Any?> = emptyList(), // up to 3, back-to-front
     ) : BookCardVariant()
 }
 
@@ -242,61 +240,62 @@ fun BookCard(
 @Composable
 private fun BoxScope.CoverContent(variant: BookCardVariant) {
     when (variant) {
-        is BookCardVariant.Pair         -> CoverOrPlaceholder(variant.coverBitmap, Icons.Default.Book)
+        is BookCardVariant.Pair         -> CoverOrPlaceholder(variant.coverImageModel, Icons.Default.Book)
         is BookCardVariant.SingleMedia  -> {
             val fallback = if (variant.kind == BookCardVariant.SingleMedia.MediaKind.AUDIOBOOK)
                 Icons.Default.Headphones else Icons.Default.Book
-            CoverOrPlaceholder(variant.coverBitmap, fallback)
+            CoverOrPlaceholder(variant.coverImageModel, fallback)
         }
-        is BookCardVariant.SeriesStack  -> SeriesStackCovers(variant.coverBitmaps)
+        is BookCardVariant.SeriesStack  -> SeriesStackCovers(variant.coverImageModels)
     }
 }
 
 @Composable
 private fun BoxScope.CoverOrPlaceholder(
-    bitmap: Bitmap?,
+    coverModel: Any?,
     fallbackIcon: androidx.compose.ui.graphics.vector.ImageVector,
 ) {
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
+    val colors = Tandem.colors
+    // Gradient placeholder — always drawn first; covered by the image once Coil loads it.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        colors.accent.copy(alpha = 0.35f),
+                        colors.accentSecondary.copy(alpha = 0.25f),
+                    ),
+                ),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = fallbackIcon,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.size(40.dp),
+        )
+    }
+    // Coil image overlays the placeholder; if it fails to load, placeholder remains visible.
+    if (coverModel != null) {
+        AsyncImage(
+            model = coverModel,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
-    } else {
-        val colors = Tandem.colors
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            colors.accent.copy(alpha = 0.35f),
-                            colors.accentSecondary.copy(alpha = 0.25f),
-                        ),
-                    ),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = fallbackIcon,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(40.dp),
-            )
-        }
     }
 }
 
 @Composable
-private fun BoxScope.SeriesStackCovers(covers: List<Bitmap?>) {
+private fun BoxScope.SeriesStackCovers(covers: List<Any?>) {
     // Back-to-front, 3 tilted mini-covers fanned out (web SeriesCard look).
     val rotations = listOf(-8f, -2f, 6f)
     val offsets = listOf(-14f, 0f, 14f)
     val padded = (covers + List(3) { null }).take(3)
 
-    padded.forEachIndexed { i, bmp ->
+    padded.forEachIndexed { i, model ->
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -309,19 +308,18 @@ private fun BoxScope.SeriesStackCovers(covers: List<Bitmap?>) {
                 .background(Tandem.colors.bgCardHover),
             contentAlignment = Alignment.Center,
         ) {
-            if (bmp != null) {
-                Image(
-                    bitmap = bmp.asImageBitmap(),
+            Icon(
+                imageVector = Icons.Default.Book,
+                contentDescription = null,
+                tint = Tandem.colors.textMuted,
+                modifier = Modifier.size(28.dp),
+            )
+            if (model != null) {
+                AsyncImage(
+                    model = model,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Book,
-                    contentDescription = null,
-                    tint = Tandem.colors.textMuted,
-                    modifier = Modifier.size(28.dp),
                 )
             }
         }

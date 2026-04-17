@@ -106,6 +106,9 @@ dependencies {
     implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.2")
     implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.2")
     
+    // Image loading (cover art in cards)
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
     // HTML Parsing
     implementation("org.jsoup:jsoup:1.17.2")
 

@@ -2,6 +2,7 @@ package com.booksync.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -253,6 +254,10 @@ private fun MainScaffold(outerNavController: NavHostController) {
         ?.substringBefore("?") // strip query args so selection matches "library?filter=NEW"
 
     Scaffold(
+        // Don't let the outer shell consume the status-bar inset — each screen's own
+        // TopAppBar handles it. Without this, the inner Scaffold's TopAppBar adds status-bar
+        // height on top of the outer Scaffold's top padding, causing double status-bar space.
+        contentWindowInsets = WindowInsets(0),
         bottomBar = {
             Column {
                 MiniPlayerBar(
