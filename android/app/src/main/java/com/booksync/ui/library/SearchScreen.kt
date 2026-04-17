@@ -22,10 +22,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -660,7 +660,7 @@ private fun TypeIcon(item: SearchResultItem) {
     val colors = Tandem.colors
     val (icon: ImageVector, tint) = when {
         item.isPair                       -> Icons.AutoMirrored.Filled.LibraryBooks to colors.accent
-        item.isEbook                      -> Icons.Default.MenuBook to colors.statusInfo
+        item.isEbook                      -> Icons.AutoMirrored.Filled.MenuBook to colors.statusInfo
         else                              -> Icons.Default.Headphones to colors.statusSuccess
     }
     Box(

@@ -20,11 +20,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -265,7 +265,7 @@ private fun LibraryTopBar(
             }
             Box {
                 IconButton(onClick = { sortOpen = true }) {
-                    Icon(Icons.Default.Sort, contentDescription = "Sort", tint = colors.textPrimary)
+                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
                 }
                 DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
                     LibrarySort.values().forEach { sort ->
