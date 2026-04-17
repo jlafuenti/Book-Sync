@@ -37,7 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import java.io.File
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -71,6 +73,7 @@ fun DownloadedScreen(
     viewModel: DownloadedViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
+    val context = LocalContext.current
     val pairs       by viewModel.downloadedPairs.collectAsState(initial = emptyList())
     val ebooks      by viewModel.downloadedEbooks.collectAsState(initial = emptyList())
     val audiobooks  by viewModel.downloadedAudiobooks.collectAsState(initial = emptyList())
@@ -144,11 +147,15 @@ fun DownloadedScreen(
             if (pairs.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader("Matched Sets", pairs.size) }
                 items(pairs, key = { "pair_${it.id}" }) { pair ->
+                    val coverModel = remember(pair.audiobookId) {
+                        File(context.filesDir, "covers/${pair.audiobookId}.jpg")
+                    }
                     BookCard(
                         variant = BookCardVariant.Pair(
                             id = pair.id,
                             title = pair.ebookTitle,
                             author = pair.ebookAuthor ?: pair.audiobookAuthor,
+                            coverImageModel = coverModel,
                             hasEbookDownloaded = pair.ebookDownloaded,
                             hasAudiobookDownloaded = pair.audiobookDownloaded,
                         ),
@@ -172,6 +179,7 @@ fun DownloadedScreen(
                             title = ebook.title,
                             author = ebook.author,
                             isDownloaded = true,
+                            // No cover model for standalone ebooks
                         ),
                         onClick = { onEbookSelect(ebook.id) },
                         onOverflow = { overflow = OverflowSelection.Ebook(ebook) },
@@ -182,12 +190,16 @@ fun DownloadedScreen(
             if (audiobooks.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader("Standalone Audiobooks", audiobooks.size) }
                 items(audiobooks, key = { "audio_${it.id}" }) { audio ->
+                    val coverModel = remember(audio.id) {
+                        File(context.filesDir, "covers/${audio.id}.jpg")
+                    }
                     BookCard(
                         variant = BookCardVariant.SingleMedia(
                             id = audio.id,
                             kind = BookCardVariant.SingleMedia.MediaKind.AUDIOBOOK,
                             title = audio.title,
                             author = audio.author,
+                            coverImageModel = coverModel,
                             isDownloaded = true,
                         ),
                         onClick = { onAudiobookSelect(audio.id) },
