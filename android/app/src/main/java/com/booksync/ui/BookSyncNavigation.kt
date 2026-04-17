@@ -75,8 +75,9 @@ object Routes {
     const val SEARCH      = "search"
     const val SETTINGS    = "settings"                // kept for legacy intents
     const val DIAGNOSTICS = "diagnostics/{channel}"
-    const val READER      = "reader/{pairId}"
-    const val PLAYER      = "player/{pairId}"
+    const val READER               = "reader/{pairId}"
+    const val PLAYER               = "player/{pairId}"
+    const val PLAYER_STANDALONE    = "player/standalone/{audiobookId}"
 
     /**
      * Build a library URL with optional filter / series / sort / group parameters.
@@ -99,6 +100,7 @@ object Routes {
 
     fun reader(pairId: Int)  = "reader/$pairId"
     fun player(pairId: Int)  = "player/$pairId"
+    fun playerStandalone(audiobookId: Int) = "player/standalone/$audiobookId"
     fun diagnostics(channel: String) = "diagnostics/$channel"
 }
 
@@ -239,6 +241,19 @@ fun BookSyncNavigation() {
                 },
             )
         }
+
+        // Standalone audiobook player — no pair, no reader switch.
+        // The audiobookId arg is read by PlayerViewModel from its SavedStateHandle.
+        composable(
+            Routes.PLAYER_STANDALONE,
+            arguments = listOf(navArgument("audiobookId") { type = NavType.IntType }),
+        ) {
+            PlayerScreen(
+                pairId = -1,            // sentinel: no pair (ViewModel uses audiobookId from SavedStateHandle)
+                onBack = { navController.popBackStack() },
+                onSwitchToReader = { }, // not applicable for standalone
+            )
+        }
     }
 }
 
@@ -298,8 +313,8 @@ private fun MainScaffold(outerNavController: NavHostController) {
                     onSearchClick     = { outerNavController.navigate(Routes.SEARCH) },
                     onOpenPairReader  = { outerNavController.navigate(Routes.reader(it)) },
                     onOpenPairPlayer  = { outerNavController.navigate(Routes.player(it)) },
-                    onOpenEbook       = { /* standalone ebook reader wired in Phase D */ },
-                    onOpenAudiobook   = { /* standalone audiobook player wired in Phase D */ },
+                    onOpenEbook       = { /* standalone ebook reader — no pair-based reader support yet */ },
+                    onOpenAudiobook   = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onSeeAll          = { target ->
                         val libraryRoute = when (target) {
                             HomeSeeAll.CONTINUE        -> Routes.library(sort = "RecentlyOpened")
@@ -332,14 +347,15 @@ private fun MainScaffold(outerNavController: NavHostController) {
                 val groupArg  = args?.getString("group")?.equals("series", ignoreCase = true)
 
                 LibraryScreen(
-                    onBookSelect         = { outerNavController.navigate(Routes.reader(it)) },
-                    onAudioSelect        = { outerNavController.navigate(Routes.player(it)) },
-                    onSearchClick        = { outerNavController.navigate(Routes.SEARCH) },
-                    onSettingsClick      = { outerNavController.navigate(Routes.SETTINGS) },
-                    initialFilter        = filterArg,
-                    initialSeries        = seriesArg,
-                    initialSort          = sortArg,
-                    initialGroupBySeries = groupArg,
+                    onBookSelect             = { outerNavController.navigate(Routes.reader(it)) },
+                    onAudioSelect            = { outerNavController.navigate(Routes.player(it)) },
+                    onStandaloneAudioSelect  = { outerNavController.navigate(Routes.playerStandalone(it)) },
+                    onSearchClick            = { outerNavController.navigate(Routes.SEARCH) },
+                    onSettingsClick          = { outerNavController.navigate(Routes.SETTINGS) },
+                    initialFilter            = filterArg,
+                    initialSeries            = seriesArg,
+                    initialSort              = sortArg,
+                    initialGroupBySeries     = groupArg,
                 )
             }
 
@@ -347,8 +363,8 @@ private fun MainScaffold(outerNavController: NavHostController) {
                 DownloadedScreen(
                     onPairBookSelect  = { outerNavController.navigate(Routes.reader(it)) },
                     onPairAudioSelect = { outerNavController.navigate(Routes.player(it)) },
-                    onEbookSelect     = { /* standalone ebook reader — wired in Phase E */ },
-                    onAudiobookSelect = { /* standalone audiobook player — wired in Phase E */ },
+                    onEbookSelect     = { /* standalone ebook reader — no pair-based reader support yet */ },
+                    onAudiobookSelect = { outerNavController.navigate(Routes.playerStandalone(it)) },
                 )
             }
 

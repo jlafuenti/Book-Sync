@@ -44,12 +44,18 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import androidx.mediarouter.app.MediaRouteButton
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.BookmarkLogResponse
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.player.AudioPlayerService
 import com.booksync.ui.theme.Tandem
+import com.booksync.worker.DownloadWorker
 import com.google.android.gms.cast.framework.CastButtonFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -80,9 +86,15 @@ class PlayerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val pairId: Int = savedStateHandle["pairId"] ?: 0
+    // audiobookId is set when launched from standalone player route (player/standalone/{audiobookId})
+    private val standaloneAudiobookId: Int = savedStateHandle.get<Int>("audiobookId") ?: -1
+    val isStandalone: Boolean get() = standaloneAudiobookId > 0
 
     private val _pair = MutableStateFlow<BookPairEntity?>(null)
     val pair = _pair.asStateFlow()
+
+    private val _standaloneAudio = MutableStateFlow<com.booksync.data.local.entity.AudioBookEntity?>(null)
+    val standaloneAudio = _standaloneAudio.asStateFlow()
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying = _isPlaying.asStateFlow()
@@ -114,6 +126,87 @@ class PlayerViewModel @Inject constructor(
     private val _history = MutableStateFlow<List<BookmarkLogResponse>>(emptyList())
     val history = _history.asStateFlow()
 
+    private val workManager = WorkManager.getInstance(appContext)
+
+    /** null = not downloading; 0–100 = in progress */
+    private val _downloadProgress = MutableStateFlow<Int?>(null)
+    val downloadProgress = _downloadProgress.asStateFlow()
+
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError = _downloadError.asStateFlow()
+
+    fun clearDownloadError() { _downloadError.value = null }
+
+    /** Download the standalone audiobook (used from PlayerScreen when isStandalone). */
+    fun downloadStandaloneAudiobook() {
+        val audio = _standaloneAudio.value ?: return
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to audio.id,
+                DownloadWorker.KEY_TYPE    to "STANDALONE_AUDIOBOOK",
+            ))
+            .addTag("download_worker")
+            .build()
+        val workName = "download_standalone_audio_${audio.id}"
+        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value = 0
+        viewModelScope.launch {
+            workManager.getWorkInfosForUniqueWorkFlow(workName).collect { infos ->
+                val info = infos.firstOrNull() ?: return@collect
+                when (info.state) {
+                    WorkInfo.State.RUNNING -> {
+                        _downloadProgress.value = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0).coerceIn(0, 100)
+                    }
+                    WorkInfo.State.SUCCEEDED -> {
+                        _downloadProgress.value = null
+                        // Refresh the entity from DB so isDownloaded reflects reality
+                        repository.getAudiobookById(audio.id)?.let { updated ->
+                            _standaloneAudio.value = updated
+                            controller?.let { ctrl -> loadStandaloneAudio(updated, ctrl) }
+                        }
+                    }
+                    WorkInfo.State.FAILED -> {
+                        _downloadProgress.value = null
+                        _downloadError.value = info.outputData.getString(DownloadWorker.ERROR_KEY) ?: "Download failed"
+                    }
+                    WorkInfo.State.CANCELLED -> _downloadProgress.value = null
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    fun downloadAudiobook() {
+        val pair = _pair.value ?: return
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to pair.id,
+                DownloadWorker.KEY_TYPE    to "AUDIOBOOK",
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork("download_audio_${pair.id}", ExistingWorkPolicy.REPLACE, request)
+        _downloadProgress.value = 0
+        viewModelScope.launch {
+            workManager.getWorkInfosForUniqueWorkFlow("download_audio_${pair.id}").collect { infos ->
+                val info = infos.firstOrNull() ?: return@collect
+                when (info.state) {
+                    WorkInfo.State.RUNNING -> {
+                        val pct = info.progress.getInt(DownloadWorker.PROGRESS_KEY, 0)
+                        _downloadProgress.value = pct.coerceIn(0, 100)
+                    }
+                    WorkInfo.State.SUCCEEDED -> _downloadProgress.value = null
+                    WorkInfo.State.FAILED -> {
+                        _downloadProgress.value = null
+                        _downloadError.value = info.outputData.getString(DownloadWorker.ERROR_KEY) ?: "Download failed"
+                    }
+                    WorkInfo.State.CANCELLED -> _downloadProgress.value = null
+                    else -> {}
+                }
+            }
+        }
+    }
+
     private var controller: MediaController? = null
     private var positionPollingJob: kotlinx.coroutines.Job? = null
     private var savedPositionFromBookmark: Long = 0L
@@ -137,6 +230,18 @@ class PlayerViewModel @Inject constructor(
             bookmarkLoaded = true
             _positionMs.value = pendingSeek
         }
+
+        if (isStandalone) {
+            // Standalone audiobook mode — load by audiobookId, skip pair/bookmark loading
+            viewModelScope.launch {
+                val audio = repository.getAudiobookById(standaloneAudiobookId)
+                _standaloneAudio.value = audio
+                audio?.durationSeconds?.let { _durationMs.value = it * 1000L }
+                controller?.let { ctrl ->
+                    if (audio != null) loadStandaloneAudio(audio, ctrl)
+                }
+            }
+        } else {
 
         viewModelScope.launch {
             repository.getPairsFlow().collect { pairs ->
@@ -180,6 +285,9 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             repository.refreshBookmark(pairId)
         }
+
+        } // end else (non-standalone)
+
         connectToService()
     }
 
@@ -236,8 +344,13 @@ class PlayerViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }, { it.run() })
 
-                // Load media if pair is ready
-                _pair.value?.let { loadAudio(it, mediaController) }
+                // Load media if pair or standalone audio is ready
+                val standalone = _standaloneAudio.value
+                if (standalone != null) {
+                    loadStandaloneAudio(standalone, mediaController)
+                } else {
+                    _pair.value?.let { loadAudio(it, mediaController) }
+                }
 
                 // If bookmark was already loaded before controller connected,
                 // seek to the saved position now. This handles the race condition
@@ -304,6 +417,46 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    private fun loadStandaloneAudio(
+        audio: com.booksync.data.local.entity.AudioBookEntity,
+        mediaController: MediaController,
+    ) {
+        if (!audio.isDownloaded) return
+        val audioFile = java.io.File(appContext.filesDir, "audiobooks/${audio.filename}")
+        if (!audioFile.exists()) return
+
+        // Extract cover art from audio file if not already loaded
+        if (_coverArtBitmap.value == null) {
+            try {
+                val retriever = android.media.MediaMetadataRetriever()
+                retriever.setDataSource(audioFile.absolutePath)
+                val artBytes = retriever.embeddedPicture
+                if (artBytes != null) {
+                    _coverArtBitmap.value = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size)
+                }
+                retriever.release()
+            } catch (_: Exception) {}
+        }
+
+        val mediaItem = MediaItem.Builder()
+            .setMediaId("standalone_${audio.id}")
+            .setUri(Uri.fromFile(audioFile))
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(audio.title)
+                    .setArtist(audio.author)
+                    .build()
+            )
+            .build()
+
+        val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
+        if (currentUri != Uri.fromFile(audioFile)) {
+            mediaController.setMediaItem(mediaItem)
+            mediaController.prepare()
+            mediaController.play()
+        }
+    }
+
     private fun startPositionPolling() {
         positionPollingJob?.cancel()
         positionPollingJob = viewModelScope.launch {
@@ -341,9 +494,14 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun ensureMediaLoaded() {
-        val pair = _pair.value ?: return
         val ctrl = controller ?: return
-        loadAudio(pair, ctrl)
+        val standalone = _standaloneAudio.value
+        if (standalone != null) {
+            loadStandaloneAudio(standalone, ctrl)
+        } else {
+            val pair = _pair.value ?: return
+            loadAudio(pair, ctrl)
+        }
     }
 
     fun togglePlayback() {
@@ -439,10 +597,11 @@ class PlayerViewModel @Inject constructor(
      * "No chapters found in this file".
      */
     private fun loadChaptersFromFile() {
-        val pair = _pair.value ?: return
-        if (!pair.audiobookDownloaded) return
-        val audioFile = repository.getAudiobookFile(pair)
-        if (!audioFile.exists()) return
+        val audioFile: java.io.File? = when {
+            isStandalone -> _standaloneAudio.value?.let { java.io.File(appContext.filesDir, "audiobooks/${it.filename}") }
+            else -> _pair.value?.takeIf { it.audiobookDownloaded }?.let { repository.getAudiobookFile(it) }
+        }
+        if (audioFile == null || !audioFile.exists()) return
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
@@ -510,6 +669,21 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun saveBookmark() {
+        if (isStandalone) {
+            // Standalone audiobooks track progress locally only (no pair-linked bookmark)
+            val audio = _standaloneAudio.value ?: return
+            viewModelScope.launch {
+                try {
+                    repository.updateProgress(
+                        mediaType = "audiobook",
+                        mediaId = audio.id,
+                        bookPairId = null,
+                        audioPositionMs = _positionMs.value.toInt(),
+                    )
+                } catch (_: Exception) {}
+            }
+            return
+        }
         viewModelScope.launch {
             try {
                 val posMs = _positionMs.value.toInt()
@@ -557,6 +731,11 @@ class PlayerViewModel @Inject constructor(
 
     fun markComplete() {
         viewModelScope.launch {
+            val standalone = _standaloneAudio.value
+            if (standalone != null) {
+                repository.markComplete("audiobook", standalone.id)
+                return@launch
+            }
             val p = _pair.value ?: return@launch
             p.audiobookId?.let { repository.markComplete("audiobook", it) }
             p.ebookId?.let { repository.markComplete("ebook", it) }
@@ -565,6 +744,11 @@ class PlayerViewModel @Inject constructor(
 
     fun resetProgress() {
         viewModelScope.launch {
+            val standalone = _standaloneAudio.value
+            if (standalone != null) {
+                repository.resetMediaProgress("audiobook", standalone.id)
+                return@launch
+            }
             val p = _pair.value ?: return@launch
             p.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
             p.ebookId?.let { repository.resetMediaProgress("ebook", it) }
@@ -589,6 +773,8 @@ fun PlayerScreen(
     val colors = Tandem.colors
 
     val pair               by viewModel.pair.collectAsState()
+    val standaloneAudio    by viewModel.standaloneAudio.collectAsState()
+    val isStandalone       = viewModel.isStandalone
     val isPlaying          by viewModel.isPlaying.collectAsState()
     val positionMs         by viewModel.positionMs.collectAsState()
     val durationMs         by viewModel.durationMs.collectAsState()
@@ -599,12 +785,27 @@ fun PlayerScreen(
     val chapters           by viewModel.chapters.collectAsState()
     val currentChapterIdx  by viewModel.currentChapterIndex.collectAsState()
     val historyItems       by viewModel.history.collectAsState()
+    val downloadProgress   by viewModel.downloadProgress.collectAsState()
+    val downloadError      by viewModel.downloadError.collectAsState()
 
-    val isDownloaded = pair?.audiobookDownloaded == true
+    // Resolved title/author — prefer standalone audio entity, fall back to pair
+    val displayTitle  = standaloneAudio?.title  ?: pair?.audiobookTitle  ?: "Audiobook"
+    val displayAuthor = standaloneAudio?.author ?: pair?.audiobookAuthor
+
+    val isDownloaded = pair?.audiobookDownloaded == true || standaloneAudio?.isDownloaded == true
 
     var showSleepSheet  by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var selectedTab     by remember { mutableStateOf(PlayerTab.CHAPTERS) }
+
+    // Show download error as toast
+    val context = LocalContext.current
+    LaunchedEffect(downloadError) {
+        downloadError?.let {
+            android.widget.Toast.makeText(context, "Download error: $it", android.widget.Toast.LENGTH_LONG).show()
+            viewModel.clearDownloadError()
+        }
+    }
 
     // Sleep-timer bottom sheet
     if (showSleepSheet) {
@@ -638,9 +839,11 @@ fun PlayerScreen(
                         },
                         modifier = Modifier.size(48.dp),
                     )
-                    // Switch to Reader
-                    IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader() }) {
-                        Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
+                    // Switch to Reader (not available for standalone audiobooks — no paired ebook)
+                    if (!isStandalone) {
+                        IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader() }) {
+                            Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
+                        }
                     }
                     // Overflow (Mark Complete / Reset Progress)
                     Box {
@@ -705,32 +908,64 @@ fun PlayerScreen(
 
             // ── Title & author ───────────────────────────────────────────────
             Text(
-                text = pair?.audiobookTitle ?: "Audiobook",
+                text = displayTitle,
                 color = colors.textPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
             )
-            pair?.audiobookAuthor?.let { author ->
+            displayAuthor?.let { author ->
                 Spacer(Modifier.height(4.dp))
                 Text(text = author, color = colors.textSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
             }
 
-            // Download warning
+            // Download state — warning + button when not downloaded, progress bar when downloading
             if (!isDownloaded) {
                 Spacer(Modifier.height(10.dp))
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(Tandem.shapes.input)
                         .background(colors.statusError.copy(alpha = 0.15f))
                         .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.Warning, null, tint = colors.statusError, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text("Audiobook not downloaded — download it first.", color = colors.statusError, fontSize = 13.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, null, tint = colors.statusError, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            if (downloadProgress != null) "Downloading audiobook…"
+                            else "Audiobook not downloaded.",
+                            color = colors.statusError,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    if (downloadProgress != null) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { downloadProgress!! / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = colors.accent,
+                            trackColor = colors.border,
+                        )
+                    } else if (pair != null || standaloneAudio != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                if (isStandalone) viewModel.downloadStandaloneAudiobook()
+                                else viewModel.downloadAudiobook()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.accent,
+                                contentColor = colors.textPrimary,
+                            ),
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("Download Audiobook", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 }
             }
 

@@ -237,7 +237,8 @@ private fun ContinueRow(
                 when {
                     localFile != null && localFile.exists() -> localFile
                     item.audiobookCoverPath != null ->
-                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${item.audiobookCoverPath}"
+                        // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
+                        "${BuildConfig.SERVER_BASE_URL}${item.audiobookCoverPath}"
                     else -> null
                 }
             }
@@ -291,7 +292,7 @@ private fun PairRow(
                 when {
                     localFile.exists() -> localFile
                     pair.audiobookCoverPath != null ->
-                        "${BuildConfig.SERVER_BASE_URL}/api/files/covers/${pair.audiobookCoverPath}"
+                        "${BuildConfig.SERVER_BASE_URL}${pair.audiobookCoverPath}"
                     else -> null
                 }
             }

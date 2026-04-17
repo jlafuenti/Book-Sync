@@ -56,6 +56,7 @@ data class LibraryUiState(
     val seriesFilter: String? = null,
     val transcribedOnly: Boolean = false,
     val sort: LibrarySort = LibrarySort.RecentlyAdded,
+    val searchQuery: String = "",
 )
 
 /**
@@ -127,6 +128,7 @@ class LibraryViewModel @Inject constructor(
     fun setGroupBySeries(v: Boolean)          { _uiState.value = _uiState.value.copy(groupBySeries = v, seriesFilter = null) }
     fun drillIntoSeries(name: String)         { _uiState.value = _uiState.value.copy(seriesFilter = name) }
     fun clearSeriesFilter()                   { _uiState.value = _uiState.value.copy(seriesFilter = null) }
+    fun setSearchQuery(q: String)             { _uiState.value = _uiState.value.copy(searchQuery = q) }
 
     /**
      * One-shot initializer for deep-links: e.g. Home → "library?filter=NEW&sort=RecentlyAdded".
@@ -212,7 +214,18 @@ class LibraryViewModel @Inject constructor(
         } ?: transcribedFiltered
 
         // Step 4 — sort
-        seriesFiltered.sortedWith(comparatorFor(ui.sort))
+        val sorted = seriesFiltered.sortedWith(comparatorFor(ui.sort))
+
+        // Step 5 — text search filter (title / author / series)
+        if (ui.searchQuery.isBlank()) sorted
+        else {
+            val q = ui.searchQuery.trim().lowercase()
+            sorted.filter { item ->
+                item.title.lowercase().contains(q) ||
+                item.author?.lowercase()?.contains(q) == true ||
+                item.series?.lowercase()?.contains(q) == true
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
 
     /** Series-mode view: groups items by series and returns one [SeriesStack] per series. */
@@ -317,6 +330,12 @@ class LibraryViewModel @Inject constructor(
     fun downloadAudiobook(pair: BookPairEntity)   = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
     fun refreshSyncData(pair: BookPairEntity)     = enqueue(pair.id, "SYNC_MAP",  "download_sync_${pair.id}")
 
+    fun downloadStandaloneEbook(ebook: EBookEntity) =
+        enqueue(ebook.id, "STANDALONE_EBOOK", "download_standalone_ebook_${ebook.id}")
+
+    fun downloadStandaloneAudiobook(audio: AudioBookEntity) =
+        enqueue(audio.id, "STANDALONE_AUDIOBOOK", "download_standalone_audio_${audio.id}")
+
     private fun enqueue(pairId: Int, type: String, uniqueName: String) {
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setInputData(workDataOf(
@@ -329,17 +348,23 @@ class LibraryViewModel @Inject constructor(
         _downloadingProgress.value = _downloadingProgress.value + (pairId to 0)
     }
 
-    fun deleteEbookOf(pair: BookPairEntity)       = runSafely { repository.deleteEbook(pair) }
-    fun deleteAudiobookOf(pair: BookPairEntity)   = runSafely { repository.deleteAudiobook(pair) }
-    fun unlinkPair(pair: BookPairEntity)          = runSafely { repository.deletePair(pair.id); refresh() }
+    fun deleteEbookOf(pair: BookPairEntity)           = runSafely { repository.deleteEbook(pair) }
+    fun deleteAudiobookOf(pair: BookPairEntity)       = runSafely { repository.deleteAudiobook(pair) }
+    fun deleteStandaloneEbook(ebook: EBookEntity)     = runSafely { repository.deleteStandaloneEbook(ebook) }
+    fun deleteStandaloneAudiobook(audio: AudioBookEntity) = runSafely { repository.deleteStandaloneAudiobook(audio) }
+    fun unlinkPair(pair: BookPairEntity)              = runSafely { repository.deletePair(pair.id); refresh() }
     fun markComplete(pair: BookPairEntity)        = runSafely {
         repository.markComplete("audiobook", pair.audiobookId)
         repository.markComplete("ebook", pair.ebookId)
     }
+    fun markCompleteEbook(id: Int)                = runSafely { repository.markComplete("ebook", id) }
+    fun markCompleteAudiobook(id: Int)            = runSafely { repository.markComplete("audiobook", id) }
     fun resetProgress(pair: BookPairEntity)       = runSafely {
         repository.resetMediaProgress("audiobook", pair.audiobookId)
         repository.resetMediaProgress("ebook", pair.ebookId)
     }
+    fun resetProgressEbook(id: Int)               = runSafely { repository.resetMediaProgress("ebook", id) }
+    fun resetProgressAudiobook(id: Int)           = runSafely { repository.resetMediaProgress("audiobook", id) }
 
     // --- Transcription actions ---------------------------------------------
 
