@@ -5,17 +5,25 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -24,11 +32,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.mediarouter.app.MediaRouteButton
-import com.google.android.gms.cast.framework.CastButtonFactory
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -37,28 +43,26 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
+import androidx.mediarouter.app.MediaRouteButton
+import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.remote.BookmarkLogResponse
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.player.AudioPlayerService
-import com.booksync.SyncState
+import com.booksync.ui.theme.Tandem
+import com.google.android.gms.cast.framework.CastButtonFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import javax.inject.Inject
-import android.util.Log
-import com.booksync.data.remote.BookmarkLogResponse
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.items
-import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import javax.inject.Inject
 
 /**
  * Represents a chapter marker in an M4B audiobook.
@@ -568,6 +572,12 @@ class PlayerViewModel @Inject constructor(
     }
 }
 
+// ============================================================================
+// Player UI
+// ============================================================================
+
+private enum class PlayerTab { CHAPTERS, HISTORY }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
@@ -576,199 +586,79 @@ fun PlayerScreen(
     onSwitchToReader: () -> Unit,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
-    val pair by viewModel.pair.collectAsState()
-    val isPlaying by viewModel.isPlaying.collectAsState()
-    val positionMs by viewModel.positionMs.collectAsState()
-    val durationMs by viewModel.durationMs.collectAsState()
-    val speed by viewModel.speed.collectAsState()
-    val sleepTimerMinutes by viewModel.sleepTimerMinutes.collectAsState()
+    val colors = Tandem.colors
+
+    val pair               by viewModel.pair.collectAsState()
+    val isPlaying          by viewModel.isPlaying.collectAsState()
+    val positionMs         by viewModel.positionMs.collectAsState()
+    val durationMs         by viewModel.durationMs.collectAsState()
+    val speed              by viewModel.speed.collectAsState()
+    val sleepTimerMinutes  by viewModel.sleepTimerMinutes.collectAsState()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
-    val coverArt by viewModel.coverArtBitmap.collectAsState()
-    val chapters by viewModel.chapters.collectAsState()
-    val currentChapterIndex by viewModel.currentChapterIndex.collectAsState()
+    val coverArt           by viewModel.coverArtBitmap.collectAsState()
+    val chapters           by viewModel.chapters.collectAsState()
+    val currentChapterIdx  by viewModel.currentChapterIndex.collectAsState()
+    val historyItems       by viewModel.history.collectAsState()
 
-    var showSleepTimerDialog by remember { mutableStateOf(false) }
-    var showChaptersDialog by remember { mutableStateOf(false) }
-    var showHistoryDialog by remember { mutableStateOf(false) }
-    var showOverflowMenu by remember { mutableStateOf(false) }
-
-    // Not downloaded warning
     val isDownloaded = pair?.audiobookDownloaded == true
 
-    // Chapters dialog
-    if (showChaptersDialog) {
-        AlertDialog(
-            onDismissRequest = { showChaptersDialog = false },
-            title = { Text("Chapters") },
-            text = {
-                if (chapters.isEmpty()) {
-                    Text(
-                        "No chapters found in this file",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    LazyColumn {
-                        itemsIndexed(chapters) { index, chapter ->
-                            ListItem(
-                                headlineContent = { Text(chapter.title) },
-                                trailingContent = { Text(formatTime(chapter.startMs)) },
-                                modifier = Modifier.clickable {
-                                    viewModel.seekTo(chapter.startMs)
-                                    showChaptersDialog = false
-                                },
-                                colors = if (index == currentChapterIndex)
-                                    ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                                else ListItemDefaults.colors()
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showChaptersDialog = false }) { Text("Close") }
-            },
-        )
-    }
+    var showSleepSheet  by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var selectedTab     by remember { mutableStateOf(PlayerTab.CHAPTERS) }
 
-    // History dialog
-    if (showHistoryDialog) {
-        val historyItems by viewModel.history.collectAsState()
-        AlertDialog(
-            onDismissRequest = { showHistoryDialog = false },
-            title = { Text("Position History") },
-            text = {
-                if (historyItems.isEmpty()) {
-                    Text(
-                        "No history yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    LazyColumn {
-                        items(historyItems) { item ->
-                            ListItem(
-                                headlineContent = {
-                                    Text(
-                                        if (item.new_audio_position_ms != null)
-                                            "Audio: ${formatTime(item.new_audio_position_ms.toLong())}"
-                                        else "Chapter ${item.new_epub_chapter ?: "?"}"
-                                    )
-                                },
-                                supportingContent = {
-                                    Text("${item.source} · ${formatAbsoluteTime(item.changed_at)}")
-                                },
-                                leadingContent = {
-                                    Icon(
-                                        if (item.source == "audiobook") Icons.Default.Headphones
-                                        else Icons.AutoMirrored.Filled.MenuBook,
-                                        contentDescription = null
-                                    )
-                                },
-                                modifier = Modifier.clickable {
-                                    item.new_audio_position_ms?.let { ms ->
-                                        viewModel.seekTo(ms.toLong())
-                                        showHistoryDialog = false
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showHistoryDialog = false }) { Text("Close") }
-            },
-        )
-    }
-
-    // Sleep timer dialog
-    if (showSleepTimerDialog) {
-        AlertDialog(
-            onDismissRequest = { showSleepTimerDialog = false },
-            title = { Text("Sleep Timer") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (sleepTimerMinutes > 0) {
-                        Text(
-                            "Timer active: ${formatTime(sleepTimerRemainingMs)} remaining",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        FilledTonalButton(
-                            onClick = {
-                                viewModel.cancelSleepTimer()
-                                showSleepTimerDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Cancel Timer") }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    }
-                    listOf(15, 30, 45, 60).forEach { minutes ->
-                        TextButton(
-                            onClick = {
-                                viewModel.setSleepTimer(minutes)
-                                showSleepTimerDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("$minutes minutes") }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSleepTimerDialog = false }) { Text("Close") }
-            },
+    // Sleep-timer bottom sheet
+    if (showSleepSheet) {
+        SleepTimerSheet(
+            activeMinutes = sleepTimerMinutes,
+            remainingMs   = sleepTimerRemainingMs,
+            onSet         = { mins -> viewModel.setSleepTimer(mins); showSleepSheet = false },
+            onCancel      = { viewModel.cancelSleepTimer(); showSleepSheet = false },
+            onDismiss     = { showSleepSheet = false },
         )
     }
 
     Scaffold(
+        containerColor = colors.bgPrimary,
         topBar = {
             TopAppBar(
-                title = { Text("Now Playing") },
+                title = { Text("Now Playing", color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = colors.textPrimary)
                     }
                 },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgPrimary),
                 actions = {
-                    // Cast button — shows nearby Cast devices and active cast state
+                    // Chromecast button
                     AndroidView(
                         factory = { ctx ->
-                            MediaRouteButton(ctx).also { button ->
-                                CastButtonFactory.setUpMediaRouteButton(ctx, button)
+                            MediaRouteButton(ctx).also { btn ->
+                                CastButtonFactory.setUpMediaRouteButton(ctx, btn)
                             }
                         },
                         modifier = Modifier.size(48.dp),
                     )
-                    FilledTonalIconButton(onClick = {
-                        viewModel.stopAndSave()
-                        onSwitchToReader()
-                    }) {
-                        Icon(Icons.Default.AutoStories, "Switch to Reader")
+                    // Switch to Reader
+                    IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader() }) {
+                        Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
                     }
+                    // Overflow (Mark Complete / Reset Progress)
                     Box {
                         IconButton(onClick = { showOverflowMenu = true }) {
-                            Icon(Icons.Default.MoreVert, "More options")
+                            Icon(Icons.Default.MoreVert, "More options", tint = colors.textPrimary)
                         }
                         DropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false },
+                            containerColor = colors.bgSecondary,
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Mark Complete") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    viewModel.markComplete()
-                                    onBack()
-                                },
+                                text = { Text("Mark complete", color = colors.textPrimary) },
+                                onClick = { showOverflowMenu = false; viewModel.markComplete(); onBack() },
                             )
                             DropdownMenuItem(
-                                text = { Text("Reset Progress") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    viewModel.resetProgress()
-                                },
+                                text = { Text("Reset progress", color = colors.textPrimary) },
+                                onClick = { showOverflowMenu = false; viewModel.resetProgress() },
                             )
                         }
                     }
@@ -780,231 +670,394 @@ fun PlayerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(32.dp),
+                .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
         ) {
-            // Album art
-            Card(
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Cover art ────────────────────────────────────────────────────
+            Box(
                 modifier = Modifier
-                    .size(240.dp)
-                    .padding(bottom = 24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                ),
+                    .size(220.dp)
+                    .clip(Tandem.shapes.card)
+                    .background(colors.bgCard),
+                contentAlignment = Alignment.Center,
             ) {
                 if (coverArt != null) {
                     Image(
                         bitmap = coverArt!!.asImageBitmap(),
                         contentDescription = "Album Art",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(MaterialTheme.shapes.medium),
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
                 } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("🎧", fontSize = 64.sp)
-                    }
+                    Icon(
+                        Icons.Default.Headphones,
+                        contentDescription = null,
+                        tint = colors.textMuted,
+                        modifier = Modifier.size(64.dp),
+                    )
                 }
             }
 
-            // Title & Author
+            Spacer(Modifier.height(20.dp))
+
+            // ── Title & author ───────────────────────────────────────────────
             Text(
                 text = pair?.audiobookTitle ?: "Audiobook",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
+                maxLines = 2,
             )
             pair?.audiobookAuthor?.let { author ->
-                Text(
-                    text = author,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Spacer(Modifier.height(4.dp))
+                Text(text = author, color = colors.textSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
             }
-
-            Spacer(Modifier.height(8.dp))
 
             // Download warning
             if (!isDownloaded) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                    ),
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.input)
+                        .background(colors.statusError.copy(alpha = 0.15f))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "⚠️ Audiobook not downloaded. Download it first to play.",
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
+                    Icon(Icons.Default.Warning, null, tint = colors.statusError, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("Audiobook not downloaded — download it first.", color = colors.statusError, fontSize = 13.sp)
                 }
-                Spacer(Modifier.height(8.dp))
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
 
-            // Progress slider
+            // ── Progress slider ──────────────────────────────────────────────
             val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
             Slider(
                 value = progress,
                 onValueChange = { viewModel.seekTo((it * durationMs).toLong()) },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = isDownloaded,
+                colors = SliderDefaults.colors(
+                    thumbColor = colors.accent,
+                    activeTrackColor = colors.accent,
+                    inactiveTrackColor = colors.border,
+                ),
             )
-
-            // Time labels
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = formatTime(positionMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = formatTime(durationMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatTime(positionMs), color = colors.textSecondary, fontSize = 12.sp)
+                Text(formatTime(durationMs), color = colors.textSecondary, fontSize = 12.sp)
             }
 
             Spacer(Modifier.height(16.dp))
 
-            // Playback controls
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Chapter back
-                IconButton(
-                    onClick = { viewModel.skipToPreviousChapter() },
-                    enabled = isDownloaded && chapters.isNotEmpty()
-                ) {
-                    Icon(Icons.Default.SkipPrevious, "Previous Chapter", modifier = Modifier.size(28.dp))
-                }
-
-                IconButton(onClick = { viewModel.skipBackward(10) }, enabled = isDownloaded) {
-                    Icon(Icons.Default.Replay10, "Rewind 10s", modifier = Modifier.size(32.dp))
-                }
-
-                FilledIconButton(
-                    onClick = { viewModel.togglePlayback() },
-                    modifier = Modifier.size(64.dp),
-                    enabled = isDownloaded,
-                ) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        "Play/Pause",
-                        modifier = Modifier.size(32.dp),
-                    )
-                }
-
-                IconButton(onClick = { viewModel.skipForward(30) }, enabled = isDownloaded) {
-                    Icon(Icons.Default.Forward30, "Forward 30s", modifier = Modifier.size(32.dp))
-                }
-
-                // Chapter forward
-                IconButton(
-                    onClick = { viewModel.skipToNextChapter() },
-                    enabled = isDownloaded && chapters.isNotEmpty()
-                ) {
-                    Icon(Icons.Default.SkipNext, "Next Chapter", modifier = Modifier.size(28.dp))
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // Speed + Sleep Timer row
+            // ── Playback controls ────────────────────────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Speed button
-                FilledTonalButton(onClick = { viewModel.cycleSpeed() }, enabled = isDownloaded) {
-                    val speedText = if (speed % 1.0f == 0f) {
-                        "%.1f×".format(speed)
-                    } else {
-                        "${speed}×"
-                    }
-                    Text(speedText, fontWeight = FontWeight.Bold)
+                // Prev chapter
+                IconButton(
+                    onClick = { viewModel.skipToPreviousChapter() },
+                    enabled = isDownloaded && chapters.isNotEmpty(),
+                ) {
+                    Icon(Icons.Default.SkipPrevious, "Prev chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
 
-                // Sleep timer button
-                IconButton(
-                    onClick = { showSleepTimerDialog = true },
-                    enabled = isDownloaded,
+                // Replay 15 s
+                IconButton(onClick = { viewModel.skipBackward(15) }, enabled = isDownloaded) {
+                    Icon(Icons.Default.Replay, "Rewind 15s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
+                }
+
+                // Play / Pause FAB
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(if (isDownloaded) colors.accent else colors.border)
+                        .clickable(enabled = isDownloaded) { viewModel.togglePlayback() },
+                    contentAlignment = Alignment.Center,
                 ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+
+                // Forward 15 s
+                IconButton(onClick = { viewModel.skipForward(15) }, enabled = isDownloaded) {
+                    Icon(Icons.Default.Forward10, "Forward 15s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
+                }
+
+                // Next chapter
+                IconButton(
+                    onClick = { viewModel.skipToNextChapter() },
+                    enabled = isDownloaded && chapters.isNotEmpty(),
+                ) {
+                    Icon(Icons.Default.SkipNext, "Next chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ── Speed pill + Sleep timer ─────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Speed pill
+                val speedLabel = if (speed % 1.0f == 0f) "%.1f×".format(speed) else "${speed}×"
+                Box(
+                    modifier = Modifier
+                        .clip(Tandem.shapes.pill)
+                        .background(colors.bgCard)
+                        .clickable(enabled = isDownloaded) { viewModel.cycleSpeed() }
+                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(speedLabel, color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                Spacer(Modifier.width(24.dp))
+
+                // Sleep timer icon — tinted when active
+                IconButton(onClick = { showSleepSheet = true }, enabled = isDownloaded) {
                     Icon(
                         Icons.Default.NightsStay,
-                        contentDescription = "Sleep Timer",
-                        modifier = Modifier.size(28.dp),
-                        tint = if (sleepTimerMinutes > 0) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                        "Sleep timer",
+                        tint = if (sleepTimerMinutes > 0) colors.accent else colors.textSecondary,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
-
-                // Chapters button
-                IconButton(
-                    onClick = { showChaptersDialog = true },
-                    enabled = isDownloaded,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.FormatListBulleted,
-                        contentDescription = "Chapters",
-                        modifier = Modifier.size(28.dp),
-                    )
-                }
-
-                // History button
-                IconButton(
-                    onClick = {
-                        viewModel.loadHistory()
-                        showHistoryDialog = true
-                    },
-                    enabled = isDownloaded,
-                ) {
-                    Icon(
-                        Icons.Default.History,
-                        contentDescription = "History",
-                        modifier = Modifier.size(28.dp),
+                if (sleepTimerMinutes > 0) {
+                    Text(
+                        formatTime(sleepTimerRemainingMs),
+                        color = colors.accent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // Switch to reader CTA
-            OutlinedButton(
-                onClick = {
-                    viewModel.stopAndSave()
-                    onSwitchToReader()
+            // ── Chapters / History tabs ──────────────────────────────────────
+            TabRow(
+                selectedTabIndex = selectedTab.ordinal,
+                containerColor = colors.bgPrimary,
+                contentColor = colors.accent,
+                indicator = { tabPositions ->
+                    if (selectedTab.ordinal < tabPositions.size) {
+                        TabRowDefaults.SecondaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab.ordinal]),
+                            color = colors.accent,
+                        )
+                    }
                 },
-                modifier = Modifier.fillMaxWidth(),
             ) {
-                Icon(Icons.Default.AutoStories, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Switch to Reading")
+                PlayerTab.entries.forEach { tab ->
+                    Tab(
+                        selected = selectedTab == tab,
+                        onClick = {
+                            selectedTab = tab
+                            if (tab == PlayerTab.HISTORY) viewModel.loadHistory()
+                        },
+                        text = {
+                            Text(
+                                text = tab.name.lowercase().replaceFirstChar { it.uppercase() },
+                                color = if (selectedTab == tab) colors.accent else colors.textSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        },
+                    )
+                }
+            }
+
+            when (selectedTab) {
+                PlayerTab.CHAPTERS -> ChaptersTab(
+                    chapters = chapters,
+                    currentIndex = currentChapterIdx,
+                    colors = colors,
+                    onChapterClick = { chapter -> viewModel.seekTo(chapter.startMs) },
+                )
+                PlayerTab.HISTORY  -> HistoryTab(
+                    items = historyItems,
+                    colors = colors,
+                    onItemClick = { ms -> viewModel.seekTo(ms) },
+                )
             }
         }
     }
 }
+
+// ── Sub-composables ─────────────────────────────────────────────────────────
+
+@Composable
+private fun ChaptersTab(
+    chapters: List<Chapter>,
+    currentIndex: Int,
+    colors: com.booksync.ui.theme.TandemColors,
+    onChapterClick: (Chapter) -> Unit,
+) {
+    if (chapters.isEmpty()) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+            Text("No chapters found in this file", color = colors.textMuted, fontSize = 14.sp)
+        }
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        itemsIndexed(chapters) { index, chapter ->
+            val isActive = index == currentIndex
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(if (isActive) colors.accent.copy(alpha = 0.12f) else Color.Transparent)
+                    .clickable { onChapterClick(chapter) }
+                    .padding(horizontal = 4.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    chapter.title,
+                    color = if (isActive) colors.accent else colors.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(formatTime(chapter.startMs), color = colors.textMuted, fontSize = 12.sp)
+            }
+            HorizontalDivider(color = colors.border.copy(alpha = 0.5f), thickness = 0.5.dp)
+        }
+    }
+}
+
+@Composable
+private fun HistoryTab(
+    items: List<BookmarkLogResponse>,
+    colors: com.booksync.ui.theme.TandemColors,
+    onItemClick: (Long) -> Unit,
+) {
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+            Text("No history yet", color = colors.textMuted, fontSize = 14.sp)
+        }
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        items(items) { item ->
+            val posMs = item.new_audio_position_ms?.toLong()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = posMs != null) { posMs?.let(onItemClick) }
+                    .padding(horizontal = 4.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = if (item.source == "audiobook") Icons.Default.Headphones
+                                  else Icons.AutoMirrored.Filled.MenuBook,
+                    contentDescription = null,
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (posMs != null) formatTime(posMs) else "Chapter ${item.new_epub_chapter ?: "?"}",
+                        color = colors.textPrimary,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "${item.source} · ${formatAbsoluteTime(item.changed_at)}",
+                        color = colors.textMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            HorizontalDivider(color = colors.border.copy(alpha = 0.5f), thickness = 0.5.dp)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepTimerSheet(
+    activeMinutes: Int,
+    remainingMs: Long,
+    onSet: (Int) -> Unit,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = Tandem.colors
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = colors.bgSecondary,
+        shape = Tandem.shapes.modal,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.NightsStay, null, tint = colors.accent, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("Sleep timer", color = colors.textPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (activeMinutes > 0) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Active: ${formatTime(remainingMs)} remaining",
+                    color = colors.accent,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = Tandem.shapes.button,
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.statusError),
+                ) { Text("Cancel timer", color = Color.White) }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = colors.border)
+            } else {
+                Spacer(Modifier.height(8.dp))
+            }
+            listOf(5, 15, 30, 45, 60).forEach { minutes ->
+                TextButton(
+                    onClick = { onSet(minutes) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("$minutes minutes", color = colors.textPrimary, fontSize = 15.sp)
+                }
+            }
+        }
+    }
+}
+
+// ── Formatting helpers ───────────────────────────────────────────────────────
 
 private fun formatTime(ms: Long): String {
     val totalSeconds = (ms / 1000).toInt()
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
-    return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, seconds)
-    } else {
-        "%d:%02d".format(minutes, seconds)
-    }
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
+    else "%d:%02d".format(minutes, seconds)
 }
 
 /**
@@ -1020,9 +1073,8 @@ private fun formatAbsoluteTime(isoTimestamp: String): String {
         )
         val zonedUtc = utcTime.atZone(java.time.ZoneId.of("UTC"))
         val localTime = zonedUtc.withZoneSameInstant(java.time.ZoneId.systemDefault())
-        val formatter = DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault())
-        localTime.format(formatter)
+        localTime.format(DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault()))
     } catch (_: Exception) {
-        isoTimestamp // fallback: show raw timestamp
+        isoTimestamp
     }
 }

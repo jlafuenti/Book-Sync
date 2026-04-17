@@ -1,5 +1,7 @@
 package com.booksync.data.remote
 
+import com.booksync.data.remote.dto.QueueItemResponse
+import com.booksync.data.remote.dto.TranscriptionStatusResponse
 import okhttp3.MultipartBody
 import retrofit2.Response
 import retrofit2.http.*
@@ -25,6 +27,9 @@ interface BookSyncApi {
 
     @PUT("api/auth/me")
     suspend fun updateMe(@Body request: UpdateMeRequest): UserResponse
+
+    @POST("api/auth/change-password")
+    suspend fun changePassword(@Body request: PasswordChangeRequest): Response<Unit>
 
     // ============ Library ============
 
@@ -97,4 +102,22 @@ interface BookSyncApi {
         @Path("mediaId") mediaId: Int,
         @Body update: ProgressUpdateRequest
     ): ProgressResponse
+
+    // ============ Transcription ============
+
+    /** Add a book pair to the transcription queue (user-role endpoint). */
+    @POST("api/transcription/{pairId}/start")
+    suspend fun startTranscription(@Path("pairId") pairId: Int): QueueItemResponse
+
+    /** Get transcription status for a specific pair (status + optional progress). */
+    @GET("api/transcription/{pairId}/status")
+    suspend fun getTranscriptionStatus(@Path("pairId") pairId: Int): TranscriptionStatusResponse
+
+    /** Cancel an in-progress or queued transcription job for this pair. */
+    @POST("api/transcription/{pairId}/cancel")
+    suspend fun cancelTranscription(@Path("pairId") pairId: Int): QueueItemResponse
+
+    /** List all active queue items (pending + processing). Used by Home "In Queue" section. */
+    @GET("api/transcription/queue")
+    suspend fun getTranscriptionQueue(): List<QueueItemResponse>
 }

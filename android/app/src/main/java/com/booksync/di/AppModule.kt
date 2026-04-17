@@ -8,6 +8,8 @@ import androidx.room.Room
 import com.booksync.data.local.BookSyncDatabase
 import com.booksync.data.local.dao.*
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.repository.TranscriptionRepository
+import com.booksync.data.util.NetworkMonitor
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
 import dagger.Provides
@@ -116,4 +118,16 @@ object AppModule {
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
         context.dataStore
+
+    @Provides
+    @Singleton
+    fun provideNetworkMonitor(@ApplicationContext context: Context): NetworkMonitor =
+        NetworkMonitor(context)
+
+    @Provides
+    @Singleton
+    fun provideTranscriptionRepository(
+        api: BookSyncApi,
+        networkMonitor: NetworkMonitor,
+    ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor)
 }
