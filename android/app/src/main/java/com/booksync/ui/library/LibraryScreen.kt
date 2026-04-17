@@ -305,10 +305,10 @@ private fun FilterPillRow(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FilterPill("All",        active == LibraryFilter.ALL)        { onPick(LibraryFilter.ALL) }
-        FilterPill("Pairs",      active == LibraryFilter.PAIRS)      { onPick(LibraryFilter.PAIRS) }
-        FilterPill("Ebooks",     active == LibraryFilter.EBOOKS)     { onPick(LibraryFilter.EBOOKS) }
-        FilterPill("Audiobooks", active == LibraryFilter.AUDIOBOOKS) { onPick(LibraryFilter.AUDIOBOOKS) }
+        FilterPill("All",        active == LibraryFilter.ALL,        onClick = { onPick(LibraryFilter.ALL) })
+        FilterPill("Pairs",      active == LibraryFilter.PAIRS,      onClick = { onPick(LibraryFilter.PAIRS) })
+        FilterPill("Ebooks",     active == LibraryFilter.EBOOKS,     onClick = { onPick(LibraryFilter.EBOOKS) })
+        FilterPill("Audiobooks", active == LibraryFilter.AUDIOBOOKS, onClick = { onPick(LibraryFilter.AUDIOBOOKS) })
         FilterPill(
             label = "New",
             selected = active == LibraryFilter.NEW,
