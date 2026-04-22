@@ -2,10 +2,18 @@ package com.booksync.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.TranscriptionRepository
+import com.booksync.data.util.NetworkMonitor
+import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -62,7 +70,24 @@ data class HomeQueueItem(
 class HomeViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val transcriptionRepository: TranscriptionRepository,
+    private val workManager: WorkManager,
+    networkMonitor: NetworkMonitor,
 ) : ViewModel() {
+
+    /** Mirrors NetworkMonitor so the overflow sheet can disable offline-only actions. */
+    val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
+
+    /** One-shot snackbar messages from transcription actions. */
+    private val _transcriptionMessage = MutableStateFlow<String?>(null)
+    val transcriptionMessage: StateFlow<String?> = _transcriptionMessage.asStateFlow()
+    fun clearTranscriptionMessage() { _transcriptionMessage.value = null }
+
+    /** Pair IDs currently queued/transcribing on the server, used to drive the overflow
+     *  sheet's Transcribe-vs-Cancel choice for pairs that aren't in the local DB as synced. */
+    val activeTxPairIds: StateFlow<Set<Int>> =
+        transcriptionRepository.activeQueueItemsFlow()
+            .map { list -> list.map { it.book_pair_id }.toSet() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
     // --- Continue Reading ---------------------------------------------------
     private val _continueItems = MutableStateFlow<List<HomeItem>>(emptyList())
@@ -165,6 +190,85 @@ class HomeViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    // =======================================================================
+    // Overflow-menu actions. Kept intentionally minimal — everything delegates
+    // to the same repository / WorkManager / transcription-repo LibraryViewModel
+    // uses, so behavior stays consistent across Home and Library.
+    // =======================================================================
+
+    fun downloadEbook(pair: BookPairEntity)     = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")
+    fun downloadAudiobook(pair: BookPairEntity) = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
+    fun refreshSyncData(pair: BookPairEntity)   = enqueue(pair.id, "SYNC_MAP",  "download_sync_${pair.id}")
+
+    fun downloadStandaloneEbook(ebook: EBookEntity) =
+        enqueue(ebook.id, "STANDALONE_EBOOK", "download_standalone_ebook_${ebook.id}")
+
+    fun downloadStandaloneAudiobook(audio: AudioBookEntity) =
+        enqueue(audio.id, "STANDALONE_AUDIOBOOK", "download_standalone_audio_${audio.id}")
+
+    private fun enqueue(id: Int, type: String, uniqueName: String) {
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to id,
+                DownloadWorker.KEY_TYPE    to type,
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    fun deleteEbookOf(pair: BookPairEntity)               = runSafely { repository.deleteEbook(pair) }
+    fun deleteAudiobookOf(pair: BookPairEntity)           = runSafely { repository.deleteAudiobook(pair) }
+    fun deleteStandaloneEbook(ebook: EBookEntity)         = runSafely { repository.deleteStandaloneEbook(ebook) }
+    fun deleteStandaloneAudiobook(audio: AudioBookEntity) = runSafely { repository.deleteStandaloneAudiobook(audio) }
+    fun unlinkPair(pair: BookPairEntity)                  = runSafely { repository.deletePair(pair.id) }
+
+    fun markComplete(pair: BookPairEntity) = runSafely {
+        repository.markComplete("audiobook", pair.audiobookId)
+        repository.markComplete("ebook", pair.ebookId)
+    }
+    fun markCompleteEbook(id: Int)     = runSafely { repository.markComplete("ebook", id) }
+    fun markCompleteAudiobook(id: Int) = runSafely { repository.markComplete("audiobook", id) }
+
+    fun resetProgress(pair: BookPairEntity) = runSafely {
+        repository.resetMediaProgress("audiobook", pair.audiobookId)
+        repository.resetMediaProgress("ebook", pair.ebookId)
+    }
+    fun resetProgressEbook(id: Int)     = runSafely { repository.resetMediaProgress("ebook", id) }
+    fun resetProgressAudiobook(id: Int) = runSafely { repository.resetMediaProgress("audiobook", id) }
+
+    fun addToTranscriptionQueue(pair: BookPairEntity) {
+        viewModelScope.launch {
+            transcriptionRepository.addToQueue(pair.id)
+                .onSuccess { _transcriptionMessage.value = "Added to transcription queue" }
+                .onFailure { e ->
+                    _transcriptionMessage.value = when (e) {
+                        is TranscriptionRepository.OfflineException -> "Connect to server to transcribe"
+                        else -> "Failed to add to queue: ${e.message ?: "unknown error"}"
+                    }
+                }
+        }
+    }
+
+    fun cancelTranscription(pair: BookPairEntity) {
+        viewModelScope.launch {
+            transcriptionRepository.cancel(pair.id)
+                .onSuccess { _transcriptionMessage.value = "Transcription cancelled" }
+                .onFailure { e ->
+                    _transcriptionMessage.value = when (e) {
+                        is TranscriptionRepository.OfflineException -> "Connect to server to cancel"
+                        else -> "Failed to cancel: ${e.message ?: "unknown error"}"
+                    }
+                }
+        }
+    }
+
+    private inline fun runSafely(crossinline block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try { block() } catch (_: Exception) { /* swallowed — UI surfaces via other flows */ }
         }
     }
 }

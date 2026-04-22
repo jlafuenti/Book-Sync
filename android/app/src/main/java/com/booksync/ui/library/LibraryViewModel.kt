@@ -203,9 +203,11 @@ class LibraryViewModel @Inject constructor(
             }
         }
 
-        // Step 2 — transcribed-only filter (pairs only; standalone items pass through)
+        // Step 2 — transcribed-only filter (pairs only; standalone items pass through).
+        // Uses server-side status rather than local cache so the filter is useful
+        // before the user has downloaded anything.
         val transcribedFiltered = if (ui.transcribedOnly) {
-            filtered.filter { it.pair == null || it.pair.syncMapDownloaded }
+            filtered.filter { it.pair == null || it.pair.status == "synced" }
         } else filtered
 
         // Step 3 — series drill-in

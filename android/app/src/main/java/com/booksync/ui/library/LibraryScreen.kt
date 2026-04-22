@@ -599,7 +599,7 @@ private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = wh
 
 /** Status badge rule: transcribed pairs → Synced; unacknowledged → NEW; else null. */
 private fun LibraryItem.defaultBadge(): BadgeStatus? = when {
-    pair?.syncMapDownloaded == true -> BadgeStatus.Synced
+    pair?.status == "synced" -> BadgeStatus.Synced
     else -> null
 }
 
@@ -610,8 +610,10 @@ private fun LibraryItem.toOverflowTarget(activeTxPairIds: Set<Int> = emptySet())
         subtitle = pair.ebookAuthor ?: pair.audiobookAuthor,
         hasEbookDownloaded = pair.ebookDownloaded,
         hasAudiobookDownloaded = pair.audiobookDownloaded,
-        isTranscribed = pair.syncMapDownloaded,
-        isQueuedOrTranscribing = pair.id in activeTxPairIds,
+        // Server-side transcription state. Pair.status "synced" == transcription
+        // exists on the server; syncMapDownloaded only tracks the local cache.
+        isTranscribed = pair.status == "synced",
+        isQueuedOrTranscribing = pair.id in activeTxPairIds || pair.status == "transcribing",
         isComplete = false,
     )
     ebook != null -> OverflowTarget.Ebook(
@@ -660,7 +662,9 @@ private fun buildOverflowActions(
             // so the sheet itself decides which action to render — just wire all three.
             onTranscribe           = pair?.let { { vm.addToTranscriptionQueue(it) } },
             onCancelTranscription  = pair?.let { { vm.cancelTranscription(it) } },
-            onRefreshSyncData = pair?.takeIf { it.syncMapDownloaded }?.let { { vm.refreshSyncData(it) } },
+            // Transcribed pairs get "Refresh sync data" — re-downloads the sync map
+            // whether or not we already had one cached locally.
+            onRefreshSyncData = pair?.let { { vm.refreshSyncData(it) } },
             onMarkComplete    = pair?.let { { vm.markComplete(it) } },
             onResetProgress   = pair?.let { { vm.resetProgress(it) } },
             onUnlinkPair      = pair?.let { { vm.unlinkPair(it) } },
