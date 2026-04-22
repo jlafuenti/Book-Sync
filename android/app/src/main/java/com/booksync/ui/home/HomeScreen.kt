@@ -289,19 +289,12 @@ private fun PairRow(
         items(pairs, key = { it.id }) { pair ->
             val coverModel = remember(pair.audiobookId, pair.audiobookCoverPath) {
                 val localFile = File(context.filesDir, "covers/${pair.audiobookId}.jpg")
-                val resolved = when {
+                when {
                     localFile.exists() -> localFile
                     pair.audiobookCoverPath != null ->
                         "${BuildConfig.SERVER_BASE_URL}${pair.audiobookCoverPath}"
                     else -> null
                 }
-                android.util.Log.d(
-                    "CoverDebug",
-                    "pair#${pair.id} title='${pair.ebookTitle}' " +
-                        "coverPath=${pair.audiobookCoverPath} " +
-                        "localExists=${localFile.exists()} resolved=$resolved"
-                )
-                resolved
             }
             Box(modifier = Modifier.width(140.dp)) {
                 BookCard(
@@ -312,7 +305,8 @@ private fun PairRow(
                         coverImageModel = coverModel,
                         hasEbookDownloaded = pair.ebookDownloaded,
                         hasAudiobookDownloaded = pair.audiobookDownloaded,
-                        hasMismatchWarning = pair.hasMetadataMismatch(),
+                        // Plan: mismatch warning appears only in the "New Pairs" section.
+                        hasMismatchWarning = showNewBadge && pair.hasMetadataMismatch(),
                     ),
                     onClick = { onPairClick(pair) },
                     onOverflow = { /* overflow wired via LibraryScreen in Phase D */ },
@@ -378,6 +372,15 @@ private fun BookPairEntity.hasMetadataMismatch(): Boolean {
     val titleDiffers = ebookTitle.trim().equals(audiobookTitle.trim(), ignoreCase = true).not()
     val authorDiffers = ebookAuthor?.trim().equals(audiobookAuthor?.trim(), ignoreCase = true).not() &&
         ebookAuthor != null && audiobookAuthor != null
-    return titleDiffers || authorDiffers
+    val mismatch = titleDiffers || authorDiffers
+    if (mismatch) {
+        android.util.Log.d(
+            "MismatchDebug",
+            "pair#$id titleDiffers=$titleDiffers authorDiffers=$authorDiffers " +
+                "ebookTitle='$ebookTitle' audiobookTitle='$audiobookTitle' " +
+                "ebookAuthor='$ebookAuthor' audiobookAuthor='$audiobookAuthor'"
+        )
+    }
+    return mismatch
 }
 
