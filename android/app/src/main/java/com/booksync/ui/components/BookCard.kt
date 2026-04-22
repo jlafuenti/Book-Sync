@@ -33,7 +33,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -99,8 +101,8 @@ fun BookCard(
     onOverflow: () -> Unit,
     modifier: Modifier = Modifier,
     status: BadgeStatus? = null,
-    progress: Float? = null,            // 0.0..1.0 reading/listening progress
-    downloadPercent: Int? = null,       // overrides status+progress while downloading
+    progress: Float? = null,                             // 0.0..1.0 reading/listening progress
+    downloadPercent: Int? = null,                        // overrides status+progress while downloading
 ) {
     val colors = Tandem.colors
     val shapes = Tandem.shapes
@@ -256,6 +258,7 @@ private fun BoxScope.CoverOrPlaceholder(
     fallbackIcon: androidx.compose.ui.graphics.vector.ImageVector,
 ) {
     val colors = Tandem.colors
+    val context = LocalContext.current
     // Gradient placeholder — always drawn first; covered by the image once Coil loads it.
     Box(
         modifier = Modifier
@@ -280,7 +283,10 @@ private fun BoxScope.CoverOrPlaceholder(
     // Coil image overlays the placeholder; if it fails to load, placeholder remains visible.
     if (coverModel != null) {
         AsyncImage(
-            model = coverModel,
+            model = ImageRequest.Builder(context)
+                .data(coverModel)
+                .crossfade(true)
+                .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -294,6 +300,7 @@ private fun BoxScope.SeriesStackCovers(covers: List<Any?>) {
     val rotations = listOf(-8f, -2f, 6f)
     val offsets = listOf(-14f, 0f, 14f)
     val padded = (covers + List(3) { null }).take(3)
+    val context = LocalContext.current
 
     padded.forEachIndexed { i, model ->
         Box(
@@ -316,7 +323,10 @@ private fun BoxScope.SeriesStackCovers(covers: List<Any?>) {
             )
             if (model != null) {
                 AsyncImage(
-                    model = model,
+                    model = ImageRequest.Builder(context)
+                        .data(model)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
