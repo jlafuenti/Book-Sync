@@ -1,5 +1,6 @@
 package com.booksync.ui.home
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
@@ -15,6 +16,7 @@ import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -70,9 +72,11 @@ data class HomeQueueItem(
 class HomeViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val transcriptionRepository: TranscriptionRepository,
-    private val workManager: WorkManager,
     networkMonitor: NetworkMonitor,
+    @param:ApplicationContext context: Context,
 ) : ViewModel() {
+
+    private val workManager = WorkManager.getInstance(context)
 
     /** Mirrors NetworkMonitor so the overflow sheet can disable offline-only actions. */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline

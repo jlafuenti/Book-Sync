@@ -93,6 +93,10 @@ data class PendingSyncEntity(
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
     val epubLocator: String? = null,
+    // Persisted so the SyncWorker's flushed request carries the same
+    // history-log flag the original write intended. False for heartbeat
+    // position saves, true for pause/stop/30-min-tick saves.
+    val appendToLog: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
 

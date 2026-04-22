@@ -83,6 +83,9 @@ class AudioPlayerService : MediaLibraryService() {
         private const val PREF_LAST_MEDIA_ID = "last_media_id"
         private const val PREF_LAST_SAVED_AT = "last_position_saved_at"
         private const val AUTO_SAVE_INTERVAL_MS = 5_000L
+        // Write a history-log entry every 30 min of continuous playback
+        // (in addition to pause/stop boundaries). Keeps the history tab scannable.
+        private const val AUTO_LOG_INTERVAL_MS = 30L * 60L * 1000L
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -95,6 +98,11 @@ class AudioPlayerService : MediaLibraryService() {
     private var exoPlayer: Player? = null
     private var sleepTimerJob: Job? = null
     private var autoPositionSaveJob: Job? = null
+    // Last time we wrote a history-log entry (appendToLog=true). Updated on pause,
+    // track-end, service destroy, cast session transitions, and the 30-min tick.
+    // Only advanced while isPlaying (the polling loop only runs then), so pauses
+    // naturally freeze the 30-min clock.
+    private var lastAutoLogTimeMs = 0L
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
@@ -131,7 +139,17 @@ class AudioPlayerService : MediaLibraryService() {
                     startAutoPositionSave()
                 } else {
                     stopAutoPositionSave()
-                    saveCurrentPositionForAuto()
+                    // Pause is a session boundary — log it. Also covers the
+                    // sleep-timer path, which drops playWhenReady to false.
+                    saveCurrentPositionForAuto(appendToLog = true)
+                }
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // Track/audiobook reached its natural end (fires on both
+                // ExoPlayer and CastPlayer since the same listener is attached
+                // to both). Log as a session boundary.
+                if (playbackState == Player.STATE_ENDED) {
+                    saveCurrentPositionForAuto(appendToLog = true)
                 }
             }
         }
@@ -228,6 +246,10 @@ class AudioPlayerService : MediaLibraryService() {
         val player = mediaLibrarySession?.player
         if (player != null) {
             saveLastPosition(player.currentPosition, player.currentMediaItem?.mediaId)
+            // Note: we don't log a history entry here. If the player was
+            // playing, the OS will stop it → onIsPlayingChanged(false) logs.
+            // If it was already paused, that pause already logged. Adding
+            // a log here would double-log in the common "pause, close app" flow.
             if (!player.playWhenReady) {
                 stopSelf()
             }
@@ -269,7 +291,8 @@ class AudioPlayerService : MediaLibraryService() {
         val currentPlayer = session.player
         if (currentPlayer === newPlayer) return
 
-        if (savePosition) saveCurrentPositionForAuto()
+        // Every cast transition is a session boundary — log it when saving.
+        if (savePosition) saveCurrentPositionForAuto(appendToLog = true)
 
         val currentItem = currentPlayer.currentMediaItem
         val positionMs = currentPlayer.currentPosition
@@ -361,14 +384,20 @@ class AudioPlayerService : MediaLibraryService() {
 
     /**
      * Saves the current playback position to the local database.
-     * Called every AUTO_SAVE_INTERVAL_MS while playing and immediately on pause/disconnect.
-     * This is the Auto counterpart to the phone app's PlayerViewModel 5-second save loop.
+     * Called every AUTO_SAVE_INTERVAL_MS while playing and on pause/stop boundaries.
+     * This is the Auto counterpart to the phone app's PlayerViewModel save loop.
+     *
+     * @param appendToLog false for 5-second heartbeat saves (position-only, no
+     *   history entry). True on pause / stop / 30-min-tick / cast transitions —
+     *   those produce a BookmarkLog row and reset the continuous-playback timer.
      */
-    private fun saveCurrentPositionForAuto() {
+    private fun saveCurrentPositionForAuto(appendToLog: Boolean = false) {
         val player = mediaLibrarySession?.player ?: return
         val mediaId = player.currentMediaItem?.mediaId ?: return
         val posMs = player.currentPosition.toInt()
         if (posMs <= 0) return
+
+        if (appendToLog) lastAutoLogTimeMs = System.currentTimeMillis()
 
         serviceScope.launch {
             try {
@@ -378,10 +407,13 @@ class AudioPlayerService : MediaLibraryService() {
                         repository.updateBookmark(
                             pairId = pairId,
                             source = "audiobook",
-                            audioPositionMs = posMs
+                            audioPositionMs = posMs,
+                            appendToLog = appendToLog,
                         )
                     }
                     mediaId.startsWith("audiobook_") -> {
+                        // Standalone audiobooks: no pair → no bookmark_log entry to
+                        // worry about. updateProgress only writes UserProgress.
                         val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
                         repository.updateProgress(
                             mediaType = "audiobook",
@@ -401,7 +433,15 @@ class AudioPlayerService : MediaLibraryService() {
         autoPositionSaveJob = serviceScope.launch {
             while (true) {
                 delay(AUTO_SAVE_INTERVAL_MS)
-                saveCurrentPositionForAuto()
+                // Heartbeat: keep bookmark position fresh, no history entry.
+                saveCurrentPositionForAuto(appendToLog = false)
+                // 30-min continuous-playback tick: write a single history entry
+                // and reset the timer. Only reached while isPlaying (the loop is
+                // torn down by stopAutoPositionSave on pause), so pauses freeze
+                // the clock automatically.
+                if (System.currentTimeMillis() - lastAutoLogTimeMs >= AUTO_LOG_INTERVAL_MS) {
+                    saveCurrentPositionForAuto(appendToLog = true)
+                }
             }
         }
     }

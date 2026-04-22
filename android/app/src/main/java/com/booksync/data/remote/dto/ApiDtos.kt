@@ -146,7 +146,11 @@ data class BookmarkUpdateRequest(
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
-    val epub_locator: String? = null
+    val epub_locator: String? = null,
+    // When false (default), server updates the bookmark but does NOT append
+    // a BookmarkLog row. Clients set true only on pause / stop / 30-min
+    // boundaries. Mirrors server BookmarkUpdate.append_to_log.
+    val append_to_log: Boolean = false
 )
 
 @Serializable
