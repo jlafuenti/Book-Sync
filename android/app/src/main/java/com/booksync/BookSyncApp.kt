@@ -48,29 +48,6 @@ class BookSyncApp : Application(), Configuration.Provider {
             ImageLoader.Builder(this)
                 .okHttpClient(okHttpClient)
                 .crossfade(true)
-                .eventListener(object : coil.EventListener {
-                    override fun onStart(request: coil.request.ImageRequest) {
-                        Log.d("CoilDebug", "onStart data=${request.data}")
-                    }
-                    override fun onSuccess(
-                        request: coil.request.ImageRequest,
-                        result: coil.request.SuccessResult
-                    ) {
-                        Log.d("CoilDebug", "onSuccess data=${request.data} source=${result.dataSource}")
-                    }
-                    override fun onError(
-                        request: coil.request.ImageRequest,
-                        result: coil.request.ErrorResult
-                    ) {
-                        Log.w(
-                            "CoilDebug",
-                            "onError data=${request.data} err=${result.throwable::class.simpleName}: ${result.throwable.message}"
-                        )
-                    }
-                    override fun onCancel(request: coil.request.ImageRequest) {
-                        Log.d("CoilDebug", "onCancel data=${request.data}")
-                    }
-                })
                 .build()
         }
 
