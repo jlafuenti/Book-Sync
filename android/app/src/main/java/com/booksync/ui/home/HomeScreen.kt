@@ -289,12 +289,19 @@ private fun PairRow(
         items(pairs, key = { it.id }) { pair ->
             val coverModel = remember(pair.audiobookId, pair.audiobookCoverPath) {
                 val localFile = File(context.filesDir, "covers/${pair.audiobookId}.jpg")
-                when {
+                val resolved = when {
                     localFile.exists() -> localFile
                     pair.audiobookCoverPath != null ->
                         "${BuildConfig.SERVER_BASE_URL}${pair.audiobookCoverPath}"
                     else -> null
                 }
+                android.util.Log.d(
+                    "CoverDebug",
+                    "pair#${pair.id} title='${pair.ebookTitle}' " +
+                        "coverPath=${pair.audiobookCoverPath} " +
+                        "localExists=${localFile.exists()} resolved=$resolved"
+                )
+                resolved
             }
             Box(modifier = Modifier.width(140.dp)) {
                 BookCard(

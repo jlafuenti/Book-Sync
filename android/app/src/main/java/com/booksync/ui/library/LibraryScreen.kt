@@ -498,13 +498,19 @@ private fun ItemGrid(
             val coverPath   = item.pair?.audiobookCoverPath ?: item.audiobook?.coverFilename
             val coverModel = remember(audiobookId, coverPath) {
                 val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
-                when {
+                val resolved = when {
                     localFile != null && localFile.exists() -> localFile
                     coverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
                         "${BuildConfig.SERVER_BASE_URL}$coverPath"
                     else -> null
                 }
+                android.util.Log.d(
+                    "CoverDebug",
+                    "lib key=${item.key} audiobookId=$audiobookId coverPath=$coverPath " +
+                        "localExists=${localFile?.exists()} resolved=$resolved"
+                )
+                resolved
             }
             val variant = item.toVariant(coverModel)
             val dlPct: Int? = item.pair?.id?.let { downloadingPercent[it] }
