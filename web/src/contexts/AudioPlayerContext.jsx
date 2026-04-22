@@ -1,7 +1,12 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken } from '../api'
+import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendBookmarkKeepalive } from '../api'
 
 const AudioPlayerContext = createContext(null)
+
+// Write a history-log entry every 30 min of continuous playback (in addition
+// to pause / stop / ended boundaries). Keeps the Session History panel clean —
+// a 1-hour uninterrupted session logs ~2 entries instead of ~720.
+const LOG_INTERVAL_MS = 30 * 60 * 1000
 
 export function useAudioPlayer() {
     return useContext(AudioPlayerContext)
@@ -11,6 +16,13 @@ export function AudioPlayerProvider({ children }) {
     const audioRef = useRef(null)
     const saveIntervalRef = useRef(null)
     const sleepTimerRef = useRef(null)
+    // Last time we wrote a history-log entry (append_to_log=true). Updated on
+    // pause, ended, 30-min tick, and beforeunload. Only advanced while playing,
+    // so pauses freeze the 30-min clock.
+    const lastLogTimeRef = useRef(0)
+    // Latest audiobook / timing refs so the beforeunload handler can read
+    // current state without re-binding the listener on every state change.
+    const currentAudiobookRef = useRef(null)
 
     const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
     const [pairedEbookId, setPairedEbookId] = useState(null)
@@ -38,6 +50,17 @@ export function AudioPlayerProvider({ children }) {
                     is_completed: true,
                     device_id: 'web',
                 }).catch(() => {})
+                // Log a "finished" history entry so the audiobook's last session
+                // is visible in Session History.
+                if (currentAudiobook.pairId && audio) {
+                    const posMs = Math.floor(audio.currentTime * 1000)
+                    updateBookmark(currentAudiobook.pairId, {
+                        source: 'audiobook',
+                        audio_position_ms: posMs,
+                        append_to_log: true,
+                    }).catch(() => {})
+                    lastLogTimeRef.current = Date.now()
+                }
             }
         }
 
@@ -58,24 +81,46 @@ export function AudioPlayerProvider({ children }) {
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Auto-save progress every 5s while playing
+    // Keep the latest audiobook in a ref so the beforeunload handler can read
+    // it without having to re-bind every time it changes.
+    useEffect(() => {
+        currentAudiobookRef.current = currentAudiobook
+    }, [currentAudiobook])
+
+    // Auto-save progress every 5s while playing. Heartbeat keeps the bookmark
+    // position fresh so a crash / tab close costs at most a few seconds of
+    // listening. The 5s cadence WAS also clogging the history log; now the
+    // history entry is gated on `append_to_log`, which only flips true once
+    // every 30 min of continuous playback (pauses freeze the timer because
+    // this interval stops running when `playing` goes false).
     useEffect(() => {
         if (saveIntervalRef.current) clearInterval(saveIntervalRef.current)
 
         if (playing && currentAudiobook) {
+            // Seed the log timer so the first log entry lands 30 min into the
+            // session, not immediately on resume.
+            if (lastLogTimeRef.current === 0) {
+                lastLogTimeRef.current = Date.now()
+            }
             saveIntervalRef.current = setInterval(() => {
                 const audio = audioRef.current
                 if (audio && currentAudiobook) {
                     const posMs = Math.floor(audio.currentTime * 1000)
+                    // UserProgress heartbeat — untouched, doesn't feed the history view.
                     updateProgress('audiobook', currentAudiobook.id, {
                         audio_position_ms: posMs,
                         book_pair_id: currentAudiobook.pairId || undefined,
                         device_id: 'web',
                     }).catch(() => {})
                     if (currentAudiobook.pairId) {
+                        // One heartbeat per tick; flip append_to_log only when the
+                        // 30-min continuous-playback threshold has been crossed.
+                        const shouldLog = Date.now() - lastLogTimeRef.current >= LOG_INTERVAL_MS
+                        if (shouldLog) lastLogTimeRef.current = Date.now()
                         updateBookmark(currentAudiobook.pairId, {
                             source: 'audiobook',
                             audio_position_ms: posMs,
+                            append_to_log: shouldLog,
                         }).catch(() => {})
                     }
                 }
@@ -86,6 +131,31 @@ export function AudioPlayerProvider({ children }) {
             if (saveIntervalRef.current) clearInterval(saveIntervalRef.current)
         }
     }, [playing, currentAudiobook])
+
+    // Final history entry when the tab closes / reloads. Regular fetch is
+    // aborted during unload, so we use the keepalive helper that sends the
+    // request in the background. sendBeacon can't be used here because the
+    // bookmark endpoint is PUT, not POST.
+    useEffect(() => {
+        const onUnload = () => {
+            const audio = audioRef.current
+            const ab = currentAudiobookRef.current
+            if (!ab?.pairId || !audio) return
+            const posMs = Math.floor(audio.currentTime * 1000)
+            sendBookmarkKeepalive(ab.pairId, {
+                source: 'audiobook',
+                audio_position_ms: posMs,
+                append_to_log: true,
+            })
+        }
+        // pagehide fires more reliably than beforeunload on mobile Safari.
+        window.addEventListener('pagehide', onUnload)
+        window.addEventListener('beforeunload', onUnload)
+        return () => {
+            window.removeEventListener('pagehide', onUnload)
+            window.removeEventListener('beforeunload', onUnload)
+        }
+    }, [])
 
     const play = useCallback((audiobookId, audiobook, positionMs = 0, pairedEbookIdArg = null) => {
         setPairedEbookId(pairedEbookIdArg)
@@ -129,7 +199,8 @@ export function AudioPlayerProvider({ children }) {
 
     const pause = useCallback(() => {
         audioRef.current?.pause()
-        // Save position immediately on pause
+        // Save position immediately on pause. Pause is a session boundary —
+        // log a history entry and reset the 30-min continuous-playback timer.
         if (currentAudiobook && audioRef.current) {
             const posMs = Math.floor(audioRef.current.currentTime * 1000)
             updateProgress('audiobook', currentAudiobook.id, {
@@ -141,7 +212,9 @@ export function AudioPlayerProvider({ children }) {
                 updateBookmark(currentAudiobook.pairId, {
                     source: 'audiobook',
                     audio_position_ms: posMs,
+                    append_to_log: true,
                 }).catch(() => {})
+                lastLogTimeRef.current = Date.now()
             }
         }
     }, [currentAudiobook])

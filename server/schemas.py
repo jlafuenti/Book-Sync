@@ -273,6 +273,11 @@ class BookmarkUpdate(BaseModel):
     epub_chapter: Optional[int] = None
     epub_sentence_index: Optional[int] = None
     audio_position_ms: Optional[int] = None
+    # When False (default), the bookmark is updated but no BookmarkLog row is
+    # appended. Clients set this to True only on meaningful session boundaries:
+    # pause, stop (track ended, player closed, cast session ends), or every
+    # 30 minutes of continuous playback. Keeps the history tab scannable.
+    append_to_log: bool = False
 
 
 class TextMatchRequest(BaseModel):
