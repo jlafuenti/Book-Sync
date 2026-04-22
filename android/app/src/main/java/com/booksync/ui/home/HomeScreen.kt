@@ -26,10 +26,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,7 +49,10 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
+import com.booksync.ui.components.CardOverflowMenu
 import com.booksync.ui.components.EmptyState
+import com.booksync.ui.components.OverflowActions
+import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.theme.Tandem
 
 /**
@@ -71,13 +79,28 @@ fun HomeScreen(
     val recentlyAdded by viewModel.recentlyAdded.collectAsState()
     val newPairs by viewModel.newPairs.collectAsState()
     val queueItems by viewModel.queueItems.collectAsState()
+    val activeTxPairIds by viewModel.activeTxPairIds.collectAsState()
 
     val allEmpty = continueItems.isEmpty() &&
         recentlyAdded.isEmpty() &&
         newPairs.isEmpty() &&
         queueItems.isEmpty()
 
+    // Overflow sheet state — set when a card's three-dots is tapped.
+    var overflowTarget by remember { mutableStateOf<OverflowTarget?>(null) }
+
+    // Snackbar host for transcription-action feedback.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val transcriptionMessage by viewModel.transcriptionMessage.collectAsState()
+    LaunchedEffect(transcriptionMessage) {
+        transcriptionMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearTranscriptionMessage()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
@@ -134,7 +157,13 @@ fun HomeScreen(
                                 HomeItem.MediaType.AUDIOBOOK -> item.audiobookId?.let(onOpenAudiobook)
                             }
                         },
-                        onItemLongClick = { /* overflow wired when cards gain long-press */ },
+                        onItemOverflow = { item ->
+                            overflowTarget = item.toOverflowTarget(
+                                recentlyAdded = recentlyAdded,
+                                newPairs = newPairs,
+                                activeTxPairIds = activeTxPairIds,
+                            )
+                        },
                     )
                 }
             }
@@ -149,6 +178,9 @@ fun HomeScreen(
                         pairs = recentlyAdded,
                         showNewBadge = false,
                         onPairClick = { pair -> onOpenPairReader(pair.id) },
+                        onPairOverflow = { pair ->
+                            overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
+                        },
                     )
                 }
             }
@@ -163,6 +195,9 @@ fun HomeScreen(
                         pairs = newPairs,
                         showNewBadge = true,
                         onPairClick = { pair -> onOpenPairReader(pair.id) },
+                        onPairOverflow = { pair ->
+                            overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
+                        },
                     )
                 }
             }
@@ -179,6 +214,23 @@ fun HomeScreen(
                     )
                 }
             }
+        }
+
+        // Overflow sheet — shown when the user taps a card's three-dots button.
+        val target = overflowTarget
+        if (target != null) {
+            CardOverflowMenu(
+                target = target,
+                actions = buildHomeOverflowActions(
+                    target = target,
+                    vm = viewModel,
+                    onOpenPairReader = onOpenPairReader,
+                    onOpenPairPlayer = onOpenPairPlayer,
+                    onOpenEbook = onOpenEbook,
+                    onOpenAudiobook = onOpenAudiobook,
+                ),
+                onDismiss = { overflowTarget = null },
+            )
         }
     }
 }
@@ -223,7 +275,7 @@ private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
 private fun ContinueRow(
     items: List<HomeItem>,
     onItemClick: (HomeItem) -> Unit,
-    onItemLongClick: (HomeItem) -> Unit,
+    onItemOverflow: (HomeItem) -> Unit,
 ) {
     val context = LocalContext.current
     LazyRow(
@@ -267,7 +319,7 @@ private fun ContinueRow(
                 BookCard(
                     variant = variant,
                     onClick = { onItemClick(item) },
-                    onOverflow = { onItemLongClick(item) },
+                    onOverflow = { onItemOverflow(item) },
                     progress = (item.progressPercent / 100f).coerceIn(0f, 1f),
                 )
             }
@@ -280,6 +332,7 @@ private fun PairRow(
     pairs: List<BookPairEntity>,
     showNewBadge: Boolean,
     onPairClick: (BookPairEntity) -> Unit,
+    onPairOverflow: (BookPairEntity) -> Unit,
 ) {
     val context = LocalContext.current
     LazyRow(
@@ -309,7 +362,7 @@ private fun PairRow(
                         hasMismatchWarning = showNewBadge && pair.hasMetadataMismatch(),
                     ),
                     onClick = { onPairClick(pair) },
-                    onOverflow = { /* overflow wired via LibraryScreen in Phase D */ },
+                    onOverflow = { onPairOverflow(pair) },
                     status = if (showNewBadge) BadgeStatus.New else null,
                 )
             }
@@ -382,5 +435,121 @@ private fun BookPairEntity.hasMetadataMismatch(): Boolean {
         )
     }
     return mismatch
+}
+
+// ==========================================================================
+// Overflow-target builders. Home carousels can carry pairs, standalone ebooks,
+// or standalone audiobooks — each maps to one of CardOverflowMenu's three
+// target shapes. The Pair builder folds in server-side transcription state
+// (pair.status) plus any active queue items so the sheet can decide between
+// Transcribe / Cancel transcription / Refresh sync data.
+// ==========================================================================
+
+private fun BookPairEntity.toPairOverflowTarget(activeTxPairIds: Set<Int>): OverflowTarget.Pair =
+    OverflowTarget.Pair(
+        pairId = id,
+        title = ebookTitle,
+        subtitle = ebookAuthor ?: audiobookAuthor,
+        hasEbookDownloaded = ebookDownloaded,
+        hasAudiobookDownloaded = audiobookDownloaded,
+        isTranscribed = status == "synced",
+        isQueuedOrTranscribing = id in activeTxPairIds || status == "transcribing",
+        isComplete = false,
+        hasMismatchWarning = hasMetadataMismatch(),
+    )
+
+private fun HomeItem.toOverflowTarget(
+    recentlyAdded: List<BookPairEntity>,
+    newPairs: List<BookPairEntity>,
+    activeTxPairIds: Set<Int>,
+): OverflowTarget = when (mediaType) {
+    HomeItem.MediaType.PAIR -> {
+        // Resolve the live pair from the flows we already collect so we can
+        // use the same full-fidelity builder Recently Added / New Pairs use.
+        val pair = (recentlyAdded + newPairs).firstOrNull { it.id == pairId }
+        pair?.toPairOverflowTarget(activeTxPairIds)
+            ?: OverflowTarget.Pair(
+                pairId = pairId ?: 0,
+                title = title,
+                subtitle = author,
+                hasEbookDownloaded = false,
+                hasAudiobookDownloaded = false,
+                isTranscribed = false,
+                isQueuedOrTranscribing = false,
+                isComplete = false,
+            )
+    }
+    HomeItem.MediaType.EBOOK -> OverflowTarget.Ebook(
+        ebookId = ebookId ?: 0,
+        title = title,
+        subtitle = author,
+        // We don't have the entity in hand for Continue Reading ebooks — default to
+        // downloaded/paired=true so the destructive delete/pair options don't show.
+        // Download shows only for not-downloaded items; since this item came from
+        // getRecentlyReadEbooksFlow (which reads progress, not download state) we
+        // conservatively assume the user has the file to read it.
+        isDownloaded = true,
+        isPaired = true,
+    )
+    HomeItem.MediaType.AUDIOBOOK -> OverflowTarget.Audiobook(
+        audiobookId = audiobookId ?: 0,
+        title = title,
+        subtitle = author,
+        isDownloaded = true,
+        isPaired = true,
+    )
+}
+
+/**
+ * Build the [OverflowActions] for Home's sheet. Matches LibraryScreen's helper —
+ * the VMs have parallel action methods so pair/ebook/audiobook behavior stays
+ * consistent between the two screens.
+ */
+@Composable
+private fun buildHomeOverflowActions(
+    target: OverflowTarget,
+    vm: HomeViewModel,
+    onOpenPairReader: (Int) -> Unit,
+    onOpenPairPlayer: (Int) -> Unit,
+    onOpenEbook: (Int) -> Unit,
+    onOpenAudiobook: (Int) -> Unit,
+): OverflowActions {
+    val isOnline by vm.isOnline.collectAsState()
+    // Pull the live pair entity (if present) so delete/download operate on the real record.
+    val recentlyAdded by vm.recentlyAdded.collectAsState()
+    val newPairs by vm.newPairs.collectAsState()
+    val pair = (target as? OverflowTarget.Pair)?.pairId?.let { pid ->
+        (recentlyAdded + newPairs).firstOrNull { it.id == pid }
+    }
+
+    return when (target) {
+        is OverflowTarget.Pair -> OverflowActions(
+            isOnline              = isOnline,
+            onRead                = pair?.let { { onOpenPairReader(it.id) } },
+            onListen              = pair?.let { { onOpenPairPlayer(it.id) } },
+            onDownloadEbook       = pair?.let { { vm.downloadEbook(it) } },
+            onDownloadAudiobook   = pair?.let { { vm.downloadAudiobook(it) } },
+            onDeleteEbook         = pair?.let { { vm.deleteEbookOf(it) } },
+            onDeleteAudiobook     = pair?.let { { vm.deleteAudiobookOf(it) } },
+            onTranscribe          = pair?.let { { vm.addToTranscriptionQueue(it) } },
+            onCancelTranscription = pair?.let { { vm.cancelTranscription(it) } },
+            onRefreshSyncData     = pair?.let { { vm.refreshSyncData(it) } },
+            onMarkComplete        = pair?.let { { vm.markComplete(it) } },
+            onResetProgress       = pair?.let { { vm.resetProgress(it) } },
+            onUnlinkPair          = pair?.let { { vm.unlinkPair(it) } },
+        )
+        is OverflowTarget.Ebook -> OverflowActions(
+            isOnline        = isOnline,
+            onRead          = { onOpenEbook(target.ebookId) },
+            onMarkComplete  = { vm.markCompleteEbook(target.ebookId) },
+            onResetProgress = { vm.resetProgressEbook(target.ebookId) },
+        )
+        is OverflowTarget.Audiobook -> OverflowActions(
+            isOnline        = isOnline,
+            onListen        = { onOpenAudiobook(target.audiobookId) },
+            onMarkComplete  = { vm.markCompleteAudiobook(target.audiobookId) },
+            onResetProgress = { vm.resetProgressAudiobook(target.audiobookId) },
+        )
+    }
 }
 

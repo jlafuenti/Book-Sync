@@ -338,8 +338,10 @@ private sealed class OverflowSelection {
             subtitle = pair.ebookAuthor ?: pair.audiobookAuthor,
             hasEbookDownloaded = pair.ebookDownloaded,
             hasAudiobookDownloaded = pair.audiobookDownloaded,
-            isTranscribed = pair.syncMapDownloaded,
-            isQueuedOrTranscribing = false,
+            // Server-side transcription state — "synced" means the sync map exists
+            // on the server (regardless of whether we've downloaded it locally).
+            isTranscribed = pair.status == "synced",
+            isQueuedOrTranscribing = pair.status == "transcribing",
             isComplete = false,
         )
 
