@@ -512,9 +512,13 @@ class BookSyncRepository @Inject constructor(
         epubSentenceIndex: Int? = null,
         audioPositionMs: Int? = null,
         epubLocator: String? = null,
+        // When false (heartbeat saves every 5s), only the Bookmark row is updated
+        // and no BookmarkLog row is written — server and local history stay clean.
+        // Set true on pause / stop / 30-min-continuous-playback boundaries.
+        appendToLog: Boolean = false,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
-        
+
         // Merge with existing
         val merged = BookmarkEntity(
             bookPairId = pairId,
@@ -530,23 +534,25 @@ class BookSyncRepository @Inject constructor(
         // Save locally
         bookmarkDao.upsertBookmark(merged)
 
-        // Record a local history entry so the user's own offline changes appear in the
-        // history UI immediately. Server-sourced rows replace/supersede these on next
-        // successful getBookmarkHistory() call.
-        bookmarkLogDao.insertLocal(
-            BookmarkLogEntity(
-                serverId = null,
-                bookPairId = pairId,
-                source = source,
-                prevEpubChapter = existing?.epubChapter,
-                prevEpubSentenceIndex = existing?.epubSentenceIndex,
-                prevAudioPositionMs = existing?.audioPositionMs,
-                newEpubChapter = merged.epubChapter,
-                newEpubSentenceIndex = merged.epubSentenceIndex,
-                newAudioPositionMs = merged.audioPositionMs,
-                changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+        // Record a local history entry ONLY on meaningful session boundaries so the
+        // offline history mirrors what the server will record. Heartbeat saves stay
+        // out of the log on both sides.
+        if (appendToLog) {
+            bookmarkLogDao.insertLocal(
+                BookmarkLogEntity(
+                    serverId = null,
+                    bookPairId = pairId,
+                    source = source,
+                    prevEpubChapter = existing?.epubChapter,
+                    prevEpubSentenceIndex = existing?.epubSentenceIndex,
+                    prevAudioPositionMs = existing?.audioPositionMs,
+                    newEpubChapter = merged.epubChapter,
+                    newEpubSentenceIndex = merged.epubSentenceIndex,
+                    newAudioPositionMs = merged.audioPositionMs,
+                    changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+                )
             )
-        )
+        }
 
         // Try immediate sync
         try {
@@ -558,6 +564,7 @@ class BookSyncRepository @Inject constructor(
                     epub_sentence_index = merged.epubSentenceIndex,
                     audio_position_ms = merged.audioPositionMs,
                     epub_locator = merged.epubLocator,
+                    append_to_log = appendToLog,
                 )
             )
             bookmarkDao.upsertBookmark(merged.copy(syncedToServer = true))
@@ -571,6 +578,7 @@ class BookSyncRepository @Inject constructor(
                     epubSentenceIndex = merged.epubSentenceIndex,
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
+                    appendToLog = appendToLog,
                 )
             )
         }
@@ -972,6 +980,7 @@ class BookSyncRepository @Inject constructor(
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
                         epub_locator = sync.epubLocator,
+                        append_to_log = sync.appendToLog,
                     )
                 )
                 pendingSyncDao.delete(sync)

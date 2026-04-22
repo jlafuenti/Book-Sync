@@ -212,8 +212,15 @@ class PlayerViewModel @Inject constructor(
     private var savedPositionFromBookmark: Long = 0L
     private var bookmarkLoaded = false
     private var lastSaveTimeMs = 0L
+    // Last time we wrote a history-log entry (appendToLog=true). Updated whenever
+    // a pause / stop / 30-min-tick save fires, so the 30-min timer resets on any
+    // meaningful boundary. Only advanced while isPlaying, so pauses freeze it.
+    private var lastLogTimeMs = 0L
     private var pendingSeekPosition: Long = -1L  // Seek deferred until player is ready
     private val SAVE_INTERVAL_MS = 5000L  // Save bookmark every 5 seconds
+    // Write a history-log entry every 30 min of continuous playback (in addition
+    // to pause/stop boundaries). Caps a 1-hour session to ~2 log entries.
+    private val LOG_INTERVAL_MS = 30 * 60 * 1000L
     private var chaptersLoaded = false
 
     companion object {
@@ -317,6 +324,11 @@ class PlayerViewModel @Inject constructor(
                             pendingSeekPosition = -1L
                             mediaController.seekTo(pos)
                             _positionMs.value = pos
+                        }
+                        // Track / audiobook reached its natural end — log a
+                        // history entry so the session shows up as "finished".
+                        if (playbackState == Player.STATE_ENDED) {
+                            saveBookmark(appendToLog = true)
                         }
                     }
                     override fun onMediaMetadataChanged(metadata: MediaMetadata) {
@@ -478,15 +490,23 @@ class PlayerViewModel @Inject constructor(
                         loadChaptersFromService(ctrl)
                     }
 
-                    // Save bookmark periodically while playing (every 5 seconds)
+                    // Heartbeat: save position every 5s while playing (NO history
+                    // entry — just keeps Bookmark fresh so a crash doesn't lose
+                    // more than a few seconds of listening).
                     val now = System.currentTimeMillis()
                     if (ctrl.isPlaying && (now - lastSaveTimeMs >= SAVE_INTERVAL_MS)) {
                         lastSaveTimeMs = now
-                        saveBookmark()
+                        saveBookmark(appendToLog = false)
                     }
-                    // Save when playback pauses
+                    // 30-min continuous-playback log tick: writes a history entry.
+                    // Only advances lastLogTimeMs while playing, so pauses freeze
+                    // the timer; any pause/stop that logs also resets it.
+                    if (ctrl.isPlaying && (now - lastLogTimeMs >= LOG_INTERVAL_MS)) {
+                        saveBookmark(appendToLog = true)
+                    }
+                    // Pause → log this as a session boundary.
                     if (wasPlaying && !ctrl.isPlaying) {
-                        saveBookmark()
+                        saveBookmark(appendToLog = true)
                     }
                 }
             }
@@ -668,7 +688,15 @@ class PlayerViewModel @Inject constructor(
         ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SLEEP_TIMER, Bundle.EMPTY), args)
     }
 
-    private fun saveBookmark() {
+    /**
+     * Save the current playback position.
+     *
+     * @param appendToLog false for 5-second heartbeat saves (position-only, no
+     *   history entry). True for pause / stop / 30-min-tick boundaries — those
+     *   produce a BookmarkLog row and reset the 30-min continuous-playback timer.
+     */
+    private fun saveBookmark(appendToLog: Boolean = false) {
+        if (appendToLog) lastLogTimeMs = System.currentTimeMillis()
         if (isStandalone) {
             // Standalone audiobooks track progress locally only (no pair-linked bookmark)
             val audio = _standaloneAudio.value ?: return
@@ -692,6 +720,7 @@ class PlayerViewModel @Inject constructor(
                     pairId = pairId,
                     source = "audiobook",
                     audioPositionMs = posMs,
+                    appendToLog = appendToLog,
                 )
                 // Also write to UserProgress so the Continue section can track this
                 _pair.value?.audiobookId?.let { audiobookId ->
@@ -707,17 +736,18 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * Pause playback and save bookmark. Called when switching to reader.
+     * Pause playback and save bookmark. Called when switching to reader — this
+     * is a session boundary so we do log a history entry.
      */
     fun stopAndSave() {
         controller?.pause()
-        saveBookmark()
+        saveBookmark(appendToLog = true)
     }
 
     override fun onCleared() {
         positionPollingJob?.cancel()
-        // Save final position before cleanup
-        saveBookmark()
+        // Save final position before cleanup — user closing the player is a stop event.
+        saveBookmark(appendToLog = true)
         controller?.release()
         controller = null
         super.onCleared()
