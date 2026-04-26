@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -1035,9 +1036,10 @@ fun PlayerScreen(
                     Icon(Icons.Default.SkipPrevious, "Prev chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
 
-                // Replay 15 s
+                // Replay 15 s — Material only ships Replay5/10/30. Overlay "15"
+                // on the plain Replay arrow so the glyph matches the behaviour.
                 IconButton(onClick = { viewModel.skipBackward(15) }, enabled = isDownloaded) {
-                    Icon(Icons.Default.Replay, "Rewind 15s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
+                    Skip15Icon(forward = false, tint = colors.textPrimary, size = 32.dp)
                 }
 
                 // Play / Pause FAB
@@ -1057,9 +1059,9 @@ fun PlayerScreen(
                     )
                 }
 
-                // Forward 15 s
+                // Forward 15 s — see Skip15Icon comment above.
                 IconButton(onClick = { viewModel.skipForward(15) }, enabled = isDownloaded) {
-                    Icon(Icons.Default.Forward10, "Forward 15s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
+                    Skip15Icon(forward = true, tint = colors.textPrimary, size = 32.dp)
                 }
 
                 // Next chapter
@@ -1341,5 +1343,44 @@ private fun formatAbsoluteTime(isoTimestamp: String): String {
         localTime.format(DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault()))
     } catch (_: Exception) {
         isoTimestamp
+    }
+}
+
+/**
+ * Plain curved arrow + "15" numeral overlay. Material ships Forward/Replay
+ * 5/10/30 but not 15, and the previous "Forward10" glyph made users think the
+ * button jumped 10 s when it actually jumps 15. This composable overlays a
+ * bold "15" on top of the plain [Icons.Default.Replay] arrow (mirrored on X
+ * for forward), matching the visual weight of the Material Forward/Replay 10
+ * style without needing a hand-rolled VectorDrawable.
+ */
+@Composable
+private fun Skip15Icon(
+    forward: Boolean,
+    tint: Color,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    Box(
+        modifier = Modifier.size(size),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Replay,
+            contentDescription = if (forward) "Forward 15s" else "Rewind 15s",
+            tint = tint,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { if (forward) scaleX = -1f },
+        )
+        // Tuck the digits inside the circular-arrow curve. The Material
+        // Replay/Forward arrow has its arrowhead at the top-left, so the
+        // negative space where the "10" normally sits is the lower-center.
+        Text(
+            text = "15",
+            color = tint,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = (size.value * 0.25f).dp),
+        )
     }
 }

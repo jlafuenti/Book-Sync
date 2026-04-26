@@ -42,6 +42,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -57,15 +61,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Context
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.ui.components.EmptyState
 import com.booksync.ui.theme.Tandem
+import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -102,7 +113,10 @@ data class SearchResultItem(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    private val workManager = WorkManager.getInstance(context)
 
     private val _query = MutableStateFlow("")
     val query = _query.asStateFlow()
@@ -314,6 +328,33 @@ class SearchViewModel @Inject constructor(
     }
 
     fun clearPairingError() { _pairingError.value = null }
+
+    // --- Downloads from search results --------------------------------------
+    //
+    // Mirrors LibraryViewModel.enqueue so the Downloaded tab's progress / state
+    // observers pick these up identically. `idForWorker` is the numeric ID from
+    // the SearchResultItem and is used both as the worker's input key and the
+    // unique work name. TYPE is "ALL" for a pair, else the appropriate
+    // standalone type.
+
+    fun downloadFromResult(item: SearchResultItem) {
+        val id = item.numericId ?: return
+        val type = when {
+            item.isPair      -> "ALL"
+            item.isEbook     -> "STANDALONE_EBOOK"
+            item.isAudiobook -> "STANDALONE_AUDIOBOOK"
+            else             -> return
+        }
+        val uniqueName = "download_search_${type.lowercase()}_$id"
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to (item.pairId ?: id),
+                DownloadWorker.KEY_TYPE    to type,
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+    }
 }
 
 // ============================================================================
@@ -469,6 +510,7 @@ fun SearchScreen(
                     onEbookSelect = onBookSelect,
                     onAudioSelect = onAudioSelect,
                     onRequestPair = { pairingItem = it },
+                    onDownload = { viewModel.downloadFromResult(it) },
                 )
             }
         }
@@ -512,6 +554,7 @@ private fun SearchResultsList(
     onEbookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onRequestPair: (SearchResultItem) -> Unit,
+    onDownload: (SearchResultItem) -> Unit,
 ) {
     val pairs     = results.filter { it.isPair }
     val ebooks    = results.filter { !it.isPair && it.isEbook }
@@ -529,6 +572,7 @@ private fun SearchResultsList(
                     item = item,
                     onClick = { item.pairId?.let(onPairClick) },
                     onRequestPair = { /* pairs aren't pairable */ },
+                    onDownload = onDownload,
                 )
             }
         }
@@ -539,6 +583,7 @@ private fun SearchResultsList(
                     item = item,
                     onClick = { item.numericId?.let(onEbookSelect) },
                     onRequestPair = onRequestPair,
+                    onDownload = onDownload,
                 )
             }
         }
@@ -549,6 +594,7 @@ private fun SearchResultsList(
                     item = item,
                     onClick = { item.numericId?.let(onAudioSelect) },
                     onRequestPair = onRequestPair,
+                    onDownload = onDownload,
                 )
             }
         }
@@ -588,8 +634,10 @@ private fun ResultRow(
     item: SearchResultItem,
     onClick: () -> Unit,
     onRequestPair: (SearchResultItem) -> Unit,
+    onDownload: (SearchResultItem) -> Unit,
 ) {
     val colors = Tandem.colors
+    var overflowOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -643,12 +691,47 @@ private fun ResultRow(
 
         // Pair button for unpaired results
         if (!item.isPair) {
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(4.dp))
             IconButton(onClick = { onRequestPair(item) }) {
                 Icon(
                     Icons.Default.Link,
                     contentDescription = "Pair with counterpart",
                     tint = colors.accent,
+                )
+            }
+        }
+
+        // Overflow menu — a single "Download …" entry. The entry label is
+        // contextual ("pair" / "ebook" / "audiobook") and the VM picks the
+        // right worker TYPE based on the item shape.
+        Box {
+            IconButton(onClick = { overflowOpen = true }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "More actions",
+                    tint = colors.textSecondary,
+                )
+            }
+            DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                val label = when {
+                    item.isPair      -> "Download pair"
+                    item.isEbook     -> "Download ebook"
+                    item.isAudiobook -> "Download audiobook"
+                    else             -> "Download"
+                }
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            tint = colors.accent,
+                        )
+                    },
+                    onClick = {
+                        overflowOpen = false
+                        onDownload(item)
+                    },
                 )
             }
         }

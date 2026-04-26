@@ -100,6 +100,26 @@ data class BookPairResponse(
     val synced_at: String? = null
 )
 
+/**
+ * Lightweight slice of the server's `EBookDetailResponse` / `AudioBookDetailResponse`.
+ * Used by the Book Details screen to pull description + metadata that aren't
+ * in the local cache. We only decode the fields we render — kotlinx ignores
+ * the rest thanks to `ignoreUnknownKeys = true` on the Json instance.
+ */
+@Serializable
+data class BookMetadataResponse(
+    val id: Int,
+    val title: String,
+    val author: String? = null,
+    val series: String? = null,
+    val series_index: Float? = null,
+    val description: String? = null,
+    val publisher: String? = null,
+    val publish_year: Int? = null,
+    val language: String? = null,
+    val narrators: String? = null,
+)
+
 @Serializable
 data class CreatePairRequest(
     val ebook_id: Int,

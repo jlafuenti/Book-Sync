@@ -1,7 +1,6 @@
 package com.booksync.ui.downloaded
 
 import android.content.Context
-import android.os.StatFs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
@@ -16,31 +15,11 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import java.io.File
 import javax.inject.Inject
-
-/**
- * Storage summary shown at the top of the Downloaded tab.
- *
- * - [usedBytes] — total size of BookSync's own downloads (ebooks + audiobooks + sync maps)
- * - [totalBytes] — total capacity of the partition BookSync writes to
- * - [freeBytes] — remaining space on that partition
- */
-data class StorageUsage(
-    val usedBytes: Long = 0L,
-    val totalBytes: Long = 0L,
-    val freeBytes: Long = 0L,
-) {
-    /** Fraction of the partition consumed by BookSync downloads (0..1). */
-    val usedFraction: Float
-        get() = if (totalBytes > 0L) (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
-}
 
 @HiltViewModel
 class DownloadedViewModel @Inject constructor(
@@ -61,32 +40,9 @@ class DownloadedViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<Map<Int, Int>>(emptyMap())
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
-    // --- Storage summary -----------------------------------------------------
-
-    private val _storage = MutableStateFlow(StorageUsage())
-    val storage = _storage.asStateFlow()
-
     init {
         observeWorkManager()
-        refreshStorage()
     }
-
-    /** Recompute disk usage in the background. Cheap — a few file-system calls. */
-    fun refreshStorage() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val used = listOf("ebooks", "audiobooks", "sync_maps")
-                .sumOf { File(context.filesDir, it).recursiveSize() }
-            val stat = runCatching { StatFs(context.filesDir.absolutePath) }.getOrNull()
-            val total = stat?.let { it.blockCountLong * it.blockSizeLong } ?: 0L
-            val free  = stat?.let { it.availableBlocksLong * it.blockSizeLong } ?: 0L
-            _storage.value = StorageUsage(used, total, free)
-        }
-    }
-
-    private fun File.recursiveSize(): Long =
-        if (!exists()) 0L
-        else if (isFile) length()
-        else walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
     private fun observeWorkManager() {
         viewModelScope.launch {
@@ -100,8 +56,6 @@ class DownloadedViewModel @Inject constructor(
                     }
                 }
                 _downloadingProgress.value = progress
-                // When a download finishes, disk usage changes — refresh in the background.
-                if (workInfos.any { it.state == WorkInfo.State.SUCCEEDED }) refreshStorage()
             }
         }
     }
@@ -161,16 +115,12 @@ class DownloadedViewModel @Inject constructor(
                 downloadedEbooks.first().forEach { repository.deleteStandaloneEbook(it) }
                 downloadedAudiobooks.first().forEach { repository.deleteStandaloneAudiobook(it) }
             }
-            // Small delay lets deleteX propagate into the file system before re-reading sizes.
-            delay(200)
-            refreshStorage()
         }
     }
 
     private inline fun runSafely(crossinline block: suspend () -> Unit) {
         viewModelScope.launch {
             runCatching { block() }
-            refreshStorage()
         }
     }
 }

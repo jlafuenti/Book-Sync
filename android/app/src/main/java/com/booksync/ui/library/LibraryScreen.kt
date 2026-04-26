@@ -85,6 +85,7 @@ fun LibraryScreen(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onStandaloneAudioSelect: (Int) -> Unit = {},
+    onOpenDetails: (LibraryItem) -> Unit = {},
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,    // kept for back-compat, unused by new nav
     initialFilter: LibraryFilter? = null,
@@ -134,8 +135,12 @@ fun LibraryScreen(
         }
     }
 
-    // Overflow bottom sheet state
+    // Overflow bottom sheet state. `overflowSeriesItems` is captured alongside
+    // the OverflowTarget.Series so the VM's batch ops (download / reset / mark
+    // complete) can iterate the concrete items — the target itself only
+    // carries display info to keep LibraryItem out of the components module.
     var overflowTarget by remember { mutableStateOf<OverflowTarget?>(null) }
+    var overflowSeriesItems by remember { mutableStateOf<List<LibraryItem>>(emptyList()) }
 
     Scaffold(
         topBar = {
@@ -186,6 +191,20 @@ fun LibraryScreen(
                 onGroupBySeriesToggle = { viewModel.setGroupBySeries(it) },
             )
 
+            // "N items visible" hint when any narrowing filter is active, so
+            // the user can tell the grid isn't just showing everything. Also
+            // offers a single Clear to reset filters without tapping each one.
+            val hasActiveFilter = ui.filter != LibraryFilter.ALL ||
+                ui.transcribedOnly ||
+                ui.seriesFilter != null ||
+                ui.searchQuery.isNotBlank()
+            if (hasActiveFilter && !ui.groupBySeries) {
+                FilteredCountBar(
+                    count = items.size,
+                    onClear = { viewModel.clearAllFilters() },
+                )
+            }
+
             // Acknowledge all (NEW filter only)
             if (ui.filter == LibraryFilter.NEW && items.isNotEmpty()) {
                 AcknowledgeAllBar(
@@ -216,11 +235,18 @@ fun LibraryScreen(
                 ui.groupBySeries -> SeriesGrid(
                     stacks = seriesStacks,
                     onStackClick = { stack -> viewModel.drillIntoSeries(stack.seriesName) },
+                    onStackOverflow = { stack ->
+                        overflowSeriesItems = stack.items
+                        overflowTarget = OverflowTarget.Series(
+                            name = stack.seriesName,
+                            itemCount = stack.totalCount,
+                        )
+                    },
                 )
                 else -> ItemGrid(
                     items = items,
                     downloadingPercent = downloading,
-                    onItemClick = { item -> openItem(item, onBookSelect, onAudioSelect, onStandaloneAudioSelect) },
+                    onItemClick = { item -> openItem(item, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
                     onItemOverflow = { item -> overflowTarget = item.toOverflowTarget(activeTxPairIds) },
                 )
             }
@@ -231,7 +257,15 @@ fun LibraryScreen(
         if (target != null) {
             CardOverflowMenu(
                 target = target,
-                actions = buildOverflowActions(target, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect),
+                actions = buildOverflowActions(
+                    target = target,
+                    vm = viewModel,
+                    onBookSelect = onBookSelect,
+                    onAudioSelect = onAudioSelect,
+                    onStandaloneAudioSelect = onStandaloneAudioSelect,
+                    onOpenDetails = onOpenDetails,
+                    seriesItems = overflowSeriesItems,
+                ),
                 onDismiss = { overflowTarget = null },
             )
         }
@@ -445,6 +479,34 @@ private fun InlineSearchBar(
 }
 
 @Composable
+private fun FilteredCountBar(count: Int, onClear: () -> Unit) {
+    val colors = Tandem.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (count == 1) "1 item visible" else "$count items visible",
+            color = colors.textSecondary,
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = "Clear",
+            color = colors.accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(Tandem.shapes.button)
+                .clickable(onClick = onClear)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
 private fun AcknowledgeAllBar(count: Int, onClick: () -> Unit) {
     val colors = Tandem.colors
     Row(
@@ -507,7 +569,12 @@ private fun ItemGrid(
                 }
             }
             val variant = item.toVariant(coverModel)
+            // DownloadWorker publishes progress keyed by the input "pair id",
+            // which for standalone items is the ebook/audiobook id. Check all
+            // three so standalone-only cards also show the bar.
             val dlPct: Int? = item.pair?.id?.let { downloadingPercent[it] }
+                ?: item.ebook?.id?.let { downloadingPercent[it] }
+                ?: item.audiobook?.id?.let { downloadingPercent[it] }
             BookCard(
                 variant = variant,
                 onClick = { onItemClick(item) },
@@ -523,7 +590,9 @@ private fun ItemGrid(
 private fun SeriesGrid(
     stacks: List<SeriesStack>,
     onStackClick: (SeriesStack) -> Unit,
+    onStackOverflow: (SeriesStack) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
@@ -532,17 +601,33 @@ private fun SeriesGrid(
         modifier = Modifier.fillMaxSize(),
     ) {
         items(stacks, key = { it.seriesName }) { stack ->
+            // First 3 covers from the stack — same resolution rule as ItemGrid:
+            // local cached file → server URL → null. Drives the fanned-cover
+            // look that matched the web SeriesCard.
+            val covers = remember(stack.seriesName, stack.items.size) {
+                stack.items.take(3).map { item ->
+                    val audiobookId = item.pair?.audiobookId ?: item.audiobook?.id
+                    val coverPath   = item.pair?.audiobookCoverPath ?: item.audiobook?.coverFilename
+                    val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+                    when {
+                        localFile != null && localFile.exists() -> localFile
+                        coverPath != null -> "${BuildConfig.SERVER_BASE_URL}$coverPath"
+                        else -> null
+                    }
+                }
+            }
             BookCard(
                 variant = BookCardVariant.SeriesStack(
-                    seriesName     = stack.seriesName,
-                    author         = stack.author,
-                    itemCount      = stack.totalCount,
-                    pairCount      = stack.pairCount,
-                    ebookCount     = stack.ebookCount,
-                    audiobookCount = stack.audiobookCount,
+                    seriesName       = stack.seriesName,
+                    author           = stack.author,
+                    itemCount        = stack.totalCount,
+                    pairCount        = stack.pairCount,
+                    ebookCount       = stack.ebookCount,
+                    audiobookCount   = stack.audiobookCount,
+                    coverImageModels = covers,
                 ),
                 onClick = { onStackClick(stack) },
-                onOverflow = { /* series stacks have no overflow actions */ },
+                onOverflow = { onStackOverflow(stack) },
             )
         }
     }
@@ -557,15 +642,18 @@ private fun openItem(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onStandaloneAudioSelect: (Int) -> Unit = {},
+    onOpenDetails: (LibraryItem) -> Unit = {},
 ) {
     val pair = item.pair
     when {
         pair != null && pair.ebookDownloaded      -> onBookSelect(pair.id)
         pair != null && pair.audiobookDownloaded  -> onAudioSelect(pair.id)
-        pair != null                              -> onBookSelect(pair.id) // will show "Download ebook" launcher
-        item.audiobook != null                    -> onStandaloneAudioSelect(item.audiobook.id)
-        // Standalone ebooks: reader is pair-based; tap does nothing until standalone reader support is added
-        else                                      -> { }
+        // Neither half downloaded — no reader/player to open. Land on the
+        // Book Details page so the user can download or unlink from there.
+        pair != null                              -> onOpenDetails(item)
+        item.audiobook != null && item.audiobook.isDownloaded -> onStandaloneAudioSelect(item.audiobook.id)
+        // Standalone ebook / undownloaded standalone audiobook → details screen.
+        else                                      -> onOpenDetails(item)
     }
 }
 
@@ -640,6 +728,8 @@ private fun buildOverflowActions(
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onStandaloneAudioSelect: (Int) -> Unit = {},
+    onOpenDetails: ((LibraryItem) -> Unit)? = null,
+    seriesItems: List<LibraryItem> = emptyList(),
 ): OverflowActions {
     // Resolve the live pair from the VM so per-action state is accurate.
     val items by vm.items.collectAsState()
@@ -651,10 +741,13 @@ private fun buildOverflowActions(
     return when (target) {
         is OverflowTarget.Pair -> OverflowActions(
             isOnline          = isOnline,
+            onViewDetails     = pair?.let { p -> onOpenDetails?.let { cb -> { cb(LibraryItem(key = "pair_${p.id}", pair = p)) } } },
             onRead            = pair?.let { { onBookSelect(it.id) } },
             onListen          = pair?.let { { onAudioSelect(it.id) } },
-            onDownloadEbook   = pair?.let { { vm.downloadEbook(it) } },
-            onDownloadAudiobook = pair?.let { { vm.downloadAudiobook(it) } },
+            // Single "Download pair" affordance on the overflow — grabs ebook,
+            // audiobook, and sync-map in one worker. Per-media downloads now
+            // live on the Book Details screen (see TODO #15).
+            onDownloadPair    = pair?.let { { vm.downloadAll(it) } },
             onDeleteEbook     = pair?.let { { vm.deleteEbookOf(it) } },
             onDeleteAudiobook = pair?.let { { vm.deleteAudiobookOf(it) } },
             // Transcription: only offer "Transcribe" if not yet transcribed and not queued.
@@ -673,6 +766,7 @@ private fun buildOverflowActions(
             val ebook = items.firstOrNull { it.ebook?.id == target.ebookId }?.ebook
             OverflowActions(
                 isOnline          = isOnline,
+                onViewDetails     = ebook?.let { e -> onOpenDetails?.let { cb -> { cb(LibraryItem(key = "ebook_${e.id}", ebook = e)) } } },
                 onDownloadEbook   = if (!target.isDownloaded) ebook?.let { { vm.downloadStandaloneEbook(it) } } else null,
                 onDeleteEbook     = if (target.isDownloaded) ebook?.let { { vm.deleteStandaloneEbook(it) } } else null,
                 onMarkComplete    = ebook?.let { { vm.markCompleteEbook(it.id) } },
@@ -683,6 +777,7 @@ private fun buildOverflowActions(
             val audio = items.firstOrNull { it.audiobook?.id == target.audiobookId }?.audiobook
             OverflowActions(
                 isOnline              = isOnline,
+                onViewDetails         = audio?.let { a -> onOpenDetails?.let { cb -> { cb(LibraryItem(key = "audiobook_${a.id}", audiobook = a)) } } },
                 onListen              = if (target.isDownloaded) audio?.let { { onStandaloneAudioSelect(it.id) } } else null,
                 onDownloadAudiobook   = if (!target.isDownloaded) audio?.let { { vm.downloadStandaloneAudiobook(it) } } else null,
                 onDeleteAudiobook     = if (target.isDownloaded) audio?.let { { vm.deleteStandaloneAudiobook(it) } } else null,
@@ -690,5 +785,14 @@ private fun buildOverflowActions(
                 onResetProgress       = audio?.let { { vm.resetProgressAudiobook(it.id) } },
             )
         }
+        is OverflowTarget.Series -> OverflowActions(
+            isOnline               = isOnline,
+            // seriesItems was captured at overflow-open time; the VM's batch
+            // methods dispatch per-item (pair / standalone ebook / standalone
+            // audiobook). Guard against an empty list by not wiring callbacks.
+            onDownloadSeries       = seriesItems.takeIf { it.isNotEmpty() }?.let { items -> { vm.downloadSeries(items) } },
+            onMarkSeriesComplete   = seriesItems.takeIf { it.isNotEmpty() }?.let { items -> { vm.markSeriesComplete(items) } },
+            onResetSeriesProgress  = seriesItems.takeIf { it.isNotEmpty() }?.let { items -> { vm.resetSeriesProgress(items) } },
+        )
     }
 }

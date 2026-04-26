@@ -110,6 +110,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     @Inject lateinit var repository: BookSyncRepository
+    @Inject lateinit var dictionaryRepository: com.booksync.data.repository.DictionaryRepository
 
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
@@ -175,7 +176,6 @@ class ReaderActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.action_switch_audio -> { switchToAudio(); true }
                 R.id.action_font_settings -> { showFontSettings(); true }
-                R.id.action_sync -> { syncAudioToPage(); true }
                 else -> false
             }
         }
@@ -294,9 +294,13 @@ class ReaderActivity : AppCompatActivity() {
 
                 navigator?.addInputListener(tapListener)
                 applyPreferences()
-                
+
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
+                // Wrap WebView's parent so we can intercept the floating selection
+                // ActionMode at creation time. WebView is created lazily by Readium —
+                // this method polls until it shows up.
+                installSelectionInterceptor()
 
 
 
@@ -1021,22 +1025,222 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     // ============ Text Selection Sync ============
+    //
+    // The floating selection toolbar (Copy / Share / Select all / etc.) is
+    // driven by an `ActionMode.Callback` that the WebView starts when the user
+    // long-presses text. To strip noise items and inject our own BEFORE the
+    // toolbar takes its menu snapshot, we have to intercept the *creation* of
+    // the ActionMode — not mutate the menu after.
+    //
+    // System Chrome WebView does NOT route this through
+    // `Window.Callback.onWindowStartingActionMode`; tested empirically and
+    // also documented behavior. Instead, the WebView calls
+    // `View.startActionMode(callback, TYPE_FLOATING)`, which walks up via
+    // `ViewParent.startActionModeForChild(...)`. Each ancestor ViewGroup gets
+    // a chance to intercept. So we install a custom intercepting FrameLayout
+    // between the WebView and its current parent at runtime — see
+    // `installSelectionInterceptor()`.
+    //
+    // `onActionModeStarted` is also kept as a defensive fallback: it adds
+    // Define / Sync-to-Audio post-hoc so they're at least available even if
+    // the interceptor wasn't installed (e.g. WebView was recreated, etc.).
+    // Mutate-after-snapshot can't refresh the rendered toolbar, so the noise
+    // strip path lives only inside the wrapper. See plan in
+    // `.claude/plans/playful-painting-salamander.md`.
 
+    /** Set true once we've successfully wrapped the WebView's parent with the interceptor. */
+    private var hasInstalledSelectionInterceptor: Boolean = false
+
+    /** Number of times we've polled for the WebView; bounded to avoid infinite recursion. */
+    private var selectionInterceptorRetries: Int = 0
+
+    /**
+     * Insert a [SelectionInterceptingFrameLayout] between the Readium WebView
+     * and its current parent, so we can intercept TYPE_FLOATING ActionMode
+     * creation via `startActionModeForChild`. Idempotent — checks
+     * `hasInstalledSelectionInterceptor` before doing any work.
+     *
+     * The WebView is created lazily by Readium, so this method polls every
+     * 100 ms (capped at ~5 s) until findWebView returns non-null, then
+     * performs the swap.
+     */
+    private fun installSelectionInterceptor() {
+        if (hasInstalledSelectionInterceptor) return
+        val webView = navigator?.view?.let { findWebView(it) }
+        if (webView == null) {
+            if (selectionInterceptorRetries < 50) {
+                selectionInterceptorRetries++
+                window.decorView.postDelayed({ installSelectionInterceptor() }, 100)
+            } else {
+                Log.w(TAG, "Selection interceptor: WebView not found after 50 tries; giving up")
+            }
+            return
+        }
+        val parent = webView.parent as? android.view.ViewGroup
+        if (parent == null) {
+            Log.w(TAG, "Selection interceptor: WebView has no parent; cannot wrap")
+            return
+        }
+        if (parent is SelectionInterceptingFrameLayout) {
+            hasInstalledSelectionInterceptor = true
+            return
+        }
+        // Swap webView -> [interceptor [webView]] inside the original parent at the same index.
+        val originalIndex = parent.indexOfChild(webView)
+        val originalParams = webView.layoutParams
+        parent.removeView(webView)
+        val interceptor = SelectionInterceptingFrameLayout(this).apply {
+            // Don't consume touches ourselves.
+            isClickable = false
+            isFocusable = false
+            addView(
+                webView,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+        parent.addView(interceptor, originalIndex, originalParams)
+        hasInstalledSelectionInterceptor = true
+        Log.d(TAG, "Selection interceptor installed (parent=${parent.javaClass.simpleName})")
+    }
+
+    /**
+     * Custom ViewGroup ancestor of the WebView. Chrome WebView calls
+     * `parent.startActionModeForChild(view, callback, TYPE_FLOATING)` when a
+     * text selection happens. By overriding here, we get to wrap the callback
+     * BEFORE the ActionMode is created and BEFORE the FloatingToolbar takes
+     * its menu snapshot — which is the only point at which menu mutations
+     * actually affect the rendered toolbar.
+     */
+    private inner class SelectionInterceptingFrameLayout(
+        context: android.content.Context,
+    ) : android.widget.FrameLayout(context) {
+
+        override fun startActionModeForChild(
+            originalView: android.view.View,
+            callback: android.view.ActionMode.Callback,
+            type: Int,
+        ): android.view.ActionMode? {
+            if (type == android.view.ActionMode.TYPE_FLOATING) {
+                Log.d(TAG, "Intercepting startActionModeForChild type=$type (selection toolbar)")
+                return super.startActionModeForChild(
+                    originalView,
+                    SelectionCallbackWrapper(callback),
+                    type,
+                )
+            }
+            return super.startActionModeForChild(originalView, callback, type)
+        }
+
+        // Older overload — WebView always passes a type on API 23+, so this
+        // typically isn't hit, but override defensively.
+        override fun startActionModeForChild(
+            originalView: android.view.View,
+            callback: android.view.ActionMode.Callback,
+        ): android.view.ActionMode? {
+            return super.startActionModeForChild(originalView, callback)
+        }
+    }
+
+    /**
+     * Defensive fallback: if the interceptor isn't installed (e.g. WebView
+     * lifecycle edge case, or device WebView routes through a different code
+     * path), this still injects our custom items so they're at least
+     * reachable. We don't bother trimming here because mutate-after-snapshot
+     * doesn't refresh the rendered toolbar.
+     */
     override fun onActionModeStarted(mode: android.view.ActionMode?) {
         super.onActionModeStarted(mode)
-        if (mode == null || pair?.audiobookDownloaded != true) return
+        if (mode == null) return
+        captureSelection()
+        injectCustomItems(mode, mode.menu ?: return)
+    }
 
-        // Read the selection stored by the selectionchange tracker injected in savePosition.
-        // window.getSelection() is unreliable here (ActionMode may clear it before JS fires,
-        // and Android native touch-selection isn't always reflected in the JS DOM selection).
-        // The tracker captures it the moment the user makes a selection.
-        val webView = navigator?.view?.let { findWebView(it) }
-        webView?.evaluateJavascript("""
+    /**
+     * Wraps the WebView's selection ActionMode callback so we can:
+     *   - Strip Share / Select All / Translate / Web Search from the Menu
+     *     before the floating toolbar ever snapshots it.
+     *   - Re-strip on `onPrepareActionMode` for Android 14+ async text-classifier
+     *     items (those arrive later via a second prepare pass).
+     *   - Inject our own "Define" + "Sync to Audio" items.
+     *   - Delegate Copy / positioning / destroy to the original callback.
+     *
+     * Must extend `Callback2`, not the plain `Callback` interface, so
+     * `onGetContentRect` is forwarded — otherwise the toolbar mis-positions
+     * away from the selection.
+     */
+    private inner class SelectionCallbackWrapper(
+        private val delegate: android.view.ActionMode.Callback,
+    ) : android.view.ActionMode.Callback2() {
+
+        override fun onCreateActionMode(
+            mode: android.view.ActionMode,
+            menu: android.view.Menu,
+        ): Boolean {
+            // Let the WebView populate first so we can edit the result.
+            val keep = delegate.onCreateActionMode(mode, menu)
+            captureSelection()
+            trimSelectionMenu(menu)
+            injectCustomItems(mode, menu)
+            return keep || true
+        }
+
+        override fun onPrepareActionMode(
+            mode: android.view.ActionMode,
+            menu: android.view.Menu,
+        ): Boolean {
+            // Async TextClassifier items (API 29+) come in via a follow-up prepare
+            // cycle. Re-strip + re-inject so the rendered toolbar stays clean.
+            delegate.onPrepareActionMode(mode, menu)
+            trimSelectionMenu(menu)
+            injectCustomItems(mode, menu)
+            return true
+        }
+
+        override fun onActionItemClicked(
+            mode: android.view.ActionMode,
+            item: android.view.MenuItem,
+        ): Boolean {
+            // Our injected items consume their clicks via setOnMenuItemClickListener,
+            // so this only fires for Copy / Read Aloud / etc. — delegate as-is.
+            return delegate.onActionItemClicked(mode, item)
+        }
+
+        override fun onDestroyActionMode(mode: android.view.ActionMode) {
+            delegate.onDestroyActionMode(mode)
+        }
+
+        override fun onGetContentRect(
+            mode: android.view.ActionMode,
+            view: android.view.View?,
+            outRect: android.graphics.Rect,
+        ) {
+            // Forward when possible so the toolbar anchors to the selection.
+            // Falling back to super positions the toolbar at the view origin,
+            // which looks broken — but better than crashing.
+            if (delegate is android.view.ActionMode.Callback2) {
+                delegate.onGetContentRect(mode, view, outRect)
+            } else {
+                super.onGetContentRect(mode, view, outRect)
+            }
+        }
+    }
+
+    /**
+     * Read the selection stored by the selectionchange tracker injected in
+     * savePosition. `window.getSelection()` here is unreliable (ActionMode may
+     * have cleared the DOM selection by the time JS evaluates), so we prefer
+     * `window._bookSyncSelection` which the tracker captures the moment the
+     * user makes a selection.
+     */
+    private fun captureSelection() {
+        val webView = navigator?.view?.let { findWebView(it) } ?: return
+        webView.evaluateJavascript("""
             (function() {
-                // Primary: tracker stored it when selectionchange fired
                 var stored = window._bookSyncSelection || '';
                 if (stored.trim().length > 3) return stored;
-                // Fallback: try live selection in iframes (same-origin localhost)
                 var frames = document.querySelectorAll('iframe');
                 for (var i = 0; i < frames.length; i++) {
                     try {
@@ -1053,19 +1257,134 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Captured selection: '${captured.take(60)}'")
             }
         }
+    }
 
-        // Add our custom item and force the floating toolbar to refresh
-        if (mode.menu?.findItem(R.id.action_sync_selection) == null) {
-            val item = mode.menu?.add(0, R.id.action_sync_selection, 0, "Sync to Audio")
-            item?.setOnMenuItemClickListener {
+    /**
+     * Insert the reader's two custom selection actions: Define (order 0,
+     * leftmost) and Sync to Audio (order 1). Idempotent via `findItem` —
+     * safe to call from both `onCreateActionMode` and `onPrepareActionMode`,
+     * and from the `onActionModeStarted` fallback.
+     *
+     * Sync to Audio is only injected when there is a downloaded paired
+     * audiobook, since it has nothing to scrub to otherwise.
+     */
+    private fun injectCustomItems(mode: android.view.ActionMode, menu: android.view.Menu) {
+        if (menu.findItem(R.id.action_define) == null) {
+            menu.add(0, R.id.action_define, 0, "Define").setOnMenuItemClickListener {
+                defineSelectedWord()
+                mode.finish()
+                true
+            }
+            Log.d(TAG, "Added 'Define' to ActionMode menu")
+        }
+        if (pair?.audiobookDownloaded == true &&
+            menu.findItem(R.id.action_sync_selection) == null
+        ) {
+            menu.add(0, R.id.action_sync_selection, 1, "Sync to Audio").setOnMenuItemClickListener {
                 syncSelectedTextToAudio()
                 mode.finish()
                 true
             }
             Log.d(TAG, "Added 'Sync to Audio' to ActionMode menu")
         }
-        // Force floating toolbar to rebuild with the new item
-        mode.invalidate()
+    }
+
+    /**
+     * Remove Web Search / Select All / Share / Translate / Assist from the
+     * floating selection toolbar. We keep Copy (android.R.id.copy) so users
+     * can still quote a passage, and we leave anything we don't recognize
+     * alone so accessibility items like "Read Aloud" stay available.
+     *
+     * The system populates these items dynamically (some on Android 14+ from
+     * text classification), so we match by id AND by a loose title contains
+     * check to catch variants like "Share…", "Search web", or locale strings.
+     */
+    private fun trimSelectionMenu(menu: android.view.Menu?) {
+        menu ?: return
+        val knownNoiseIds = setOf(
+            android.R.id.shareText,
+            android.R.id.selectAll,
+            // android.R.id.textAssist (= 0x1020041) is the slot the system
+            // TextClassifier uses to inject "smart" suggestions like a
+            // Google-branded "Define" or "Translate" chip. We have our own
+            // Define / Sync to Audio actions, so strip whatever the
+            // classifier picks here unconditionally. Without this strip a
+            // "G Define" appears next to ours on the second-or-later
+            // selection (after the async classifier pass finishes).
+            android.R.id.textAssist,
+            // Some OEMs use non-android-framework ids for these text-classifier
+            // items; match by title below catches them.
+        )
+        // Substrings (case-insensitive) to match against the item title.
+        // Use contains rather than exact match so we catch "Share…",
+        // "Select all", "Search web", OEM-specific labels, etc.
+        val noiseTitleSubstrings = listOf(
+            "share", "select all", "translate",
+            "web search", "search web", "assist",
+        )
+        val itemsToRemove = mutableListOf<Int>()
+        for (i in 0 until menu.size()) {
+            val item = menu.getItem(i) ?: continue
+            val itemId = item.itemId
+            val title = item.title?.toString().orEmpty()
+            val titleLower = title.lowercase().trim().trimEnd('\u2026', '.', ' ')
+            Log.v(TAG, "Selection menu item: id=0x${itemId.toString(16)} title='$title'")
+            // Don't touch our own custom items
+            if (itemId == R.id.action_define || itemId == R.id.action_sync_selection) continue
+            // Don't touch Copy — users still need it
+            if (itemId == android.R.id.copy) continue
+            // Leave Read Aloud / accessibility items alone
+            if ("read aloud" in titleLower || "speak" in titleLower) continue
+            val matchesId = itemId in knownNoiseIds
+            val matchesTitle = noiseTitleSubstrings.any { it in titleLower }
+            if (matchesId || matchesTitle) itemsToRemove += itemId
+        }
+        itemsToRemove.forEach { menu.removeItem(it) }
+        if (itemsToRemove.isNotEmpty()) {
+            Log.d(TAG, "Stripped ${itemsToRemove.size} noise item(s) from selection toolbar")
+        }
+    }
+
+    /**
+     * Look up the first word of the user's selection on dictionaryapi.dev
+     * and present the result in a dialog. Silent/Toast on offline or 404.
+     */
+    private fun defineSelectedWord() {
+        val raw = lastSelectedText.trim()
+        // Take the first "wordy" token — strip trailing/leading punctuation, pick first whitespace-separated chunk.
+        val firstToken = raw.split(Regex("\\s+"))
+            .firstOrNull()
+            ?.trim { !it.isLetter() && it != '\'' && it != '-' }
+            .orEmpty()
+
+        if (firstToken.isEmpty()) {
+            android.widget.Toast.makeText(this, "Select a word to define", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        Log.d(TAG, "Defining word: '$firstToken'")
+
+        lifecycleScope.launch {
+            val entries = try {
+                dictionaryRepository.lookup(firstToken)
+            } catch (e: Exception) {
+                Log.w(TAG, "Dictionary lookup failed for '$firstToken'", e)
+                android.widget.Toast.makeText(
+                    this@ReaderActivity,
+                    "No definition available",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
+            if (entries.isEmpty()) {
+                android.widget.Toast.makeText(
+                    this@ReaderActivity,
+                    "No definition found for '$firstToken'",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
+            DictionarySheet.show(this@ReaderActivity, firstToken, entries)
+        }
     }
 
     private fun syncSelectedTextToAudio() {
@@ -1103,6 +1422,8 @@ class ReaderActivity : AppCompatActivity() {
                 )
                 val timeStr = formatAudioTime(audioMs.toLong())
                 android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
+                // After successful sync, jump straight to the player so the user can continue listening.
+                switchToAudio()
             } else {
                 android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
             }

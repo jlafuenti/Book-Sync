@@ -42,6 +42,16 @@ interface BookSyncApi {
     @GET("api/library/pairs")
     suspend fun getPairs(): List<BookPairResponse>
 
+    // ---- Per-book extended metadata (description, publisher, etc.) ----
+    // These endpoints return richer metadata than the list endpoints. We use
+    // them for the Book Details screen, which shows the description.
+
+    @GET("api/library/ebooks/{ebookId}")
+    suspend fun getEbookMetadata(@Path("ebookId") ebookId: Int): BookMetadataResponse
+
+    @GET("api/library/audiobooks/{audiobookId}")
+    suspend fun getAudiobookMetadata(@Path("audiobookId") audiobookId: Int): BookMetadataResponse
+
     @POST("api/library/scan")
     suspend fun scanLibrary(): Response<Unit>
 
