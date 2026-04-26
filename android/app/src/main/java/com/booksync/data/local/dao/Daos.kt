@@ -19,6 +19,9 @@ interface BookPairDao {
     @Query("SELECT * FROM book_pairs WHERE id = :pairId")
     suspend fun getPairById(pairId: Int): BookPairEntity?
 
+    @Query("SELECT * FROM book_pairs WHERE id = :pairId")
+    fun getPairByIdFlow(pairId: Int): Flow<BookPairEntity?>
+
     @Upsert
     suspend fun upsertPairs(pairs: List<BookPairEntity>)
 
@@ -76,6 +79,9 @@ interface EBookDao {
     @Query("SELECT * FROM ebooks WHERE id = :ebookId")
     suspend fun getEBookById(ebookId: Int): EBookEntity?
 
+    @Query("SELECT * FROM ebooks WHERE id = :ebookId")
+    fun getEBookByIdFlow(ebookId: Int): Flow<EBookEntity?>
+
     @Upsert
     suspend fun upsertEBooks(ebooks: List<EBookEntity>)
 
@@ -117,6 +123,9 @@ interface AudioBookDao {
 
     @Query("SELECT * FROM audiobooks WHERE id = :audiobookId")
     suspend fun getAudioBookById(audiobookId: Int): AudioBookEntity?
+
+    @Query("SELECT * FROM audiobooks WHERE id = :audiobookId")
+    fun getAudioBookByIdFlow(audiobookId: Int): Flow<AudioBookEntity?>
 
     @Upsert
     suspend fun upsertAudioBooks(audiobooks: List<AudioBookEntity>)

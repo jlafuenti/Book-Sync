@@ -1,30 +1,22 @@
 package com.booksync.ui.downloaded
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -36,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import java.io.File
@@ -59,7 +50,6 @@ import com.booksync.ui.theme.Tandem
  * Downloaded tab — everything you can open offline.
  *
  * Structure:
- *   - Storage summary card at the top
  *   - Three sectioned grids: Matched Sets → Standalone Ebooks → Standalone Audiobooks
  *   - Per-card overflow sheet = same [CardOverflowMenu] used across the app
  *   - Empty state when nothing is downloaded
@@ -71,6 +61,9 @@ fun DownloadedScreen(
     onPairAudioSelect: (Int) -> Unit,
     onEbookSelect: (Int) -> Unit,
     onAudiobookSelect: (Int) -> Unit,
+    onOpenPairDetails: (Int) -> Unit = {},
+    onOpenEbookDetails: (Int) -> Unit = {},
+    onOpenAudiobookDetails: (Int) -> Unit = {},
     viewModel: DownloadedViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -79,7 +72,6 @@ fun DownloadedScreen(
     val ebooks      by viewModel.downloadedEbooks.collectAsState(initial = emptyList())
     val audiobooks  by viewModel.downloadedAudiobooks.collectAsState(initial = emptyList())
     val downloading by viewModel.downloadingProgress.collectAsState()
-    val storage     by viewModel.storage.collectAsState()
 
     // Overflow sheet state — one active target at a time.
     var overflow by remember { mutableStateOf<OverflowSelection?>(null) }
@@ -90,9 +82,9 @@ fun DownloadedScreen(
             is OverflowSelection.Audio    -> sel.toOverflowTarget()
         }
         val actions = when (sel) {
-            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect)
-            is OverflowSelection.Ebook -> sel.buildActions(viewModel, onEbookSelect)
-            is OverflowSelection.Audio -> sel.buildActions(viewModel, onAudiobookSelect)
+            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect, onOpenPairDetails)
+            is OverflowSelection.Ebook -> sel.buildActions(viewModel, onEbookSelect, onOpenEbookDetails)
+            is OverflowSelection.Audio -> sel.buildActions(viewModel, onAudiobookSelect, onOpenAudiobookDetails)
         }
         CardOverflowMenu(
             target = target,
@@ -140,11 +132,6 @@ fun DownloadedScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Storage summary spans full width
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                StorageCard(storage)
-            }
-
             if (pairs.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader("Matched Sets", pairs.size) }
                 items(pairs, key = { "pair_${it.id}" }) { pair ->
@@ -224,69 +211,6 @@ fun DownloadedScreen(
     }
 }
 
-// --------------------------------------------------------------------------
-// Storage summary
-// --------------------------------------------------------------------------
-
-@Composable
-private fun StorageCard(storage: StorageUsage) {
-    val colors = Tandem.colors
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(Tandem.shapes.card)
-            .background(colors.bgCard)
-            .padding(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(colors.accent.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Storage,
-                    contentDescription = null,
-                    tint = colors.accent,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Storage",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    "${formatBytes(storage.usedBytes)} used of ${formatBytes(storage.totalBytes)}",
-                    color = colors.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Text(
-                "${formatBytes(storage.freeBytes)} free",
-                color = colors.textMuted,
-                fontSize = 12.sp,
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        LinearProgressIndicator(
-            progress = { storage.usedFraction },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = colors.accent,
-            trackColor = colors.bgInput,
-        )
-    }
-}
-
 @Composable
 private fun SectionHeader(label: String, count: Int) {
     val colors = Tandem.colors
@@ -310,19 +234,6 @@ private fun SectionHeader(label: String, count: Int) {
             fontWeight = FontWeight.Medium,
         )
     }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
-    var value = bytes.toDouble()
-    var unit = 0
-    while (value >= 1024 && unit < units.lastIndex) {
-        value /= 1024
-        unit++
-    }
-    return if (unit < 2) "${value.toInt()} ${units[unit]}"
-    else String.format("%.1f %s", value, units[unit])
 }
 
 // --------------------------------------------------------------------------
@@ -349,11 +260,15 @@ private sealed class OverflowSelection {
             vm: DownloadedViewModel,
             onReadClick: (Int) -> Unit,
             onListenClick: (Int) -> Unit,
+            onOpenDetails: (Int) -> Unit,
         ) = OverflowActions(
+            onViewDetails      = { onOpenDetails(pair.id) },
             onRead             = if (pair.ebookDownloaded)     ({ onReadClick(pair.id) })   else null,
             onListen           = if (pair.audiobookDownloaded) ({ onListenClick(pair.id) }) else null,
-            onDownloadEbook    = if (!pair.ebookDownloaded)     ({ vm.downloadEbookOnly(pair) })     else null,
-            onDownloadAudiobook= if (!pair.audiobookDownloaded) ({ vm.downloadAudiobookOnly(pair) }) else null,
+            // Single "Download pair" row — only appears when one side is still
+            // missing. Matches the library overflow behaviour (bug 1).
+            onDownloadPair     = if (!pair.ebookDownloaded || !pair.audiobookDownloaded)
+                                     ({ vm.downloadAll(pair) }) else null,
             onDeleteEbook      = if (pair.ebookDownloaded)     ({ vm.deleteEbook(pair) })      else null,
             onDeleteAudiobook  = if (pair.audiobookDownloaded) ({ vm.deleteAudiobook(pair) })  else null,
             onRefreshSyncData  = if (pair.syncMapDownloaded)   ({ vm.refreshSyncData(pair) })  else null,
@@ -375,7 +290,9 @@ private sealed class OverflowSelection {
         fun buildActions(
             vm: DownloadedViewModel,
             onRead: (Int) -> Unit,
+            onOpenDetails: (Int) -> Unit,
         ) = OverflowActions(
+            onViewDetails = { onOpenDetails(ebook.id) },
             onRead        = { onRead(ebook.id) },
             onDeleteEbook = { vm.deleteStandaloneEbook(ebook) },
         )
@@ -393,7 +310,9 @@ private sealed class OverflowSelection {
         fun buildActions(
             vm: DownloadedViewModel,
             onListen: (Int) -> Unit,
+            onOpenDetails: (Int) -> Unit,
         ) = OverflowActions(
+            onViewDetails     = { onOpenDetails(audio.id) },
             onListen          = { onListen(audio.id) },
             onDeleteAudiobook = { vm.deleteStandaloneAudiobook(audio) },
         )

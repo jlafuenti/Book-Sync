@@ -1,5 +1,6 @@
 package com.booksync.ui.account
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -44,11 +46,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
+import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.theme.TandemTheme
 import kotlinx.coroutines.launch
@@ -282,6 +287,29 @@ fun AccountScreen(
                 }
             }
 
+            // Shortcut into the browser-based version of Book Sync, for uploads /
+            // admin operations that aren't surfaced in the Android client yet.
+            item {
+                val context = LocalContext.current
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard),
+                ) {
+                    ActionRow(
+                        title = "Open web app",
+                        description = "Launch Tandem in your browser.",
+                        trailingIcon = Icons.Default.OpenInBrowser,
+                        onClick = {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, "https://booksync.example.com".toUri())
+                            )
+                        },
+                    )
+                }
+            }
+
             item {
                 Box(
                     modifier = Modifier
@@ -471,32 +499,6 @@ private fun ToggleRow(
     }
 }
 
-@Composable
-private fun ActionRow(
-    title: String,
-    description: String? = null,
-    destructive: Boolean = false,
-    trailingIcon: ImageVector = Icons.Default.ChevronRight,
-    onClick: () -> Unit,
-) {
-    val colors = Tandem.colors
-    val tint = if (destructive) colors.statusError else colors.textPrimary
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = tint, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            if (description != null) {
-                Text(description, color = colors.textSecondary, fontSize = 12.sp)
-            }
-        }
-        Icon(trailingIcon, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(18.dp))
-    }
-}
 
 @Composable
 private fun AboutRow(label: String, value: String) {

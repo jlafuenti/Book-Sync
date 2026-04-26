@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <item name="action_sync_selection" type="id" />
+    <item name="action_define" type="id" />
 </resources>

@@ -78,6 +78,9 @@ object Routes {
     const val READER               = "reader/{pairId}"
     const val PLAYER               = "player/{pairId}"
     const val PLAYER_STANDALONE    = "player/standalone/{audiobookId}"
+    const val BOOK_DETAILS_PAIR      = "book_details/pair/{pairId}"
+    const val BOOK_DETAILS_EBOOK     = "book_details/ebook/{ebookId}"
+    const val BOOK_DETAILS_AUDIOBOOK = "book_details/audiobook/{audiobookId}"
 
     /**
      * Build a library URL with optional filter / series / sort / group parameters.
@@ -102,6 +105,9 @@ object Routes {
     fun player(pairId: Int)  = "player/$pairId"
     fun playerStandalone(audiobookId: Int) = "player/standalone/$audiobookId"
     fun diagnostics(channel: String) = "diagnostics/$channel"
+    fun bookDetailsPair(pairId: Int)           = "book_details/pair/$pairId"
+    fun bookDetailsEbook(ebookId: Int)         = "book_details/ebook/$ebookId"
+    fun bookDetailsAudiobook(audiobookId: Int) = "book_details/audiobook/$audiobookId"
 }
 
 /**
@@ -254,6 +260,41 @@ fun BookSyncNavigation() {
                 onSwitchToReader = { }, // not applicable for standalone
             )
         }
+
+        // ---- Book Details (3 route variants for pair / standalone ebook / standalone audiobook) ----
+        composable(
+            Routes.BOOK_DETAILS_PAIR,
+            arguments = listOf(navArgument("pairId") { type = NavType.IntType }),
+        ) {
+            com.booksync.ui.details.BookDetailsScreen(
+                onBack = { navController.popBackStack() },
+                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+            )
+        }
+        composable(
+            Routes.BOOK_DETAILS_EBOOK,
+            arguments = listOf(navArgument("ebookId") { type = NavType.IntType }),
+        ) {
+            com.booksync.ui.details.BookDetailsScreen(
+                onBack = { navController.popBackStack() },
+                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+            )
+        }
+        composable(
+            Routes.BOOK_DETAILS_AUDIOBOOK,
+            arguments = listOf(navArgument("audiobookId") { type = NavType.IntType }),
+        ) {
+            com.booksync.ui.details.BookDetailsScreen(
+                onBack = { navController.popBackStack() },
+                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
+            )
+        }
     }
 }
 
@@ -315,6 +356,9 @@ private fun MainScaffold(outerNavController: NavHostController) {
                     onOpenPairPlayer  = { outerNavController.navigate(Routes.player(it)) },
                     onOpenEbook       = { /* standalone ebook reader — no pair-based reader support yet */ },
                     onOpenAudiobook   = { outerNavController.navigate(Routes.playerStandalone(it)) },
+                    onOpenPairDetails      = { outerNavController.navigate(Routes.bookDetailsPair(it)) },
+                    onOpenEbookDetails     = { outerNavController.navigate(Routes.bookDetailsEbook(it)) },
+                    onOpenAudiobookDetails = { outerNavController.navigate(Routes.bookDetailsAudiobook(it)) },
                     onSeeAll          = { target ->
                         val libraryRoute = when (target) {
                             HomeSeeAll.CONTINUE        -> Routes.library(sort = "RecentlyOpened")
@@ -350,6 +394,15 @@ private fun MainScaffold(outerNavController: NavHostController) {
                     onBookSelect             = { outerNavController.navigate(Routes.reader(it)) },
                     onAudioSelect            = { outerNavController.navigate(Routes.player(it)) },
                     onStandaloneAudioSelect  = { outerNavController.navigate(Routes.playerStandalone(it)) },
+                    onOpenDetails            = { item ->
+                        val route = when {
+                            item.pair != null      -> Routes.bookDetailsPair(item.pair.id)
+                            item.ebook != null     -> Routes.bookDetailsEbook(item.ebook.id)
+                            item.audiobook != null -> Routes.bookDetailsAudiobook(item.audiobook.id)
+                            else -> null
+                        }
+                        route?.let { outerNavController.navigate(it) }
+                    },
                     onSearchClick            = { outerNavController.navigate(Routes.SEARCH) },
                     onSettingsClick          = { outerNavController.navigate(Routes.SETTINGS) },
                     initialFilter            = filterArg,
@@ -365,6 +418,9 @@ private fun MainScaffold(outerNavController: NavHostController) {
                     onPairAudioSelect = { outerNavController.navigate(Routes.player(it)) },
                     onEbookSelect     = { /* standalone ebook reader — no pair-based reader support yet */ },
                     onAudiobookSelect = { outerNavController.navigate(Routes.playerStandalone(it)) },
+                    onOpenPairDetails     = { outerNavController.navigate(Routes.bookDetailsPair(it)) },
+                    onOpenEbookDetails    = { outerNavController.navigate(Routes.bookDetailsEbook(it)) },
+                    onOpenAudiobookDetails = { outerNavController.navigate(Routes.bookDetailsAudiobook(it)) },
                 )
             }
 

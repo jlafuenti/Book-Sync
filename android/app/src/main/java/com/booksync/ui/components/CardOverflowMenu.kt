@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Replay
@@ -88,6 +89,18 @@ sealed class OverflowTarget {
         val isDownloaded: Boolean,
         val isPaired: Boolean,
     ) : OverflowTarget()
+
+    /**
+     * Series bundle — operates over every item in the series. The target only
+     * carries display info; the caller closes over the item list in each
+     * callback so this file doesn't need to know about LibraryItem.
+     */
+    data class Series(
+        val name: String,
+        val itemCount: Int,
+        override val title: String = name,
+        override val subtitle: String? = if (itemCount == 1) "1 book" else "$itemCount books",
+    ) : OverflowTarget()
 }
 
 /**
@@ -100,10 +113,13 @@ sealed class OverflowTarget {
  */
 data class OverflowActions(
     val isOnline: Boolean = true,
+    // Landing page for this book (Book Details screen)
+    val onViewDetails: (() -> Unit)? = null,
     // Reading / listening shortcuts
     val onRead: (() -> Unit)? = null,
     val onListen: (() -> Unit)? = null,
     // Downloads
+    val onDownloadPair: (() -> Unit)? = null,
     val onDownloadEbook: (() -> Unit)? = null,
     val onDownloadAudiobook: (() -> Unit)? = null,
     val onDeleteEbook: (() -> Unit)? = null,
@@ -118,6 +134,10 @@ data class OverflowActions(
     // Pairing
     val onPairWith: (() -> Unit)? = null,
     val onUnlinkPair: (() -> Unit)? = null,
+    // Series-only (rendered by SeriesActions)
+    val onDownloadSeries: (() -> Unit)? = null,
+    val onResetSeriesProgress: (() -> Unit)? = null,
+    val onMarkSeriesComplete: (() -> Unit)? = null,
 )
 
 /**
@@ -143,6 +163,8 @@ fun CardOverflowMenu(
     var confirmReset by remember { mutableStateOf(false) }
     var confirmCancelTranscription by remember { mutableStateOf(false) }
     var showMismatch by remember { mutableStateOf(false) }
+    var confirmSeriesReset by remember { mutableStateOf(false) }
+    var confirmSeriesComplete by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -211,6 +233,10 @@ fun CardOverflowMenu(
                 is OverflowTarget.Audiobook -> AudiobookActions(target, actions,
                     onConfirmDelete = { confirmDeleteAudiobook = true },
                     onConfirmReset  = { confirmReset = true },
+                )
+                is OverflowTarget.Series    -> SeriesActions(target, actions,
+                    onConfirmReset    = { confirmSeriesReset = true },
+                    onConfirmComplete = { confirmSeriesComplete = true },
                 )
             }
         }
@@ -287,6 +313,34 @@ fun CardOverflowMenu(
             onCancel = { confirmCancelTranscription = false },
         )
     }
+    if (confirmSeriesReset && target is OverflowTarget.Series) {
+        ConfirmDialog(
+            title = "Reset series progress?",
+            message = "Reading and listening positions for every book in \"${target.name}\" will be cleared.",
+            confirmLabel = "Reset all",
+            destructive = true,
+            onConfirm = {
+                confirmSeriesReset = false
+                actions.onResetSeriesProgress?.invoke()
+                onDismiss()
+            },
+            onCancel = { confirmSeriesReset = false },
+        )
+    }
+    if (confirmSeriesComplete && target is OverflowTarget.Series) {
+        ConfirmDialog(
+            title = "Mark series complete?",
+            message = "Every book in \"${target.name}\" will be marked finished.",
+            confirmLabel = "Mark all",
+            destructive = false,
+            onConfirm = {
+                confirmSeriesComplete = false
+                actions.onMarkSeriesComplete?.invoke()
+                onDismiss()
+            },
+            onCancel = { confirmSeriesComplete = false },
+        )
+    }
     if (showMismatch && target is OverflowTarget.Pair) {
         AlertDialog(
             onDismissRequest = { showMismatch = false },
@@ -322,6 +376,19 @@ private fun PairActions(
     onConfirmReset: () -> Unit,
     onConfirmCancelTx: () -> Unit,
 ) {
+    actions.onViewDetails?.let {
+        ActionRow(Icons.Default.Info, "View details", onClick = it)
+    }
+    // "Download pair" is the primary download affordance on a pair overflow.
+    // Per-media downloads live on the Book Details page (TODO #15); listing three
+    // download rows here bloats the sheet. Show only when at least one side is
+    // still missing locally.
+    val needsAnyDownload = !target.hasEbookDownloaded || !target.hasAudiobookDownloaded
+    if (needsAnyDownload) {
+        actions.onDownloadPair?.let {
+            ActionRow(Icons.Default.CloudDownload, "Download pair", onClick = it)
+        }
+    }
     // Open shortcuts — only when action wired AND media present
     actions.onRead?.takeIf { target.hasEbookDownloaded }?.let {
         ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
@@ -329,19 +396,12 @@ private fun PairActions(
     actions.onListen?.takeIf { target.hasAudiobookDownloaded }?.let {
         ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
     }
-    // Downloads
-    if (!target.hasEbookDownloaded) {
-        actions.onDownloadEbook?.let {
-            ActionRow(Icons.Default.CloudDownload, "Download ebook", onClick = it)
-        }
-    } else {
+    // Per-media delete is still useful on the pair overflow — hiding it would
+    // mean the only way to free space is the Book Details page.
+    if (target.hasEbookDownloaded) {
         ActionRow(Icons.Default.Delete, "Delete ebook", destructive = true, onClick = onConfirmDeleteEb)
     }
-    if (!target.hasAudiobookDownloaded) {
-        actions.onDownloadAudiobook?.let {
-            ActionRow(Icons.Default.CloudDownload, "Download audiobook", onClick = it)
-        }
-    } else {
+    if (target.hasAudiobookDownloaded) {
         ActionRow(Icons.Default.Delete, "Delete audiobook", destructive = true, onClick = onConfirmDeleteAud)
     }
     // Transcription
@@ -390,6 +450,9 @@ private fun EbookActions(
     onConfirmDelete: () -> Unit,
     onConfirmReset: () -> Unit,
 ) {
+    actions.onViewDetails?.let {
+        ActionRow(Icons.Default.Info, "View details", onClick = it)
+    }
     actions.onRead?.takeIf { target.isDownloaded }?.let {
         ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
     }
@@ -420,6 +483,9 @@ private fun AudiobookActions(
     onConfirmDelete: () -> Unit,
     onConfirmReset: () -> Unit,
 ) {
+    actions.onViewDetails?.let {
+        ActionRow(Icons.Default.Info, "View details", onClick = it)
+    }
     actions.onListen?.takeIf { target.isDownloaded }?.let {
         ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
     }
@@ -440,6 +506,24 @@ private fun AudiobookActions(
         actions.onPairWith?.let {
             ActionRow(Icons.Default.Link, "Pair with ebook…", onClick = it)
         }
+    }
+}
+
+@Composable
+private fun SeriesActions(
+    target: OverflowTarget.Series,
+    actions: OverflowActions,
+    onConfirmReset: () -> Unit,
+    onConfirmComplete: () -> Unit,
+) {
+    actions.onDownloadSeries?.let {
+        ActionRow(Icons.Default.CloudDownload, "Download all in series", onClick = it)
+    }
+    actions.onMarkSeriesComplete?.let {
+        ActionRow(Icons.Default.CheckCircle, "Mark series complete", onClick = onConfirmComplete)
+    }
+    actions.onResetSeriesProgress?.let {
+        ActionRow(Icons.Default.Replay, "Reset series progress", onClick = onConfirmReset)
     }
 }
 

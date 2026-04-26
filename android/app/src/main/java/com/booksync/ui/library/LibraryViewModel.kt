@@ -126,9 +126,30 @@ class LibraryViewModel @Inject constructor(
     fun setSort(sort: LibrarySort)            { _uiState.value = _uiState.value.copy(sort = sort) }
     fun setTranscribedOnly(v: Boolean)        { _uiState.value = _uiState.value.copy(transcribedOnly = v) }
     fun setGroupBySeries(v: Boolean)          { _uiState.value = _uiState.value.copy(groupBySeries = v, seriesFilter = null) }
-    fun drillIntoSeries(name: String)         { _uiState.value = _uiState.value.copy(seriesFilter = name) }
+    /**
+     * Drill from the grouped series grid into a flat list scoped to one series.
+     * We also flip `groupBySeries` off — otherwise the drilled view tries to
+     * render as a stack of one, which is what the user saw as "nothing happens."
+     * `clearSeriesFilter()` leaves grouping off; the user can re-enable from the
+     * toggle.
+     */
+    fun drillIntoSeries(name: String)         { _uiState.value = _uiState.value.copy(seriesFilter = name, groupBySeries = false) }
     fun clearSeriesFilter()                   { _uiState.value = _uiState.value.copy(seriesFilter = null) }
     fun setSearchQuery(q: String)             { _uiState.value = _uiState.value.copy(searchQuery = q) }
+
+    /**
+     * Reset every narrowing filter back to defaults — called from the
+     * "Clear" action on the filtered-count bar. Keeps sort + groupBySeries
+     * alone: those are user preferences, not filters.
+     */
+    fun clearAllFilters() {
+        _uiState.value = _uiState.value.copy(
+            filter = LibraryFilter.ALL,
+            transcribedOnly = false,
+            seriesFilter = null,
+            searchQuery = "",
+        )
+    }
 
     /**
      * One-shot initializer for deep-links: e.g. Home → "library?filter=NEW&sort=RecentlyAdded".
@@ -203,11 +224,13 @@ class LibraryViewModel @Inject constructor(
             }
         }
 
-        // Step 2 — transcribed-only filter (pairs only; standalone items pass through).
-        // Uses server-side status rather than local cache so the filter is useful
-        // before the user has downloaded anything.
+        // Step 2 — transcribed-only filter.
+        // Only pairs have a transcription — so when this toggle is on we drop
+        // standalone ebooks/audiobooks too. Uses server-side status rather
+        // than local cache so the filter is useful before the user has
+        // downloaded anything.
         val transcribedFiltered = if (ui.transcribedOnly) {
-            filtered.filter { it.pair == null || it.pair.status == "synced" }
+            filtered.filter { it.pair?.status == "synced" }
         } else filtered
 
         // Step 3 — series drill-in
@@ -367,6 +390,43 @@ class LibraryViewModel @Inject constructor(
     }
     fun resetProgressEbook(id: Int)               = runSafely { repository.resetMediaProgress("ebook", id) }
     fun resetProgressAudiobook(id: Int)           = runSafely { repository.resetMediaProgress("audiobook", id) }
+
+    // --- Actions (series batch) --------------------------------------------
+    //
+    // A series can mix pairs, standalone ebooks, and standalone audiobooks.
+    // Each call iterates and dispatches the appropriate per-item op — the
+    // worker / repository handle already-downloaded / already-complete
+    // idempotently, so no skip logic needed here.
+
+    fun downloadSeries(items: List<LibraryItem>) {
+        items.forEach { item ->
+            when {
+                item.pair != null      -> downloadAll(item.pair)
+                item.ebook != null     -> downloadStandaloneEbook(item.ebook)
+                item.audiobook != null -> downloadStandaloneAudiobook(item.audiobook)
+            }
+        }
+    }
+
+    fun markSeriesComplete(items: List<LibraryItem>) {
+        items.forEach { item ->
+            when {
+                item.pair != null      -> markComplete(item.pair)
+                item.ebook != null     -> markCompleteEbook(item.ebook.id)
+                item.audiobook != null -> markCompleteAudiobook(item.audiobook.id)
+            }
+        }
+    }
+
+    fun resetSeriesProgress(items: List<LibraryItem>) {
+        items.forEach { item ->
+            when {
+                item.pair != null      -> resetProgress(item.pair)
+                item.ebook != null     -> resetProgressEbook(item.ebook.id)
+                item.audiobook != null -> resetProgressAudiobook(item.audiobook.id)
+            }
+        }
+    }
 
     // --- Transcription actions ---------------------------------------------
 

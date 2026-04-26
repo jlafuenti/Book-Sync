@@ -71,6 +71,9 @@ fun HomeScreen(
     onOpenPairPlayer: (pairId: Int) -> Unit,
     onOpenEbook: (ebookId: Int) -> Unit,
     onOpenAudiobook: (audiobookId: Int) -> Unit,
+    onOpenPairDetails: (Int) -> Unit = {},
+    onOpenEbookDetails: (Int) -> Unit = {},
+    onOpenAudiobookDetails: (Int) -> Unit = {},
     onSeeAll: (route: HomeSeeAll) -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
@@ -228,6 +231,9 @@ fun HomeScreen(
                     onOpenPairPlayer = onOpenPairPlayer,
                     onOpenEbook = onOpenEbook,
                     onOpenAudiobook = onOpenAudiobook,
+                    onOpenPairDetails = onOpenPairDetails,
+                    onOpenEbookDetails = onOpenEbookDetails,
+                    onOpenAudiobookDetails = onOpenAudiobookDetails,
                 ),
                 onDismiss = { overflowTarget = null },
             )
@@ -513,6 +519,9 @@ private fun buildHomeOverflowActions(
     onOpenPairPlayer: (Int) -> Unit,
     onOpenEbook: (Int) -> Unit,
     onOpenAudiobook: (Int) -> Unit,
+    onOpenPairDetails: (Int) -> Unit,
+    onOpenEbookDetails: (Int) -> Unit,
+    onOpenAudiobookDetails: (Int) -> Unit,
 ): OverflowActions {
     val isOnline by vm.isOnline.collectAsState()
     // Pull the live pair entity (if present) so delete/download operate on the real record.
@@ -525,6 +534,7 @@ private fun buildHomeOverflowActions(
     return when (target) {
         is OverflowTarget.Pair -> OverflowActions(
             isOnline              = isOnline,
+            onViewDetails         = { onOpenPairDetails(target.pairId) },
             onRead                = pair?.let { { onOpenPairReader(it.id) } },
             onListen              = pair?.let { { onOpenPairPlayer(it.id) } },
             onDownloadEbook       = pair?.let { { vm.downloadEbook(it) } },
@@ -540,16 +550,20 @@ private fun buildHomeOverflowActions(
         )
         is OverflowTarget.Ebook -> OverflowActions(
             isOnline        = isOnline,
+            onViewDetails   = { onOpenEbookDetails(target.ebookId) },
             onRead          = { onOpenEbook(target.ebookId) },
             onMarkComplete  = { vm.markCompleteEbook(target.ebookId) },
             onResetProgress = { vm.resetProgressEbook(target.ebookId) },
         )
         is OverflowTarget.Audiobook -> OverflowActions(
             isOnline        = isOnline,
+            onViewDetails   = { onOpenAudiobookDetails(target.audiobookId) },
             onListen        = { onOpenAudiobook(target.audiobookId) },
             onMarkComplete  = { vm.markCompleteAudiobook(target.audiobookId) },
             onResetProgress = { vm.resetProgressAudiobook(target.audiobookId) },
         )
+        // Home has no series-grouped grid; series overflow is library-only.
+        is OverflowTarget.Series -> OverflowActions(isOnline = isOnline)
     }
 }
 

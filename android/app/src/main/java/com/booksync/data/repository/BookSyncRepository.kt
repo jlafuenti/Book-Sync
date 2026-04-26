@@ -7,6 +7,7 @@ import com.booksync.data.remote.*
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -219,6 +220,15 @@ class BookSyncRepository @Inject constructor(
     /** Get a single audiobook by ID. */
     suspend fun getAudiobookById(audiobookId: Int): AudioBookEntity? = audioBookDao.getAudioBookById(audiobookId)
 
+    /** Reactive single-pair flow for the details screen. */
+    fun getPairByIdFlow(pairId: Int): Flow<BookPairEntity?> = bookPairDao.getPairByIdFlow(pairId)
+
+    /** Reactive single-ebook flow for the details screen. */
+    fun getEbookByIdFlow(ebookId: Int): Flow<EBookEntity?> = eBookDao.getEBookByIdFlow(ebookId)
+
+    /** Reactive single-audiobook flow for the details screen. */
+    fun getAudiobookByIdFlow(audiobookId: Int): Flow<AudioBookEntity?> = audioBookDao.getAudioBookByIdFlow(audiobookId)
+
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
         return api.searchLibrary(query)
@@ -399,6 +409,34 @@ class BookSyncRepository @Inject constructor(
         syncPointDao.insertPoints(entities)
         bookPairDao.setSyncMapDownloaded(pairId, true)
         log("downloadSyncMap complete — ${entities.size} sync points saved")
+    }
+
+    /**
+     * Best-effort sync-map fetch with exponential backoff (1s/3s/10s).
+     * Returns true when the sync map landed, false when the server has no sync map
+     * yet (404) or every attempt failed. Never throws — callers treat a false
+     * return as "try again later" and move on.
+     */
+    suspend fun downloadSyncMapWithRetry(pairId: Int): Boolean {
+        val delaysMs = longArrayOf(1_000L, 3_000L, 10_000L)
+        repeat(delaysMs.size) { attempt ->
+            try {
+                downloadSyncMap(pairId)
+                return true
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 404) {
+                    log("downloadSyncMapWithRetry — 404 for pair $pairId; sync map not ready yet")
+                    return false
+                }
+                log("downloadSyncMapWithRetry — HTTP ${e.code()} (attempt ${attempt + 1}/${delaysMs.size}): ${e.message()}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("downloadSyncMapWithRetry — error (attempt ${attempt + 1}/${delaysMs.size}): ${e.message}")
+            }
+            if (attempt < delaysMs.size - 1) kotlinx.coroutines.delay(delaysMs[attempt])
+        }
+        return false
     }
 
     fun getEbookFile(pair: BookPairEntity): File =
