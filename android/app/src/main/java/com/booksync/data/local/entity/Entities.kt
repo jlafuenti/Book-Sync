@@ -25,7 +25,10 @@ data class BookPairEntity(
     val status: String,
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
-    val syncMapDownloaded: Boolean = false
+    val syncMapDownloaded: Boolean = false,
+    // Audiobook cover filename as served by /api/files/covers/{filename}.
+    // Populated from AudioBookResponse.cover_path on library sync.
+    val audiobookCoverPath: String? = null,
 )
 
 @Entity(tableName = "ebooks")
@@ -90,6 +93,10 @@ data class PendingSyncEntity(
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
     val epubLocator: String? = null,
+    // Persisted so the SyncWorker's flushed request carries the same
+    // history-log flag the original write intended. False for heartbeat
+    // position saves, true for pause/stop/30-min-tick saves.
+    val appendToLog: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
 

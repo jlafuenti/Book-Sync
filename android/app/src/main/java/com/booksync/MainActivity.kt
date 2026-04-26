@@ -12,7 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import dagger.hilt.android.AndroidEntryPoint
 import com.booksync.ui.BookSyncNavigation
-import com.booksync.ui.settings.SettingsViewModel
+import com.booksync.ui.account.AccountViewModel
 import com.booksync.ui.theme.BookSyncTheme
 
 /**
@@ -21,7 +21,7 @@ import com.booksync.ui.theme.BookSyncTheme
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
-    private val settingsViewModel: SettingsViewModel by viewModels()
+    private val settingsViewModel: AccountViewModel by viewModels()
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()

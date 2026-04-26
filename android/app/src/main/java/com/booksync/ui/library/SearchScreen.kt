@@ -1,35 +1,93 @@
 package com.booksync.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import android.content.Context
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.ui.components.EmptyState
+import com.booksync.ui.theme.Tandem
+import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+// ============================================================================
+// Search result model
+// ============================================================================
 
 data class SearchResultItem(
     val id: String,
@@ -39,16 +97,27 @@ data class SearchResultItem(
     val seriesIndex: Float?,
     val isEbook: Boolean,
     val isAudiobook: Boolean,
-    val pairId: Int? = null
+    val pairId: Int? = null,
 ) {
     /** Extract numeric media ID from the composite id (e.g. "ebook_42" -> 42). */
     val numericId: Int? get() = id.substringAfter("_").toIntOrNull()
+
+    /** Convenience flag for UI partitioning. */
+    val isPair: Boolean get() = pairId != null
 }
+
+// ============================================================================
+// ViewModel
+// ============================================================================
 
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    private val workManager = WorkManager.getInstance(context)
+
     private val _query = MutableStateFlow("")
     val query = _query.asStateFlow()
 
@@ -58,7 +127,12 @@ class SearchViewModel @Inject constructor(
     private val _searchResults = MutableStateFlow<List<SearchResultItem>>(emptyList())
     val searchResults = _searchResults.asStateFlow()
 
-    // Pairing state
+    /** True when the last query fell back to the local DB (server unreachable). */
+    private val _usingOfflineFallback = MutableStateFlow(false)
+    val usingOfflineFallback = _usingOfflineFallback.asStateFlow()
+
+    // --- Pairing state ------------------------------------------------------
+
     private val _unpairedAudiobooks = MutableStateFlow<List<AudioBookEntity>>(emptyList())
     val unpairedAudiobooks = _unpairedAudiobooks.asStateFlow()
 
@@ -75,9 +149,9 @@ class SearchViewModel @Inject constructor(
         searchJob?.cancel()
         if (newQuery.isBlank()) {
             _searchResults.value = emptyList()
+            _usingOfflineFallback.value = false
             return
         }
-
         searchJob = viewModelScope.launch {
             delay(500) // debounce
             performSearch(newQuery)
@@ -88,9 +162,7 @@ class SearchViewModel @Inject constructor(
         searchJob?.cancel()
         val q = _query.value
         if (q.isBlank()) return
-        viewModelScope.launch {
-            performSearch(q)
-        }
+        viewModelScope.launch { performSearch(q) }
     }
 
     private suspend fun performSearch(q: String) {
@@ -98,84 +170,148 @@ class SearchViewModel @Inject constructor(
         try {
             val response = repository.searchLibrary(q)
             val items = mutableListOf<SearchResultItem>()
-            
+
             val pairedEbookIds = response.book_pairs.map { it.ebook.id }.toSet()
             val pairedAudiobookIds = response.book_pairs.map { it.audiobook.id }.toSet()
 
             response.book_pairs.forEach { pair ->
-                items.add(
-                    SearchResultItem(
-                        id = "pair_${pair.id}",
-                        title = pair.ebook.title,
-                        author = pair.ebook.author ?: pair.audiobook.author,
-                        series = pair.ebook.series ?: pair.audiobook.series,
-                        seriesIndex = pair.ebook.series_index ?: pair.audiobook.series_index,
-                        isEbook = true,
-                        isAudiobook = true,
-                        pairId = pair.id
-                    )
+                items += SearchResultItem(
+                    id = "pair_${pair.id}",
+                    title = pair.ebook.title,
+                    author = pair.ebook.author ?: pair.audiobook.author,
+                    series = pair.ebook.series ?: pair.audiobook.series,
+                    seriesIndex = pair.ebook.series_index ?: pair.audiobook.series_index,
+                    isEbook = true,
+                    isAudiobook = true,
+                    pairId = pair.id,
                 )
             }
-            
             response.ebooks.forEach { ebook ->
                 if (ebook.id !in pairedEbookIds) {
-                    items.add(
-                        SearchResultItem(
-                            id = "ebook_${ebook.id}",
-                            title = ebook.title,
-                            author = ebook.author,
-                            series = ebook.series,
-                            seriesIndex = ebook.series_index,
-                            isEbook = true,
-                            isAudiobook = false
-                        )
+                    items += SearchResultItem(
+                        id = "ebook_${ebook.id}",
+                        title = ebook.title,
+                        author = ebook.author,
+                        series = ebook.series,
+                        seriesIndex = ebook.series_index,
+                        isEbook = true,
+                        isAudiobook = false,
                     )
                 }
             }
-            
             response.audiobooks.forEach { audio ->
                 if (audio.id !in pairedAudiobookIds) {
-                    items.add(
-                        SearchResultItem(
-                            id = "audio_${audio.id}",
-                            title = audio.title,
-                            author = audio.author,
-                            series = audio.series,
-                            seriesIndex = audio.series_index,
-                            isEbook = false,
-                            isAudiobook = true
-                        )
+                    items += SearchResultItem(
+                        id = "audio_${audio.id}",
+                        title = audio.title,
+                        author = audio.author,
+                        series = audio.series,
+                        seriesIndex = audio.series_index,
+                        isEbook = false,
+                        isAudiobook = true,
                     )
                 }
             }
-            
-            val prefixRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
-            
-            _searchResults.value = items.sortedWith(
-                compareBy<SearchResultItem, String?>(nullsLast()) { it.series?.replace(prefixRegex, "")?.lowercase() }
-                    .thenBy(nullsLast()) { it.seriesIndex }
-                    .thenBy { it.title.replace(prefixRegex, "").lowercase() }
-            )
-            
+            _searchResults.value = sortResults(items)
+            _usingOfflineFallback.value = false
         } catch (_: Exception) {
+            // Network down / server error — fall back to local DB.
+            _searchResults.value = sortResults(searchLocalCache(q))
+            _usingOfflineFallback.value = true
         } finally {
             _isLoading.value = false
         }
     }
 
-    // Pairing functions
+    /** Client-side filter over the Room-cached pairs/ebooks/audiobooks. */
+    private suspend fun searchLocalCache(q: String): List<SearchResultItem> {
+        val needle = q.lowercase()
+        val pairs = repository.getPairsFlow().first()
+        val ebooks = repository.getEbooksFlow().first()
+        val audios = repository.getAudiobooksFlow().first()
+
+        val pairedEbookIds = pairs.map { it.ebookId }.toSet()
+        val pairedAudioIds = pairs.map { it.audiobookId }.toSet()
+
+        val items = mutableListOf<SearchResultItem>()
+        pairs.forEach { pair ->
+            val haystack = listOfNotNull(
+                pair.ebookTitle,
+                pair.audiobookTitle,
+                pair.ebookAuthor,
+                pair.audiobookAuthor,
+            ).joinToString(" ").lowercase()
+            if (needle in haystack) {
+                items += SearchResultItem(
+                    id = "pair_${pair.id}",
+                    title = pair.ebookTitle,
+                    author = pair.ebookAuthor ?: pair.audiobookAuthor,
+                    series = null,
+                    seriesIndex = null,
+                    isEbook = true,
+                    isAudiobook = true,
+                    pairId = pair.id,
+                )
+            }
+        }
+        ebooks.forEach { ebook ->
+            if (ebook.id in pairedEbookIds) return@forEach
+            val haystack = listOfNotNull(ebook.title, ebook.author, ebook.series)
+                .joinToString(" ").lowercase()
+            if (needle in haystack) {
+                items += SearchResultItem(
+                    id = "ebook_${ebook.id}",
+                    title = ebook.title,
+                    author = ebook.author,
+                    series = ebook.series,
+                    seriesIndex = ebook.seriesIndex,
+                    isEbook = true,
+                    isAudiobook = false,
+                )
+            }
+        }
+        audios.forEach { audio ->
+            if (audio.id in pairedAudioIds) return@forEach
+            val haystack = listOfNotNull(audio.title, audio.author, audio.series)
+                .joinToString(" ").lowercase()
+            if (needle in haystack) {
+                items += SearchResultItem(
+                    id = "audio_${audio.id}",
+                    title = audio.title,
+                    author = audio.author,
+                    series = audio.series,
+                    seriesIndex = audio.seriesIndex,
+                    isEbook = false,
+                    isAudiobook = true,
+                )
+            }
+        }
+        return items
+    }
+
+    /** Series-aware sort — strips "The/A/An" articles, then series, then title. */
+    private fun sortResults(items: List<SearchResultItem>): List<SearchResultItem> {
+        val articleRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
+        return items.sortedWith(
+            compareBy<SearchResultItem, String?>(nullsLast()) {
+                it.series?.replace(articleRegex, "")?.lowercase()
+            }
+                .thenBy(nullsLast()) { it.seriesIndex }
+                .thenBy { it.title.replace(articleRegex, "").lowercase() },
+        )
+    }
+
+    // --- Pairing ------------------------------------------------------------
 
     fun loadUnpairedAudiobooks() {
         viewModelScope.launch {
-            try { _unpairedAudiobooks.value = repository.getUnpairedAudiobooks() }
-            catch (_: Exception) {}
+            runCatching { _unpairedAudiobooks.value = repository.getUnpairedAudiobooks() }
         }
     }
 
     fun loadUnpairedEbooks() {
         viewModelScope.launch {
-            try { _unpairedEbooks.value = repository.getUnpairedEbooks() }
-            catch (_: Exception) {}
+            runCatching { _unpairedEbooks.value = repository.getUnpairedEbooks() }
         }
     }
 
@@ -184,7 +320,6 @@ class SearchViewModel @Inject constructor(
             try {
                 repository.createPair(ebookId, audiobookId)
                 _pairingError.value = null
-                // Re-run search to refresh results
                 performSearch(_query.value)
             } catch (e: Exception) {
                 _pairingError.value = e.message
@@ -193,7 +328,38 @@ class SearchViewModel @Inject constructor(
     }
 
     fun clearPairingError() { _pairingError.value = null }
+
+    // --- Downloads from search results --------------------------------------
+    //
+    // Mirrors LibraryViewModel.enqueue so the Downloaded tab's progress / state
+    // observers pick these up identically. `idForWorker` is the numeric ID from
+    // the SearchResultItem and is used both as the worker's input key and the
+    // unique work name. TYPE is "ALL" for a pair, else the appropriate
+    // standalone type.
+
+    fun downloadFromResult(item: SearchResultItem) {
+        val id = item.numericId ?: return
+        val type = when {
+            item.isPair      -> "ALL"
+            item.isEbook     -> "STANDALONE_EBOOK"
+            item.isAudiobook -> "STANDALONE_AUDIOBOOK"
+            else             -> return
+        }
+        val uniqueName = "download_search_${type.lowercase()}_$id"
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(
+                DownloadWorker.KEY_PAIR_ID to (item.pairId ?: id),
+                DownloadWorker.KEY_TYPE    to type,
+            ))
+            .addTag("download_worker")
+            .build()
+        workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+    }
 }
+
+// ============================================================================
+// Screen
+// ============================================================================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -201,209 +367,52 @@ fun SearchScreen(
     onBack: () -> Unit,
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
-    viewModel: SearchViewModel = hiltViewModel()
+    viewModel: SearchViewModel = hiltViewModel(),
 ) {
+    val colors = Tandem.colors
     val query by viewModel.query.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val results by viewModel.searchResults.collectAsState()
+    val usingOfflineFallback by viewModel.usingOfflineFallback.collectAsState()
 
-    // Manage dialog state
-    var selectedItem by remember { mutableStateOf<SearchResultItem?>(null) }
-
-    // Pairing bottom sheet state
-    var showPairSheet by remember { mutableStateOf(false) }
-    var pairSearchQuery by remember { mutableStateOf("") }
-    // Which item is being paired (the one from the manage dialog)
     var pairingItem by remember { mutableStateOf<SearchResultItem?>(null) }
+    var pairSearchQuery by remember { mutableStateOf("") }
 
     val unpairedAudiobooks by viewModel.unpairedAudiobooks.collectAsState()
     val unpairedEbooks by viewModel.unpairedEbooks.collectAsState()
     val pairingError by viewModel.pairingError.collectAsState()
 
-    // ---- Manage Dialog (identical to EbookCard / AudiobookCard manage dialogs) ----
-    if (selectedItem != null) {
-        val item = selectedItem!!
-        AlertDialog(
-            onDismissRequest = { selectedItem = null },
-            title = {
-                Text(if (item.isEbook) "Manage Ebook" else "Manage Audiobook")
+    // ---- Pairing bottom sheet (unchanged flow, restyled chrome) ----
+    if (pairingItem != null) {
+        val item = pairingItem!!
+        val isEbookBeingPaired = item.isEbook
+        LaunchedEffect(item.id) {
+            if (isEbookBeingPaired) viewModel.loadUnpairedAudiobooks()
+            else viewModel.loadUnpairedEbooks()
+        }
+        PairingSheet(
+            item = item,
+            isEbookBeingPaired = isEbookBeingPaired,
+            unpairedAudiobooks = unpairedAudiobooks,
+            unpairedEbooks = unpairedEbooks,
+            pairingError = pairingError,
+            pairSearchQuery = pairSearchQuery,
+            onPairSearchQueryChange = { pairSearchQuery = it },
+            onPair = { counterpartId ->
+                val selfId = item.numericId ?: return@PairingSheet
+                if (isEbookBeingPaired) viewModel.pairEbookWithAudiobook(selfId, counterpartId)
+                else viewModel.pairEbookWithAudiobook(counterpartId, selfId)
+                pairingItem = null
+                pairSearchQuery = ""
             },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Show book info
-                    Text(item.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    item.author?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    if (!item.series.isNullOrBlank()) {
-                        Text(
-                            buildString {
-                                append(item.series)
-                                if (item.seriesIndex != null && item.seriesIndex > 0f) {
-                                    append(" #${if (item.seriesIndex % 1 == 0f) item.seriesIndex.toInt().toString() else item.seriesIndex.toString()}")
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                    // Pair action
-                    TextButton(onClick = {
-                        pairingItem = item
-                        selectedItem = null
-                        if (item.isEbook) viewModel.loadUnpairedAudiobooks()
-                        else viewModel.loadUnpairedEbooks()
-                        showPairSheet = true
-                    }) {
-                        Icon(Icons.Default.Link, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (item.isEbook) "🎧 Pair with Audiobook" else "📚 Pair with Ebook")
-                    }
-                }
+            onDismiss = {
+                pairingItem = null
+                pairSearchQuery = ""
+                viewModel.clearPairingError()
             },
-            confirmButton = {
-                TextButton(onClick = { selectedItem = null }) { Text("Close") }
-            }
         )
     }
 
-    // ---- Pairing Bottom Sheet ----
-    if (showPairSheet && pairingItem != null) {
-        val item = pairingItem!!
-        val isEbookBeingPaired = item.isEbook
-
-        val counterparts = if (isEbookBeingPaired) unpairedAudiobooks else unpairedEbooks
-        val filtered = if (pairSearchQuery.isBlank()) {
-            counterparts
-        } else {
-            val q = pairSearchQuery.lowercase()
-            counterparts.filter {
-                when (it) {
-                    is AudioBookEntity -> it.title.lowercase().contains(q) ||
-                        (it.author?.lowercase()?.contains(q) == true) ||
-                        (it.series?.lowercase()?.contains(q) == true)
-                    is EBookEntity -> it.title.lowercase().contains(q) ||
-                        (it.author?.lowercase()?.contains(q) == true) ||
-                        (it.series?.lowercase()?.contains(q) == true)
-                    else -> false
-                }
-            }
-        }
-
-        ModalBottomSheet(
-            onDismissRequest = {
-                showPairSheet = false
-                pairSearchQuery = ""
-                pairingItem = null
-                viewModel.clearPairingError()
-            }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 32.dp)
-            ) {
-                Text(
-                    "Pair \"${item.title}\"",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    if (isEbookBeingPaired) "Select an audiobook to pair with this ebook."
-                    else "Select an ebook to pair with this audiobook.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                )
-
-                if (pairingError != null) {
-                    Text(
-                        "Error: $pairingError",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-
-                OutlinedTextField(
-                    value = pairSearchQuery,
-                    onValueChange = { pairSearchQuery = it },
-                    label = { Text(if (isEbookBeingPaired) "Search audiobooks..." else "Search ebooks...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Search, null) }
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                if (counterparts.isEmpty()) {
-                    Text(
-                        if (isEbookBeingPaired) "No unpaired audiobooks available."
-                        else "No unpaired ebooks available.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 24.dp)
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 400.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        if (isEbookBeingPaired) {
-                            items(filtered.filterIsInstance<AudioBookEntity>()) { audiobook ->
-                                ListItem(
-                                    headlineContent = { Text(audiobook.title, fontWeight = FontWeight.Medium) },
-                                    supportingContent = {
-                                        val parts = listOfNotNull(
-                                            audiobook.author,
-                                            audiobook.series?.let { s -> "$s${audiobook.seriesIndex?.let { " #${it.toInt()}" } ?: ""}" }
-                                        )
-                                        if (parts.isNotEmpty()) Text(parts.joinToString(" · "))
-                                    },
-                                    trailingContent = {
-                                        AssistChip(onClick = {}, label = { Text(audiobook.format.uppercase(), style = MaterialTheme.typography.labelSmall) })
-                                    },
-                                    modifier = Modifier.clickable {
-                                        val ebookId = item.numericId ?: return@clickable
-                                        viewModel.pairEbookWithAudiobook(ebookId, audiobook.id)
-                                        showPairSheet = false
-                                        pairSearchQuery = ""
-                                        pairingItem = null
-                                    }
-                                )
-                            }
-                        } else {
-                            items(filtered.filterIsInstance<EBookEntity>()) { ebook ->
-                                ListItem(
-                                    headlineContent = { Text(ebook.title, fontWeight = FontWeight.Medium) },
-                                    supportingContent = {
-                                        val parts = listOfNotNull(
-                                            ebook.author,
-                                            ebook.series?.let { s -> "$s${ebook.seriesIndex?.let { " #${it.toInt()}" } ?: ""}" }
-                                        )
-                                        if (parts.isNotEmpty()) Text(parts.joinToString(" · "))
-                                    },
-                                    trailingContent = {
-                                        AssistChip(onClick = {}, label = { Text(ebook.format.uppercase(), style = MaterialTheme.typography.labelSmall) })
-                                    },
-                                    modifier = Modifier.clickable {
-                                        val audiobookId = item.numericId ?: return@clickable
-                                        viewModel.pairEbookWithAudiobook(ebook.id, audiobookId)
-                                        showPairSheet = false
-                                        pairSearchQuery = ""
-                                        pairingItem = null
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ---- Main Search UI ----
     Scaffold(
         topBar = {
             TopAppBar(
@@ -411,101 +420,560 @@ fun SearchScreen(
                     OutlinedTextField(
                         value = query,
                         onValueChange = { viewModel.updateQuery(it) },
-                        placeholder = { Text("Search title, author etc...") },
+                        placeholder = {
+                            Text(
+                                "Search title, author, series…",
+                                color = colors.textMuted,
+                                fontSize = 14.sp,
+                            )
+                        },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(end = 16.dp),
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(end = 8.dp),
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                        shape = Tandem.shapes.input,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = { viewModel.forceSearch() }),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        )
+                            focusedBorderColor = colors.accent,
+                            unfocusedBorderColor = colors.border,
+                            focusedContainerColor = colors.bgInput,
+                            unfocusedContainerColor = colors.bgInput,
+                            focusedTextColor = colors.textPrimary,
+                            unfocusedTextColor = colors.textPrimary,
+                            cursorColor = colors.accent,
+                        ),
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = colors.textPrimary,
+                        )
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = colors.bgSecondary,
+                    titleContentColor = colors.textPrimary,
+                ),
             )
-        }
+        },
+        containerColor = colors.bgPrimary,
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (isLoading) {
-                item {
-                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                    }
-                }
+        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+
+            // Offline / local-cache banner
+            if (usingOfflineFallback) {
+                OfflineSearchChip()
             }
 
-            if (!isLoading && query.isNotBlank() && results.isEmpty()) {
-                item {
-                    Text("No results found.", modifier = Modifier.padding(16.dp))
-                }
-            }
-
-            if (results.isNotEmpty()) {
-                items(results, key = { it.id }) { item ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            if (item.pairId != null) {
-                                onBookSelect(item.pairId)
-                            } else {
-                                selectedItem = item
-                            }
-                        }
+            when {
+                isLoading -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            // Series Info
-                            if (!item.series.isNullOrBlank()) {
-                                Text(
-                                    text = buildString {
-                                        append(item.series)
-                                        if (item.seriesIndex != null && item.seriesIndex > 0f) {
-                                            val indexStr = if (item.seriesIndex % 1 == 0f) item.seriesIndex.toInt().toString() else item.seriesIndex.toString()
-                                            append(" #$indexStr")
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(bottom = 4.dp)
-                                )
-                            }
-                        
-                            Text(text = item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            item.author?.let { Text(text = it, style = MaterialTheme.typography.bodyMedium) }
-                            
-                            Spacer(Modifier.height(8.dp))
-                            
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (item.isEbook) {
-                                    AssistChip(onClick = {}, label = { Text("Ebook") }, leadingIcon = { Text("📚") })
-                                }
-                                if (item.isAudiobook) {
-                                    AssistChip(onClick = {}, label = { Text("Audiobook") }, leadingIcon = { Text("🎧") })
-                                }
-                                if (item.pairId == null) {
-                                    AssistChip(
-                                        onClick = {},
-                                        label = { Text("Unpaired") },
-                                        colors = AssistChipDefaults.assistChipColors(
-                                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                                            labelColor = MaterialTheme.colorScheme.onErrorContainer
-                                        )
-                                    )
-                                }
-                            }
+                        CircularProgressIndicator(color = colors.accent)
+                    }
+                }
+                query.isBlank() -> {
+                    EmptyState(
+                        modifier = Modifier.fillMaxSize(),
+                        icon = Icons.Default.Search,
+                        title = "Search your library",
+                        subtitle = "Find books by title, author, or series across pairs, ebooks, and audiobooks.",
+                    )
+                }
+                results.isEmpty() -> {
+                    EmptyState(
+                        modifier = Modifier.fillMaxSize(),
+                        icon = Icons.AutoMirrored.Filled.LibraryBooks,
+                        title = "No matches for \"$query\"",
+                        subtitle = if (usingOfflineFallback)
+                            "Searching local cache only. Connect to the server for full results."
+                        else "Try a different query or check your spelling.",
+                    )
+                }
+                else -> SearchResultsList(
+                    results = results,
+                    onPairClick = onBookSelect,
+                    onEbookSelect = onBookSelect,
+                    onAudioSelect = onAudioSelect,
+                    onRequestPair = { pairingItem = it },
+                    onDownload = { viewModel.downloadFromResult(it) },
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Subcomponents
+// ============================================================================
+
+@Composable
+private fun OfflineSearchChip() {
+    val colors = Tandem.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.statusWarning.copy(alpha = 0.12f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.CloudOff,
+            contentDescription = null,
+            tint = colors.statusWarning,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "Offline — searching local cache",
+            color = colors.statusWarning,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun SearchResultsList(
+    results: List<SearchResultItem>,
+    onPairClick: (Int) -> Unit,
+    onEbookSelect: (Int) -> Unit,
+    onAudioSelect: (Int) -> Unit,
+    onRequestPair: (SearchResultItem) -> Unit,
+    onDownload: (SearchResultItem) -> Unit,
+) {
+    val pairs     = results.filter { it.isPair }
+    val ebooks    = results.filter { !it.isPair && it.isEbook }
+    val audiobooks = results.filter { !it.isPair && it.isAudiobook }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (pairs.isNotEmpty()) {
+            item { SectionHeader("Pairs", pairs.size) }
+            items(pairs, key = { it.id }) { item ->
+                ResultRow(
+                    item = item,
+                    onClick = { item.pairId?.let(onPairClick) },
+                    onRequestPair = { /* pairs aren't pairable */ },
+                    onDownload = onDownload,
+                )
+            }
+        }
+        if (ebooks.isNotEmpty()) {
+            item { SectionHeader("Ebooks", ebooks.size) }
+            items(ebooks, key = { it.id }) { item ->
+                ResultRow(
+                    item = item,
+                    onClick = { item.numericId?.let(onEbookSelect) },
+                    onRequestPair = onRequestPair,
+                    onDownload = onDownload,
+                )
+            }
+        }
+        if (audiobooks.isNotEmpty()) {
+            item { SectionHeader("Audiobooks", audiobooks.size) }
+            items(audiobooks, key = { it.id }) { item ->
+                ResultRow(
+                    item = item,
+                    onClick = { item.numericId?.let(onAudioSelect) },
+                    onRequestPair = onRequestPair,
+                    onDownload = onDownload,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(label: String, count: Int) {
+    val colors = Tandem.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label.uppercase(),
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.8.sp,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            count.toString(),
+            color = colors.textMuted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.width(12.dp))
+        HorizontalDivider(color = colors.border, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun ResultRow(
+    item: SearchResultItem,
+    onClick: () -> Unit,
+    onRequestPair: (SearchResultItem) -> Unit,
+    onDownload: (SearchResultItem) -> Unit,
+) {
+    val colors = Tandem.colors
+    var overflowOpen by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(Tandem.shapes.card)
+            .background(colors.bgCard)
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Type icon disc
+        TypeIcon(item)
+
+        Spacer(Modifier.width(12.dp))
+
+        // Title + author + series
+        Column(modifier = Modifier.weight(1f)) {
+            if (!item.series.isNullOrBlank()) {
+                Text(
+                    text = buildString {
+                        append(item.series)
+                        if (item.seriesIndex != null && item.seriesIndex > 0f) {
+                            val idx = if (item.seriesIndex % 1 == 0f)
+                                item.seriesIndex.toInt().toString()
+                            else item.seriesIndex.toString()
+                            append(" #$idx")
+                        }
+                    },
+                    color = colors.accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                item.title,
+                color = colors.textPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+            )
+            item.author?.let {
+                Text(
+                    it,
+                    color = colors.textSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                )
+            }
+            Spacer(Modifier.size(4.dp))
+            TypeChipRow(item)
+        }
+
+        // Pair button for unpaired results
+        if (!item.isPair) {
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = { onRequestPair(item) }) {
+                Icon(
+                    Icons.Default.Link,
+                    contentDescription = "Pair with counterpart",
+                    tint = colors.accent,
+                )
+            }
+        }
+
+        // Overflow menu — a single "Download …" entry. The entry label is
+        // contextual ("pair" / "ebook" / "audiobook") and the VM picks the
+        // right worker TYPE based on the item shape.
+        Box {
+            IconButton(onClick = { overflowOpen = true }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "More actions",
+                    tint = colors.textSecondary,
+                )
+            }
+            DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                val label = when {
+                    item.isPair      -> "Download pair"
+                    item.isEbook     -> "Download ebook"
+                    item.isAudiobook -> "Download audiobook"
+                    else             -> "Download"
+                }
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            tint = colors.accent,
+                        )
+                    },
+                    onClick = {
+                        overflowOpen = false
+                        onDownload(item)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TypeIcon(item: SearchResultItem) {
+    val colors = Tandem.colors
+    val (icon: ImageVector, tint) = when {
+        item.isPair                       -> Icons.AutoMirrored.Filled.LibraryBooks to colors.accent
+        item.isEbook                      -> Icons.AutoMirrored.Filled.MenuBook to colors.statusInfo
+        else                              -> Icons.Default.Headphones to colors.statusSuccess
+    }
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(tint.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+    }
+}
+
+@Composable
+private fun TypeChipRow(item: SearchResultItem) {
+    val colors = Tandem.colors
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (item.isPair) {
+            TinyChip("Pair", colors.accent)
+        } else {
+            if (item.isEbook) TinyChip("Ebook", colors.statusInfo)
+            if (item.isAudiobook) TinyChip("Audiobook", colors.statusSuccess)
+            TinyChip("Unpaired", colors.statusError)
+        }
+    }
+}
+
+@Composable
+private fun TinyChip(label: String, tint: androidx.compose.ui.graphics.Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(tint.copy(alpha = 0.18f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            label.uppercase(),
+            color = tint,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.4.sp,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pairing sheet — restyled chrome, same logic as before.
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PairingSheet(
+    item: SearchResultItem,
+    isEbookBeingPaired: Boolean,
+    unpairedAudiobooks: List<AudioBookEntity>,
+    unpairedEbooks: List<EBookEntity>,
+    pairingError: String?,
+    pairSearchQuery: String,
+    onPairSearchQueryChange: (String) -> Unit,
+    onPair: (counterpartId: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = Tandem.colors
+    val counterparts: List<Any> = if (isEbookBeingPaired) unpairedAudiobooks else unpairedEbooks
+    val filtered = if (pairSearchQuery.isBlank()) counterparts else {
+        val needle = pairSearchQuery.lowercase()
+        counterparts.filter {
+            when (it) {
+                is AudioBookEntity -> listOfNotNull(it.title, it.author, it.series)
+                    .any { s -> needle in s.lowercase() }
+                is EBookEntity     -> listOfNotNull(it.title, it.author, it.series)
+                    .any { s -> needle in s.lowercase() }
+                else -> false
+            }
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = colors.bgSecondary,
+        shape = Tandem.shapes.modal,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            Text(
+                "Pair \"${item.title}\"",
+                color = colors.textPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.size(4.dp))
+            Text(
+                if (isEbookBeingPaired)
+                    "Select an audiobook to pair with this ebook."
+                else "Select an ebook to pair with this audiobook.",
+                color = colors.textSecondary,
+                fontSize = 13.sp,
+            )
+
+            if (pairingError != null) {
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    "Error: $pairingError",
+                    color = colors.statusError,
+                    fontSize = 13.sp,
+                )
+            }
+
+            Spacer(Modifier.size(16.dp))
+
+            OutlinedTextField(
+                value = pairSearchQuery,
+                onValueChange = onPairSearchQueryChange,
+                placeholder = {
+                    Text(
+                        if (isEbookBeingPaired) "Search audiobooks…" else "Search ebooks…",
+                        color = colors.textMuted,
+                        fontSize = 13.sp,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                leadingIcon = {
+                    Icon(Icons.Default.Search, null, tint = colors.textSecondary, modifier = Modifier.size(18.dp))
+                },
+                shape = Tandem.shapes.input,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = colors.accent,
+                    unfocusedBorderColor = colors.border,
+                    focusedContainerColor = colors.bgInput,
+                    unfocusedContainerColor = colors.bgInput,
+                    focusedTextColor = colors.textPrimary,
+                    unfocusedTextColor = colors.textPrimary,
+                    cursorColor = colors.accent,
+                ),
+            )
+
+            Spacer(Modifier.size(12.dp))
+
+            if (counterparts.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (isEbookBeingPaired) "No unpaired audiobooks available."
+                        else "No unpaired ebooks available.",
+                        color = colors.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (isEbookBeingPaired) {
+                        items(filtered.filterIsInstance<AudioBookEntity>(), key = { it.id }) { ab ->
+                            CounterpartRow(
+                                title = ab.title,
+                                author = ab.author,
+                                series = ab.series,
+                                seriesIndex = ab.seriesIndex,
+                                formatTag = ab.format,
+                                onClick = { onPair(ab.id) },
+                            )
+                        }
+                    } else {
+                        items(filtered.filterIsInstance<EBookEntity>(), key = { it.id }) { eb ->
+                            CounterpartRow(
+                                title = eb.title,
+                                author = eb.author,
+                                series = eb.series,
+                                seriesIndex = eb.seriesIndex,
+                                formatTag = eb.format,
+                                onClick = { onPair(eb.id) },
+                            )
                         }
                     }
+                }
+                Spacer(Modifier.size(8.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = colors.textSecondary)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CounterpartRow(
+    title: String,
+    author: String?,
+    series: String?,
+    seriesIndex: Float?,
+    formatTag: String?,
+    onClick: () -> Unit,
+) {
+    val colors = Tandem.colors
+    val subtitle = buildString {
+        author?.let { append(it) }
+        if (!series.isNullOrBlank()) {
+            if (isNotEmpty()) append(" · ")
+            append(series)
+            if (seriesIndex != null && seriesIndex > 0f) {
+                val idx = if (seriesIndex % 1 == 0f) seriesIndex.toInt().toString() else seriesIndex.toString()
+                append(" #$idx")
+            }
+        }
+    }
+    ListItem(
+        headlineContent = {
+            Text(title, color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        },
+        supportingContent = if (subtitle.isNotBlank()) {
+            { Text(subtitle, color = colors.textSecondary, fontSize = 12.sp) }
+        } else null,
+        trailingContent = formatTag?.takeIf { it.isNotBlank() }?.let { tag ->
+            { TinyChip(tag.uppercase(), colors.textMuted) }
+        },
+        colors = ListItemDefaults.colors(containerColor = colors.bgCard),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(Tandem.shapes.card)
+            .clickable(onClick = onClick),
+    )
 }

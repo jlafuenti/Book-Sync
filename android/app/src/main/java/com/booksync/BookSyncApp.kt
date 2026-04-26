@@ -7,9 +7,12 @@ import android.os.Build
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import coil.Coil
+import coil.ImageLoader
 import com.booksync.diagnostics.DiagnosticLogger
 import com.google.android.gms.cast.framework.CastContext
 import dagger.hilt.android.HiltAndroidApp
+import okhttp3.OkHttpClient
 import javax.inject.Inject
 
 /**
@@ -29,10 +32,24 @@ class BookSyncApp : Application(), Configuration.Provider {
     @Inject
     lateinit var diagnosticLogger: DiagnosticLogger
 
+    /** Same OkHttpClient used by Retrofit — carries AuthInterceptor so Coil can fetch
+     *  authenticated cover images from /api/files/covers/{filename}. */
+    @Inject
+    lateinit var okHttpClient: OkHttpClient
+
     override fun onCreate() {
         super.onCreate()
         // Clear any leftover "until app closed" diagnostic session from a previous run.
         diagnosticLogger.clearAppCloseMode()
+
+        // Wire Coil with the same auth-capable OkHttpClient that Retrofit uses.
+        // This lets AsyncImage fetch /api/files/covers/{filename} with bearer tokens.
+        Coil.setImageLoader {
+            ImageLoader.Builder(this)
+                .okHttpClient(okHttpClient)
+                .crossfade(true)
+                .build()
+        }
 
         // Create the notification channel for diagnostic status notifications (API 26+).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -134,10 +134,19 @@ class DownloadWorker @AssistedInject constructor(
                     }
                 }
 
-                if (type == "SYNC_MAP" || (type == "ALL" && !pair.syncMapDownloaded && pair.status == "synced")) {
+                // Always attempt sync-map after an audiobook download (or on ALL / explicit SYNC_MAP).
+                // The server returns 404 if the sync map isn't ready yet; the retry wrapper handles
+                // transient failures with exponential backoff and treats 404 as "not ready, move on".
+                val shouldFetchSyncMap = when (type) {
+                    "SYNC_MAP", "AUDIOBOOK" -> true
+                    "ALL" -> !pair.syncMapDownloaded
+                    else -> false
+                }
+                if (shouldFetchSyncMap) {
                     updateNotificationProgress(-1, "Sync Data")
                     setProgressAsync(workDataOf(PROGRESS_KEY to -1, "CURRENT" to "SYNC_MAP", KEY_PAIR_ID to pairId, KEY_TYPE to type))
-                    repository.downloadSyncMap(pair.id)
+                    val ok = repository.downloadSyncMapWithRetry(pair.id)
+                    Log.d("DownloadWorker", "sync-map fetch for pair $pairId -> ok=$ok")
                 }
 
                 Result.success()

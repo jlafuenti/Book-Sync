@@ -196,7 +196,7 @@ async def update_bookmark(
             or bookmark.epub_sentence_index != epub_si
             or bookmark.audio_position_ms != audio_ms
         )
-        if position_changed:
+        if position_changed and update.append_to_log:
             log = BookmarkLog(
                 bookmark_id=bookmark.id,
                 source=update.source,
