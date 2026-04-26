@@ -20,6 +20,7 @@ from database import init_db, bootstrap_superadmin
 from config import settings
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users
 from routers import settings as settings_router
+from routers import import_sources as import_sources_router
 
 # Configure logging
 # Ensure log directory exists
@@ -68,14 +69,27 @@ async def lifespan(app: FastAPI):
     # Reset any stale transcription jobs (legacy)
     from routers.transcription import reset_stale_transcriptions
     await reset_stale_transcriptions()
-    
+
+    # One-shot: move plaintext ABS API token into the encrypted credential store
+    # if it's still living in system_settings. Idempotent; safe to call always.
+    try:
+        from services.abs_metadata import migrate_abs_token_to_credentials
+        await migrate_abs_token_to_credentials()
+    except Exception as e:
+        logger.exception(f"ABS token migration failed: {e}")
+
     # Start the transcription queue manager
     from services.queue_manager import start_queue_manager, stop_queue_manager
     await start_queue_manager()
-    
+
+    # Start the import-source scheduler (auto-syncs + ACSM watched folder)
+    from services import import_scheduler
+    await import_scheduler.start()
+
     yield
-    
+
     # Shutdown
+    await import_scheduler.stop()
     await stop_queue_manager()
     logger.info("BookSync server shutting down...")
 
@@ -112,6 +126,7 @@ app.include_router(files.router)
 app.include_router(transcription.router)
 app.include_router(stats.router)
 app.include_router(settings_router.router)
+app.include_router(import_sources_router.router)
 app.include_router(chapters.router, prefix="/api/library")
 app.include_router(match.router, prefix="/api/library")
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
@@ -804,6 +805,21 @@ function SystemPage({ tab }) {
                             count={unsupportedCount}
                             onViewItems={() => setShowUnsupported(true)}
                         />
+                    </div>
+
+                    {/* Import Sources entry point */}
+                    <div className="system-status-card" style={{ marginBottom: 24 }}>
+                        <div className="system-status-card-left">
+                            <div>
+                                <h5 className="system-status-title">Import Sources</h5>
+                                <p className="system-status-desc">
+                                    Pull books from Audible, Google Play, and Nook.
+                                </p>
+                            </div>
+                        </div>
+                        <Link to="/system/import-sources" className="system-status-link">
+                            CONFIGURE
+                        </Link>
                     </div>
 
                     {/* ── Section: Configuration ── */}
