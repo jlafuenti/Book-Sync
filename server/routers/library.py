@@ -628,30 +628,32 @@ def _extract_and_save_cover(filepath: str, book_type: str, book_id: int, book_ti
 
 
 async def _load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
-    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix)."""
+    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix).
+
+    The token is read from the encrypted credential store (source_key='abs');
+    the other fields stay in system_settings since they're non-secret.
+    """
+    from services.abs_metadata import get_abs_token
+
     result = await db.execute(
         select(SystemSetting).where(
-            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_api_token", "abs_audiobooks_prefix"])
+            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_audiobooks_prefix"])
         )
     )
     conf = {s.key: s.value for s in result.scalars().all()}
     enabled = conf.get("abs_enabled", "false").lower() == "true"
     url = conf.get("abs_url") or ""
-    token = conf.get("abs_api_token") or ""
+    token = (await get_abs_token(db)) or ""
     prefix = conf.get("abs_audiobooks_prefix") or ""
     return enabled, url, token, prefix
 
 
-@router.post("/scan", response_model=LibraryScanResponse)
-async def scan_library(
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_editor_user),
-):
+async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
     """
-    Scan the ebook and audiobook directories for new files.
-    Recursively searches subdirectories.
-    Extracts metadata from filenames and tags.
-    Adds any undiscovered files to the database and attempts auto-matching.
+    Library-scan implementation, callable from internal code paths
+    (e.g. import sources after they place new files into the library).
+
+    This is the body of POST /api/library/scan minus the auth dependency.
     """
     new_ebooks = 0
     new_audiobooks = 0
@@ -895,6 +897,20 @@ async def scan_library(
         message=f"Found {new_ebooks} new ebooks, {new_audiobooks} new audiobooks, "
                 f"auto-matched {auto_matched} pairs.",
     )
+
+
+@router.post("/scan", response_model=LibraryScanResponse)
+async def scan_library(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """
+    Scan the ebook and audiobook directories for new files.
+    Recursively searches subdirectories.
+    Extracts metadata from filenames and tags.
+    Adds any undiscovered files to the database and attempts auto-matching.
+    """
+    return await scan_library_impl(db)
 
 
 @router.post("/rescan-all")

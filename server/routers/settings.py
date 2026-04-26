@@ -6,8 +6,14 @@ from models.settings import SystemSetting
 from database import get_db
 from routers.auth import get_current_user, get_admin_user
 from models.user import User
+from services import credentials as credential_store
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+# Placeholder returned by GET /api/settings for secrets that exist in the
+# encrypted credential store. The web UI uses presence of this string to know
+# a credential is set without exposing the value.
+_SECRET_PLACEHOLDER = "********"
 
 DEFAULT_SETTINGS = {
     "ebook_filename_patterns": [
@@ -66,7 +72,12 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
     for key, val in DEFAULT_SETTINGS.items():
         if key not in settings_dict:
             settings_dict[key] = val
-            
+
+    # Mask abs_api_token: never expose the value. Show a placeholder if a
+    # credential is on file (encrypted store), empty string otherwise.
+    abs_token = await credential_store.get_credential(db, "abs")
+    settings_dict["abs_api_token"] = _SECRET_PLACEHOLDER if abs_token else ""
+
     return settings_dict
 
 @router.put("/", response_model=Dict[str, Any])
@@ -77,21 +88,33 @@ async def update_settings(
 ):
     """Update system settings."""
     for key, value in new_settings.items():
+        # Route abs_api_token through the encrypted credential store. An empty
+        # string clears the credential; the placeholder means "leave unchanged"
+        # (so a UI that round-trips the masked GET doesn't wipe the secret).
+        if key == "abs_api_token":
+            if value is None or value == _SECRET_PLACEHOLDER:
+                continue
+            if value == "":
+                await credential_store.delete_credential(db, "abs")
+            else:
+                await credential_store.set_credential(db, "abs", str(value))
+            continue
+
         # Serialize before saving
         if key in ["ebook_filename_patterns", "audiobook_filename_patterns"] and isinstance(value, list):
             value = "\n".join(value)
         else:
             value = str(value)
-            
+
         result = await db.execute(select(SystemSetting).where(SystemSetting.key == key))
         setting = result.scalar_one_or_none()
-        
+
         if setting:
             setting.value = value
         else:
             setting = SystemSetting(key=key, value=value)
             db.add(setting)
-            
+
     await db.commit()
     return await get_settings(db)
 
