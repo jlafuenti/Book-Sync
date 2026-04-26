@@ -199,12 +199,31 @@ async def _existing_asins(db: AsyncSession) -> set[str]:
     return {row[0] for row in result.all() if row[0]}
 
 
+def _ensure_audible_cli_config(config_dir: Path, auth_filename: str, locale: str = DEFAULT_LOCALE) -> None:
+    """
+    audible-cli reads a config.toml that names the active profile and points
+    at the auth file. We synthesize a minimal one alongside the auth blob so
+    the CLI can find it via --config-dir.
+    """
+    config_path = config_dir / "config.toml"
+    if config_path.exists():
+        return
+    config_path.write_text(
+        f'[APP]\n'
+        f'primary_profile = "default"\n\n'
+        f'[profile.default]\n'
+        f'auth_file = "{auth_filename}"\n'
+        f'country_code = "{locale}"\n'
+    )
+
+
 def _download_via_cli(asin: str, out_dir: Path, auth_blob_path: Path) -> Path:
     """
     Shell out to audible-cli to download a single ASIN, decrypt to .m4b, and
     return the resulting file. Requires audible-cli + ffmpeg on PATH in the
     server image.
     """
+    _ensure_audible_cli_config(auth_blob_path.parent, auth_blob_path.name)
     cmd = [
         "audible",
         "--config-dir", str(auth_blob_path.parent),

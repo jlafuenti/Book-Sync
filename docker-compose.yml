@@ -7,6 +7,7 @@ services:
       - /path/to/your/ebooks:/data/ebooks # ← REPLACE with your ebook folder
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
       - ./data:/data/app
+      - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
     environment:
       - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
       - JWT_SECRET_KEY=change-me-to-a-random-secret-key
@@ -15,6 +16,13 @@ services:
       - EBOOK_DIR=/data/ebooks
       - AUDIOBOOK_DIR=/data/audiobooks
       - APP_DATA_DIR=/data/app
+      - IMPORTS_DIR=/data/imports
+      # Comma-separated list of Fernet keys used to encrypt source credentials
+      # (Audible auth blob, ABS API token). First key encrypts new writes; all
+      # keys are tried for decryption, so rotation is "prepend a new key".
+      # Generate with:
+      #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+      - CREDENTIAL_ENC_KEYS=change-me-generate-a-real-fernet-key
     depends_on:
       db:
         condition: service_healthy
