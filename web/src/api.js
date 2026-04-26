@@ -458,6 +458,34 @@ export async function getBookmarkLog(pairId) {
     return resp.json();
 }
 
+/**
+ * Fire-and-forget bookmark update that survives page unload.
+ *
+ * Used by AudioPlayerContext's `beforeunload` / `pagehide` handler to log a
+ * final "stop" history entry when the user closes the tab. A regular fetch
+ * would be aborted during unload; `keepalive: true` tells the browser to let
+ * the request complete in the background (up to ~64 KB body).
+ *
+ * Not awaited — errors are swallowed because there is no UI context left to
+ * surface them in. Silent failure is acceptable: the last 5-second heartbeat
+ * save kept `Bookmark.audio_position_ms` fresh, so at worst we lose the
+ * history-log entry, not the resume position.
+ */
+export function sendBookmarkKeepalive(pairId, data) {
+    if (!accessToken) return;
+    try {
+        fetch(`${API_BASE}/sync/bookmark/${pairId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify(data),
+            keepalive: true,
+        });
+    } catch {}
+}
+
 export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/match-text/${pairId}`, {
         method: 'POST',

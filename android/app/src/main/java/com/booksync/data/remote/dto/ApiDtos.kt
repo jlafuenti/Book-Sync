@@ -50,6 +50,16 @@ data class UpdateMeRequest(
     val theme: String? = null
 )
 
+/**
+ * Body for `POST /api/auth/change-password`.
+ * Field names match the server's Pydantic `PasswordChange` model (snake_case).
+ */
+@Serializable
+data class PasswordChangeRequest(
+    val old_password: String,
+    val new_password: String,
+)
+
 // ============ Library ============
 
 @Serializable
@@ -88,6 +98,26 @@ data class BookPairResponse(
     val status: String,
     val matched_at: String? = null,
     val synced_at: String? = null
+)
+
+/**
+ * Lightweight slice of the server's `EBookDetailResponse` / `AudioBookDetailResponse`.
+ * Used by the Book Details screen to pull description + metadata that aren't
+ * in the local cache. We only decode the fields we render — kotlinx ignores
+ * the rest thanks to `ignoreUnknownKeys = true` on the Json instance.
+ */
+@Serializable
+data class BookMetadataResponse(
+    val id: Int,
+    val title: String,
+    val author: String? = null,
+    val series: String? = null,
+    val series_index: Float? = null,
+    val description: String? = null,
+    val publisher: String? = null,
+    val publish_year: Int? = null,
+    val language: String? = null,
+    val narrators: String? = null,
 )
 
 @Serializable
@@ -136,7 +166,11 @@ data class BookmarkUpdateRequest(
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
-    val epub_locator: String? = null
+    val epub_locator: String? = null,
+    // When false (default), server updates the bookmark but does NOT append
+    // a BookmarkLog row. Clients set true only on pause / stop / 30-min
+    // boundaries. Mirrors server BookmarkUpdate.append_to_log.
+    val append_to_log: Boolean = false
 )
 
 @Serializable

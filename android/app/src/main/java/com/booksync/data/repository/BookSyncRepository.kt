@@ -7,6 +7,7 @@ import com.booksync.data.remote.*
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -70,6 +71,7 @@ class BookSyncRepository @Inject constructor(
                 ebookDownloaded = existing?.ebookDownloaded ?: false,
                 audiobookDownloaded = existing?.audiobookDownloaded ?: false,
                 syncMapDownloaded = existing?.syncMapDownloaded ?: false,
+                audiobookCoverPath = pair.audiobook.cover_path ?: existing?.audiobookCoverPath,
             )
         }
         bookPairDao.upsertPairs(entities)
@@ -217,6 +219,15 @@ class BookSyncRepository @Inject constructor(
 
     /** Get a single audiobook by ID. */
     suspend fun getAudiobookById(audiobookId: Int): AudioBookEntity? = audioBookDao.getAudioBookById(audiobookId)
+
+    /** Reactive single-pair flow for the details screen. */
+    fun getPairByIdFlow(pairId: Int): Flow<BookPairEntity?> = bookPairDao.getPairByIdFlow(pairId)
+
+    /** Reactive single-ebook flow for the details screen. */
+    fun getEbookByIdFlow(ebookId: Int): Flow<EBookEntity?> = eBookDao.getEBookByIdFlow(ebookId)
+
+    /** Reactive single-audiobook flow for the details screen. */
+    fun getAudiobookByIdFlow(audiobookId: Int): Flow<AudioBookEntity?> = audioBookDao.getAudioBookByIdFlow(audiobookId)
 
     /** Search the library remotely */
     suspend fun searchLibrary(query: String): SearchResponse {
@@ -400,6 +411,34 @@ class BookSyncRepository @Inject constructor(
         log("downloadSyncMap complete — ${entities.size} sync points saved")
     }
 
+    /**
+     * Best-effort sync-map fetch with exponential backoff (1s/3s/10s).
+     * Returns true when the sync map landed, false when the server has no sync map
+     * yet (404) or every attempt failed. Never throws — callers treat a false
+     * return as "try again later" and move on.
+     */
+    suspend fun downloadSyncMapWithRetry(pairId: Int): Boolean {
+        val delaysMs = longArrayOf(1_000L, 3_000L, 10_000L)
+        repeat(delaysMs.size) { attempt ->
+            try {
+                downloadSyncMap(pairId)
+                return true
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 404) {
+                    log("downloadSyncMapWithRetry — 404 for pair $pairId; sync map not ready yet")
+                    return false
+                }
+                log("downloadSyncMapWithRetry — HTTP ${e.code()} (attempt ${attempt + 1}/${delaysMs.size}): ${e.message()}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("downloadSyncMapWithRetry — error (attempt ${attempt + 1}/${delaysMs.size}): ${e.message}")
+            }
+            if (attempt < delaysMs.size - 1) kotlinx.coroutines.delay(delaysMs[attempt])
+        }
+        return false
+    }
+
     fun getEbookFile(pair: BookPairEntity): File =
         File(context.filesDir, "ebooks/${pair.ebookFilename}")
 
@@ -511,9 +550,13 @@ class BookSyncRepository @Inject constructor(
         epubSentenceIndex: Int? = null,
         audioPositionMs: Int? = null,
         epubLocator: String? = null,
+        // When false (heartbeat saves every 5s), only the Bookmark row is updated
+        // and no BookmarkLog row is written — server and local history stay clean.
+        // Set true on pause / stop / 30-min-continuous-playback boundaries.
+        appendToLog: Boolean = false,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
-        
+
         // Merge with existing
         val merged = BookmarkEntity(
             bookPairId = pairId,
@@ -529,23 +572,25 @@ class BookSyncRepository @Inject constructor(
         // Save locally
         bookmarkDao.upsertBookmark(merged)
 
-        // Record a local history entry so the user's own offline changes appear in the
-        // history UI immediately. Server-sourced rows replace/supersede these on next
-        // successful getBookmarkHistory() call.
-        bookmarkLogDao.insertLocal(
-            BookmarkLogEntity(
-                serverId = null,
-                bookPairId = pairId,
-                source = source,
-                prevEpubChapter = existing?.epubChapter,
-                prevEpubSentenceIndex = existing?.epubSentenceIndex,
-                prevAudioPositionMs = existing?.audioPositionMs,
-                newEpubChapter = merged.epubChapter,
-                newEpubSentenceIndex = merged.epubSentenceIndex,
-                newAudioPositionMs = merged.audioPositionMs,
-                changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+        // Record a local history entry ONLY on meaningful session boundaries so the
+        // offline history mirrors what the server will record. Heartbeat saves stay
+        // out of the log on both sides.
+        if (appendToLog) {
+            bookmarkLogDao.insertLocal(
+                BookmarkLogEntity(
+                    serverId = null,
+                    bookPairId = pairId,
+                    source = source,
+                    prevEpubChapter = existing?.epubChapter,
+                    prevEpubSentenceIndex = existing?.epubSentenceIndex,
+                    prevAudioPositionMs = existing?.audioPositionMs,
+                    newEpubChapter = merged.epubChapter,
+                    newEpubSentenceIndex = merged.epubSentenceIndex,
+                    newAudioPositionMs = merged.audioPositionMs,
+                    changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+                )
             )
-        )
+        }
 
         // Try immediate sync
         try {
@@ -557,6 +602,7 @@ class BookSyncRepository @Inject constructor(
                     epub_sentence_index = merged.epubSentenceIndex,
                     audio_position_ms = merged.audioPositionMs,
                     epub_locator = merged.epubLocator,
+                    append_to_log = appendToLog,
                 )
             )
             bookmarkDao.upsertBookmark(merged.copy(syncedToServer = true))
@@ -570,6 +616,7 @@ class BookSyncRepository @Inject constructor(
                     epubSentenceIndex = merged.epubSentenceIndex,
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
+                    appendToLog = appendToLog,
                 )
             )
         }
@@ -971,6 +1018,7 @@ class BookSyncRepository @Inject constructor(
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
                         epub_locator = sync.epubLocator,
+                        append_to_log = sync.appendToLog,
                     )
                 )
                 pendingSyncDao.delete(sync)

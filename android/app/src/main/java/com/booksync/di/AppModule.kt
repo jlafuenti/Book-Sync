@@ -8,6 +8,9 @@ import androidx.room.Room
 import com.booksync.data.local.BookSyncDatabase
 import com.booksync.data.local.dao.*
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.DictionaryApi
+import com.booksync.data.repository.TranscriptionRepository
+import com.booksync.data.util.NetworkMonitor
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
 import dagger.Provides
@@ -20,6 +23,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
+import javax.inject.Named
 import javax.inject.Singleton
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "booksync_prefs")
@@ -75,6 +79,44 @@ object AppModule {
     fun provideApi(retrofit: Retrofit): BookSyncApi =
         retrofit.create(BookSyncApi::class.java)
 
+    // ---------------------------------------------------------------------
+    // Dictionary API (api.dictionaryapi.dev) — separate client so our
+    // Bearer JWT doesn't leak to a third-party server.
+    // ---------------------------------------------------------------------
+
+    @Provides
+    @Singleton
+    @Named("dictionary")
+    fun provideDictionaryOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.SECONDS)
+            .addInterceptor(HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+            })
+            .build()
+
+    @Provides
+    @Singleton
+    @Named("dictionary")
+    fun provideDictionaryRetrofit(
+        @Named("dictionary") client: OkHttpClient,
+        json: Json,
+    ): Retrofit {
+        val contentType = "application/json".toMediaType()
+        return Retrofit.Builder()
+            .baseUrl("https://api.dictionaryapi.dev/")
+            .client(client)
+            .addConverterFactory(json.asConverterFactory(contentType))
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideDictionaryApi(@Named("dictionary") retrofit: Retrofit): DictionaryApi =
+        retrofit.create(DictionaryApi::class.java)
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BookSyncDatabase =
@@ -116,4 +158,16 @@ object AppModule {
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
         context.dataStore
+
+    @Provides
+    @Singleton
+    fun provideNetworkMonitor(@ApplicationContext context: Context): NetworkMonitor =
+        NetworkMonitor(context)
+
+    @Provides
+    @Singleton
+    fun provideTranscriptionRepository(
+        api: BookSyncApi,
+        networkMonitor: NetworkMonitor,
+    ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor)
 }
