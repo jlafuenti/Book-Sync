@@ -19,12 +19,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
-# Install the acsm-calibre-plugin so Calibre can convert .acsm files
-# (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.
+# Install the acsm-calibre-plugin (DeACSM) so Calibre can convert .acsm
+# files (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.
 # The plugin runs via `calibre-debug -r DeACSM -- file.acsm`, invoked from
-# services/import_sources/acsm.py.
+# services/import_sources/acsm.py. Version pinned to the most recent
+# release; the project releases infrequently because ADEPT itself is stable.
+ARG ACSM_PLUGIN_VERSION=0.0.16
 RUN curl -L --fail -o /tmp/acsm-plugin.zip \
-      https://github.com/Leseratte10/acsm-calibre-plugin/releases/latest/download/calibre-plugin.zip && \
+      https://github.com/Leseratte10/acsm-calibre-plugin/releases/download/v${ACSM_PLUGIN_VERSION}/DeACSM_${ACSM_PLUGIN_VERSION}.zip && \
     calibre-customize -a /tmp/acsm-plugin.zip && \
     rm /tmp/acsm-plugin.zip
 
