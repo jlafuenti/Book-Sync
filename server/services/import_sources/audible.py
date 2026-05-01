@@ -269,13 +269,17 @@ def _download_via_cli(asin: str, out_dir: Path, auth_blob_path: Path) -> Path:
 
     audible-cli locates its config via the AUDIBLE_CONFIG_DIR env var; there
     is no equivalent CLI flag (verified by reading audible_cli.constants).
+
+    We pass --aax-fallback rather than --aaxc so older titles that exist
+    only in the legacy .aax format come through too — passing --aaxc against
+    an aax-only title makes audible-cli exit 0 without writing anything.
     """
     _ensure_audible_cli_config(auth_blob_path.parent, auth_blob_path.name)
     cmd = [
         "audible",
         "download",
         "--asin", asin,
-        "--aaxc",
+        "--aax-fallback",
         "--output-dir", str(out_dir),
     ]
     env = {**os.environ, "AUDIBLE_CONFIG_DIR": str(auth_blob_path.parent)}
@@ -286,15 +290,21 @@ def _download_via_cli(asin: str, out_dir: Path, auth_blob_path: Path) -> Path:
             f"audible-cli download failed for {asin}: "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
-    # audible-cli writes a .aaxc plus a .voucher; we then need to decrypt.
-    aaxc = next(out_dir.glob("*.aaxc"), None)
-    if aaxc is None:
-        # Maybe it gave us a legacy .aax
-        aax = next(out_dir.glob("*.aax"), None)
-        if aax is None:
-            raise RuntimeError(f"audible-cli produced no output file for {asin}")
-        return aax
-    return aaxc
+
+    # Look for any audio file the CLI might have produced. Single-file
+    # downloads land as .aax / .aaxc; the rare multi-part audiobook can
+    # come down as .m4b / .m4a directly.
+    for ext in ("*.aaxc", "*.aax", "*.m4b", "*.m4a"):
+        match = next(out_dir.glob(ext), None)
+        if match:
+            return match
+
+    # No output file produced. audible-cli sometimes succeeds (rc=0) but
+    # silently skips a title — surface its stdout/stderr so we get a real
+    # reason, not just "no output file".
+    cli_out = (proc.stdout + "\n" + proc.stderr).strip()
+    cli_msg = " ".join(cli_out.split())[:300] or "audible-cli wrote nothing and said nothing"
+    raise RuntimeError(f"No output file for {asin}: {cli_msg}")
 
 
 def _decrypt_to_m4b(input_file: Path, out_dir: Path, activation_bytes: Optional[str]) -> Path:
