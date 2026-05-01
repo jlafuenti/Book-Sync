@@ -16,6 +16,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.book import AudioBook
 from services import credentials
 from services.import_sources.base import (
+    ImportedItem,
     ProgressFn,
     SourceAdapter,
     SyncError,
@@ -238,9 +240,82 @@ def _normalize_item(item: dict) -> dict:
     }
 
 
+_TITLE_PAREN = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _normalize_title(t: str) -> str:
+    """Strip trailing parenthetical suffixes ("(Unabridged)") and lowercase
+    so audiobook titles from disk can be matched against Audible API titles."""
+    if not t:
+        return ""
+    t = t.lower().strip()
+    # Repeatedly strip trailing parentheticals — "Title (Book 3) (Unabridged)"
+    while True:
+        new = _TITLE_PAREN.sub("", t).strip()
+        if new == t:
+            break
+        t = new
+    return t
+
+
 async def _existing_asins(db: AsyncSession) -> set[str]:
     result = await db.execute(select(AudioBook.asin).where(AudioBook.asin.isnot(None)))
     return {row[0] for row in result.all() if row[0]}
+
+
+async def _untagged_audiobooks(db: AsyncSession) -> list[tuple[int, str, str]]:
+    """
+    Return audiobook rows that don't yet have an ASIN — these are candidates
+    for fuzzy-title backfill against the Audible library. Tuple shape:
+    (id, normalized_title, author_lower).
+    """
+    result = await db.execute(
+        select(AudioBook.id, AudioBook.title, AudioBook.author)
+        .where(AudioBook.asin.is_(None))
+    )
+    return [
+        (row_id, _normalize_title(title or ""), (author or "").lower())
+        for (row_id, title, author) in result.all()
+    ]
+
+
+def _match_existing(meta: dict, candidates: list[tuple[int, str, str]]) -> int | None:
+    """
+    Find an existing audiobook row that almost certainly is the same book as
+    `meta` from the Audible library. Returns the audiobook id, or None.
+
+    Uses rapidfuzz (already a project dep) for token-set matching, plus a
+    soft author-agreement check to avoid cross-author title collisions.
+    """
+    from rapidfuzz import fuzz
+
+    target_title = _normalize_title(meta.get("title") or "")
+    if not target_title:
+        return None
+    target_author = (meta.get("author") or "").lower()
+
+    best_id = None
+    best_score = 0
+    for ab_id, norm_title, author in candidates:
+        if not norm_title:
+            continue
+        title_score = fuzz.token_set_ratio(target_title, norm_title)
+        # Require titles to be very close. Author agreement adds confidence
+        # but isn't strictly required (audible's author field is occasionally
+        # "John Doe et al.").
+        if title_score >= 92:
+            score = title_score
+            if target_author and author:
+                if target_author in author or author in target_author:
+                    score += 5
+                elif fuzz.token_set_ratio(target_author, author) < 60:
+                    # Strong author disagreement — this is almost certainly
+                    # a different book that happens to share a title.
+                    continue
+            if score > best_score:
+                best_score = score
+                best_id = ab_id
+    return best_id
 
 
 def _ensure_audible_cli_config(config_dir: Path, auth_filename: str, locale: str = DEFAULT_LOCALE) -> None:
@@ -381,19 +456,58 @@ class AudibleSource(SourceAdapter):
         except Exception as e:
             return SyncResult(fatal_error=f"Could not list Audible library: {e}")
 
-        existing = await _existing_asins(db)
-        new_items = [i for i in items if i.get("asin") and i["asin"] not in existing]
+        # Two-tier dedup:
+        # 1) Exact ASIN match against audiobooks.asin (fast, definitive).
+        # 2) Fuzzy title+author match against existing rows that have no ASIN
+        #    yet — handles books imported before provenance tracking landed.
+        #    Matched rows get backfilled with asin/import_source so all future
+        #    syncs hit path #1 instead.
+        existing_asins = await _existing_asins(db)
+        untagged = await _untagged_audiobooks(db)
 
-        result = SyncResult(items_skipped=len(items) - len(new_items))
-        total = len(new_items)
+        result = SyncResult()
+        to_download: list[dict] = []
 
+        for raw in items:
+            asin = raw.get("asin")
+            if not asin:
+                continue
+            if asin in existing_asins:
+                result.items_skipped += 1
+                continue
+
+            meta = _normalize_item(raw)
+            matched_id = _match_existing(meta, untagged)
+            if matched_id is not None:
+                ab = await db.get(AudioBook, matched_id)
+                if ab is not None:
+                    ab.asin = asin
+                    ab.external_id = asin
+                    ab.import_source = "audible"
+                    db.add(ab)
+                    logger.info(
+                        f"[audible] backfilled existing row #{matched_id} "
+                        f"('{ab.title}') -> {asin}"
+                    )
+                # Drop from candidate list so a different ASIN can't double-match.
+                untagged = [c for c in untagged if c[0] != matched_id]
+                existing_asins.add(asin)
+                result.items_skipped += 1
+                continue
+
+            to_download.append(raw)
+
+        # Persist any backfills before the long download phase so they're
+        # not lost if a later download crashes.
+        await db.flush()
+
+        total = len(to_download)
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
-            # Persist a fresh on-disk auth file for audible-cli to use.
             auth_file = tmpdir / "audible.json"
             auth_file.write_text(_auth_to_blob(auth))
 
-            for idx, raw in enumerate(new_items, start=1):
+            for idx, raw in enumerate(to_download, start=1):
                 meta = _normalize_item(raw)
                 title = meta.get("title") or raw.get("asin") or "Unknown"
                 await progress(idx, total, title)
@@ -422,13 +536,18 @@ class AudibleSource(SourceAdapter):
                     )
                     result.items_added += 1
                     result.added_titles.append(title)
+                    result.imported_items.append(ImportedItem(
+                        file_path=target,
+                        source_key="audible",
+                        external_id=asin,
+                    ))
                     logger.info(f"[audible] imported {asin} -> {target}")
                 except Exception as e:
                     logger.exception(f"[audible] failed to import {raw.get('asin')}: {e}")
                     result.errors.append(SyncError(
                         title=title,
                         external_id=raw.get("asin"),
-                        error=str(e).strip().split("\n")[0][:300],  # one-line summary
+                        error=str(e).strip().split("\n")[0][:300],
                     ))
 
         return result

@@ -18,6 +18,15 @@ class SyncError:
 
 
 @dataclass
+class ImportedItem:
+    """A file just placed by an import source — used post-sync to tag the
+    resulting row with provenance after the library scan creates it."""
+    file_path: str
+    source_key: str  # e.g. "audible"
+    external_id: Optional[str] = None  # ASIN or other external identifier
+
+
+@dataclass
 class SyncResult:
     """Outcome of a single sync run."""
     items_added: int = 0
@@ -25,6 +34,7 @@ class SyncResult:
     added_titles: List[str] = field(default_factory=list)
     errors: List[SyncError] = field(default_factory=list)
     fatal_error: Optional[str] = None  # set if the whole run failed before per-item processing
+    imported_items: List[ImportedItem] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
