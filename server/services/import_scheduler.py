@@ -133,15 +133,36 @@ async def _run_sync(source_key: str, trigger: str) -> None:
             src_row.progress_title = None
         await db.commit()
 
-    # If anything was added, refresh the library so the new files get DB rows.
+    # If anything was added, refresh the library so the new files get DB
+    # rows, then stamp those rows with the import_source / external_id so
+    # future syncs can dedup via ASIN instead of fuzzy title matching.
     if sync_result and sync_result.items_added > 0:
         try:
+            from models.book import AudioBook, EBook
             from routers.library import scan_library_impl
             async with async_session() as db:
                 await scan_library_impl(db)
+                for item in sync_result.imported_items:
+                    # Audible imports → AudioBook; ACSM/ebook imports → EBook.
+                    Model = AudioBook if item.source_key == "audible" else EBook
+                    row_q = await db.execute(
+                        select(Model).where(Model.file_path == item.file_path)
+                    )
+                    row = row_q.scalar_one_or_none()
+                    if row is None:
+                        logger.warning(
+                            f"[import-scheduler] post-scan: no {Model.__name__} "
+                            f"found at {item.file_path}, can't stamp provenance"
+                        )
+                        continue
+                    row.import_source = item.source_key
+                    row.external_id = item.external_id
+                    if item.external_id and not row.asin and item.source_key == "audible":
+                        row.asin = item.external_id
+                    db.add(row)
                 await db.commit()
         except Exception as e:
-            logger.exception(f"[import-scheduler] post-sync scan failed: {e}")
+            logger.exception(f"[import-scheduler] post-sync scan/stamp failed: {e}")
 
 
 async def trigger_now(source_key: str) -> None:
