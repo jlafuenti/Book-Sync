@@ -25,9 +25,16 @@ function formatRelativeTime(iso) {
     return then.toLocaleDateString()
 }
 
-function pillFor(status, connected) {
-    if (status === 'running') return { cls: 'running', label: 'Syncing' }
-    if (status === 'failed') return { cls: 'err', label: 'Failed' }
+function pillFor(source) {
+    const { last_status: status, connected, progress } = source
+    // Treat 'running' as actually running only if the backend is also
+    // sending live progress data — guards against stale rows from a crash.
+    const reallyRunning =
+        status === 'running' &&
+        progress &&
+        (progress.current != null || progress.total != null || progress.title)
+    if (reallyRunning) return { cls: 'running', label: 'Syncing' }
+    if (status === 'failed') return { cls: 'err', label: 'Last sync failed' }
     if (status === 'succeeded') return { cls: 'ok', label: 'Healthy' }
     if (!connected) return { cls: 'idle', label: 'Not connected' }
     return { cls: 'idle', label: 'Idle' }
@@ -35,8 +42,8 @@ function pillFor(status, connected) {
 
 /* ── Status pill ─────────────────────────────────────────────────── */
 
-function StatusPill({ status, connected }) {
-    const { cls, label } = pillFor(status, connected)
+function StatusPill({ source }) {
+    const { cls, label } = pillFor(source)
     return (
         <span className={`import-status-pill ${cls}`}>
             <span className="dot" />
@@ -55,7 +62,7 @@ function SourceCardShell({ icon, source, children }) {
                     <span className="import-source-icon">{icon}</span>
                     {source.display_name}
                 </h3>
-                <StatusPill status={source.last_status} connected={source.connected} />
+                <StatusPill source={source} />
             </div>
             <div className="system-card-body">{children}</div>
         </div>
@@ -91,8 +98,16 @@ function StateGrid({ source }) {
 
 /* ── Live progress bar ───────────────────────────────────────────── */
 
-function ProgressBlock({ progress }) {
+function ProgressBlock({ source }) {
+    // Only render when the source genuinely is mid-sync. last_status alone
+    // isn't trusted — we also require some sign of actual progress data
+    // (a current count, total, or title) to guard against stale rows.
+    if (source.last_status !== 'running') return null
+    const progress = source.progress
     if (!progress) return null
+    const hasSignal = progress.current != null || progress.total != null || progress.title
+    if (!hasSignal) return null
+
     const { current, total, title } = progress
     const pct = total ? Math.min(100, Math.round((current / total) * 100)) : 0
     const indeterminate = !total
@@ -214,12 +229,11 @@ function ControlsRow({ source, onChange, onTriggerSync, secondaryAction }) {
     const isRunning = source.last_status === 'running'
     return (
         <>
-            {source.supports_auto_sync && (
+            {source.supports_auto_sync && source.connected && (
                 <div className="import-controls">
                     <label className="import-controls-toggle">
                         <input
                             type="checkbox"
-                            disabled={!source.connected}
                             checked={source.auto_sync_enabled}
                             onChange={(e) =>
                                 onChange({ auto_sync_enabled: e.target.checked })
@@ -246,13 +260,15 @@ function ControlsRow({ source, onChange, onTriggerSync, secondaryAction }) {
                 </div>
             )}
             <div className="import-action-row">
-                <button
-                    className="btn btn-primary"
-                    disabled={!source.connected || isRunning}
-                    onClick={onTriggerSync}
-                >
-                    {isRunning ? 'Syncing…' : 'Run sync now'}
-                </button>
+                {source.connected && (
+                    <button
+                        className="btn btn-primary"
+                        disabled={isRunning}
+                        onClick={onTriggerSync}
+                    >
+                        {isRunning ? 'Syncing…' : 'Run sync now'}
+                    </button>
+                )}
                 {secondaryAction}
             </div>
         </>
@@ -268,7 +284,7 @@ function AudibleCard({ source, jobs, onChange, onTriggerSync, onConnect, onDisco
             source={source}
         >
             <StateGrid source={source} />
-            <ProgressBlock progress={source.progress} />
+            <ProgressBlock source={source} />
             <LastRunSummary source={source} jobs={jobs} />
             <ControlsRow
                 source={source}
@@ -321,7 +337,7 @@ function AcsmCard({ source, jobs, onChange, onTriggerSync, onUploaded }) {
             source={source}
         >
             <StateGrid source={source} />
-            <ProgressBlock progress={source.progress} />
+            <ProgressBlock source={source} />
             <LastRunSummary source={source} jobs={jobs} />
 
             <div

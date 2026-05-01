@@ -217,6 +217,13 @@ async def audible_disconnect(
     state = await _get_or_create_state(db, "audible")
     state.enabled = False
     state.auto_sync_enabled = False
+    # Clear any "running"/progress bookkeeping so the UI doesn't show a
+    # phantom in-progress sync after disconnect.
+    state.last_status = None
+    state.last_message = None
+    state.progress_current = None
+    state.progress_total = None
+    state.progress_title = None
     await db.commit()
     return {"connected": False}
 

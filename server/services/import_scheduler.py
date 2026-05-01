@@ -199,9 +199,44 @@ async def _run_loop() -> None:
     logger.info("[import-scheduler] stopped")
 
 
+async def reset_stale_running_sources() -> None:
+    """
+    Clear any import_sources row stuck at last_status='running' from a
+    previous server lifetime — e.g. a crash mid-sync, or a docker restart
+    while a download was in flight. Called once at lifespan startup so
+    the UI doesn't show a phantom "Syncing" state forever.
+    """
+    async with async_session() as db:
+        result = await db.execute(
+            select(ImportSource).where(ImportSource.last_status == "running")
+        )
+        rows = result.scalars().all()
+        if not rows:
+            return
+        for row in rows:
+            row.last_status = "failed"
+            row.last_message = "Previous sync was interrupted (server restart)."
+            row.progress_current = None
+            row.progress_total = None
+            row.progress_title = None
+        await db.commit()
+        logger.info(f"[import-scheduler] cleared {len(rows)} stale running source(s)")
+
+        # Also mark any matching ImportJob rows still 'running' as 'failed'.
+        result = await db.execute(
+            select(ImportJob).where(ImportJob.status == "running")
+        )
+        for j in result.scalars().all():
+            j.status = "failed"
+            j.error_message = j.error_message or "Interrupted by server restart"
+            j.finished_at = datetime.datetime.utcnow()
+        await db.commit()
+
+
 async def start() -> None:
     global _task
     _stop.clear()
+    await reset_stale_running_sources()
     if _task is None or _task.done():
         _task = asyncio.create_task(_run_loop())
 
