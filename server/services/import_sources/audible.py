@@ -12,12 +12,15 @@ The resulting .m4b is then handed to library_writer.place_file().
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -34,48 +37,90 @@ logger = logging.getLogger(__name__)
 
 
 # --- in-memory pending-login state -------------------------------------------
-# Holds half-completed logins between "start" (server prints OAuth URL) and
-# "complete" (user pastes the redirect URL back). Single-process is fine for
-# a home server — Tandem doesn't run replicas.
+# audible.Authenticator.from_login_external() drives the whole OAuth flow
+# itself: it generates a code_verifier, builds the login URL, calls a
+# user-supplied callback with that URL, and expects the callback to return
+# the post-login response URL. That blocks, which doesn't fit a stateless
+# two-request browser flow.
+#
+# Bridge: run from_login_external in a background thread, hand the URL out
+# of the thread via one Future, hand the response URL back into the thread
+# via another Future. Single-process is fine for a home server.
 
-_PENDING: dict[str, dict] = {}
 DEFAULT_LOCALE = "us"  # Audible marketplace; could be configurable later.
+_LOGIN_TIMEOUT_SECONDS = 600  # how long the user has to complete sign-in
+
+
+@dataclass
+class _PendingLogin:
+    url_future: concurrent.futures.Future = field(default_factory=concurrent.futures.Future)
+    response_future: concurrent.futures.Future = field(default_factory=concurrent.futures.Future)
+    auth_future: concurrent.futures.Future = field(default_factory=concurrent.futures.Future)
+    thread: Optional[threading.Thread] = None
+
+
+_PENDING: dict[str, _PendingLogin] = {}
 
 
 def _build_login_state(locale: str = DEFAULT_LOCALE) -> tuple[str, str]:
     """
-    Start a login flow. Returns (login_url, state_token). Caller stores
-    state_token client-side and passes it back with the post-login redirect URL.
+    Start a login flow. Spins up a background thread that calls
+    Authenticator.from_login_external; once that hits the URL callback we
+    capture the URL and return it. Caller pairs (login_url, state_token)
+    and passes state_token back when completing.
     """
-    code_verifier = audible.login.create_code_verifier()
-    locale_obj = audible.localization.Locale(locale)
-    login_url = audible.login.build_oauth_url(
-        country_code=locale_obj.country_code,
-        domain=locale_obj.domain,
-        market_place_id=locale_obj.market_place_id,
-        code_verifier=code_verifier,
-    )[0]
     state_token = os.urandom(16).hex()
-    _PENDING[state_token] = {
-        "code_verifier": code_verifier,
-        "locale": locale,
-    }
+    pending = _PendingLogin()
+    _PENDING[state_token] = pending
+
+    def _login_url_callback(url: str) -> str:
+        pending.url_future.set_result(url)
+        return pending.response_future.result(timeout=_LOGIN_TIMEOUT_SECONDS)
+
+    def _runner():
+        try:
+            auth = audible.Authenticator.from_login_external(
+                locale=locale,
+                login_url_callback=_login_url_callback,
+            )
+            pending.auth_future.set_result(auth)
+        except Exception as e:
+            pending.auth_future.set_exception(e)
+            if not pending.url_future.done():
+                pending.url_future.set_exception(e)
+            if not pending.response_future.done():
+                # Unblock any hanging callback if the failure happened pre-callback.
+                pending.response_future.cancel()
+
+    pending.thread = threading.Thread(target=_runner, daemon=True, name=f"audible-login-{state_token[:6]}")
+    pending.thread.start()
+
+    # Wait briefly for the URL — should be ~instant since the audible lib
+    # does basically no I/O before invoking the callback.
+    try:
+        login_url = pending.url_future.result(timeout=15)
+    except concurrent.futures.TimeoutError:
+        _PENDING.pop(state_token, None)
+        raise RuntimeError("Audible library did not produce a login URL in time.")
+    except Exception as e:
+        _PENDING.pop(state_token, None)
+        raise RuntimeError(f"Audible login could not start: {e}")
+
     return login_url, state_token
 
 
 async def _complete_login(state_token: str, response_url: str) -> audible.Authenticator:
-    state = _PENDING.pop(state_token, None)
-    if not state:
+    pending = _PENDING.pop(state_token, None)
+    if not pending:
         raise ValueError("Unknown or expired state token — start the login over.")
 
-    def _do_login() -> audible.Authenticator:
-        return audible.Authenticator.from_login_external(
-            locale=state["locale"],
-            code_verifier=state["code_verifier"],
-            login_url_callback=lambda u: response_url,
-        )
+    pending.response_future.set_result(response_url)
 
-    auth = await asyncio.to_thread(_do_login)
+    def _wait_for_auth() -> audible.Authenticator:
+        return pending.auth_future.result(timeout=60)
+
+    auth = await asyncio.to_thread(_wait_for_auth)
+
     # Pre-fetch activation bytes so they end up persisted in the auth blob.
     try:
         await asyncio.to_thread(auth.get_activation_bytes)
@@ -84,41 +129,34 @@ async def _complete_login(state_token: str, response_url: str) -> audible.Authen
     return auth
 
 
+# audible.Authenticator has built-in to_file/from_file (JSON). Round-trip
+# through a temp file rather than reaching into private attributes — that
+# keeps us compatible across audible-lib versions.
+
 def _auth_to_blob(auth: audible.Authenticator) -> str:
-    """Serialize an Authenticator to a JSON-able plaintext blob."""
-    data = {
-        "adp_token": auth.adp_token,
-        "device_private_key": auth.device_private_key,
-        "access_token": auth.access_token,
-        "refresh_token": auth.refresh_token,
-        "device_info": auth.device_info,
-        "customer_info": auth.customer_info,
-        "expires": auth.expires,
-        "locale_code": auth.locale.locale_code,
-        "with_username": auth.with_username,
-        "activation_bytes": getattr(auth, "activation_bytes", None),
-        "website_cookies": getattr(auth, "website_cookies", None),
-    }
-    return json.dumps(data)
+    with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        auth.to_file(filename=str(tmp_path), encryption=False)
+        return tmp_path.read_text()
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _blob_to_auth(blob: str) -> audible.Authenticator:
-    data = json.loads(blob)
-    auth = audible.Authenticator()
-    auth.adp_token = data["adp_token"]
-    auth.device_private_key = data["device_private_key"]
-    auth.access_token = data["access_token"]
-    auth.refresh_token = data["refresh_token"]
-    auth.device_info = data["device_info"]
-    auth.customer_info = data["customer_info"]
-    auth.expires = data["expires"]
-    auth.locale = audible.localization.Locale(data["locale_code"])
-    auth.with_username = data["with_username"]
-    if data.get("activation_bytes"):
-        auth.activation_bytes = data["activation_bytes"]
-    if data.get("website_cookies"):
-        auth.website_cookies = data["website_cookies"]
-    return auth
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+        tmp.write(blob)
+        tmp_path = Path(tmp.name)
+    try:
+        return audible.Authenticator.from_file(filename=str(tmp_path))
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 async def _load_auth(db: AsyncSession) -> Optional[audible.Authenticator]:
