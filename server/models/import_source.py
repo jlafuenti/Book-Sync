@@ -27,6 +27,11 @@ class ImportSource(Base):
     last_status: Mapped[str] = mapped_column(String(20), nullable=True)  # "succeeded", "failed", "running"
     last_message: Mapped[str] = mapped_column(Text, nullable=True)
 
+    # Live progress while a sync is running. Cleared when the job finishes.
+    progress_current: Mapped[int] = mapped_column(Integer, nullable=True)
+    progress_total: Mapped[int] = mapped_column(Integer, nullable=True)
+    progress_title: Mapped[str] = mapped_column(String(500), nullable=True)
+
     # Optional source-specific JSON config blob (e.g. Kobo desktop path).
     config: Mapped[str] = mapped_column(Text, nullable=True)
 

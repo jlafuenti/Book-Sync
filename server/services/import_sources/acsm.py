@@ -34,7 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models.book import EBook
-from services.import_sources.base import SourceAdapter, SyncResult
+from services.import_sources.base import (
+    ProgressFn,
+    SourceAdapter,
+    SyncError,
+    SyncResult,
+    _noop_progress,
+)
 from services.library_writer import place_file
 
 logger = logging.getLogger(__name__)
@@ -211,48 +217,39 @@ class AcsmSource(SourceAdapter):
         # Always "connected": this source needs no credentials.
         return True
 
-    async def sync(self, db: AsyncSession) -> SyncResult:
+    async def sync(self, db: AsyncSession, progress: ProgressFn = _noop_progress) -> SyncResult:
         """Process every file in the inbox folder."""
         _ensure_dirs()
-        added = 0
-        skipped = 0
-        added_titles: list[str] = []
-        errors: list[str] = []
+        result = SyncResult()
 
         inbox = _inbox_dir()
         candidates = sorted(
             p for p in inbox.iterdir()
             if p.is_file() and p.suffix.lower() in (".acsm", ".epub")
         )
+        total = len(candidates)
 
-        for path in candidates:
+        for idx, path in enumerate(candidates, start=1):
+            await progress(idx, total, path.name)
             try:
-                result = await process_file(db, path, path.name)
-                if result["status"] == "added":
-                    added += 1
-                    if result.get("title"):
-                        added_titles.append(result["title"])
+                outcome = await process_file(db, path, path.name)
+                if outcome["status"] == "added":
+                    result.items_added += 1
+                    if outcome.get("title"):
+                        result.added_titles.append(outcome["title"])
                     shutil.move(str(path), _processed_dir() / path.name)
-                elif result["status"] == "skipped":
-                    skipped += 1
+                elif outcome["status"] == "skipped":
+                    result.items_skipped += 1
                     shutil.move(str(path), _processed_dir() / path.name)
             except Exception as e:
                 logger.exception(f"[acsm] failed to process {path.name}: {e}")
-                errors.append(f"{path.name}: {e}")
+                result.errors.append(SyncError(
+                    title=path.name,
+                    error=str(e).strip().split("\n")[0][:300],
+                ))
                 try:
                     shutil.move(str(path), _failed_dir() / path.name)
                 except Exception:
                     pass
 
-        detail = ""
-        if added_titles:
-            detail = "Added: " + "; ".join(added_titles)
-        if errors:
-            detail += ("\n" if detail else "") + "Errors: " + "; ".join(errors)
-
-        return SyncResult(
-            items_added=added,
-            items_skipped=skipped,
-            detail=detail,
-            error="; ".join(errors) if errors and added == 0 else None,
-        )
+        return result

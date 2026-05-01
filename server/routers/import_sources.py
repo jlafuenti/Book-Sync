@@ -14,6 +14,7 @@ Endpoints:
   POST   /api/import/acsm/upload                  Upload a single .acsm or .epub
 """
 
+import json
 import logging
 import shutil
 import tempfile
@@ -67,6 +68,11 @@ async def _serialize_source(db: AsyncSession, source_key: str) -> Dict[str, Any]
         "last_sync_at": state.last_sync_at.isoformat() if state.last_sync_at else None,
         "last_status": state.last_status,
         "last_message": state.last_message,
+        "progress": {
+            "current": state.progress_current,
+            "total": state.progress_total,
+            "title": state.progress_title,
+        } if state.last_status == "running" else None,
     }
 
 
@@ -137,8 +143,22 @@ async def list_jobs(
         .order_by(ImportJob.started_at.desc())
         .limit(20)
     )
-    return [
-        {
+    out = []
+    for j in result.scalars().all():
+        # detail is JSON ({added_titles, errors}) for new jobs; older rows
+        # may be a freeform string — surface those as raw text.
+        added_titles: list[str] = []
+        errors: list[dict] = []
+        raw_detail = None
+        if j.detail:
+            try:
+                parsed = json.loads(j.detail)
+                added_titles = parsed.get("added_titles") or []
+                errors = parsed.get("errors") or []
+            except (ValueError, TypeError):
+                raw_detail = j.detail
+
+        out.append({
             "id": j.id,
             "status": j.status,
             "trigger": j.trigger,
@@ -147,10 +167,11 @@ async def list_jobs(
             "items_added": j.items_added,
             "items_skipped": j.items_skipped,
             "error_message": j.error_message,
-            "detail": j.detail,
-        }
-        for j in result.scalars().all()
-    ]
+            "added_titles": added_titles,
+            "errors": errors,
+            "detail_raw": raw_detail,
+        })
+    return out
 
 
 # ---- Audible-specific endpoints --------------------------------------------

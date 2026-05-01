@@ -30,7 +30,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.book import AudioBook
 from services import credentials
-from services.import_sources.base import SourceAdapter, SyncResult
+from services.import_sources.base import (
+    ProgressFn,
+    SourceAdapter,
+    SyncError,
+    SyncResult,
+    _noop_progress,
+)
 from services.library_writer import place_file
 
 logger = logging.getLogger(__name__)
@@ -355,23 +361,21 @@ class AudibleSource(SourceAdapter):
     async def is_connected(self, db: AsyncSession) -> bool:
         return await _load_auth(db) is not None
 
-    async def sync(self, db: AsyncSession) -> SyncResult:
+    async def sync(self, db: AsyncSession, progress: ProgressFn = _noop_progress) -> SyncResult:
         auth = await _load_auth(db)
         if not auth:
-            return SyncResult(error="Audible is not connected.")
+            return SyncResult(fatal_error="Audible is not connected.")
 
         try:
             items = await asyncio.to_thread(_list_library, auth)
         except Exception as e:
-            return SyncResult(error=f"Could not list Audible library: {e}")
+            return SyncResult(fatal_error=f"Could not list Audible library: {e}")
 
         existing = await _existing_asins(db)
         new_items = [i for i in items if i.get("asin") and i["asin"] not in existing]
 
-        added = 0
-        skipped = len(items) - len(new_items)
-        added_titles: list[str] = []
-        errors: list[str] = []
+        result = SyncResult(items_skipped=len(items) - len(new_items))
+        total = len(new_items)
 
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -379,9 +383,12 @@ class AudibleSource(SourceAdapter):
             auth_file = tmpdir / "audible.json"
             auth_file.write_text(_auth_to_blob(auth))
 
-            for raw in new_items:
+            for idx, raw in enumerate(new_items, start=1):
+                meta = _normalize_item(raw)
+                title = meta.get("title") or raw.get("asin") or "Unknown"
+                await progress(idx, total, title)
+
                 try:
-                    meta = _normalize_item(raw)
                     asin = meta["asin"]
                     item_dir = tmpdir / asin
                     item_dir.mkdir()
@@ -403,23 +410,15 @@ class AudibleSource(SourceAdapter):
                         meta=meta,
                         move=True,
                     )
-                    added += 1
-                    if meta.get("title"):
-                        added_titles.append(meta["title"])
+                    result.items_added += 1
+                    result.added_titles.append(title)
                     logger.info(f"[audible] imported {asin} -> {target}")
                 except Exception as e:
                     logger.exception(f"[audible] failed to import {raw.get('asin')}: {e}")
-                    errors.append(f"{raw.get('title') or raw.get('asin')}: {e}")
+                    result.errors.append(SyncError(
+                        title=title,
+                        external_id=raw.get("asin"),
+                        error=str(e).strip().split("\n")[0][:300],  # one-line summary
+                    ))
 
-        detail = ""
-        if added_titles:
-            detail = "Added: " + "; ".join(added_titles)
-        if errors:
-            detail += ("\n" if detail else "") + "Errors: " + "; ".join(errors)
-
-        return SyncResult(
-            items_added=added,
-            items_skipped=skipped,
-            detail=detail,
-            error="; ".join(errors) if errors and added == 0 else None,
-        )
+        return result
