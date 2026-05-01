@@ -260,18 +260,21 @@ def _download_via_cli(asin: str, out_dir: Path, auth_blob_path: Path) -> Path:
     Shell out to audible-cli to download a single ASIN, decrypt to .m4b, and
     return the resulting file. Requires audible-cli + ffmpeg on PATH in the
     server image.
+
+    audible-cli locates its config via the AUDIBLE_CONFIG_DIR env var; there
+    is no equivalent CLI flag (verified by reading audible_cli.constants).
     """
     _ensure_audible_cli_config(auth_blob_path.parent, auth_blob_path.name)
     cmd = [
         "audible",
-        "--config-dir", str(auth_blob_path.parent),
         "download",
         "--asin", asin,
         "--aaxc",
         "--output-dir", str(out_dir),
     ]
-    logger.info(f"[audible] running: {' '.join(cmd)}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    env = {**os.environ, "AUDIBLE_CONFIG_DIR": str(auth_blob_path.parent)}
+    logger.info(f"[audible] running: AUDIBLE_CONFIG_DIR={auth_blob_path.parent} {' '.join(cmd)}")
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env)
     if proc.returncode != 0:
         raise RuntimeError(
             f"audible-cli download failed for {asin}: "
