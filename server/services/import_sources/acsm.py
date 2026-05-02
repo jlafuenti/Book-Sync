@@ -63,35 +63,101 @@ def _ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
+_ADOBE_ID_PATH = Path("/root/.config/calibre/plugins/DeACSM/account")
+_AUTHORIZE_SCRIPT = Path(__file__).parent / "_acsm_authorize.py"
+
+
+def is_adobe_id_authorized() -> bool:
+    """The DeACSM plugin stores its Adobe ID device certificate + keys in
+    its 'account' directory. If it's empty, the plugin can't decrypt
+    anything because ADEPT DRM is keyed to an authorized Adobe ID."""
+    if not _ADOBE_ID_PATH.exists():
+        return False
+    try:
+        return any(_ADOBE_ID_PATH.iterdir())
+    except OSError:
+        return False
+
+
+def authorize_adobe_id(mode: str = "anonymous", email: str = "", password: str = "") -> None:
+    """
+    Register the DeACSM plugin with an Adobe ID so it can decrypt ACSMs.
+    Drives the plugin's bundled libadobeAccount via `calibre-debug -e`.
+
+    mode = "anonymous" — works for most Google Play / Nook content; no
+        email / password needed. Recommended.
+    mode = "adobeid"   — register with a specific Adobe account; email
+        and password required.
+
+    Raises RuntimeError on failure (with the underlying tool's message).
+    """
+    if mode not in ("anonymous", "adobeid"):
+        raise ValueError(f"unknown auth mode: {mode}")
+    if mode == "adobeid" and not (email and password):
+        raise ValueError("Adobe ID mode requires email and password")
+
+    cmd = ["calibre-debug", "-e", str(_AUTHORIZE_SCRIPT), "--", mode]
+    if mode == "adobeid":
+        cmd.extend([email, password])
+    logger.info(f"[acsm] authorizing DeACSM (mode={mode})")
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        # Stderr has the actionable message from the script's exit branches.
+        msg = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+        # Strip the noisy traceback to a single line for UI consumption.
+        msg = msg.split("\n")[-1][:400]
+        raise RuntimeError(msg)
+
+
+def deauthorize_adobe_id() -> None:
+    """Wipe the plugin's account dir so the user can re-authorize with a
+    different account (or anonymously)."""
+    if not _ADOBE_ID_PATH.exists():
+        return
+    for child in _ADOBE_ID_PATH.iterdir():
+        try:
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+        except OSError as e:
+            logger.warning(f"[acsm] could not remove {child}: {e}")
+
+
 def _convert_acsm_to_epub(acsm_path: Path, out_dir: Path) -> Path:
     """
-    Run the acsm-calibre-plugin via `calibre-debug -r DeACSM`. Returns the
-    path to the output EPUB. Raises RuntimeError on failure.
+    Convert .acsm to a DRM-free EPUB through Calibre's standard conversion
+    pipeline. The DeACSM plugin is registered as a file-type plugin, so
+    `ebook-convert input.acsm output.epub` automatically routes through it.
+
+    Requires the plugin to be linked to an authorized Adobe ID (ADEPT DRM
+    is keyed to an Adobe account). We surface a clear error if it isn't.
     """
-    cmd = ["calibre-debug", "-r", "DeACSM", "--", str(acsm_path)]
-    logger.info(f"[acsm] running: {' '.join(cmd)} (cwd={out_dir})")
+    if not is_adobe_id_authorized():
+        raise RuntimeError(
+            "ACSM source is not authorized with Adobe yet. Open the Import "
+            "Sources page and click 'Authorize Adobe' on the Google Play / "
+            "Nook card — anonymous authorization is enough for most books."
+        )
+
+    out_path = out_dir / (acsm_path.stem + ".epub")
+    cmd = ["ebook-convert", str(acsm_path), str(out_path)]
+    logger.info(f"[acsm] running: {' '.join(cmd)}")
     try:
         result = subprocess.run(
-            cmd, cwd=out_dir, capture_output=True, text=True, timeout=120
+            cmd, capture_output=True, text=True, timeout=180
         )
     except FileNotFoundError as e:
-        raise RuntimeError(
-            "calibre-debug not found on PATH — install Calibre and the "
-            "acsm-calibre-plugin in the server image."
-        ) from e
+        raise RuntimeError("ebook-convert not found on PATH") from e
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"acsm-calibre-plugin failed (rc={result.returncode}): "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
+    # Calibre always exits 0 on success and writes to stderr on info; check
+    # the output file existence as the real success signal.
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        diag = (result.stdout + "\n" + result.stderr).strip()
+        diag = " ".join(diag.split())[:600] or f"ebook-convert exit {result.returncode}"
+        raise RuntimeError(f"ACSM conversion failed: {diag}")
 
-    epubs = sorted(out_dir.glob("*.epub"))
-    if not epubs:
-        raise RuntimeError(
-            f"acsm-calibre-plugin produced no EPUB. stdout={result.stdout!r}"
-        )
-    return epubs[0]
+    return out_path
 
 
 def _read_epub_meta(epub_path: Path) -> dict:
@@ -214,8 +280,10 @@ class AcsmSource(SourceAdapter):
     SUPPORTS_AUTO_SYNC = True  # auto-sync = poll the watched folder
 
     async def is_connected(self, db: AsyncSession) -> bool:
-        # Always "connected": this source needs no credentials.
-        return True
+        # ACSM source is "connected" once the DeACSM plugin has an Adobe
+        # device key on disk. Without one it can't decrypt anything, so
+        # the UI hides the upload box and prompts the user to authorize.
+        return is_adobe_id_authorized()
 
     async def sync(self, db: AsyncSession, progress: ProgressFn = _noop_progress) -> SyncResult:
         """Process every file in the inbox folder."""

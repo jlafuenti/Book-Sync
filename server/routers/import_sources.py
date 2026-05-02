@@ -32,7 +32,12 @@ from models.user import User
 from routers.auth import get_admin_user
 from services import import_scheduler
 from services.import_sources import get_source, list_sources
-from services.import_sources.acsm import process_file as acsm_process_file
+from services.import_sources.acsm import (
+    process_file as acsm_process_file,
+    is_adobe_id_authorized,
+    authorize_adobe_id,
+    deauthorize_adobe_id,
+)
 from services.import_sources.audible import AudibleSource
 
 logger = logging.getLogger(__name__)
@@ -226,6 +231,47 @@ async def audible_disconnect(
     state.progress_title = None
     await db.commit()
     return {"connected": False}
+
+
+# ---- ACSM Adobe-ID authorization ------------------------------------------
+
+class AcsmAuthorizeRequest(BaseModel):
+    mode: str  # "anonymous" | "adobeid"
+    email: str = ""
+    password: str = ""
+
+
+@router.get("/acsm/authorization")
+async def acsm_authorization_status(_: User = Depends(get_admin_user)):
+    return {"authorized": is_adobe_id_authorized()}
+
+
+@router.post("/acsm/authorize")
+async def acsm_authorize(
+    payload: AcsmAuthorizeRequest,
+    _: User = Depends(get_admin_user),
+):
+    try:
+        # Run the calibre-debug subprocess off the event loop — it shells
+        # out to Calibre and can take a few seconds.
+        import asyncio
+        await asyncio.to_thread(
+            authorize_adobe_id,
+            payload.mode,
+            payload.email or "",
+            payload.password or "",
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Authorization failed: {e}")
+    return {"authorized": is_adobe_id_authorized()}
+
+
+@router.post("/acsm/deauthorize")
+async def acsm_deauthorize(_: User = Depends(get_admin_user)):
+    deauthorize_adobe_id()
+    return {"authorized": is_adobe_id_authorized()}
 
 
 # ---- ACSM upload endpoint --------------------------------------------------

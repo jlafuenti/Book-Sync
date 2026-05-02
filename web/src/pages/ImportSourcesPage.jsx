@@ -8,6 +8,8 @@ import {
     audibleLoginComplete,
     audibleDisconnect,
     uploadAcsm,
+    acsmAuthorize,
+    acsmDeauthorize,
 } from '../api'
 import './ImportSourcesPage.css'
 
@@ -308,7 +310,94 @@ function AudibleCard({ source, jobs, onChange, onTriggerSync, onConnect, onDisco
 
 /* ── ACSM card ───────────────────────────────────────────────────── */
 
-function AcsmCard({ source, jobs, onChange, onTriggerSync, onUploaded }) {
+function AcsmAuthorizePanel({ onAuthorized }) {
+    const [mode, setMode] = useState('anonymous')
+    const [email, setEmail] = useState('')
+    const [password, setPassword] = useState('')
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState(null)
+
+    const submit = async (e) => {
+        e.preventDefault()
+        setBusy(true)
+        setError(null)
+        try {
+            await acsmAuthorize({ mode, email, password })
+            onAuthorized()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    return (
+        <div className="acsm-authorize">
+            <h4 className="acsm-authorize-title">Authorize with Adobe</h4>
+            <p className="acsm-authorize-desc">
+                ACSM files use Adobe's ADEPT DRM. The server needs a one-time
+                Adobe authorization before it can decrypt your downloads.
+            </p>
+            <form className="acsm-authorize-form" onSubmit={submit}>
+                <label className="acsm-authorize-radio">
+                    <input
+                        type="radio"
+                        checked={mode === 'anonymous'}
+                        onChange={() => setMode('anonymous')}
+                    />
+                    <div>
+                        <strong>Anonymous</strong>{' '}
+                        <span style={{ color: 'var(--text-muted)' }}>(recommended)</span>
+                        <div className="acsm-authorize-radio-hint">
+                            Works for almost all Google Play Books and Nook downloads.
+                            No Adobe account required.
+                        </div>
+                    </div>
+                </label>
+                <label className="acsm-authorize-radio">
+                    <input
+                        type="radio"
+                        checked={mode === 'adobeid'}
+                        onChange={() => setMode('adobeid')}
+                    />
+                    <div>
+                        <strong>Adobe ID</strong>
+                        <div className="acsm-authorize-radio-hint">
+                            Use a specific Adobe account. Needed only if a publisher
+                            ties downloads to your Adobe ID specifically.
+                        </div>
+                    </div>
+                </label>
+                {mode === 'adobeid' && (
+                    <div className="acsm-authorize-fields">
+                        <input
+                            type="email"
+                            placeholder="Adobe ID email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                            autoComplete="off"
+                        />
+                        <input
+                            type="password"
+                            placeholder="Password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
+                            autoComplete="off"
+                        />
+                    </div>
+                )}
+                {error && <div className="acsm-authorize-error">{error}</div>}
+                <button type="submit" className="btn btn-primary" disabled={busy}>
+                    {busy ? 'Authorizing…' : 'Authorize'}
+                </button>
+            </form>
+        </div>
+    )
+}
+
+function AcsmCard({ source, jobs, onChange, onTriggerSync, onUploaded, onRefresh }) {
     const [busy, setBusy] = useState(false)
     const [results, setResults] = useState([])
     const [dragging, setDragging] = useState(false)
@@ -331,87 +420,108 @@ function AcsmCard({ source, jobs, onChange, onTriggerSync, onUploaded }) {
         onUploaded()
     }
 
+    const revoke = async () => {
+        if (!confirm('Remove the Adobe authorization? You\'ll need to re-authorize before importing more ACSM files.')) {
+            return
+        }
+        try {
+            await acsmDeauthorize()
+            onRefresh()
+        } catch (e) {
+            alert(e.message)
+        }
+    }
+
     return (
-        <SourceCardShell
-            icon={<EpubIcon />}
-            source={source}
-        >
+        <SourceCardShell icon={<EpubIcon />} source={source}>
             <StateGrid source={source} />
             <ProgressBlock source={source} />
             <LastRunSummary source={source} jobs={jobs} />
 
-            <div
-                className={`acsm-dropzone${dragging ? ' dragging' : ''}${busy ? ' busy' : ''}`}
-                onDragOver={(e) => {
-                    e.preventDefault()
-                    setDragging(true)
-                }}
-                onDragLeave={() => setDragging(false)}
-                onDrop={(e) => {
-                    e.preventDefault()
-                    setDragging(false)
-                    handleFiles(Array.from(e.dataTransfer.files))
-                }}
-                onClick={() => !busy && inputRef.current?.click()}
-            >
-                <UploadIcon />
-                <div className="acsm-dropzone-primary">
-                    {busy
-                        ? 'Uploading…'
-                        : dragging
-                            ? 'Drop to upload'
-                            : 'Drag .acsm or .epub files here'}
-                </div>
-                <div className="acsm-dropzone-hint">
-                    Or click to browse. Google Play / Nook downloads are
-                    converted to DRM-free EPUB on the server.
-                </div>
-                <input
-                    ref={inputRef}
-                    type="file"
-                    multiple
-                    accept=".acsm,.epub"
-                    style={{ display: 'none' }}
-                    onChange={(e) => handleFiles(Array.from(e.target.files || []))}
-                />
-            </div>
+            {!source.connected ? (
+                <AcsmAuthorizePanel onAuthorized={onRefresh} />
+            ) : (
+                <>
+                    <div
+                        className={`acsm-dropzone${dragging ? ' dragging' : ''}${busy ? ' busy' : ''}`}
+                        onDragOver={(e) => {
+                            e.preventDefault()
+                            setDragging(true)
+                        }}
+                        onDragLeave={() => setDragging(false)}
+                        onDrop={(e) => {
+                            e.preventDefault()
+                            setDragging(false)
+                            handleFiles(Array.from(e.dataTransfer.files))
+                        }}
+                        onClick={() => !busy && inputRef.current?.click()}
+                    >
+                        <UploadIcon />
+                        <div className="acsm-dropzone-primary">
+                            {busy
+                                ? 'Uploading…'
+                                : dragging
+                                    ? 'Drop to upload'
+                                    : 'Drag .acsm or .epub files here'}
+                        </div>
+                        <div className="acsm-dropzone-hint">
+                            Or click to browse. Google Play / Nook downloads are
+                            converted to DRM-free EPUB on the server.
+                        </div>
+                        <input
+                            ref={inputRef}
+                            type="file"
+                            multiple
+                            accept=".acsm,.epub"
+                            style={{ display: 'none' }}
+                            onChange={(e) => handleFiles(Array.from(e.target.files || []))}
+                        />
+                    </div>
 
-            <p className="acsm-watched-folder">
-                Or drop files server-side into <code>/data/imports/acsm/inbox/</code>{' '}
-                — they're picked up automatically.
-            </p>
+                    <p className="acsm-watched-folder">
+                        Or drop files server-side into{' '}
+                        <code>/data/imports/acsm/inbox/</code> — they're picked up
+                        automatically.
+                    </p>
 
-            {results.length > 0 && (
-                <ul className="acsm-results">
-                    {results.map((r, i) => {
-                        const cls = r.status === 'added'
-                            ? 'added'
-                            : r.status === 'skipped'
-                                ? 'skipped'
-                                : 'failed'
-                        const icon = r.status === 'added' ? '✓' : r.status === 'skipped' ? '–' : '✕'
-                        return (
-                            <li key={i} className={`acsm-result-item ${cls}`}>
-                                <span className={`acsm-result-icon ${cls}`}>{icon}</span>
-                                <span className="acsm-result-name" title={r.name}>
-                                    {r.title || r.name}
-                                </span>
-                                <span className="acsm-result-detail">
-                                    {r.status === 'added' && 'Added to library'}
-                                    {r.status === 'skipped' && (r.reason || 'Already in library')}
-                                    {r.status === 'failed' && (r.error || 'Failed')}
-                                </span>
-                            </li>
-                        )
-                    })}
-                </ul>
+                    {results.length > 0 && (
+                        <ul className="acsm-results">
+                            {results.map((r, i) => {
+                                const cls = r.status === 'added'
+                                    ? 'added'
+                                    : r.status === 'skipped'
+                                        ? 'skipped'
+                                        : 'failed'
+                                const icon = r.status === 'added' ? '✓' : r.status === 'skipped' ? '–' : '✕'
+                                return (
+                                    <li key={i} className={`acsm-result-item ${cls}`}>
+                                        <span className={`acsm-result-icon ${cls}`}>{icon}</span>
+                                        <span className="acsm-result-name" title={r.name}>
+                                            {r.title || r.name}
+                                        </span>
+                                        <span className="acsm-result-detail">
+                                            {r.status === 'added' && 'Added to library'}
+                                            {r.status === 'skipped' && (r.reason || 'Already in library')}
+                                            {r.status === 'failed' && (r.error || 'Failed')}
+                                        </span>
+                                    </li>
+                                )
+                            })}
+                        </ul>
+                    )}
+
+                    <ControlsRow
+                        source={source}
+                        onChange={onChange}
+                        onTriggerSync={onTriggerSync}
+                        secondaryAction={
+                            <button className="btn btn-secondary" onClick={revoke}>
+                                Revoke Adobe authorization
+                            </button>
+                        }
+                    />
+                </>
             )}
-
-            <ControlsRow
-                source={source}
-                onChange={onChange}
-                onTriggerSync={onTriggerSync}
-            />
         </SourceCardShell>
     )
 }
@@ -661,6 +771,7 @@ export default function ImportSourcesPage() {
                     onChange={(patch) => updateConfig('acsm', patch)}
                     onTriggerSync={() => runSync('acsm')}
                     onUploaded={refresh}
+                    onRefresh={refresh}
                 />
             )}
 
