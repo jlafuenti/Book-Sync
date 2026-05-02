@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
 # System dependencies for Whisper (ffmpeg), PostgreSQL client, Calibre,
-# and curl (used to fetch the acsm-calibre-plugin release zip below).
+# curl (fetching the acsm-calibre-plugin release zip), and zip/unzip
+# (patching the plugin in place before installing it).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libpq-dev \
@@ -9,6 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     calibre \
     curl \
     ca-certificates \
+    zip \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -21,14 +24,27 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core &
 
 # Install the acsm-calibre-plugin (DeACSM) so Calibre can convert .acsm
 # files (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.
-# The plugin runs via `calibre-debug -r DeACSM -- file.acsm`, invoked from
-# services/import_sources/acsm.py. Version pinned to the most recent
-# release; the project releases infrequently because ADEPT itself is stable.
+# The plugin runs through Calibre's standard `ebook-convert` (DeACSM is a
+# file-type plugin that transforms .acsm at conversion time).
+#
+# v0.0.16 (2022) was released before Calibre moved to Python 3.11+, and
+# libadobe.py:249 has a bytes/str concat bug that breaks anonymous and
+# Adobe-ID authorization on every modern Calibre. We unpack the zip,
+# patch that one line, repack, and then install. The patch is a no-op
+# on the (str + str) path, so it stays correct if upstream ever fixes
+# this and we bump the version pin.
 ARG ACSM_PLUGIN_VERSION=0.0.16
 RUN curl -L --fail -o /tmp/acsm-plugin.zip \
       https://github.com/Leseratte10/acsm-calibre-plugin/releases/download/v${ACSM_PLUGIN_VERSION}/DeACSM_${ACSM_PLUGIN_VERSION}.zip && \
-    calibre-customize -a /tmp/acsm-plugin.zip && \
-    rm /tmp/acsm-plugin.zip
+    mkdir -p /tmp/acsm-unpacked && \
+    cd /tmp/acsm-unpacked && \
+    unzip -q /tmp/acsm-plugin.zip && \
+    sed -i 's|str_to_hash = serial + devkey_bytes\.decode|str_to_hash = (serial.decode("latin-1") if isinstance(serial, bytes) else serial) + devkey_bytes.decode|' libadobe.py && \
+    grep -q 'isinstance(serial, bytes)' libadobe.py || (echo "DeACSM patch did not apply" && exit 1) && \
+    zip -qr /tmp/acsm-plugin-patched.zip . && \
+    calibre-customize -a /tmp/acsm-plugin-patched.zip && \
+    cd / && \
+    rm -rf /tmp/acsm-plugin.zip /tmp/acsm-plugin-patched.zip /tmp/acsm-unpacked
 
 # Copy application code
 COPY . .

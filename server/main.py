@@ -50,6 +50,26 @@ class EndpointFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# Library loggers we don't want in normal operation
+logging.getLogger("audible.auth").setLevel(logging.WARNING)
+logging.getLogger("audible.client").setLevel(logging.WARNING)
+
+
+# Filter out the polling endpoints that fire every 3s from the Import
+# Sources page — they fill the log faster than anything useful.
+class ImportPollingFilter(logging.Filter):
+    _NOISY_PATHS = (
+        "/api/import/sources HTTP",
+        "/api/import/sources/audible/jobs HTTP",
+        "/api/import/sources/acsm/jobs HTTP",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p in msg for p in self._NOISY_PATHS)
+
+
+logging.getLogger("uvicorn.access").addFilter(ImportPollingFilter())
 
 logger = logging.getLogger(__name__)
 

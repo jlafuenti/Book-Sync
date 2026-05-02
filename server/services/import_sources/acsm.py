@@ -68,15 +68,17 @@ _AUTHORIZE_SCRIPT = Path(__file__).parent / "_acsm_authorize.py"
 
 
 def is_adobe_id_authorized() -> bool:
-    """The DeACSM plugin stores its Adobe ID device certificate + keys in
-    its 'account' directory. If it's empty, the plugin can't decrypt
-    anything because ADEPT DRM is keyed to an authorized Adobe ID."""
+    """
+    The DeACSM plugin needs three artifacts on disk to decrypt an ACSM:
+    a device key, a device file, and an activation file. Anything less
+    than all three is a half-finished authorization that will fail at
+    fulfillment time — which is much more confusing than just saying
+    "not authorized" up front.
+    """
     if not _ADOBE_ID_PATH.exists():
         return False
-    try:
-        return any(_ADOBE_ID_PATH.iterdir())
-    except OSError:
-        return False
+    required = ("devicesalt", "device.xml", "activation.xml")
+    return all((_ADOBE_ID_PATH / name).is_file() for name in required)
 
 
 def authorize_adobe_id(mode: str = "anonymous", email: str = "", password: str = "") -> None:
@@ -102,11 +104,30 @@ def authorize_adobe_id(mode: str = "anonymous", email: str = "", password: str =
     logger.info(f"[acsm] authorizing DeACSM (mode={mode})")
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if proc.returncode != 0:
-        # Stderr has the actionable message from the script's exit branches.
-        msg = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        # Strip the noisy traceback to a single line for UI consumption.
-        msg = msg.split("\n")[-1][:400]
-        raise RuntimeError(msg)
+        # Log the full output so we can diagnose later. Pull the most
+        # informative error line for the user — usually the line right
+        # before the traceback ("Login failed: …", "Could not create…").
+        full = (proc.stdout + "\n" + proc.stderr).strip()
+        logger.error(
+            f"[acsm] authorize subprocess exit {proc.returncode}:\n{full}"
+        )
+        lines = [
+            ln.strip() for ln in full.splitlines()
+            if ln.strip() and not ln.startswith(("Traceback", "  File ", "    "))
+        ]
+        # Drop noisy "TypeError: …" frames in favor of an upstream message
+        # if there is one; otherwise show the last real line.
+        msg = next(
+            (ln for ln in lines if ln.startswith(("Login", "Could", "Authorization", "Device"))),
+            lines[-1] if lines else f"exit {proc.returncode}",
+        )
+        # If state got partially written (the bug fails mid-flight), wipe
+        # it so is_authorized() doesn't return True for a broken setup.
+        try:
+            deauthorize_adobe_id()
+        except Exception:
+            pass
+        raise RuntimeError(msg[:400])
 
 
 def deauthorize_adobe_id() -> None:

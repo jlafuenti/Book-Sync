@@ -444,7 +444,11 @@ class AudibleSource(SourceAdapter):
 
     # --- adapter API ---------------------------------------------------------
     async def is_connected(self, db: AsyncSession) -> bool:
-        return await _load_auth(db) is not None
+        # Just check that a credential blob exists — don't round-trip it
+        # through Authenticator.from_file() on every poll. That involved a
+        # tempfile write per call and made the audible library log a line
+        # every 3 seconds, drowning out the rest of the server log.
+        return bool(await credentials.get_credential(db, "audible"))
 
     async def sync(self, db: AsyncSession, progress: ProgressFn = _noop_progress) -> SyncResult:
         auth = await _load_auth(db)
