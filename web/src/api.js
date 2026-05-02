@@ -871,3 +871,23 @@ export async function uploadAcsm(file) {
     });
     return _jsonOrThrow(resp, 'Upload failed');
 }
+
+export async function acsmAuthorizationStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/authorization`);
+    return _jsonOrThrow(resp, 'Failed to check authorization');
+}
+
+export async function acsmAuthorize({ mode, email = '', password = '' }) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/authorize`, {
+        method: 'POST',
+        body: JSON.stringify({ mode, email, password }),
+    });
+    return _jsonOrThrow(resp, 'Authorization failed');
+}
+
+export async function acsmDeauthorize() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/deauthorize`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Failed to revoke authorization');
+}
