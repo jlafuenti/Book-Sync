@@ -5,6 +5,11 @@ Fetches library metadata from the ABS API and merges it into Book Sync
 audiobook records, filling in fields that embedded tag extraction left empty.
 After enrichment, writes the combined metadata back into the audio file's
 embedded tags so that future rescans don't need to call ABS again.
+
+The ABS API token is stored in the encrypted import_source_credentials table
+(source_key='abs') alongside Audible and other source credentials. A one-shot
+startup migration (services/abs_token_migration.py, called from main.py
+lifespan) moves any token that still lives plaintext in system_settings.
 """
 
 import os
@@ -12,10 +17,58 @@ import logging
 from typing import Optional
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from models.settings import SystemSetting
+from services import credentials
 from services.metadata_utils import extract_series_and_index
 
 logger = logging.getLogger(__name__)
+
+
+async def get_abs_token(db: AsyncSession) -> Optional[str]:
+    """
+    Read the ABS API token from the encrypted credential store. Falls back to
+    legacy plaintext system_settings.abs_api_token in case the startup
+    migration hasn't run yet (e.g. unit tests that bypass lifespan).
+    """
+    token = await credentials.get_credential(db, "abs")
+    if token:
+        return token
+    legacy = await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "abs_api_token")
+    )
+    row = legacy.scalar_one_or_none()
+    return (row.value if row and row.value else None)
+
+
+async def migrate_abs_token_to_credentials() -> None:
+    """
+    One-shot: move the plaintext abs_api_token in system_settings into the
+    encrypted credential store. Idempotent — does nothing once the row in
+    system_settings has been blanked. Safe to call on every startup.
+    """
+    from database import async_session
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(SystemSetting).where(SystemSetting.key == "abs_api_token")
+        )
+        row = result.scalar_one_or_none()
+        if not row or not row.value or row.value.strip() == "":
+            return
+
+        existing = await credentials.get_credential(db, "abs")
+        if existing == row.value:
+            row.value = ""
+            await db.commit()
+            return
+
+        await credentials.set_credential(db, "abs", row.value)
+        row.value = ""  # blank it out in plaintext
+        await db.commit()
+        logger.info("[abs_metadata] migrated abs_api_token to encrypted credential store")
 
 
 def _normalize_path(path: str, prefix: str) -> str:
@@ -111,7 +164,7 @@ def enrich_from_abs(
                     best_score, best = score, it
             if best_score >= 85:
                 item = best
-                logger.info(
+                logger.debug(
                     f"[abs_metadata] Fuzzy matched '{file_meta.get('title')}' → "
                     f"'{item['media']['metadata'].get('title')}' ({best_score}%)"
                 )
@@ -171,7 +224,7 @@ def enrich_from_abs(
                     file_meta["series_index"] = s_idx
 
     if changed:
-        logger.info(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
+        logger.debug(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
 
     return file_meta, changed, True
 
@@ -238,7 +291,7 @@ def write_metadata_to_file(filepath: str, file_meta: dict) -> bool:
         _set_freeform("NARRATOR", file_meta.get("narrators"))
 
         audio.save()
-        logger.info(f"[abs_metadata] Wrote tags back to {filepath}")
+        logger.debug(f"[abs_metadata] Wrote tags back to {filepath}")
         return True
     except Exception as e:
         logger.warning(f"[abs_metadata] Failed to write tags to {filepath}: {e}")

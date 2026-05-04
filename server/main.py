@@ -20,6 +20,7 @@ from database import init_db, bootstrap_superadmin
 from config import settings
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users
 from routers import settings as settings_router
+from routers import import_sources as import_sources_router
 
 # Configure logging
 # Ensure log directory exists
@@ -49,6 +50,26 @@ class EndpointFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# Library loggers we don't want in normal operation
+logging.getLogger("audible.auth").setLevel(logging.WARNING)
+logging.getLogger("audible.client").setLevel(logging.WARNING)
+
+
+# Filter out the polling endpoints that fire every 3s from the Import
+# Sources page — they fill the log faster than anything useful.
+class ImportPollingFilter(logging.Filter):
+    _NOISY_PATHS = (
+        "/api/import/sources HTTP",
+        "/api/import/sources/audible/jobs HTTP",
+        "/api/import/sources/acsm/jobs HTTP",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p in msg for p in self._NOISY_PATHS)
+
+
+logging.getLogger("uvicorn.access").addFilter(ImportPollingFilter())
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +89,39 @@ async def lifespan(app: FastAPI):
     # Reset any stale transcription jobs (legacy)
     from routers.transcription import reset_stale_transcriptions
     await reset_stale_transcriptions()
-    
+
+    # One-shot: move plaintext ABS API token into the encrypted credential store
+    # if it's still living in system_settings. Idempotent; safe to call always.
+    try:
+        from services.abs_metadata import migrate_abs_token_to_credentials
+        await migrate_abs_token_to_credentials()
+    except Exception as e:
+        logger.exception(f"ABS token migration failed: {e}")
+
+    # Re-hydrate the DeACSM plugin's Adobe device authorization from the
+    # encrypted credential store onto disk. Without this, every container
+    # rebuild forces the user to re-authorize and burns a Google Play
+    # device slot in the process.
+    try:
+        from services.import_sources.acsm import restore_adobe_account_from_credentials
+        from database import async_session
+        async with async_session() as db:
+            await restore_adobe_account_from_credentials(db)
+    except Exception as e:
+        logger.exception(f"Adobe authorization restore failed: {e}")
+
     # Start the transcription queue manager
     from services.queue_manager import start_queue_manager, stop_queue_manager
     await start_queue_manager()
-    
+
+    # Start the import-source scheduler (auto-syncs + ACSM watched folder)
+    from services import import_scheduler
+    await import_scheduler.start()
+
     yield
-    
+
     # Shutdown
+    await import_scheduler.stop()
     await stop_queue_manager()
     logger.info("BookSync server shutting down...")
 
@@ -112,6 +158,7 @@ app.include_router(files.router)
 app.include_router(transcription.router)
 app.include_router(stats.router)
 app.include_router(settings_router.router)
+app.include_router(import_sources_router.router)
 app.include_router(chapters.router, prefix="/api/library")
 app.include_router(match.router, prefix="/api/library")
 

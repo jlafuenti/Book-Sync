@@ -20,6 +20,7 @@ import UserManagementPage from './pages/UserManagementPage'
 import HomePage from './pages/HomePage'
 import NewItemsPage from './pages/NewItemsPage'
 import NewPairsPage from './pages/NewPairsPage'
+import ImportSourcesPage from './pages/ImportSourcesPage'
 import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
 import { MiniPlayer } from './components/AudioPlayer'
 import { AudioPlayerView } from './components/AudioPlayer'
@@ -281,6 +282,7 @@ function AppShell({ user, setUser }) {
                     <Route path="/system" element={<SystemPage tab="status" />} />
                     <Route path="/system/status" element={<SystemPage tab="status" />} />
                     <Route path="/system/unsupported" element={<SystemPage tab="unsupported" />} />
+                    <Route path="/system/import-sources" element={<ImportSourcesPage />} />
 
                     {/* Book Detail */}
                     <Route path="/book/:type/:id" element={<BookDetailPage />} />

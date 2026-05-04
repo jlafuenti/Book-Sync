@@ -177,8 +177,8 @@ async def parse_filename_metadata_with_settings(
     
     patterns = await get_filename_patterns(db, file_type)
     
-    logger.info(f"[metadata] Parsing '{filename}' (type={file_type})")
-    logger.info(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
+    logger.debug(f"[metadata] Parsing '{filename}' (type={file_type})")
+    logger.debug(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
     
     for pattern_str in patterns:
         try:
@@ -195,7 +195,7 @@ async def parse_filename_metadata_with_settings(
             
             if match:
                 groups = match.groupdict()
-                logger.info(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
+                logger.debug(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
                 
                 if "author" in groups: meta["author"] = normalize_author(groups["author"])
                 if "series" in groups: meta["series"] = normalize_series(groups["series"])
@@ -215,7 +215,7 @@ async def parse_filename_metadata_with_settings(
                     if not meta["author"] and parent_dir_name:
                          meta["author"] = normalize_author(parent_dir_name)
                     
-                    logger.info(f"[metadata]   Final (pattern): {meta}")
+                    logger.debug(f"[metadata]   Final (pattern): {meta}")
                     return meta
         except Exception as e:
              logger.warning(f"[metadata]   Pattern '{pattern_str}' threw error: {e}")
@@ -228,7 +228,7 @@ async def parse_filename_metadata_with_settings(
     if parent_dir_name:
         meta["author"] = normalize_author(parent_dir_name)
     
-    logger.info(f"[metadata]   Final (fallback): {meta}")
+    logger.debug(f"[metadata]   Final (fallback): {meta}")
     return meta
 
 
@@ -260,8 +260,8 @@ async def extract_metadata(
         except ValueError:
             pass  # Different drives on Windows, etc.
     
-    logger.info(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
-    logger.info(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
+    logger.debug(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
+    logger.debug(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
     
     # 1. Filename/path metadata (Regex/Settings) - Default priority as requested:
     filename_meta = await parse_filename_metadata_with_settings(
@@ -330,7 +330,7 @@ async def extract_metadata(
                     file_meta['series'] = s_name
                     file_meta['series_index'] = s_idx
 
-            logger.info(f"[extract_metadata]   EPUB embedded: {file_meta}")
+            logger.debug(f"[extract_metadata]   EPUB embedded: {file_meta}")
 
         elif file_type == "audiobook":
             try:
@@ -339,8 +339,8 @@ async def extract_metadata(
                 audio = None
                 logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
             if audio:
-                logger.info(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
-                logger.info(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
+                logger.debug(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
+                logger.debug(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
                 
                 # MP4/M4B/M4A files (mutagen.mp4.MP4)
                 if hasattr(audio, 'tags') and hasattr(audio, 'info'):
@@ -460,7 +460,7 @@ async def extract_metadata(
                                 file_meta["series"] = normalize_series(str(val[0]) if isinstance(val, list) else str(val))
                                 break
                 
-                logger.info(f"[extract_metadata]   Audio embedded: {file_meta}")
+                logger.debug(f"[extract_metadata]   Audio embedded: {file_meta}")
                 
     except Exception as e:
         logger.warning(f"[extract_metadata]   Embedded metadata read failed: {e}")
@@ -481,7 +481,7 @@ async def extract_metadata(
         else:
             meta["_metadata_source"] = "embedded"
     
-    logger.info(f"[extract_metadata]   Merged result: {meta}")
+    logger.debug(f"[extract_metadata]   Merged result: {meta}")
     return meta
 
 
@@ -628,18 +628,333 @@ def _extract_and_save_cover(filepath: str, book_type: str, book_id: int, book_ti
 
 
 async def _load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
-    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix)."""
+    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix).
+
+    The token is read from the encrypted credential store (source_key='abs');
+    the other fields stay in system_settings since they're non-secret.
+    """
+    from services.abs_metadata import get_abs_token
+
     result = await db.execute(
         select(SystemSetting).where(
-            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_api_token", "abs_audiobooks_prefix"])
+            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_audiobooks_prefix"])
         )
     )
     conf = {s.key: s.value for s in result.scalars().all()}
     enabled = conf.get("abs_enabled", "false").lower() == "true"
     url = conf.get("abs_url") or ""
-    token = conf.get("abs_api_token") or ""
+    token = (await get_abs_token(db)) or ""
     prefix = conf.get("abs_audiobooks_prefix") or ""
     return enabled, url, token, prefix
+
+
+async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> bool:
+    """
+    Process a single ebook file: enrich an existing row, or create a new
+    one. Returns True if a new row was created.
+    """
+    filename = os.path.basename(filepath)
+    ext = Path(filename).suffix.lower()
+
+    result = await db.execute(select(EBook).where(EBook.file_path == filepath))
+    existing_ebook = result.scalar_one_or_none()
+
+    if existing_ebook:
+        meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
+        updated = False
+
+        if not existing_ebook.metadata_source:
+            existing_ebook.title = meta.get("title") or existing_ebook.title
+            existing_ebook.author = meta.get("author") or existing_ebook.author
+            existing_ebook.metadata_source = meta.get("_metadata_source")
+            existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
+            updated = True
+
+        if meta.get("series") and not existing_ebook.series:
+            existing_ebook.series = meta["series"]
+            existing_ebook.series_index = meta.get("series_index")
+            updated = True
+
+        for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
+            if meta.get(f) is not None and getattr(existing_ebook, f) is None:
+                setattr(existing_ebook, f, meta.get(f))
+                updated = True
+
+        if updated:
+            db.add(existing_ebook)
+
+        if not existing_ebook.cover_path:
+            try:
+                cover_path = await asyncio.to_thread(
+                    _extract_and_save_cover, filepath, "ebook", existing_ebook.id, existing_ebook.title
+                )
+                if cover_path:
+                    existing_ebook.cover_path = cover_path
+                    db.add(existing_ebook)
+            except Exception as e:
+                logger.error(f"Error extracting cover after scan for ebook {existing_ebook.id}: {e}")
+        return False
+
+    try:
+        file_hash = compute_file_hash(filepath)
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        return False
+
+    meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
+
+    ebook = EBook(
+        title=meta.get("title") or filename,
+        author=meta.get("author"),
+        series=meta.get("series"),
+        series_index=meta.get("series_index"),
+        description=meta.get("description"),
+        publisher=meta.get("publisher"),
+        publish_year=meta.get("publish_year"),
+        language=meta.get("language"),
+        genres=meta.get("genres"),
+        tags=meta.get("tags"),
+        isbn=meta.get("isbn"),
+        asin=meta.get("asin"),
+        metadata_source=meta.get("_metadata_source"),
+        metadata_pattern=meta.get("_metadata_pattern"),
+        filename=filename,
+        file_path=filepath,
+        file_hash=file_hash,
+        file_size=file_size,
+        format=ext.lstrip("."),
+    )
+    db.add(ebook)
+    await db.flush()
+
+    try:
+        cover_path = await asyncio.to_thread(
+            _extract_and_save_cover, filepath, "ebook", ebook.id, ebook.title
+        )
+        if cover_path:
+            ebook.cover_path = cover_path
+            db.add(ebook)
+    except Exception as e:
+        logger.error(f"Error extracting cover for new ebook {ebook.id}: {e}")
+
+    return True
+
+
+async def _ingest_one_audiobook(
+    db: AsyncSession, filepath: str, audiobook_dir: str, abs_index: dict
+) -> bool:
+    """
+    Process a single audiobook file: enrich an existing row, or create a
+    new one. Returns True if a new row was created.
+    """
+    filename = os.path.basename(filepath)
+    ext = Path(filename).suffix.lower()
+
+    result = await db.execute(select(AudioBook).where(AudioBook.file_path == filepath))
+    existing_audiobook = result.scalar_one_or_none()
+
+    if existing_audiobook:
+        meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+
+        if abs_index:
+            meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
+            # Respect user-cleared fields: empty string means user explicitly cleared it.
+            if existing_audiobook.series == "":
+                meta.pop("series", None)
+                meta.pop("series_index", None)
+            if abs_changed:
+                await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+
+        updated = False
+        if not existing_audiobook.metadata_source:
+            existing_audiobook.title = meta.get("title") or existing_audiobook.title
+            existing_audiobook.author = meta.get("author") or existing_audiobook.author
+            existing_audiobook.metadata_source = meta.get("_metadata_source")
+            existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
+            updated = True
+
+        if meta.get("series") and existing_audiobook.series is None:
+            existing_audiobook.series = meta["series"]
+            existing_audiobook.series_index = meta.get("series_index")
+            updated = True
+
+        for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators", "isbn", "asin"]:
+            if meta.get(f) is not None and getattr(existing_audiobook, f) is None:
+                setattr(existing_audiobook, f, meta.get(f))
+                updated = True
+
+        if updated:
+            db.add(existing_audiobook)
+
+        if not existing_audiobook.cover_path:
+            try:
+                cover_path = await asyncio.to_thread(
+                    _extract_and_save_cover, filepath, "audiobook", existing_audiobook.id
+                )
+                if cover_path:
+                    existing_audiobook.cover_path = cover_path
+                    db.add(existing_audiobook)
+            except Exception as e:
+                logger.error(f"Error extracting cover after scan for audiobook {existing_audiobook.id}: {e}")
+        return False
+
+    try:
+        file_hash = compute_file_hash(filepath)
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        return False
+
+    meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
+
+    if abs_index:
+        meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
+        if abs_changed:
+            await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+
+    audiobook = AudioBook(
+        title=meta["title"] or filename,
+        author=meta["author"],
+        series=meta["series"],
+        series_index=meta["series_index"],
+        description=meta.get("description"),
+        publisher=meta.get("publisher"),
+        publish_year=meta.get("publish_year"),
+        language=meta.get("language"),
+        genres=meta.get("genres"),
+        tags=meta.get("tags"),
+        isbn=meta.get("isbn"),
+        asin=meta.get("asin"),
+        narrators=meta.get("narrators"),
+        is_explicit=meta.get("is_explicit", False),
+        is_abridged=meta.get("is_abridged", False),
+        metadata_source=meta.get("_metadata_source"),
+        metadata_pattern=meta.get("_metadata_pattern"),
+        filename=filename,
+        file_path=filepath,
+        file_hash=file_hash,
+        file_size=file_size,
+        format=ext.lstrip("."),
+    )
+    db.add(audiobook)
+    await db.flush()
+
+    try:
+        cover_path = await asyncio.to_thread(
+            _extract_and_save_cover, filepath, "audiobook", audiobook.id
+        )
+        if cover_path:
+            audiobook.cover_path = cover_path
+            db.add(audiobook)
+    except Exception as e:
+        logger.error(f"Error extracting cover for new audiobook {audiobook.id}: {e}")
+
+    return True
+
+
+async def _maybe_load_abs_index(db: AsyncSession) -> dict:
+    """Build the ABS metadata index once when enabled, else return {}."""
+    abs_enabled, abs_url, abs_token, abs_prefix = await _load_abs_settings(db)
+    if abs_enabled and abs_url and abs_token:
+        return await asyncio.to_thread(fetch_abs_index, abs_url, abs_token, abs_prefix)
+    return {}
+
+
+async def scan_files_impl(
+    db: AsyncSession, filepaths: list[str]
+) -> LibraryScanResponse:
+    """
+    Targeted-scan: process exactly the files in `filepaths` instead of
+    walking the whole library. Used by import sources after they place
+    new files, so a single ACSM upload doesn't spend seconds re-checking
+    every existing audiobook on disk.
+
+    Each path is classified by extension into ebook vs audiobook and
+    routed to the appropriate per-file ingest helper. ABS metadata
+    enrichment runs once per call (not per file) when there's at least
+    one audiobook in the list. Auto-pairing runs once at the end.
+    """
+    new_ebooks = 0
+    new_audiobooks = 0
+    ebook_dir = settings.ebook_dir
+    audiobook_dir = settings.audiobook_dir
+
+    # Partition by extension so we know whether to bother fetching the
+    # ABS index (which is a network call we want to skip if no audiobooks).
+    audiobook_paths: list[str] = []
+    ebook_paths: list[str] = []
+    for p in filepaths:
+        if not os.path.isfile(p):
+            continue
+        ext = Path(p).suffix.lower()
+        if ext in EBOOK_EXTENSIONS:
+            ebook_paths.append(p)
+        elif ext in AUDIOBOOK_EXTENSIONS:
+            audiobook_paths.append(p)
+
+    abs_index: dict = {}
+    if audiobook_paths:
+        abs_index = await _maybe_load_abs_index(db)
+
+    for path in ebook_paths:
+        if await _ingest_one_ebook(db, path, ebook_dir):
+            new_ebooks += 1
+
+    for path in audiobook_paths:
+        if await _ingest_one_audiobook(db, path, audiobook_dir, abs_index):
+            new_audiobooks += 1
+
+    await db.flush()
+    auto_matched = await auto_match_books(db)
+
+    return LibraryScanResponse(
+        new_ebooks=new_ebooks,
+        new_audiobooks=new_audiobooks,
+        auto_matched_pairs=auto_matched,
+        message=(
+            f"Scanned {len(filepaths)} file(s): {new_ebooks} new ebooks, "
+            f"{new_audiobooks} new audiobooks, auto-matched {auto_matched} pairs."
+        ),
+    )
+
+
+async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
+    """
+    Full library scan: walk both library directories and ingest every
+    supported file. The body of POST /api/library/scan minus auth.
+    """
+    new_ebooks = 0
+    new_audiobooks = 0
+
+    if os.path.isdir(settings.ebook_dir):
+        for root, _, files in os.walk(settings.ebook_dir):
+            for filename in files:
+                if Path(filename).suffix.lower() not in EBOOK_EXTENSIONS:
+                    continue
+                filepath = os.path.join(root, filename)
+                if await _ingest_one_ebook(db, filepath, settings.ebook_dir):
+                    new_ebooks += 1
+
+    abs_index = await _maybe_load_abs_index(db)
+
+    if os.path.isdir(settings.audiobook_dir):
+        for root, _, files in os.walk(settings.audiobook_dir):
+            for filename in files:
+                if Path(filename).suffix.lower() not in AUDIOBOOK_EXTENSIONS:
+                    continue
+                filepath = os.path.join(root, filename)
+                if await _ingest_one_audiobook(db, filepath, settings.audiobook_dir, abs_index):
+                    new_audiobooks += 1
+
+    await db.flush()
+    auto_matched = await auto_match_books(db)
+
+    return LibraryScanResponse(
+        new_ebooks=new_ebooks,
+        new_audiobooks=new_audiobooks,
+        auto_matched_pairs=auto_matched,
+        message=f"Found {new_ebooks} new ebooks, {new_audiobooks} new audiobooks, "
+                f"auto-matched {auto_matched} pairs.",
+    )
 
 
 @router.post("/scan", response_model=LibraryScanResponse)
@@ -653,248 +968,7 @@ async def scan_library(
     Extracts metadata from filenames and tags.
     Adds any undiscovered files to the database and attempts auto-matching.
     """
-    new_ebooks = 0
-    new_audiobooks = 0
-    auto_matched = 0
-
-    # Scan ebook directory
-    ebook_dir = settings.ebook_dir
-    if os.path.isdir(ebook_dir):
-        for root, _, files in os.walk(ebook_dir):
-            for filename in files:
-                ext = Path(filename).suffix.lower()
-                if ext not in EBOOK_EXTENSIONS:
-                    continue
-
-                filepath = os.path.join(root, filename)
-                rel_path = os.path.relpath(filepath, ebook_dir)
-                
-                # Check if already in database (by file_path or filename)
-                result = await db.execute(
-                    select(EBook).where(EBook.file_path == filepath)
-                )
-                existing_ebook = result.scalar_one_or_none()
-                
-                if existing_ebook:
-                    # If exists, see if we can enrich it with embedded metadata
-                    meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
-                    updated = False
-                    
-                    if not existing_ebook.metadata_source:
-                         existing_ebook.title = meta.get("title") or existing_ebook.title
-                         existing_ebook.author = meta.get("author") or existing_ebook.author
-                         existing_ebook.metadata_source = meta.get("_metadata_source")
-                         existing_ebook.metadata_pattern = meta.get("_metadata_pattern")
-                         updated = True
-                         
-                    if meta.get("series") and not existing_ebook.series:
-                         existing_ebook.series = meta["series"]
-                         existing_ebook.series_index = meta.get("series_index")
-                         updated = True
-                         
-                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
-                         if meta.get(f) is not None and getattr(existing_ebook, f) is None:
-                             setattr(existing_ebook, f, meta.get(f))
-                             updated = True
-
-                    if updated:
-                        db.add(existing_ebook)
-
-                    # Try to extract cover if missing
-                    if not existing_ebook.cover_path:
-                        try:
-                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", existing_ebook.id, existing_ebook.title)
-                            if cover_path:
-                                existing_ebook.cover_path = cover_path
-                                db.add(existing_ebook)
-                        except Exception as e:
-                            logger.error(f"Error extracting cover after scan for ebook {existing_ebook.id}: {e}")
-                    
-                    continue
-
-                try:
-                    file_hash = compute_file_hash(filepath)
-                    file_size = os.path.getsize(filepath)
-                except OSError:
-                    continue
-                
-                meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
-
-                ebook = EBook(
-                    title=meta.get("title") or filename,
-                    author=meta.get("author"),
-                    series=meta.get("series"),
-                    series_index=meta.get("series_index"),
-                    description=meta.get("description"),
-                    publisher=meta.get("publisher"),
-                    publish_year=meta.get("publish_year"),
-                    language=meta.get("language"),
-                    genres=meta.get("genres"),
-                    tags=meta.get("tags"),
-                    isbn=meta.get("isbn"),
-                    asin=meta.get("asin"),
-                    metadata_source=meta.get("_metadata_source"),
-                    metadata_pattern=meta.get("_metadata_pattern"),
-                    filename=filename,
-                    file_path=filepath,
-                    file_hash=file_hash,
-                    file_size=file_size,
-                    format=ext.lstrip("."),
-                )
-                db.add(ebook)
-                await db.flush()  # flush to get ID
-                
-                # Try to extract cover
-                try:
-                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "ebook", ebook.id, ebook.title)
-                    if cover_path:
-                        ebook.cover_path = cover_path
-                        db.add(ebook)
-                except Exception as e:
-                    logger.error(f"Error extracting cover for new ebook {ebook.id}: {e}")
-                    
-                new_ebooks += 1
-
-    # Build ABS metadata index once before scanning audiobooks
-    abs_index = {}
-    _abs_enabled, _abs_url, _abs_token, _abs_prefix = await _load_abs_settings(db)
-    if _abs_enabled and _abs_url and _abs_token:
-        abs_index = await asyncio.to_thread(fetch_abs_index, _abs_url, _abs_token, _abs_prefix)
-
-    # Scan audiobook directory
-    audiobook_dir = settings.audiobook_dir
-    if os.path.isdir(audiobook_dir):
-        for root, _, files in os.walk(audiobook_dir):
-            for filename in files:
-                ext = Path(filename).suffix.lower()
-                if ext not in AUDIOBOOK_EXTENSIONS:
-                    continue
-
-                filepath = os.path.join(root, filename)
-                
-                result = await db.execute(
-                    select(AudioBook).where(AudioBook.file_path == filepath)
-                )
-                existing_audiobook = result.scalar_one_or_none()
-                
-                if existing_audiobook:
-                    # Update metadata if missing
-                    meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
-
-                    # Enrich from ABS for any still-missing fields
-                    if abs_index:
-                        meta, abs_changed, _ = enrich_from_abs(
-                            meta, filepath, abs_index, audiobook_dir
-                        )
-                        # Respect user-cleared fields: empty string means user explicitly
-                        # cleared the value — don't let ABS restore it or write it to file.
-                        if existing_audiobook.series == "":
-                            meta.pop("series", None)
-                            meta.pop("series_index", None)
-                        if abs_changed:
-                            await asyncio.to_thread(write_metadata_to_file, filepath, meta)
-
-                    updated = False
-
-                    if not existing_audiobook.metadata_source:
-                         existing_audiobook.title = meta.get("title") or existing_audiobook.title
-                         existing_audiobook.author = meta.get("author") or existing_audiobook.author
-                         existing_audiobook.metadata_source = meta.get("_metadata_source")
-                         existing_audiobook.metadata_pattern = meta.get("_metadata_pattern")
-                         updated = True
-
-                    # Only set series if it has never been set (None) — empty string means
-                    # the user explicitly cleared it and we must not overwrite that.
-                    if meta.get("series") and existing_audiobook.series is None:
-                         existing_audiobook.series = meta["series"]
-                         existing_audiobook.series_index = meta.get("series_index")
-                         updated = True
-
-                    for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators", "isbn", "asin"]:
-                         if meta.get(f) is not None and getattr(existing_audiobook, f) is None:
-                             setattr(existing_audiobook, f, meta.get(f))
-                             updated = True
-
-                    if updated:
-                        db.add(existing_audiobook)
-                    # Try to extract cover if missing
-                    if not existing_audiobook.cover_path:
-                        try:
-                            cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "audiobook", existing_audiobook.id)
-                            if cover_path:
-                                existing_audiobook.cover_path = cover_path
-                                db.add(existing_audiobook)
-                        except Exception as e:
-                            logger.error(f"Error extracting cover after scan for audiobook {existing_audiobook.id}: {e}")
-                            
-                    continue
-
-                try:
-                    file_hash = compute_file_hash(filepath)
-                    file_size = os.path.getsize(filepath)
-                except OSError:
-                    continue
-                
-                meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
-
-                # Enrich from ABS before creating the record
-                if abs_index:
-                    meta, abs_changed, _ = enrich_from_abs(
-                        meta, filepath, abs_index, audiobook_dir
-                    )
-                    if abs_changed:
-                        await asyncio.to_thread(write_metadata_to_file, filepath, meta)
-
-                audiobook = AudioBook(
-                    title=meta["title"] or filename,
-                    author=meta["author"],
-                    series=meta["series"],
-                    series_index=meta["series_index"],
-                    description=meta.get("description"),
-                    publisher=meta.get("publisher"),
-                    publish_year=meta.get("publish_year"),
-                    language=meta.get("language"),
-                    genres=meta.get("genres"),
-                    tags=meta.get("tags"),
-                    isbn=meta.get("isbn"),
-                    asin=meta.get("asin"),
-                    narrators=meta.get("narrators"),
-                    is_explicit=meta.get("is_explicit", False),
-                    is_abridged=meta.get("is_abridged", False),
-                    metadata_source=meta.get("_metadata_source"),
-                    metadata_pattern=meta.get("_metadata_pattern"),
-                    filename=filename,
-                    file_path=filepath,
-                    file_hash=file_hash,
-                    file_size=file_size,
-                    format=ext.lstrip("."),
-                )
-                db.add(audiobook)
-                await db.flush() # flush to get ID
-                
-                # Try to extract cover
-                try:
-                    cover_path = await asyncio.to_thread(_extract_and_save_cover, filepath, "audiobook", audiobook.id)
-                    if cover_path:
-                        audiobook.cover_path = cover_path
-                        db.add(audiobook)
-                except Exception as e:
-                    logger.error(f"Error extracting cover for new audiobook {audiobook.id}: {e}")
-
-                new_audiobooks += 1
-
-    await db.flush()
-
-    # Auto-match by filename similarity
-    auto_matched = await auto_match_books(db)
-
-    return LibraryScanResponse(
-        new_ebooks=new_ebooks,
-        new_audiobooks=new_audiobooks,
-        auto_matched_pairs=auto_matched,
-        message=f"Found {new_ebooks} new ebooks, {new_audiobooks} new audiobooks, "
-                f"auto-matched {auto_matched} pairs.",
-    )
+    return await scan_library_impl(db)
 
 
 @router.post("/rescan-all")

@@ -55,6 +55,10 @@ class EBook(Base):
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
 
+    # Import provenance — set when this row was created via an automated import source.
+    import_source: Mapped[str] = mapped_column(String(50), nullable=True)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=True)
+
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -100,6 +104,10 @@ class AudioBook(Base):
     is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
     cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
+
+    # Import provenance — set when this row was created via an automated import source.
+    import_source: Mapped[str] = mapped_column(String(50), nullable=True)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=True)
 
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

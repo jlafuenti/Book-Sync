@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     audiobook_dir: str = Field(default="/data/audiobooks", alias="AUDIOBOOK_DIR")
     app_data_dir: str = Field(default="/data/app", alias="APP_DATA_DIR")
     covers_dir: str = Field(default="/data/app/covers", alias="COVERS_DIR")
+    imports_dir: str = Field(default="/data/imports", alias="IMPORTS_DIR")
+
+    # Credential encryption — comma-separated list of Fernet keys.
+    # First key is used to encrypt new writes; all keys are tried for decryption,
+    # so rotation is "prepend a new key" with no migration step.
+    credential_enc_keys: str = Field(default="", alias="CREDENTIAL_ENC_KEYS")
 
     # Server
     server_host: str = "0.0.0.0"

@@ -51,6 +51,7 @@ async def init_db():
         from models.transcription_queue import TranscriptionQueueItem  # Queue model
         from models.transcript import AudioTranscript  # Transcript cache model
         from models.audit_log import AuditLog  # Audit log model
+        from models.import_source import ImportSource, ImportSourceCredential, ImportJob  # Import sources
 
         await conn.run_sync(Base.metadata.create_all)
 
@@ -110,6 +111,16 @@ async def init_db():
         await conn.execute(text("ALTER TABLE ebooks ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(text("ALTER TABLE audiobooks ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(text("ALTER TABLE book_pairs ADD COLUMN IF NOT EXISTS acknowledged BOOLEAN NOT NULL DEFAULT false"))
+
+        # Import-source provenance columns
+        for table in ("ebooks", "audiobooks"):
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS import_source VARCHAR(50)"))
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS external_id VARCHAR(200)"))
+
+        # Live progress fields on import_sources
+        await conn.execute(text("ALTER TABLE import_sources ADD COLUMN IF NOT EXISTS progress_current INTEGER"))
+        await conn.execute(text("ALTER TABLE import_sources ADD COLUMN IF NOT EXISTS progress_total INTEGER"))
+        await conn.execute(text("ALTER TABLE import_sources ADD COLUMN IF NOT EXISTS progress_title VARCHAR(500)"))
 
 
 async def bootstrap_superadmin():
