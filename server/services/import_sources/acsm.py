@@ -175,10 +175,67 @@ def _convert_acsm_to_epub(acsm_path: Path, out_dir: Path) -> Path:
     # the output file existence as the real success signal.
     if not out_path.exists() or out_path.stat().st_size == 0:
         diag = (result.stdout + "\n" + result.stderr).strip()
-        diag = " ".join(diag.split())[:600] or f"ebook-convert exit {result.returncode}"
-        raise RuntimeError(f"ACSM conversion failed: {diag}")
+        # Log the full output so we can dig in later if the friendly
+        # translation misses a case.
+        logger.error(f"[acsm] ebook-convert failed for {acsm_path.name}:\n{diag}")
+        raise RuntimeError(_friendly_acsm_error(diag, result.returncode))
 
     return out_path
+
+
+# Human-readable translations for the most common Adobe ADEPT error codes
+# that DeACSM surfaces inside its tracebacks. The codes are the canonical
+# names Adobe documents — we match on substring so the error wrapping
+# from various ADE versions all funnel to the same message.
+_ADEPT_ERROR_HINTS: list[tuple[str, str]] = [
+    (
+        "E_ADEPT_REQUEST_EXPIRED",
+        "This ACSM file has expired. Download a fresh copy from Google Play "
+        "(or the original retailer) and upload it right away — the link is "
+        "only valid for about 24 hours.",
+    ),
+    (
+        "E_LIC_ALREADY_FULFILLED_BY_ANOTHER_USER",
+        "This book has already been downloaded with a different Adobe ID. "
+        "Re-authorize the server with that same Adobe ID (the 'Adobe ID' "
+        "option on the authorize panel), or get a fresh ACSM.",
+    ),
+    (
+        "E_ACT_NOT_READY",
+        "The Adobe authorization on the server isn't fully active yet. "
+        "Click 'Revoke Adobe authorization' and authorize again.",
+    ),
+    (
+        "E_AUTH_BAD_DEVICE_KEY",
+        "Adobe rejected the device key. Revoke the current authorization "
+        "and authorize again to refresh the device registration.",
+    ),
+    (
+        "E_LIC_LICENSE_SIGN_ERROR",
+        "Adobe could not verify the license signature for this file. "
+        "The ACSM may be corrupted — re-download it.",
+    ),
+    (
+        "ADE auth is missing or broken",
+        "The server isn't authorized with Adobe. Click 'Authorize Adobe' "
+        "above to set it up.",
+    ),
+]
+
+
+def _friendly_acsm_error(diag: str, returncode: int) -> str:
+    """Pick a readable message from a long Calibre/DeACSM traceback."""
+    for needle, message in _ADEPT_ERROR_HINTS:
+        if needle in diag:
+            return message
+    # Fall back to the most informative-looking single line, trimmed.
+    candidates = [
+        ln.strip() for ln in diag.splitlines()
+        if ln.strip() and "DeACSM" in ln and "Try" not in ln
+    ]
+    if candidates:
+        return candidates[-1][:300]
+    return f"ACSM conversion failed (ebook-convert exit {returncode})"
 
 
 def _read_epub_meta(epub_path: Path) -> dict:
