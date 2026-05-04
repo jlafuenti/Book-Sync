@@ -136,12 +136,17 @@ async def _run_sync(source_key: str, trigger: str) -> None:
     # If anything was added, refresh the library so the new files get DB
     # rows, then stamp those rows with the import_source / external_id so
     # future syncs can dedup via ASIN instead of fuzzy title matching.
+    # Targeted scan (just the imported paths) instead of walking the whole
+    # library — for a 1-book sync we shouldn't be re-checking every other
+    # audiobook on disk.
     if sync_result and sync_result.items_added > 0:
         try:
             from models.book import AudioBook, EBook
-            from routers.library import scan_library_impl
+            from routers.library import scan_files_impl
+            imported_paths = [item.file_path for item in sync_result.imported_items]
             async with async_session() as db:
-                await scan_library_impl(db)
+                if imported_paths:
+                    await scan_files_impl(db, imported_paths)
                 for item in sync_result.imported_items:
                     # Audible imports → AudioBook; ACSM/ebook imports → EBook.
                     Model = AudioBook if item.source_key == "audible" else EBook
