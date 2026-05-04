@@ -177,8 +177,8 @@ async def parse_filename_metadata_with_settings(
     
     patterns = await get_filename_patterns(db, file_type)
     
-    logger.info(f"[metadata] Parsing '{filename}' (type={file_type})")
-    logger.info(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
+    logger.debug(f"[metadata] Parsing '{filename}' (type={file_type})")
+    logger.debug(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
     
     for pattern_str in patterns:
         try:
@@ -195,7 +195,7 @@ async def parse_filename_metadata_with_settings(
             
             if match:
                 groups = match.groupdict()
-                logger.info(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
+                logger.debug(f"[metadata]   Matched pattern '{pattern_str}' -> groups={groups}")
                 
                 if "author" in groups: meta["author"] = normalize_author(groups["author"])
                 if "series" in groups: meta["series"] = normalize_series(groups["series"])
@@ -215,7 +215,7 @@ async def parse_filename_metadata_with_settings(
                     if not meta["author"] and parent_dir_name:
                          meta["author"] = normalize_author(parent_dir_name)
                     
-                    logger.info(f"[metadata]   Final (pattern): {meta}")
+                    logger.debug(f"[metadata]   Final (pattern): {meta}")
                     return meta
         except Exception as e:
              logger.warning(f"[metadata]   Pattern '{pattern_str}' threw error: {e}")
@@ -228,7 +228,7 @@ async def parse_filename_metadata_with_settings(
     if parent_dir_name:
         meta["author"] = normalize_author(parent_dir_name)
     
-    logger.info(f"[metadata]   Final (fallback): {meta}")
+    logger.debug(f"[metadata]   Final (fallback): {meta}")
     return meta
 
 
@@ -260,8 +260,8 @@ async def extract_metadata(
         except ValueError:
             pass  # Different drives on Windows, etc.
     
-    logger.info(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
-    logger.info(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
+    logger.debug(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
+    logger.debug(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
     
     # 1. Filename/path metadata (Regex/Settings) - Default priority as requested:
     filename_meta = await parse_filename_metadata_with_settings(
@@ -330,7 +330,7 @@ async def extract_metadata(
                     file_meta['series'] = s_name
                     file_meta['series_index'] = s_idx
 
-            logger.info(f"[extract_metadata]   EPUB embedded: {file_meta}")
+            logger.debug(f"[extract_metadata]   EPUB embedded: {file_meta}")
 
         elif file_type == "audiobook":
             try:
@@ -339,8 +339,8 @@ async def extract_metadata(
                 audio = None
                 logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
             if audio:
-                logger.info(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
-                logger.info(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
+                logger.debug(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
+                logger.debug(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
                 
                 # MP4/M4B/M4A files (mutagen.mp4.MP4)
                 if hasattr(audio, 'tags') and hasattr(audio, 'info'):
@@ -460,7 +460,7 @@ async def extract_metadata(
                                 file_meta["series"] = normalize_series(str(val[0]) if isinstance(val, list) else str(val))
                                 break
                 
-                logger.info(f"[extract_metadata]   Audio embedded: {file_meta}")
+                logger.debug(f"[extract_metadata]   Audio embedded: {file_meta}")
                 
     except Exception as e:
         logger.warning(f"[extract_metadata]   Embedded metadata read failed: {e}")
@@ -481,7 +481,7 @@ async def extract_metadata(
         else:
             meta["_metadata_source"] = "embedded"
     
-    logger.info(f"[extract_metadata]   Merged result: {meta}")
+    logger.debug(f"[extract_metadata]   Merged result: {meta}")
     return meta
 
 

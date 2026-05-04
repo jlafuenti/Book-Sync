@@ -164,7 +164,7 @@ def enrich_from_abs(
                     best_score, best = score, it
             if best_score >= 85:
                 item = best
-                logger.info(
+                logger.debug(
                     f"[abs_metadata] Fuzzy matched '{file_meta.get('title')}' → "
                     f"'{item['media']['metadata'].get('title')}' ({best_score}%)"
                 )
@@ -224,7 +224,7 @@ def enrich_from_abs(
                     file_meta["series_index"] = s_idx
 
     if changed:
-        logger.info(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
+        logger.debug(f"[abs_metadata] Enriched '{file_meta.get('title')}' from ABS")
 
     return file_meta, changed, True
 
@@ -291,7 +291,7 @@ def write_metadata_to_file(filepath: str, file_meta: dict) -> bool:
         _set_freeform("NARRATOR", file_meta.get("narrators"))
 
         audio.save()
-        logger.info(f"[abs_metadata] Wrote tags back to {filepath}")
+        logger.debug(f"[abs_metadata] Wrote tags back to {filepath}")
         return True
     except Exception as e:
         logger.warning(f"[abs_metadata] Failed to write tags to {filepath}: {e}")
