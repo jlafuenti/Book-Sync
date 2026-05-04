@@ -98,6 +98,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception(f"ABS token migration failed: {e}")
 
+    # Re-hydrate the DeACSM plugin's Adobe device authorization from the
+    # encrypted credential store onto disk. Without this, every container
+    # rebuild forces the user to re-authorize and burns a Google Play
+    # device slot in the process.
+    try:
+        from services.import_sources.acsm import restore_adobe_account_from_credentials
+        from database import async_session
+        async with async_session() as db:
+            await restore_adobe_account_from_credentials(db)
+    except Exception as e:
+        logger.exception(f"Adobe authorization restore failed: {e}")
+
     # Start the transcription queue manager
     from services.queue_manager import start_queue_manager, stop_queue_manager
     await start_queue_manager()

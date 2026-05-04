@@ -37,6 +37,8 @@ from services.import_sources.acsm import (
     is_adobe_id_authorized,
     authorize_adobe_id,
     deauthorize_adobe_id,
+    persist_adobe_account_to_credentials,
+    forget_adobe_account_in_credentials,
 )
 from services.import_sources.audible import AudibleSource
 
@@ -249,6 +251,7 @@ async def acsm_authorization_status(_: User = Depends(get_admin_user)):
 @router.post("/acsm/authorize")
 async def acsm_authorize(
     payload: AcsmAuthorizeRequest,
+    db: AsyncSession = Depends(get_db),
     _: User = Depends(get_admin_user),
 ):
     try:
@@ -265,12 +268,27 @@ async def acsm_authorize(
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(400, f"Authorization failed: {e}")
+    # Snapshot the freshly-written device files into the encrypted
+    # credential store so the auth survives container rebuilds.
+    try:
+        await persist_adobe_account_to_credentials(db)
+        await db.commit()
+    except Exception as e:
+        logger.exception(f"could not persist Adobe authorization to credentials: {e}")
     return {"authorized": is_adobe_id_authorized()}
 
 
 @router.post("/acsm/deauthorize")
-async def acsm_deauthorize(_: User = Depends(get_admin_user)):
+async def acsm_deauthorize(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
     deauthorize_adobe_id()
+    try:
+        await forget_adobe_account_in_credentials(db)
+        await db.commit()
+    except Exception as e:
+        logger.exception(f"could not clear stored Adobe authorization: {e}")
     return {"authorized": is_adobe_id_authorized()}
 
 

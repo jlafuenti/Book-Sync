@@ -67,6 +67,96 @@ _ADOBE_ID_PATH = Path("/root/.config/calibre/plugins/DeACSM/account")
 _AUTHORIZE_SCRIPT = Path(__file__).parent / "_acsm_authorize.py"
 _FULFILL_SCRIPT = Path(__file__).parent / "_acsm_fulfill.py"
 
+# Credential-store key under which we serialize the DeACSM plugin's
+# device authorization (devicesalt + device.xml + activation.xml). This
+# rides the same encrypted import_source_credentials table used for
+# Audible / ABS, so the auth survives container rebuilds without
+# needing a dedicated docker volume.
+_ACSM_CREDENTIAL_KEY = "acsm_adobe_account"
+_ACSM_REQUIRED_FILES = ("devicesalt", "device.xml", "activation.xml")
+
+
+# --- Adobe authorization persistence ---------------------------------------
+# The DeACSM plugin keeps its device cert / keys in three small files under
+# /root/.config/calibre/plugins/DeACSM/account/. That path lives inside the
+# container fs, so a `docker compose up --build` wipes it. We serialize the
+# three files into one JSON blob and store it in the encrypted
+# import_source_credentials table (same store Audible's auth blob uses) so
+# the authorization survives rebuilds. Files are written back to disk at
+# server lifespan startup before the plugin gets used.
+
+def _read_account_files_from_disk() -> Optional[dict]:
+    """Read the three account files from the plugin's on-disk dir.
+    Returns None if any file is missing."""
+    import base64
+
+    if not _ADOBE_ID_PATH.exists():
+        return None
+    out: dict = {}
+    for name in _ACSM_REQUIRED_FILES:
+        path = _ADOBE_ID_PATH / name
+        if not path.is_file():
+            return None
+        data = path.read_bytes()
+        # devicesalt is binary; the .xml files are text. Encode all as
+        # base64 to keep the blob format uniform and survive any encoding
+        # weirdness round-tripping through JSON / Postgres TEXT.
+        out[name] = base64.b64encode(data).decode("ascii")
+    return out
+
+
+def _write_account_files_to_disk(blob: dict) -> None:
+    """Write the three account files back to the plugin's on-disk dir."""
+    import base64
+
+    _ADOBE_ID_PATH.mkdir(parents=True, exist_ok=True)
+    for name in _ACSM_REQUIRED_FILES:
+        if name not in blob:
+            raise RuntimeError(f"acsm credential blob missing '{name}'")
+        (_ADOBE_ID_PATH / name).write_bytes(base64.b64decode(blob[name]))
+
+
+async def persist_adobe_account_to_credentials(db) -> None:
+    """Serialize the on-disk Adobe account into the encrypted credential
+    store. Call after a successful authorize_adobe_id() so the auth
+    survives container rebuilds."""
+    import json
+    from services import credentials
+
+    files = _read_account_files_from_disk()
+    if files is None:
+        # Nothing to save — authorize must have failed half-way through.
+        return
+    await credentials.set_credential(
+        db, _ACSM_CREDENTIAL_KEY, json.dumps(files)
+    )
+
+
+async def restore_adobe_account_from_credentials(db) -> bool:
+    """Re-hydrate the plugin's account dir from the encrypted credential
+    store. Called at server startup. Returns True if it wrote files,
+    False if there was nothing in the store to restore."""
+    import json
+    from services import credentials
+
+    raw = await credentials.get_credential(db, _ACSM_CREDENTIAL_KEY)
+    if not raw:
+        return False
+    try:
+        blob = json.loads(raw)
+        _write_account_files_to_disk(blob)
+        logger.info("[acsm] restored Adobe authorization from credential store")
+        return True
+    except Exception as e:
+        logger.exception(f"[acsm] could not restore Adobe authorization: {e}")
+        return False
+
+
+async def forget_adobe_account_in_credentials(db) -> None:
+    """Drop the stored Adobe blob (called when the user revokes auth)."""
+    from services import credentials
+    await credentials.delete_credential(db, _ACSM_CREDENTIAL_KEY)
+
 
 def is_adobe_id_authorized() -> bool:
     """
