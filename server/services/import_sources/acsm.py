@@ -65,6 +65,7 @@ def _ensure_dirs() -> None:
 
 _ADOBE_ID_PATH = Path("/root/.config/calibre/plugins/DeACSM/account")
 _AUTHORIZE_SCRIPT = Path(__file__).parent / "_acsm_authorize.py"
+_FULFILL_SCRIPT = Path(__file__).parent / "_acsm_fulfill.py"
 
 
 def is_adobe_id_authorized() -> bool:
@@ -145,14 +146,22 @@ def deauthorize_adobe_id() -> None:
             logger.warning(f"[acsm] could not remove {child}: {e}")
 
 
-def _convert_acsm_to_epub(acsm_path: Path, out_dir: Path) -> Path:
+def _fulfill_acsm(acsm_path: Path, out_dir: Path) -> Path:
     """
-    Convert .acsm to a DRM-free EPUB through Calibre's standard conversion
-    pipeline. The DeACSM plugin is registered as a file-type plugin, so
-    `ebook-convert input.acsm output.epub` automatically routes through it.
+    Fulfill an .acsm using DeACSM's libadobeFulfill directly, bypassing
+    Calibre's `ebook-convert` pipeline. Returns the path to the resulting
+    DRM-free .epub or .pdf.
 
-    Requires the plugin to be linked to an authorized Adobe ID (ADEPT DRM
-    is keyed to an Adobe account). We surface a clear error if it isn't.
+    Why we don't use ebook-convert: when DeACSM produces an EPUB it
+    appends a META-INF/rights.xml proving the user holds a license. The
+    DRM has already been stripped from the content, but Calibre's EPUB
+    Input plugin sees the rights.xml during conversion and aborts with
+    calibre.ebooks.DRMError — a false positive that can't be turned off.
+    Driving the plugin's fulfill() ourselves and writing the EPUB without
+    rights.xml sidesteps the whole problem.
+
+    Requires the plugin to be linked to an authorized Adobe identity
+    (anonymous registration is enough for most Google Play / Nook books).
     """
     if not is_adobe_id_authorized():
         raise RuntimeError(
@@ -161,26 +170,45 @@ def _convert_acsm_to_epub(acsm_path: Path, out_dir: Path) -> Path:
             "Nook card — anonymous authorization is enough for most books."
         )
 
-    out_path = out_dir / (acsm_path.stem + ".epub")
-    cmd = ["ebook-convert", str(acsm_path), str(out_path)]
+    # Output extension is unknown until we see the downloaded bytes.
+    # Reserve a base path; the script picks .epub or .pdf and writes there.
+    # We pre-create as .epub since that's the overwhelmingly common case
+    # and rename after the script returns if it produced a PDF.
+    base = out_dir / (acsm_path.stem + ".epub")
+    cmd = [
+        "calibre-debug", "-e", str(_FULFILL_SCRIPT), "--",
+        str(acsm_path), str(base),
+    ]
     logger.info(f"[acsm] running: {' '.join(cmd)}")
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=180
         )
     except FileNotFoundError as e:
-        raise RuntimeError("ebook-convert not found on PATH") from e
+        raise RuntimeError("calibre-debug not found on PATH") from e
 
-    # Calibre always exits 0 on success and writes to stderr on info; check
-    # the output file existence as the real success signal.
-    if not out_path.exists() or out_path.stat().st_size == 0:
+    if result.returncode != 0:
         diag = (result.stdout + "\n" + result.stderr).strip()
-        # Log the full output so we can dig in later if the friendly
-        # translation misses a case.
-        logger.error(f"[acsm] ebook-convert failed for {acsm_path.name}:\n{diag}")
+        logger.error(
+            f"[acsm] fulfill failed for {acsm_path.name} (rc={result.returncode}):\n{diag}"
+        )
         raise RuntimeError(_friendly_acsm_error(diag, result.returncode))
 
-    return out_path
+    if not base.exists() or base.stat().st_size == 0:
+        # Either the script wrote a PDF at the same stem, or it wrote
+        # nothing at all. Probe both.
+        alt = base.with_suffix(".pdf")
+        if alt.exists() and alt.stat().st_size > 0:
+            return alt
+        diag = (result.stdout + "\n" + result.stderr).strip()
+        logger.error(f"[acsm] fulfill produced no output for {acsm_path.name}:\n{diag}")
+        raise RuntimeError("Fulfillment did not produce a readable file.")
+
+    return base
+
+
+# Back-compat alias — the rest of the module still calls this name.
+_convert_acsm_to_epub = _fulfill_acsm
 
 
 # Human-readable translations for the most common Adobe ADEPT error codes
@@ -306,18 +334,26 @@ async def process_file(db: AsyncSession, source_path: Path, original_filename: s
         tmpdir = Path(tmp)
 
         if ext == ".epub":
-            epub_path = tmpdir / source_path.name
-            shutil.copy2(source_path, epub_path)
+            book_path = tmpdir / source_path.name
+            shutil.copy2(source_path, book_path)
         elif ext == ".acsm":
             staged = tmpdir / source_path.name
             shutil.copy2(source_path, staged)
-            epub_path = await asyncio.to_thread(_convert_acsm_to_epub, staged, tmpdir)
+            book_path = await asyncio.to_thread(_convert_acsm_to_epub, staged, tmpdir)
         else:
             raise ValueError(f"Unsupported file type: {ext}")
 
-        meta = await asyncio.to_thread(_read_epub_meta, epub_path)
+        out_ext = book_path.suffix.lower()  # ".epub" or ".pdf"
+        if out_ext == ".epub":
+            meta = await asyncio.to_thread(_read_epub_meta, book_path)
+        else:
+            # PDFs don't have OPF metadata. Use the filename stem as title;
+            # author / identifiers stay empty unless we want to bring in a
+            # PDF metadata reader later.
+            meta = {"title": book_path.stem}
+
         if not meta.get("title"):
-            meta["title"] = epub_path.stem
+            meta["title"] = book_path.stem
 
         external_id = next(
             (i for i in (meta.get("identifiers") or []) if i),
@@ -336,8 +372,8 @@ async def process_file(db: AsyncSession, source_path: Path, original_filename: s
         target_path = await place_file(
             db,
             book_type="ebook",
-            source_path=str(epub_path),
-            extension=".epub",
+            source_path=str(book_path),
+            extension=out_ext,
             meta=meta,
             move=True,
         )
