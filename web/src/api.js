@@ -803,3 +803,91 @@ export async function deleteUnsupportedSource(id) {
     }
     return resp.json();
 }
+
+/* ── Import Sources ──────────────────────────────────────────────────── */
+
+async function _jsonOrThrow(resp, fallback) {
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || fallback);
+    }
+    return resp.json();
+}
+
+export async function listImportSources() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/sources`);
+    return _jsonOrThrow(resp, 'Failed to list import sources');
+}
+
+export async function updateImportSourceConfig(sourceKey, config) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/sources/${sourceKey}/config`, {
+        method: 'PUT',
+        body: JSON.stringify(config),
+    });
+    return _jsonOrThrow(resp, 'Failed to update source config');
+}
+
+export async function triggerImportSync(sourceKey) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/sources/${sourceKey}/sync`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Failed to trigger sync');
+}
+
+export async function getImportJobs(sourceKey) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/sources/${sourceKey}/jobs`);
+    return _jsonOrThrow(resp, 'Failed to fetch jobs');
+}
+
+export async function audibleLoginStart() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/audible/login/start`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+    return _jsonOrThrow(resp, 'Failed to start Audible login');
+}
+
+export async function audibleLoginComplete(stateToken, responseUrl) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/audible/login/complete`, {
+        method: 'POST',
+        body: JSON.stringify({ state_token: stateToken, response_url: responseUrl }),
+    });
+    return _jsonOrThrow(resp, 'Audible login failed');
+}
+
+export async function audibleDisconnect() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/audible/disconnect`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Failed to disconnect Audible');
+}
+
+export async function uploadAcsm(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/upload`, {
+        method: 'POST',
+        body: fd,
+    });
+    return _jsonOrThrow(resp, 'Upload failed');
+}
+
+export async function acsmAuthorizationStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/authorization`);
+    return _jsonOrThrow(resp, 'Failed to check authorization');
+}
+
+export async function acsmAuthorize({ mode, email = '', password = '' }) {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/authorize`, {
+        method: 'POST',
+        body: JSON.stringify({ mode, email, password }),
+    });
+    return _jsonOrThrow(resp, 'Authorization failed');
+}
+
+export async function acsmDeauthorize() {
+    const resp = await fetchWithAuth(`${API_BASE}/import/acsm/deauthorize`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Failed to revoke authorization');
+}
