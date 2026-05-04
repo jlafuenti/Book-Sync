@@ -224,11 +224,13 @@ _ADEPT_ERROR_HINTS: list[tuple[str, str]] = [
     ),
     (
         "E_GOOGLE_DEVICE_LIMIT_REACHED",
-        "Google has refused this download because too many devices are "
-        "registered to the current anonymous Adobe pool. Revoke the current "
-        "authorization and re-authorize using a real Adobe ID instead "
-        "(create a free one at account.adobe.com if needed) — Adobe IDs "
-        "have a managed device limit you can clear on Adobe's site.",
+        "Google Play has refused this download — your Google account has "
+        "fulfilled this book to its device limit (typically 6). This is "
+        "Google's limit, not Adobe's, so re-authorizing the server won't "
+        "help. Options: (a) manage devices on play.google.com/books and "
+        "remove old ones, then re-download the ACSM; (b) wait for Google's "
+        "counter to relax (no published timeline); or (c) buy / borrow on "
+        "a different platform (Kobo, library via Libby, etc.).",
     ),
     (
         "E_LIC_ALREADY_FULFILLED_BY_ANOTHER_USER",
