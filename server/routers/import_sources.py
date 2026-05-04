@@ -322,11 +322,12 @@ async def acsm_upload(
         except Exception:
             pass
 
-    if result.get("status") == "added":
-        # Trigger a library scan so the new file gets a DB row.
+    if result.get("status") == "added" and result.get("target_path"):
+        # Targeted scan of just the just-placed file — no need to walk the
+        # whole library for a single upload.
         try:
-            from routers.library import scan_library_impl
-            await scan_library_impl(db)
+            from routers.library import scan_files_impl
+            await scan_files_impl(db, [result["target_path"]])
             await db.commit()
         except Exception as e:
             logger.exception(f"[acsm/upload] post-upload scan failed: {e}")
