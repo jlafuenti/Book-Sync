@@ -24,11 +24,11 @@ import os
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from typing import Optional
 
-import ebooklib
-from ebooklib import epub
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,37 +370,100 @@ def _friendly_acsm_error(diag: str, returncode: int) -> str:
     return f"ACSM conversion failed (exit {returncode}); see server logs."
 
 
+_NS_DC = "http://purl.org/dc/elements/1.1/"
+_NS_OPF = "http://www.idpf.org/2007/opf"
+_NS_CONTAINER = "urn:oasis:names:tc:opendocument:xmlns:container"
+
+
 def _read_epub_meta(epub_path: Path) -> dict:
-    """Pull title/author/series from an EPUB's metadata."""
-    book = epub.read_epub(str(epub_path))
+    """
+    Extract title / author / publisher / identifiers / series from an EPUB
+    by parsing its OPF file directly.
+
+    Why we don't use ebooklib here: ebooklib's read_epub() also tries to
+    parse the legacy NCX navigation file and crashes with
+    'NoneType' object has no attribute 'find' on EPUB 3 files that don't
+    ship one (Google Play's exports, for instance). Reading just the OPF
+    avoids the whole navigation-parsing path and is everything we need.
+    """
     meta: dict = {}
 
-    titles = book.get_metadata("DC", "title")
-    if titles:
-        meta["title"] = titles[0][0]
+    try:
+        with zipfile.ZipFile(str(epub_path), "r") as z:
+            # 1. Find the OPF path via META-INF/container.xml.
+            try:
+                container_bytes = z.read("META-INF/container.xml")
+            except KeyError:
+                logger.warning(f"[acsm] {epub_path.name}: missing META-INF/container.xml")
+                return meta
 
-    creators = book.get_metadata("DC", "creator")
-    if creators:
-        meta["author"] = creators[0][0]
+            container_root = ET.fromstring(container_bytes)
+            rootfile = container_root.find(
+                f"{{{_NS_CONTAINER}}}rootfiles/{{{_NS_CONTAINER}}}rootfile"
+            )
+            if rootfile is None or "full-path" not in rootfile.attrib:
+                logger.warning(f"[acsm] {epub_path.name}: container.xml has no rootfile")
+                return meta
+            opf_path = rootfile.attrib["full-path"]
 
-    publishers = book.get_metadata("DC", "publisher")
-    if publishers:
-        meta["publisher"] = publishers[0][0]
+            # 2. Parse the OPF.
+            try:
+                opf_bytes = z.read(opf_path)
+            except KeyError:
+                logger.warning(f"[acsm] {epub_path.name}: OPF not found at {opf_path}")
+                return meta
 
-    # Identifier: Google Play has 'urn:gpb:id:XXXX'; Nook uses BN-format URNs.
-    identifiers = book.get_metadata("DC", "identifier") or []
-    for ident, attrs in identifiers:
-        meta.setdefault("identifiers", []).append(ident)
+        opf_root = ET.fromstring(opf_bytes)
+        # Metadata block can be namespaced under OPF or unnamespaced; try both.
+        metadata_elem = (
+            opf_root.find(f"{{{_NS_OPF}}}metadata")
+            or opf_root.find("metadata")
+        )
+        if metadata_elem is None:
+            return meta
 
-    # Calibre series metadata is in the OPF as <meta name="calibre:series">.
-    for ns in ("OPF", None):
-        try:
-            series = book.get_metadata(ns, "calibre:series") if ns else []
-            if series:
-                meta["series"] = series[0][0] if isinstance(series[0], tuple) else series[0]
-                break
-        except Exception:
-            pass
+        def _first_text(tag: str) -> Optional[str]:
+            el = metadata_elem.find(f"{{{_NS_DC}}}{tag}")
+            if el is not None and el.text:
+                return el.text.strip()
+            return None
+
+        title = _first_text("title")
+        if title:
+            meta["title"] = title
+        creator = _first_text("creator")
+        if creator:
+            meta["author"] = creator
+        publisher = _first_text("publisher")
+        if publisher:
+            meta["publisher"] = publisher
+
+        # Identifiers: Google Play uses urn:gpb:id:XXX, Nook uses BN-style.
+        identifiers: list[str] = []
+        for ident_el in metadata_elem.findall(f"{{{_NS_DC}}}identifier"):
+            if ident_el.text:
+                identifiers.append(ident_el.text.strip())
+        if identifiers:
+            meta["identifiers"] = identifiers
+
+        # calibre:series — written as <meta name="calibre:series" content="…"/>
+        # in OPF 2.x, or as <meta property="…" refines="…"> in OPF 3.x. Cover
+        # the common case (OPF 2-style) since that's what calibre + Google
+        # Play actually emit.
+        for meta_el in metadata_elem.findall(f"{{{_NS_OPF}}}meta") + metadata_elem.findall("meta"):
+            name = meta_el.attrib.get("name", "")
+            if name == "calibre:series":
+                series_val = meta_el.attrib.get("content")
+                if series_val:
+                    meta["series"] = series_val.strip()
+                    break
+
+    except zipfile.BadZipFile:
+        logger.warning(f"[acsm] {epub_path.name} is not a valid zip/EPUB")
+    except ET.ParseError as e:
+        logger.warning(f"[acsm] {epub_path.name}: OPF/container XML parse error: {e}")
+    except Exception as e:
+        logger.exception(f"[acsm] {epub_path.name}: unexpected error reading EPUB metadata: {e}")
 
     return meta
 
