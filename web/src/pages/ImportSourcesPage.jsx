@@ -311,7 +311,7 @@ function AudibleCard({ source, jobs, onChange, onTriggerSync, onConnect, onDisco
 /* ── ACSM card ───────────────────────────────────────────────────── */
 
 function AcsmAuthorizePanel({ onAuthorized }) {
-    const [mode, setMode] = useState('anonymous')
+    const [mode, setMode] = useState('adobeid')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [busy, setBusy] = useState(false)
@@ -342,29 +342,34 @@ function AcsmAuthorizePanel({ onAuthorized }) {
                 <label className="acsm-authorize-radio">
                     <input
                         type="radio"
-                        checked={mode === 'anonymous'}
-                        onChange={() => setMode('anonymous')}
+                        checked={mode === 'adobeid'}
+                        onChange={() => setMode('adobeid')}
                     />
                     <div>
-                        <strong>Anonymous</strong>{' '}
+                        <strong>Adobe ID</strong>{' '}
                         <span style={{ color: 'var(--text-muted)' }}>(recommended)</span>
                         <div className="acsm-authorize-radio-hint">
-                            Works for almost all Google Play Books and Nook downloads.
-                            No Adobe account required.
+                            Use a free Adobe account
+                            (<a href="https://account.adobe.com" target="_blank" rel="noreferrer">create one</a>{' '}
+                            if you don't have one). Re-authorizing always reuses
+                            the same account, and you can deauthorize stale
+                            devices on adobe.com if you ever hit the device cap.
                         </div>
                     </div>
                 </label>
                 <label className="acsm-authorize-radio">
                     <input
                         type="radio"
-                        checked={mode === 'adobeid'}
-                        onChange={() => setMode('adobeid')}
+                        checked={mode === 'anonymous'}
+                        onChange={() => setMode('anonymous')}
                     />
                     <div>
-                        <strong>Adobe ID</strong>
+                        <strong>Anonymous</strong>
                         <div className="acsm-authorize-radio-hint">
-                            Use a specific Adobe account. Needed only if a publisher
-                            ties downloads to your Adobe ID specifically.
+                            Quick to set up, but each re-authorization counts as a
+                            new device against Google's per-pool limit. If you hit
+                            "device limit reached", you'll have to switch to an
+                            Adobe ID — there's no way to clear anonymous slots.
                         </div>
                     </div>
                 </label>

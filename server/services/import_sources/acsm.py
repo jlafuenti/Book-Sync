@@ -223,6 +223,14 @@ _ADEPT_ERROR_HINTS: list[tuple[str, str]] = [
         "only valid for about 24 hours.",
     ),
     (
+        "E_GOOGLE_DEVICE_LIMIT_REACHED",
+        "Google has refused this download because too many devices are "
+        "registered to the current anonymous Adobe pool. Revoke the current "
+        "authorization and re-authorize using a real Adobe ID instead "
+        "(create a free one at account.adobe.com if needed) — Adobe IDs "
+        "have a managed device limit you can clear on Adobe's site.",
+    ),
+    (
         "E_LIC_ALREADY_FULFILLED_BY_ANOTHER_USER",
         "This book has already been downloaded with a different Adobe ID. "
         "Re-authorize the server with that same Adobe ID (the 'Adobe ID' "
@@ -257,13 +265,17 @@ def _friendly_acsm_error(diag: str, returncode: int) -> str:
         if needle in diag:
             return message
     # Fall back to the most informative-looking single line, trimmed.
-    candidates = [
-        ln.strip() for ln in diag.splitlines()
-        if ln.strip() and "DeACSM" in ln and "Try" not in ln
-    ]
-    if candidates:
-        return candidates[-1][:300]
-    return f"ACSM conversion failed (ebook-convert exit {returncode})"
+    # The fulfill script prefixes useful lines with "Fulfillment refused:"
+    # or "Download failed". Older code paths put a "DeACSM" prefix on info
+    # lines. Probe both shapes.
+    for prefix in ("Fulfillment refused", "Download failed", "DeACSM"):
+        candidates = [
+            ln.strip() for ln in diag.splitlines()
+            if ln.strip() and prefix in ln and "Try" not in ln
+        ]
+        if candidates:
+            return candidates[-1][:300]
+    return f"ACSM conversion failed (exit {returncode}); see server logs."
 
 
 def _read_epub_meta(epub_path: Path) -> dict:
