@@ -331,17 +331,18 @@ function HomePage() {
                 )
                 // Combine completed + in-progress into one skip set
                 const skipIds = new Set([...completedIds, ...inProgressMediaIds])
-                // Collect series_indices that should be skipped (either version is done/active)
-                const skipIndices = new Set()
+                // Find the highest series_index that is done/active — next book must be above it
+                let maxSkippedIndex = -Infinity
                 series.books.forEach(b => {
                     if (skipIds.has(`${b.mediaType}_${b.id}`) && b.series_index != null) {
-                        skipIndices.add(b.series_index)
+                        if (b.series_index > maxSkippedIndex) maxSkippedIndex = b.series_index
                     }
                 })
                 const sorted = [...series.books].sort((a, b) => (a.series_index || 0) - (b.series_index || 0))
                 const nextBook = sorted.find(b =>
                     !skipIds.has(`${b.mediaType}_${b.id}`) &&
-                    (b.series_index == null || !skipIndices.has(b.series_index))
+                    b.series_index != null &&
+                    b.series_index > maxSkippedIndex
                 )
                 if (!nextBook) return // all completed or in progress
 
