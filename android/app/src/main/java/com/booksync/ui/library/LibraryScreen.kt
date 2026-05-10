@@ -51,6 +51,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
+import com.booksync.data.repository.PairOpenTarget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
@@ -115,6 +119,7 @@ fun LibraryScreen(
 
     val snackbar = remember { SnackbarHostState() }
     var searchActive by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(refreshMsg) {
         refreshMsg?.let {
@@ -246,7 +251,7 @@ fun LibraryScreen(
                 else -> ItemGrid(
                     items = items,
                     downloadingPercent = downloading,
-                    onItemClick = { item -> openItem(item, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
+                    onItemClick = { item -> openItem(item, scope, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
                     onItemOverflow = { item -> overflowTarget = item.toOverflowTarget(activeTxPairIds) },
                 )
             }
@@ -639,6 +644,8 @@ private fun SeriesGrid(
 
 private fun openItem(
     item: LibraryItem,
+    scope: CoroutineScope,
+    viewModel: LibraryViewModel,
     onBookSelect: (Int) -> Unit,
     onAudioSelect: (Int) -> Unit,
     onStandaloneAudioSelect: (Int) -> Unit = {},
@@ -646,15 +653,22 @@ private fun openItem(
 ) {
     val pair = item.pair
     when {
-        pair != null && pair.ebookDownloaded      -> onBookSelect(pair.id)
-        pair != null && pair.audiobookDownloaded  -> onAudioSelect(pair.id)
-        // Neither half downloaded — no reader/player to open. Land on the
-        // Book Details page so the user can download or unlink from there.
-        pair != null                              -> onOpenDetails(item)
+        // Pair: route to the medium the user last used (bookmark.source); the resolver's
+        // own fallback (ebook → audio → details) matches the previous hardcoded ordering
+        // for never-opened pairs. Async because it consults the local DB.
+        pair != null -> scope.launch {
+            when (viewModel.resolvePairOpenTarget(pair)) {
+                PairOpenTarget.Reader  -> onBookSelect(pair.id)
+                PairOpenTarget.Player  -> onAudioSelect(pair.id)
+                PairOpenTarget.Details -> onOpenDetails(item)
+            }
+        }
         item.audiobook != null && item.audiobook.isDownloaded -> onStandaloneAudioSelect(item.audiobook.id)
         // Standalone ebook / undownloaded standalone audiobook → details screen.
         else                                      -> onOpenDetails(item)
     }
+    // Suppress: Result of `scope.launch { ... }` is intentionally discarded above.
+    Unit
 }
 
 private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = when {
