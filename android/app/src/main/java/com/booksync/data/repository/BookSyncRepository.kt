@@ -22,6 +22,9 @@ import javax.inject.Singleton
  */
 private const val REPO_TAG = "BookSyncRepository"
 
+/** Where a tap on a paired book should land. */
+enum class PairOpenTarget { Reader, Player, Details }
+
 @Singleton
 class BookSyncRepository @Inject constructor(
     private val api: BookSyncApi,
@@ -213,6 +216,26 @@ class BookSyncRepository @Inject constructor(
 
     /** Get a single pair by ID. */
     suspend fun getPairById(pairId: Int): BookPairEntity? = bookPairDao.getPairById(pairId)
+
+    /**
+     * Decide where a pair-tap should land:
+     *  - If the user has a bookmark, honor `source` ("audiobook" → Player, "ebook" → Reader)
+     *    provided that side is downloaded.
+     *  - Otherwise prefer ebook → audiobook → details (matches LibraryScreen.openItem fallback).
+     */
+    suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget {
+        val source = bookmarkDao.getBookmark(pair.id)?.source
+        return when {
+            source == "audiobook" && pair.audiobookDownloaded -> PairOpenTarget.Player
+            source == "ebook"     && pair.ebookDownloaded     -> PairOpenTarget.Reader
+            pair.ebookDownloaded                              -> PairOpenTarget.Reader
+            pair.audiobookDownloaded                          -> PairOpenTarget.Player
+            else                                              -> PairOpenTarget.Details
+        }
+    }
+
+    suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
+        getPairById(pairId)?.let { resolvePairOpenTarget(it) } ?: PairOpenTarget.Details
 
     /** Get a single ebook by ID. */
     suspend fun getEbookById(ebookId: Int): EBookEntity? = eBookDao.getEBookById(ebookId)
