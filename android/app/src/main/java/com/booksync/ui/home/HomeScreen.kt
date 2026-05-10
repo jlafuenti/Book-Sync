@@ -34,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +47,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
 import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.repository.PairOpenTarget
+import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
@@ -94,6 +97,19 @@ fun HomeScreen(
 
     // Snackbar host for transcription-action feedback.
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Route a pair tap to whichever medium the user last used (bookmark.source).
+    // Falls back to today's preference (reader) when there is no prior bookmark.
+    val openPair: (Int) -> Unit = { pairId ->
+        scope.launch {
+            when (viewModel.resolvePairOpenTarget(pairId)) {
+                PairOpenTarget.Reader, PairOpenTarget.Details -> onOpenPairReader(pairId)
+                PairOpenTarget.Player -> onOpenPairPlayer(pairId)
+            }
+        }
+        Unit
+    }
     val transcriptionMessage by viewModel.transcriptionMessage.collectAsState()
     LaunchedEffect(transcriptionMessage) {
         transcriptionMessage?.let {
@@ -155,7 +171,7 @@ fun HomeScreen(
                         items = continueItems,
                         onItemClick = { item ->
                             when (item.mediaType) {
-                                HomeItem.MediaType.PAIR      -> item.pairId?.let(onOpenPairReader)
+                                HomeItem.MediaType.PAIR      -> item.pairId?.let(openPair)
                                 HomeItem.MediaType.EBOOK     -> item.ebookId?.let(onOpenEbook)
                                 HomeItem.MediaType.AUDIOBOOK -> item.audiobookId?.let(onOpenAudiobook)
                             }
@@ -180,7 +196,7 @@ fun HomeScreen(
                     PairRow(
                         pairs = recentlyAdded,
                         showNewBadge = false,
-                        onPairClick = { pair -> onOpenPairReader(pair.id) },
+                        onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
                             overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
                         },
@@ -197,7 +213,7 @@ fun HomeScreen(
                     PairRow(
                         pairs = newPairs,
                         showNewBadge = true,
-                        onPairClick = { pair -> onOpenPairReader(pair.id) },
+                        onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
                             overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
                         },
@@ -213,7 +229,7 @@ fun HomeScreen(
                     )
                     QueueRow(
                         items = queueItems,
-                        onItemClick = { q -> onOpenPairReader(q.pairId) },
+                        onItemClick = { q -> openPair(q.pairId) },
                     )
                 }
             }

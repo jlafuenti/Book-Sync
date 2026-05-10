@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getPairs, getEbooks, getAudiobooks, createPair, deletePair } from '../api'
+import { getPairs, getEbooks, getAudiobooks, createPair, deletePair, getAllProgress } from '../api'
+import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -37,6 +38,9 @@ function PairsPage({ tab }) {
     const [pairs, setPairs] = useState([])
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
+    // Progress records — used to determine `lastFormat` per pair so a pair-tap
+    // routes to whichever medium the user last used.
+    const [progress, setProgress] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
 
@@ -57,10 +61,14 @@ function PairsPage({ tab }) {
 
     const loadData = async () => {
         try {
-            const [p, e, a] = await Promise.all([getPairs(), getEbooks(), getAudiobooks()])
+            const [p, e, a, prog] = await Promise.all([
+                getPairs(), getEbooks(), getAudiobooks(),
+                getAllProgress().catch(() => []),
+            ])
             setPairs(p)
             setEbooks(e)
             setAudiobooks(a)
+            setProgress(prog || [])
         } catch (err) {
             setError(err.message)
         } finally {
@@ -69,6 +77,34 @@ function PairsPage({ tab }) {
     }
 
     useEffect(() => { loadData() }, [])
+
+    // Group progress records by pair id so we can compute `lastFormat` per pair
+    // for routing (audiobook vs ebook reader). Falls back to id-based lookup
+    // if a record predates the `book_pair_id` column.
+    const lastFormatByPairId = useMemo(() => {
+        const ebookToPairId = {}
+        const audiobookToPairId = {}
+        pairs.forEach(p => {
+            if (p.ebook?.id) ebookToPairId[p.ebook.id] = p.id
+            if (p.audiobook?.id) audiobookToPairId[p.audiobook.id] = p.id
+        })
+        const grouped = {}
+        ;(progress || []).forEach(rec => {
+            let pid = rec.book_pair_id
+            if (!pid) {
+                if (rec.media_type === 'ebook' && rec.ebook_id) pid = ebookToPairId[rec.ebook_id]
+                if (rec.media_type === 'audiobook' && rec.audiobook_id) pid = audiobookToPairId[rec.audiobook_id]
+            }
+            if (!pid) return
+            if (!grouped[pid]) grouped[pid] = []
+            grouped[pid].push(rec)
+        })
+        const out = {}
+        Object.entries(grouped).forEach(([pid, recs]) => {
+            out[pid] = lastFormatFromProgress(recs)
+        })
+        return out
+    }, [pairs, progress])
 
     // Compute unpaired items
     const pairedEbookIds = new Set(pairs.map(p => p.ebook.id))
@@ -278,7 +314,13 @@ function PairsPage({ tab }) {
                                         {sortedPairs.map(pair => (
                                             <tr key={pair.id}>
                                                 <td style={{ fontWeight: 500 }}>
-                                                    <Link to={`/book/ebook/${pair.ebook.id}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                                                    <Link
+                                                        to={pairTargetPath(
+                                                            { ebook_id: pair.ebook.id, audiobook_id: pair.audiobook?.id },
+                                                            lastFormatByPairId[pair.id],
+                                                        )}
+                                                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                                                    >
                                                         {pair.ebook.title}
                                                     </Link>
                                                 </td>

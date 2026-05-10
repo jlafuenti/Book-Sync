@@ -654,24 +654,15 @@ class AudioPlayerService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-            serviceScope.launch(Dispatchers.IO) {
-                val lastMediaId = sharedPrefs.getString(PREF_LAST_MEDIA_ID, null)
-                val lastPositionMs = sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
-                val item = if (lastMediaId != null) resolveMediaItem(lastMediaId) else null
-                if (item != null) {
-                    future.set(
-                        MediaSession.MediaItemsWithStartPosition(
-                            listOf(item),
-                            /* startIndex= */ 0,
-                            lastPositionMs
-                        )
-                    )
-                } else {
-                    future.setException(UnsupportedOperationException("No last played item"))
-                }
-            }
-            return future
+            // Auto-resumption is disabled intentionally. When this future fails, Android Auto
+            // falls back to the browse UI where "Continue Listening" shows the book at the
+            // correct DB-backed position. The user presses play to start — no auto-play on
+            // connect. This also eliminates the stale-SharedPrefs position bug (PREF_LAST_POSITION
+            // was only written at service destroy time, so could be 0 if the service was
+            // SIGKILL'd mid-session; the DB bookmark is always current).
+            return Futures.immediateFailedFuture(
+                UnsupportedOperationException("Auto-resumption disabled — user initiates playback")
+            )
         }
 
         override fun onSetMediaItems(
@@ -693,15 +684,23 @@ class AudioPlayerService : MediaLibraryService() {
                         item
                     }
                 }
-                val item = resolvedItems.getOrNull(startIndex)
+                // Google Assistant / Android Auto pass startIndex = C.INDEX_UNSET (-1) when
+                // they want the player to use its default. getOrNull(-1) returns null, which
+                // would make us lose the bookmarked position embedded in the resolved item's
+                // extras and start from 0. Normalize to 0 (first item) for both lookup and
+                // the returned MediaItemsWithStartPosition.
+                val effectiveStartIndex =
+                    if (startIndex < 0 || startIndex >= resolvedItems.size) 0 else startIndex
+                val item = resolvedItems.getOrNull(effectiveStartIndex)
                 val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
                 val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
                     startPositionMs
                 } else {
                     resumeMs
                 }
+                diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems resolved effectiveStartIndex=$effectiveStartIndex resumeMs=$resumeMs resolvedPosition=$resolvedPosition mediaId=${item?.mediaId}")
                 future.set(
-                    MediaSession.MediaItemsWithStartPosition(resolvedItems, startIndex, resolvedPosition)
+                    MediaSession.MediaItemsWithStartPosition(resolvedItems, effectiveStartIndex, resolvedPosition)
                 )
             }
             return future
