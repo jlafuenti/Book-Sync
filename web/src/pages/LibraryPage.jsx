@@ -4,8 +4,10 @@ import {
     getEbooks, getAudiobooks, getPairs, getNewPairs, uploadEbook, uploadAudiobook, scanLibrary,
     normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata,
     rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles,
-    cleanupOrphans, coverSrc, acknowledgeNewItems, acknowledgeNewPairs
+    cleanupOrphans, coverSrc, acknowledgeNewItems, acknowledgeNewPairs,
+    getAllProgress
 } from '../api'
+import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
 import FilterPill from '../components/FilterPill'
@@ -264,6 +266,9 @@ function LibraryPage({ tab }) {
     const [ebooks, setEbooks] = useState([])
     const [audiobooks, setAudiobooks] = useState([])
     const [pairs, setPairs] = useState([])
+    // Progress records — used to determine `lastFormat` per pair so a pair-tap
+    // routes to whichever medium the user last used.
+    const [progress, setProgress] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [scanResult, setScanResult] = useState(null)
@@ -394,6 +399,26 @@ function LibraryPage({ tab }) {
         ebooks.forEach(b => { ebookMap[b.id] = b })
         audiobooks.forEach(b => { abMap[b.id] = b })
 
+        // Group progress records by pair so we can compute `lastFormat` per pair.
+        // Falls back to id-based lookup if the record predates `book_pair_id`.
+        const ebookToPairId = {}
+        const audiobookToPairId = {}
+        pairs.forEach(p => {
+            if (p.ebook?.id) ebookToPairId[p.ebook.id] = p.id
+            if (p.audiobook?.id) audiobookToPairId[p.audiobook.id] = p.id
+        })
+        const progressByPair = {}
+        ;(progress || []).forEach(rec => {
+            let pid = rec.book_pair_id
+            if (!pid) {
+                if (rec.media_type === 'ebook' && rec.ebook_id) pid = ebookToPairId[rec.ebook_id]
+                if (rec.media_type === 'audiobook' && rec.audiobook_id) pid = audiobookToPairId[rec.audiobook_id]
+            }
+            if (!pid) return
+            if (!progressByPair[pid]) progressByPair[pid] = []
+            progressByPair[pid].push(rec)
+        })
+
         return pairs.map(p => {
             const eb = p.ebook?.id ? ebookMap[p.ebook.id] : null
             const ab = p.audiobook?.id ? abMap[p.audiobook.id] : null
@@ -413,9 +438,11 @@ function LibraryPage({ tab }) {
                 pair_status: p.status,
                 ebook_id: eb?.id ?? null,
                 audiobook_id: ab?.id ?? null,
+                // 'audiobook' | 'ebook' | null — drives where a click lands.
+                lastFormat: lastFormatFromProgress(progressByPair[p.id]),
             }
         }).filter(Boolean)
-    }, [pairs, ebooks, audiobooks])
+    }, [pairs, ebooks, audiobooks, progress])
 
     // Filtered + sorted display list
     const filteredBooks = useMemo(() => {
@@ -536,11 +563,15 @@ function LibraryPage({ tab }) {
     // Data loading
     const loadData = useCallback(async () => {
         try {
-            const [e, a, p, np] = await Promise.all([getEbooks(), getAudiobooks(), getPairs(), getNewPairs()])
+            const [e, a, p, np, prog] = await Promise.all([
+                getEbooks(), getAudiobooks(), getPairs(), getNewPairs(),
+                getAllProgress().catch(() => []),
+            ])
             setEbooks(e)
             setAudiobooks(a)
             setPairs(p)
             setNewPairs(np)
+            setProgress(prog || [])
         } catch (err) {
             setError(err.message)
         } finally {
@@ -1279,7 +1310,7 @@ function LibraryPage({ tab }) {
                                 onDelete={() => openDeleteModal(book)}
                                 onNavigate={() => navigate(
                                     book.mediaType === 'pair'
-                                        ? `/book/ebook/${book.ebook_id}`
+                                        ? pairTargetPath(book, book.lastFormat)
                                         : `/book/${book.mediaType}/${book.id}`
                                 )}
                                 canEdit={canEdit}
@@ -1327,7 +1358,7 @@ function LibraryPage({ tab }) {
                             onDelete={() => openDeleteModal(book)}
                             onNavigate={() => navigate(
                                 book.mediaType === 'pair'
-                                    ? `/book/ebook/${book.ebook_id}`
+                                    ? pairTargetPath(book, book.lastFormat)
                                     : `/book/${book.mediaType}/${book.id}`
                             )}
                             canEdit={canEdit}

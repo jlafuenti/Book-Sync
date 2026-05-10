@@ -12,6 +12,7 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
@@ -202,6 +203,16 @@ class HomeViewModel @Inject constructor(
     // to the same repository / WorkManager / transcription-repo LibraryViewModel
     // uses, so behavior stays consistent across Home and Library.
     // =======================================================================
+
+    /**
+     * Resolve where a pair-tap should land based on the user's last-used medium.
+     * Falls back to today's preference (ebook → audiobook → details).
+     */
+    suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget =
+        repository.resolvePairOpenTarget(pair)
+
+    suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
+        repository.resolvePairOpenTarget(pairId)
 
     fun downloadEbook(pair: BookPairEntity)     = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")
     fun downloadAudiobook(pair: BookPairEntity) = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
