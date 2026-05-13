@@ -239,6 +239,7 @@ fun LibraryScreen(
                 }
                 ui.groupBySeries -> SeriesGrid(
                     stacks = seriesStacks,
+                    serverUrl = viewModel.serverUrl,
                     onStackClick = { stack -> viewModel.drillIntoSeries(stack.seriesName) },
                     onStackOverflow = { stack ->
                         overflowSeriesItems = stack.items
@@ -250,6 +251,7 @@ fun LibraryScreen(
                 )
                 else -> ItemGrid(
                     items = items,
+                    serverUrl = viewModel.serverUrl,
                     downloadingPercent = downloading,
                     onItemClick = { item -> openItem(item, scope, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
                     onItemOverflow = { item -> overflowTarget = item.toOverflowTarget(activeTxPairIds) },
@@ -547,6 +549,7 @@ private fun AcknowledgeAllBar(count: Int, onClick: () -> Unit) {
 @Composable
 private fun ItemGrid(
     items: List<LibraryItem>,
+    serverUrl: String,
     downloadingPercent: Map<Int, Int>,
     onItemClick: (LibraryItem) -> Unit,
     onItemOverflow: (LibraryItem) -> Unit,
@@ -569,7 +572,7 @@ private fun ItemGrid(
                     localFile != null && localFile.exists() -> localFile
                     coverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
-                        "${BuildConfig.SERVER_BASE_URL}$coverPath"
+                        "${serverUrl.trimEnd('/')}$coverPath"
                     else -> null
                 }
             }
@@ -594,6 +597,7 @@ private fun ItemGrid(
 @Composable
 private fun SeriesGrid(
     stacks: List<SeriesStack>,
+    serverUrl: String,
     onStackClick: (SeriesStack) -> Unit,
     onStackOverflow: (SeriesStack) -> Unit,
 ) {
@@ -616,7 +620,7 @@ private fun SeriesGrid(
                     val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
                     when {
                         localFile != null && localFile.exists() -> localFile
-                        coverPath != null -> "${BuildConfig.SERVER_BASE_URL}$coverPath"
+                        coverPath != null -> "${serverUrl.trimEnd('/')}$coverPath"
                         else -> null
                     }
                 }

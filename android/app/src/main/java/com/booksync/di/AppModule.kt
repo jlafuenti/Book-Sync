@@ -65,10 +65,15 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(client: OkHttpClient, json: Json): Retrofit {
+    fun provideRetrofit(
+        client: OkHttpClient,
+        json: Json,
+        serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    ): Retrofit {
         val contentType = "application/json".toMediaType()
+        val baseUrl = serverUrlManager.getServerUrlBlocking().trimEnd('/') + "/"
         return Retrofit.Builder()
-            .baseUrl("https://booksync.lafuenti.com/") // BookSync server via HTTPS
+            .baseUrl(baseUrl)
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()

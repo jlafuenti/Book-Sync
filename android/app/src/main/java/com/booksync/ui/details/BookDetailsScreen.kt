@@ -162,7 +162,7 @@ fun BookDetailsScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Hero(ui = ui)
+            Hero(ui = ui, serverUrl = viewModel.serverUrl)
             StatusChipRow(ui = ui)
             ui.description?.let { DescriptionBlock(description = it) }
             PrimaryActionButton(
@@ -327,14 +327,14 @@ fun BookDetailsScreen(
 // ============================================================================
 
 @Composable
-private fun Hero(ui: BookDetailsUi) {
+private fun Hero(ui: BookDetailsUi, serverUrl: String) {
     val colors = Tandem.colors
     val context = LocalContext.current
-    val coverModel = remember(ui.audiobookIdForCover, ui.audiobookCoverPath) {
+    val coverModel = remember(ui.audiobookIdForCover, ui.audiobookCoverPath, serverUrl) {
         val local = ui.audiobookIdForCover?.let { File(context.filesDir, "covers/$it.jpg") }
         when {
             local != null && local.exists() -> local
-            ui.audiobookCoverPath != null   -> "${BuildConfig.SERVER_BASE_URL}${ui.audiobookCoverPath}"
+            ui.audiobookCoverPath != null   -> "${serverUrl.trimEnd('/')}${ui.audiobookCoverPath}"
             else                            -> null
         }
     }
