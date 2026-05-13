@@ -97,11 +97,14 @@ data class BookDetailsUi(
 class BookDetailsViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val api: BookSyncApi,
+    serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     @param:ApplicationContext private val context: Context,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
+
+    val serverUrl: String = serverUrlManager.currentUrl
 
     // ------------------------------------------------------------------
     // Resolve the target from SavedStateHandle. Exactly one of the three

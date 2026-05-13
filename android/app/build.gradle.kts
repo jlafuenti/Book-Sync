@@ -19,7 +19,6 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "SERVER_BASE_URL", "\"https://booksync.example.com\"")
     }
 
     buildTypes {

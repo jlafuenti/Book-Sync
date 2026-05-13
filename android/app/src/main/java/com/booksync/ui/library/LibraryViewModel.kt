@@ -99,10 +99,13 @@ class LibraryViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val transcriptionRepository: TranscriptionRepository,
     private val networkMonitor: NetworkMonitor,
+    serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
+
+    val serverUrl: String = serverUrlManager.currentUrl
 
     /** Exposes live network status so [LibraryScreen] can gate the Transcribe action. */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline

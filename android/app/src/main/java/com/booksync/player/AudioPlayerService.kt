@@ -91,6 +91,7 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var coverArtHelper: CoverArtHelper
     @Inject lateinit var tokenManager: TokenManager
+    @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
     @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
 
     private var mediaLibrarySession: MediaLibrarySession? = null
@@ -325,7 +326,7 @@ class AudioPlayerService : MediaLibraryService() {
     private fun buildCastMediaItem(original: MediaItem): MediaItem? {
         val mediaId = original.mediaId
         val token = runBlocking { tokenManager.getAccessToken().firstOrNull() } ?: ""
-        val baseUrl = com.booksync.BuildConfig.SERVER_BASE_URL.trimEnd('/')
+        val baseUrl = serverUrlManager.currentUrl.trimEnd('/')
 
         val streamUrl = when {
             mediaId.startsWith("pair_") -> {
