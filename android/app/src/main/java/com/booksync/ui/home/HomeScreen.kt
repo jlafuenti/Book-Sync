@@ -148,7 +148,9 @@ fun HomeScreen(
         containerColor = colors.bgPrimary,
     ) { padding ->
         if (allEmpty) {
+            val webAppUrl by viewModel.webAppUrl.collectAsState()
             HomeEmptyState(
+                webAppUrl = webAppUrl,
                 modifier = Modifier.padding(padding).fillMaxSize(),
             )
             return@Scaffold
@@ -169,6 +171,7 @@ fun HomeScreen(
                     )
                     ContinueRow(
                         items = continueItems,
+                        serverUrl = viewModel.serverUrl,
                         onItemClick = { item ->
                             when (item.mediaType) {
                                 HomeItem.MediaType.PAIR      -> item.pairId?.let(openPair)
@@ -195,6 +198,7 @@ fun HomeScreen(
                     )
                     PairRow(
                         pairs = recentlyAdded,
+                        serverUrl = viewModel.serverUrl,
                         showNewBadge = false,
                         onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
@@ -212,6 +216,7 @@ fun HomeScreen(
                     )
                     PairRow(
                         pairs = newPairs,
+                        serverUrl = viewModel.serverUrl,
                         showNewBadge = true,
                         onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
@@ -296,6 +301,7 @@ private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
 @Composable
 private fun ContinueRow(
     items: List<HomeItem>,
+    serverUrl: String,
     onItemClick: (HomeItem) -> Unit,
     onItemOverflow: (HomeItem) -> Unit,
 ) {
@@ -312,7 +318,7 @@ private fun ContinueRow(
                     localFile != null && localFile.exists() -> localFile
                     item.audiobookCoverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
-                        "${BuildConfig.SERVER_BASE_URL}${item.audiobookCoverPath}"
+                        "${serverUrl.trimEnd('/')}${item.audiobookCoverPath}"
                     else -> null
                 }
             }
@@ -352,6 +358,7 @@ private fun ContinueRow(
 @Composable
 private fun PairRow(
     pairs: List<BookPairEntity>,
+    serverUrl: String,
     showNewBadge: Boolean,
     onPairClick: (BookPairEntity) -> Unit,
     onPairOverflow: (BookPairEntity) -> Unit,
@@ -367,7 +374,7 @@ private fun PairRow(
                 when {
                     localFile.exists() -> localFile
                     pair.audiobookCoverPath != null ->
-                        "${BuildConfig.SERVER_BASE_URL}${pair.audiobookCoverPath}"
+                        "${serverUrl.trimEnd('/')}${pair.audiobookCoverPath}"
                     else -> null
                 }
             }
@@ -423,7 +430,7 @@ private fun QueueRow(
 }
 
 @Composable
-private fun HomeEmptyState(modifier: Modifier = Modifier) {
+private fun HomeEmptyState(webAppUrl: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         EmptyState(
@@ -432,7 +439,7 @@ private fun HomeEmptyState(modifier: Modifier = Modifier) {
             subtitle = "Upload ebooks and audiobooks from the web app, then they'll show up here.",
             actionLabel = "Open web app",
             onAction = {
-                val intent = Intent(Intent.ACTION_VIEW, "https://booksync.example.com".toUri())
+                val intent = Intent(Intent.ACTION_VIEW, webAppUrl.toUri())
                 context.startActivity(intent)
             },
         )

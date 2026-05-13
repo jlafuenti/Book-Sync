@@ -23,9 +23,12 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -33,6 +36,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -99,6 +104,7 @@ fun AccountScreen(
     val appTheme              by viewModel.appTheme.collectAsState()
     val user                  by viewModel.user.collectAsState()
     val isOnline              by viewModel.isOnline.collectAsState()
+    val serverUrl             by viewModel.serverUrl.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -287,6 +293,44 @@ fun AccountScreen(
                 }
             }
 
+            item { SectionTitle("Server") }
+            item {
+                val context = LocalContext.current
+                var serverUrlEdit by remember(serverUrl) { mutableStateOf(serverUrl) }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedTextField(
+                        value = serverUrlEdit,
+                        onValueChange = { serverUrlEdit = it },
+                        label = { Text("Server URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Done,
+                        ),
+                    )
+                    Button(
+                        onClick = { viewModel.saveServerUrlAndRestart(context, serverUrlEdit.trim()) },
+                        enabled = serverUrlEdit.isNotBlank() && serverUrlEdit.trim() != serverUrl,
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                    ) {
+                        Text("Save & Restart")
+                    }
+                    Text(
+                        "Changing this restarts the app to apply the new server.",
+                        color = colors.textMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+
             // Shortcut into the browser-based version of Book Sync, for uploads /
             // admin operations that aren't surfaced in the Android client yet.
             item {
@@ -303,7 +347,7 @@ fun AccountScreen(
                         trailingIcon = Icons.Default.OpenInBrowser,
                         onClick = {
                             context.startActivity(
-                                Intent(Intent.ACTION_VIEW, "https://booksync.example.com".toUri())
+                                Intent(Intent.ACTION_VIEW, serverUrl.toUri())
                             )
                         },
                     )

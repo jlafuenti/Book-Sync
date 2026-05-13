@@ -24,10 +24,13 @@ import javax.inject.Inject
 @HiltViewModel
 class DownloadedViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
+
+    val serverUrl: String = serverUrlManager.currentUrl
 
     // --- Flows of currently-downloaded items ---------------------------------
 
