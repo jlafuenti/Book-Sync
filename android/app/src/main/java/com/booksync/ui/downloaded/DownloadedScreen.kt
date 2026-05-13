@@ -140,7 +140,7 @@ fun DownloadedScreen(
                         when {
                             localFile.exists() -> localFile
                             pair.audiobookCoverPath != null ->
-                                "${BuildConfig.SERVER_BASE_URL}${pair.audiobookCoverPath}"
+                                "${viewModel.serverUrl.trimEnd('/')}${pair.audiobookCoverPath}"
                             else -> null
                         }
                     }
@@ -189,7 +189,7 @@ fun DownloadedScreen(
                         when {
                             localFile.exists() -> localFile
                             audio.coverFilename != null ->
-                                "${BuildConfig.SERVER_BASE_URL}${audio.coverFilename}"
+                                "${viewModel.serverUrl.trimEnd('/')}${audio.coverFilename}"
                             else -> null
                         }
                     }

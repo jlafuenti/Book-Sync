@@ -12,6 +12,7 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -74,13 +75,21 @@ class HomeViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val transcriptionRepository: TranscriptionRepository,
     networkMonitor: NetworkMonitor,
-    @param:ApplicationContext context: Context,
+    serverUrlManager: ServerUrlManager,
+    @ApplicationContext context: Context,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
 
     /** Mirrors NetworkMonitor so the overflow sheet can disable offline-only actions. */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
+
+    /** Server URL for the "Open web app" empty-state button. */
+    val webAppUrl: StateFlow<String> = serverUrlManager.serverUrlFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), com.booksync.data.remote.DEFAULT_SERVER_URL)
+
+    /** Synchronous server URL for building cover image URLs in composables. */
+    val serverUrl: String = serverUrlManager.currentUrl
 
     /** One-shot snackbar messages from transcription actions. */
     private val _transcriptionMessage = MutableStateFlow<String?>(null)

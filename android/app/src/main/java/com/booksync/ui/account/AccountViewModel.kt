@@ -7,13 +7,17 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.DEFAULT_SERVER_URL
 import com.booksync.data.remote.PasswordChangeRequest
+import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.UpdateMeRequest
 import com.booksync.data.remote.UserResponse
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.theme.TandemTheme
+import com.booksync.util.restartApp
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -50,8 +54,20 @@ class AccountViewModel @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     private val api: BookSyncApi,
     private val tokenManager: TokenManager,
+    private val serverUrlManager: ServerUrlManager,
     networkMonitor: NetworkMonitor,
 ) : ViewModel() {
+
+    val serverUrl = serverUrlManager.serverUrlFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), DEFAULT_SERVER_URL)
+
+    fun saveServerUrlAndRestart(context: Context, url: String) {
+        viewModelScope.launch {
+            serverUrlManager.setServerUrl(url)
+            restartApp(context)
+        }
+    }
+
 
     /** Live network reachability — used by the UI to gate "Change password" and show the offline chip. */
     val isOnline = networkMonitor.isOnline
