@@ -171,6 +171,13 @@
     height: 18px;
     accent-color: var(--accent);
     cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.series-card:hover .series-card-checkbox,
+.series-card.select-mode .series-card-checkbox {
+    opacity: 1;
 }
 
 /* ---- Cover Stack Area ---- */

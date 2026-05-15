@@ -295,6 +295,13 @@
     height: 22px;
     cursor: pointer;
     accent-color: var(--accent);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.lib-book-card:hover .lib-book-card-checkbox,
+.lib-book-card.select-mode .lib-book-card-checkbox {
+    opacity: 1;
 }
 
 /* Type badge (E / A) */
