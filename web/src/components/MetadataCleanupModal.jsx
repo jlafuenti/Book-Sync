@@ -48,6 +48,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
         try {
             const ebook_updates = {};
             const audiobook_updates = {};
+            const unresolved_fields = [];
 
             currentPair.discrepancies.forEach(d => {
                 const choice = selected[d.field];
@@ -55,13 +56,22 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                     audiobook_updates[d.field] = d.ebook_value;
                 } else if (choice === 'audiobook') {
                     ebook_updates[d.field] = d.audiobook_value;
+                } else {
+                    // User skipped this field — mark ignored so it won't reappear
+                    unresolved_fields.push(d.field);
                 }
             });
 
-            await resolveMetadataDiscrepancies(currentPair.pair_id, {
-                ebook_updates,
-                audiobook_updates
-            });
+            if (Object.keys(ebook_updates).length > 0 || Object.keys(audiobook_updates).length > 0) {
+                await resolveMetadataDiscrepancies(currentPair.pair_id, {
+                    ebook_updates,
+                    audiobook_updates
+                });
+            }
+
+            if (unresolved_fields.length > 0) {
+                await ignoreMetadataDiscrepancies(currentPair.pair_id, unresolved_fields);
+            }
 
             advance();
         } catch (err) {
