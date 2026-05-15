@@ -62,6 +62,9 @@ class EBook(Base):
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Hashes of audiobooks this ebook must not be auto-paired with (set on manual unpair)
+    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
 
@@ -111,6 +114,9 @@ class AudioBook(Base):
 
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Hashes of ebooks this audiobook must not be auto-paired with (set on manual unpair)
+    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")
