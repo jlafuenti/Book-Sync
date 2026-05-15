@@ -543,6 +543,7 @@ export default function SeriesPage() {
                                 selectMode={selectMode}
                                 selectedKeys={selectedKeys}
                                 onToggleSelect={toggleSelect}
+                                onStartSelect={() => setSelectMode(true)}
                                 onClick={() => navigateToSeries(group)}
                                 onAuthorClick={navigateToAuthorInLibrary}
                             />
@@ -670,7 +671,7 @@ export default function SeriesPage() {
 
 // ---- Series Card (Grid) ----
 
-function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, onAuthorClick }) {
+function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onStartSelect, onClick, onAuthorClick }) {
     const { name, author, items, covers } = group
 
     const ebookCount = items.filter(i => i.hasEbook).length
@@ -694,18 +695,19 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onClick, 
 
     return (
         <div
-            className={`series-card${anySelected ? ' selected' : ''}`}
+            className={`series-card${anySelected ? ' selected' : ''}${selectMode ? ' select-mode' : ''}`}
             onClick={selectMode ? undefined : onClick}
         >
-            {selectMode && (
-                <input
-                    type="checkbox"
-                    className="series-card-checkbox"
-                    checked={allSelected}
-                    readOnly
-                    onClick={handleCheckbox}
-                />
-            )}
+            <input
+                type="checkbox"
+                className="series-card-checkbox"
+                checked={allSelected}
+                readOnly
+                onClick={(e) => {
+                    if (selectMode) handleCheckbox(e)
+                    else { e.stopPropagation(); onStartSelect(e); handleCheckbox(e) }
+                }}
+            />
 
             <div className="series-cover-area">
                 {covers.length === 0 ? (
