@@ -102,7 +102,7 @@ function TypeBadge({ mediaType }) {
 
 // ---- Book Card (Grid View) ----
 
-function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
+function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -124,19 +124,21 @@ function BookCard({ book, selectMode, isSelected, onSelect, onEdit, onDelete, on
 
     return (
         <div
-            className={`lib-book-card${isSelected ? ' selected' : ''}`}
+            className={`lib-book-card${isSelected ? ' selected' : ''}${selectMode ? ' select-mode' : ''}`}
             onClick={handleClick}
         >
             <div className="lib-book-card-cover">
-                {selectMode && (
-                    <input
-                        type="checkbox"
-                        className="lib-book-card-checkbox"
-                        checked={isSelected}
-                        readOnly
-                        onClick={(e) => { e.stopPropagation(); onSelect(e) }}
-                    />
-                )}
+                <input
+                    type="checkbox"
+                    className="lib-book-card-checkbox"
+                    checked={isSelected}
+                    readOnly
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        if (selectMode) onSelect(e)
+                        else onStartSelect(e)
+                    }}
+                />
                 {coverUrl ? (
                     <img src={coverUrl} alt={book.title} loading="lazy" />
                 ) : (
@@ -828,6 +830,20 @@ function LibraryPage({ tab }) {
         }
     }
 
+    const handleAcknowledgeSelected = async () => {
+        const parsed = parseSelectedIds()
+        const ebookIds = parsed.filter(p => p.mediaType === 'ebook').map(p => p.id)
+        const audiobookIds = parsed.filter(p => p.mediaType === 'audiobook').map(p => p.id)
+        try {
+            await acknowledgeNewItems(ebookIds, audiobookIds)
+        } catch (err) {
+            alert('Failed to acknowledge: ' + err.message)
+            return
+        }
+        exitSelectMode()
+        await loadData()
+    }
+
     // ---- Verify handlers ----
 
     const handleVerify = async () => {
@@ -1030,6 +1046,9 @@ function LibraryPage({ tab }) {
                                     </button>
                                     <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleVerify() }} disabled={verifying}>
                                         {verifying ? 'Verifying...' : 'Verify Files'}
+                                    </button>
+                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); setShowMetadataCleanup(true) }}>
+                                        Resolve Mismatches
                                     </button>
                                     <hr style={{ margin: '4px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
                                     <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); navigate('/pairs/unpaired') }}>
@@ -1306,6 +1325,7 @@ function LibraryPage({ tab }) {
                                 selectMode={selectMode}
                                 isSelected={selectedIds.has(bookKey(book))}
                                 onSelect={(e) => handleSelect(book, idx, e?.shiftKey)}
+                                onStartSelect={(e) => { setSelectMode(true); handleSelect(book, idx, e?.shiftKey) }}
                                 onEdit={() => openEdit(book)}
                                 onDelete={() => openDeleteModal(book)}
                                 onNavigate={() => navigate(
@@ -1467,6 +1487,9 @@ function LibraryPage({ tab }) {
                     <button className="btn btn-secondary" onClick={() => setBulkEditOpen(true)}>Edit Metadata</button>
                     {selectedBooksForMatch && (
                         <button className="btn btn-secondary" onClick={() => setBulkMatchOpen(true)}>Bulk Match</button>
+                    )}
+                    {activeFilter === 'new' && (
+                        <button className="btn btn-primary" onClick={handleAcknowledgeSelected}>Acknowledge Selected</button>
                     )}
                     <button className="btn btn-danger" onClick={() => { setBulkDeleteSourceFile(false); setBulkDeleteOpen(true) }}>Delete</button>
                 </div>
