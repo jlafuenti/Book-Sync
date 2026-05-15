@@ -1047,6 +1047,9 @@ function LibraryPage({ tab }) {
                                     <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); handleVerify() }} disabled={verifying}>
                                         {verifying ? 'Verifying...' : 'Verify Files'}
                                     </button>
+                                    <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); setShowMetadataCleanup(true) }}>
+                                        Resolve Mismatches
+                                    </button>
                                     <hr style={{ margin: '4px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
                                     <button className="library-dropdown-item" onClick={() => { setMaintenanceOpen(false); navigate('/pairs/unpaired') }}>
                                         Pair Ebook + Audiobook
