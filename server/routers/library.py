@@ -1719,13 +1719,22 @@ def _write_ebook_metadata(filepath: str, book) -> None:
             if not found:
                 el = ET.SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
                 el.text = str(value)
-                
+
+        def clear_dc_tag(tag_name, value):
+            """Set DC tag when value is present; remove all matching tags when empty/None."""
+            if value:
+                set_dc_tag(tag_name, value)
+            else:
+                for child in list(metadata):
+                    if child.tag.endswith(tag_name):
+                        metadata.remove(child)
+
         set_dc_tag("title", book.title)
         set_dc_tag("creator", book.author)
-        set_dc_tag("description", getattr(book, 'description', None))
-        set_dc_tag("publisher", getattr(book, 'publisher', None))
-        set_dc_tag("language", getattr(book, 'language', None))
-        set_dc_tag("date", getattr(book, 'publish_year', None))
+        clear_dc_tag("description", getattr(book, 'description', None))
+        clear_dc_tag("publisher", getattr(book, 'publisher', None))
+        clear_dc_tag("language", getattr(book, 'language', None))
+        clear_dc_tag("date", getattr(book, 'publish_year', None))
         
         # Calibre series meta tags
         if getattr(book, 'series', None):
@@ -1818,7 +1827,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                             del audio[tag]
             if book.series_index is not None:
                 audio['trkn'] = [(int(book.series_index), 0)]
-            if getattr(book, 'description', None) is not None: audio['desc'] = [book.description]
+            if book.description:
+                audio['desc'] = [book.description]
+            elif 'desc' in audio:
+                del audio['desc']
             if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
                 
@@ -1837,8 +1849,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                     del audio.tags['TALB']
             if book.series_index is not None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
-            if getattr(book, 'description', None) is not None:
+            if book.description:
                 audio.tags['COMM'] = COMM(encoding=3, lang='eng', desc='', text=book.description)
+            elif audio.tags and 'COMM' in audio.tags:
+                del audio.tags['COMM']
             if getattr(book, 'genres', None) is not None: audio.tags['TCON'] = TCON(encoding=3, text=book.genres)
             if getattr(book, 'publish_year', None) is not None: audio.tags['TYER'] = TYER(encoding=3, text=str(book.publish_year))
             if getattr(book, 'publisher', None) is not None: audio.tags['TPUB'] = TPUB(encoding=3, text=book.publisher)
@@ -1854,7 +1868,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                     del audio['album']
             if book.series_index is not None:
                 audio['tracknumber'] = [str(int(book.series_index))]
-            if getattr(book, 'description', None) is not None: audio['description'] = [book.description]
+            if book.description:
+                audio['description'] = [book.description]
+            elif 'description' in audio:
+                del audio['description']
             if getattr(book, 'genres', None) is not None: audio['genre'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['date'] = [str(book.publish_year)]
             if getattr(book, 'publisher', None) is not None: audio['organization'] = [book.publisher]
