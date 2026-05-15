@@ -117,6 +117,13 @@ async def init_db():
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS import_source VARCHAR(50)"))
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS external_id VARCHAR(200)"))
 
+        # Unpair memory: exclusion lists for auto-pairing
+        for table in ("ebooks", "audiobooks"):
+            await conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                f"auto_pair_excluded_hashes JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ))
+
         # Live progress fields on import_sources
         await conn.execute(text("ALTER TABLE import_sources ADD COLUMN IF NOT EXISTS progress_current INTEGER"))
         await conn.execute(text("ALTER TABLE import_sources ADD COLUMN IF NOT EXISTS progress_total INTEGER"))

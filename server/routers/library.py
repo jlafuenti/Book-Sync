@@ -1173,6 +1173,24 @@ async def auto_match_books(db: AsyncSession) -> int:
         t = re.sub(r'\s+', ' ', t).strip()
         return t
 
+    def _series_compatible(eb_series, eb_idx, ab_series, ab_idx) -> bool:
+        """Return False if series metadata indicates these are different books."""
+        if not eb_series and not ab_series:
+            return True
+        if not eb_series or not ab_series:
+            return True  # Only one has series — missing metadata is fine
+        series_score = fuzz.token_sort_ratio(
+            _normalize_for_comparison(eb_series),
+            _normalize_for_comparison(ab_series),
+        )
+        if series_score < 85:
+            return False  # Clearly different series
+        # Same series — if both have an index they must share the same whole number
+        if eb_idx is not None and ab_idx is not None:
+            if int(eb_idx) != int(ab_idx):
+                return False
+        return True
+
     # Check if auto-transcribe is enabled
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
     setting = result.scalar_one_or_none()
@@ -1206,6 +1224,18 @@ async def auto_match_books(db: AsyncSession) -> int:
 
         for audiobook in unpaired_audiobooks:
             if audiobook.id in matched_audiobook_ids:
+                continue
+
+            # Skip if either book has explicitly excluded the other (set on manual unpair)
+            eb_excluded = ebook.auto_pair_excluded_hashes or []
+            ab_excluded = audiobook.auto_pair_excluded_hashes or []
+            if (audiobook.file_hash and audiobook.file_hash in eb_excluded) or \
+               (ebook.file_hash and ebook.file_hash in ab_excluded):
+                continue
+
+            # Reject if series metadata indicates these are different books
+            if not _series_compatible(ebook.series, ebook.series_index,
+                                      audiobook.series, audiobook.series_index):
                 continue
 
             ab_title = _normalize_for_comparison(audiobook.title)
@@ -1480,10 +1510,28 @@ async def delete_pair(
     _: User = Depends(get_editor_user),
 ):
     """Delete a book pair."""
-    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        .where(BookPair.id == pair_id)
+    )
     pair = result.scalar_one_or_none()
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
+
+    # Record mutual exclusion so these two books won't auto-pair again
+    ebook = pair.ebook
+    audiobook = pair.audiobook
+    if ebook and audiobook and ebook.file_hash and audiobook.file_hash:
+        eb_excluded = list(ebook.auto_pair_excluded_hashes or [])
+        if audiobook.file_hash not in eb_excluded:
+            eb_excluded.append(audiobook.file_hash)
+            ebook.auto_pair_excluded_hashes = eb_excluded
+        ab_excluded = list(audiobook.auto_pair_excluded_hashes or [])
+        if ebook.file_hash not in ab_excluded:
+            ab_excluded.append(ebook.file_hash)
+            audiobook.auto_pair_excluded_hashes = ab_excluded
+
     await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
     await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
     await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair_id))
