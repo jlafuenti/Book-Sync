@@ -1173,6 +1173,24 @@ async def auto_match_books(db: AsyncSession) -> int:
         t = re.sub(r'\s+', ' ', t).strip()
         return t
 
+    def _series_compatible(eb_series, eb_idx, ab_series, ab_idx) -> bool:
+        """Return False if series metadata indicates these are different books."""
+        if not eb_series and not ab_series:
+            return True
+        if not eb_series or not ab_series:
+            return True  # Only one has series — missing metadata is fine
+        series_score = fuzz.token_sort_ratio(
+            _normalize_for_comparison(eb_series),
+            _normalize_for_comparison(ab_series),
+        )
+        if series_score < 85:
+            return False  # Clearly different series
+        # Same series — if both have an index they must share the same whole number
+        if eb_idx is not None and ab_idx is not None:
+            if int(eb_idx) != int(ab_idx):
+                return False
+        return True
+
     # Check if auto-transcribe is enabled
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
     setting = result.scalar_one_or_none()
@@ -1206,6 +1224,18 @@ async def auto_match_books(db: AsyncSession) -> int:
 
         for audiobook in unpaired_audiobooks:
             if audiobook.id in matched_audiobook_ids:
+                continue
+
+            # Skip if either book has explicitly excluded the other (set on manual unpair)
+            eb_excluded = ebook.auto_pair_excluded_hashes or []
+            ab_excluded = audiobook.auto_pair_excluded_hashes or []
+            if (audiobook.file_hash and audiobook.file_hash in eb_excluded) or \
+               (ebook.file_hash and ebook.file_hash in ab_excluded):
+                continue
+
+            # Reject if series metadata indicates these are different books
+            if not _series_compatible(ebook.series, ebook.series_index,
+                                      audiobook.series, audiobook.series_index):
                 continue
 
             ab_title = _normalize_for_comparison(audiobook.title)
@@ -1480,10 +1510,28 @@ async def delete_pair(
     _: User = Depends(get_editor_user),
 ):
     """Delete a book pair."""
-    result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        .where(BookPair.id == pair_id)
+    )
     pair = result.scalar_one_or_none()
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
+
+    # Record mutual exclusion so these two books won't auto-pair again
+    ebook = pair.ebook
+    audiobook = pair.audiobook
+    if ebook and audiobook and ebook.file_hash and audiobook.file_hash:
+        eb_excluded = list(ebook.auto_pair_excluded_hashes or [])
+        if audiobook.file_hash not in eb_excluded:
+            eb_excluded.append(audiobook.file_hash)
+            ebook.auto_pair_excluded_hashes = eb_excluded
+        ab_excluded = list(audiobook.auto_pair_excluded_hashes or [])
+        if ebook.file_hash not in ab_excluded:
+            ab_excluded.append(ebook.file_hash)
+            audiobook.auto_pair_excluded_hashes = ab_excluded
+
     await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
     await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
     await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair_id))
@@ -1671,13 +1719,22 @@ def _write_ebook_metadata(filepath: str, book) -> None:
             if not found:
                 el = ET.SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
                 el.text = str(value)
-                
+
+        def clear_dc_tag(tag_name, value):
+            """Set DC tag when value is present; remove all matching tags when empty/None."""
+            if value:
+                set_dc_tag(tag_name, value)
+            else:
+                for child in list(metadata):
+                    if child.tag.endswith(tag_name):
+                        metadata.remove(child)
+
         set_dc_tag("title", book.title)
         set_dc_tag("creator", book.author)
-        set_dc_tag("description", getattr(book, 'description', None))
-        set_dc_tag("publisher", getattr(book, 'publisher', None))
-        set_dc_tag("language", getattr(book, 'language', None))
-        set_dc_tag("date", getattr(book, 'publish_year', None))
+        clear_dc_tag("description", getattr(book, 'description', None))
+        clear_dc_tag("publisher", getattr(book, 'publisher', None))
+        clear_dc_tag("language", getattr(book, 'language', None))
+        clear_dc_tag("date", getattr(book, 'publish_year', None))
         
         # Calibre series meta tags
         if getattr(book, 'series', None):
@@ -1770,7 +1827,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                             del audio[tag]
             if book.series_index is not None:
                 audio['trkn'] = [(int(book.series_index), 0)]
-            if getattr(book, 'description', None) is not None: audio['desc'] = [book.description]
+            if book.description:
+                audio['desc'] = [book.description]
+            elif 'desc' in audio:
+                del audio['desc']
             if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
                 
@@ -1789,8 +1849,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                     del audio.tags['TALB']
             if book.series_index is not None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
-            if getattr(book, 'description', None) is not None:
+            if book.description:
                 audio.tags['COMM'] = COMM(encoding=3, lang='eng', desc='', text=book.description)
+            elif audio.tags and 'COMM' in audio.tags:
+                del audio.tags['COMM']
             if getattr(book, 'genres', None) is not None: audio.tags['TCON'] = TCON(encoding=3, text=book.genres)
             if getattr(book, 'publish_year', None) is not None: audio.tags['TYER'] = TYER(encoding=3, text=str(book.publish_year))
             if getattr(book, 'publisher', None) is not None: audio.tags['TPUB'] = TPUB(encoding=3, text=book.publisher)
@@ -1806,7 +1868,10 @@ def _write_audiobook_metadata(filepath: str, book) -> None:
                     del audio['album']
             if book.series_index is not None:
                 audio['tracknumber'] = [str(int(book.series_index))]
-            if getattr(book, 'description', None) is not None: audio['description'] = [book.description]
+            if book.description:
+                audio['description'] = [book.description]
+            elif 'description' in audio:
+                del audio['description']
             if getattr(book, 'genres', None) is not None: audio['genre'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['date'] = [str(book.publish_year)]
             if getattr(book, 'publisher', None) is not None: audio['organization'] = [book.publisher]
