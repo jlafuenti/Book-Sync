@@ -2997,3 +2997,59 @@ async def delete_unsupported_source(
     await db.delete(eb)
     await db.commit()
     return {"status": "deleted", "filename": eb.filename}
+
+
+# NOTE: /unsupported/force-all must be registered BEFORE /unsupported/{ebook_id}/force
+# so FastAPI doesn't try to interpret "force-all" as an integer ebook_id.
+@router.delete("/unsupported/force-all")
+async def force_delete_all_unsupported(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Force-delete ALL unsupported ebooks (MOBI/AZW3) from the filesystem and library."""
+    result = await db.execute(
+        select(EBook).where(EBook.format.in_(["mobi", "azw3"]))
+    )
+    ebooks = result.scalars().all()
+
+    deleted = []
+    for eb in ebooks:
+        await _relink_or_cleanup_pairs(eb.id, None, db)
+        if eb.file_path:
+            try:
+                os.remove(eb.file_path)
+            except OSError as e:
+                logger.warning(f"[force-delete] could not delete {eb.file_path}: {e}")
+        deleted.append(eb.filename)
+        await db.delete(eb)
+
+    await db.commit()
+    return {"deleted": deleted, "total": len(deleted)}
+
+
+@router.delete("/unsupported/{ebook_id}/force")
+async def force_delete_unsupported(
+    ebook_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_editor_user),
+):
+    """Force-delete a single unsupported ebook from the filesystem and library, even if no EPUB exists."""
+    result = await db.execute(select(EBook).where(EBook.id == ebook_id))
+    eb = result.scalar_one_or_none()
+    if not eb:
+        raise HTTPException(status_code=404, detail="Ebook not found")
+
+    if eb.format not in ("mobi", "azw3"):
+        raise HTTPException(status_code=400, detail="File is already in a supported format")
+
+    filename = eb.filename
+    await _relink_or_cleanup_pairs(eb.id, None, db)
+    if eb.file_path:
+        try:
+            os.remove(eb.file_path)
+        except OSError as e:
+            logger.warning(f"[force-delete] could not delete {eb.file_path}: {e}")
+
+    await db.delete(eb)
+    await db.commit()
+    return {"status": "deleted", "filename": filename}

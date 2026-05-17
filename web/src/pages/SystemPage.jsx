@@ -4,6 +4,7 @@ import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
+    forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
     getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
@@ -506,6 +507,7 @@ function UnsupportedFilesTab({ canAdmin }) {
     const [batchResult, setBatchResult] = useState(null)
     const [fileMessages, setFileMessages] = useState({})
     const [previewFile, setPreviewFile] = useState(null)
+    const [forceDeleteConfirm, setForceDeleteConfirm] = useState(null) // null | { file } | 'all'
 
     useEffect(() => { loadFiles() }, [])
 
@@ -536,6 +538,23 @@ function UnsupportedFilesTab({ canAdmin }) {
         try { await deleteUnsupportedSource(file.id); await loadFiles() }
         catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
         finally { setFileBusy(file.id, false) }
+    }
+
+    const handleForceDelete = async (file) => {
+        setFileBusy(file.id, true); setFileMsg(file.id, null); setForceDeleteConfirm(null)
+        try { await forceDeleteUnsupportedFile(file.id); await loadFiles() }
+        catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
+        finally { setFileBusy(file.id, false) }
+    }
+
+    const handleForceDeleteAll = async () => {
+        setBatchBusy(true); setBatchResult(null); setForceDeleteConfirm(null)
+        try {
+            const result = await forceDeleteAllUnsupportedFiles()
+            setBatchResult({ type: 'success', text: `Force deleted ${result.total} file${result.total !== 1 ? 's' : ''}.` })
+            await loadFiles()
+        } catch (err) { setBatchResult({ type: 'error', text: err.message }) }
+        finally { setBatchBusy(false) }
     }
 
     const handleBatchConvert = async (deleteSource) => {
@@ -570,6 +589,11 @@ function UnsupportedFilesTab({ canAdmin }) {
                             {batchBusy ? 'Converting…' : 'Convert All & Delete Original'}
                         </button>
                     </>
+                )}
+                {canAdmin && files.length > 0 && (
+                    <button className="btn btn-danger" onClick={() => setForceDeleteConfirm('all')} disabled={batchBusy}>
+                        Force Delete All
+                    </button>
                 )}
             </div>
 
@@ -647,6 +671,9 @@ function UnsupportedFilesTab({ canAdmin }) {
                                                         </button>
                                                     </>
                                                 )}
+                                                <button className="btn btn-sm btn-danger" onClick={() => setForceDeleteConfirm({ file })} disabled={busyIds.has(file.id)}>
+                                                    {busyIds.has(file.id) ? '…' : 'Force Delete'}
+                                                </button>
                                             </div>
                                         </td>
                                     )}
@@ -659,6 +686,26 @@ function UnsupportedFilesTab({ canAdmin }) {
 
             {previewFile?.epub_ebook_id && (
                 <EbookReader ebookId={previewFile.epub_ebook_id} bookTitle={previewFile.title || previewFile.filename} onClose={() => setPreviewFile(null)} />
+            )}
+
+            {forceDeleteConfirm && (
+                <div className="modal-overlay" onClick={() => setForceDeleteConfirm(null)}>
+                    <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                        <h3 style={{ marginTop: 0 }}>Confirm Force Delete</h3>
+                        <p>
+                            {forceDeleteConfirm === 'all'
+                                ? 'All unsupported files will be permanently deleted from the filesystem and the library.'
+                                : <>The file <strong>{forceDeleteConfirm.file.filename}</strong> will be permanently deleted from the filesystem and the library.</>}
+                            {' '}This cannot be undone.
+                        </p>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                            <button className="btn btn-secondary" onClick={() => setForceDeleteConfirm(null)}>Cancel</button>
+                            <button className="btn btn-danger" onClick={() => forceDeleteConfirm === 'all' ? handleForceDeleteAll() : handleForceDelete(forceDeleteConfirm.file)}>
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     )

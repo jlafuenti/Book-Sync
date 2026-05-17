@@ -75,7 +75,7 @@ data class LibraryItem(
     val author: String?
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
     val series: String?
-        get() = ebook?.series ?: audiobook?.series
+        get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
 }
 
 /** One stack in series-grouped mode. */
@@ -87,7 +87,14 @@ data class SeriesStack(
     val ebookCount: Int     get() = items.count { it.ebook != null && it.pair == null }
     val audiobookCount: Int get() = items.count { it.audiobook != null && it.pair == null }
     val totalCount: Int     get() = items.size
-    val author: String?     get() = items.firstNotNullOfOrNull { it.author }
+    val author: String?     get() {
+        val unique = items.mapNotNull { it.author }.distinct()
+        return when {
+            unique.isEmpty() -> null
+            unique.size == 1 -> unique.first()
+            else -> "Various Authors"
+        }
+    }
 }
 
 // ============================================================================
