@@ -10,6 +10,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
@@ -125,15 +126,42 @@ class BookSyncRepository @Inject constructor(
 
     /** Pairs that have audio progress, ordered by most recently listened. Used for Android Auto Continue Listening. */
     fun getRecentlyPlayedPairsFlow(): Flow<List<BookPairEntity>> =
-        bookPairDao.getRecentlyPlayedPairs()
+        combine(
+            bookPairDao.getRecentlyPlayedPairs(),
+            userProgressDao.getAllProgressFlow(),
+        ) { pairs, allProgress ->
+            val completedAudiobookIds = allProgress
+                .filter { it.mediaType == "audiobook" && it.isCompleted }
+                .map { it.mediaId }
+                .toSet()
+            pairs.filter { pair -> pair.audiobookId !in completedAudiobookIds }
+        }
 
     /** Standalone audiobooks with audio progress, ordered by most recently played. */
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
-        audioBookDao.getRecentlyPlayedStandaloneAudiobooks()
+        combine(
+            audioBookDao.getRecentlyPlayedStandaloneAudiobooks(),
+            userProgressDao.getAllProgressFlow(),
+        ) { audiobooks, allProgress ->
+            val completedIds = allProgress
+                .filter { it.mediaType == "audiobook" && it.isCompleted }
+                .map { it.mediaId }
+                .toSet()
+            audiobooks.filter { it.id !in completedIds }
+        }
 
     /** Ebooks with reading progress, ordered by most recently read. */
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
-        eBookDao.getRecentlyReadEbooks()
+        combine(
+            eBookDao.getRecentlyReadEbooks(),
+            userProgressDao.getAllProgressFlow(),
+        ) { ebooks, allProgress ->
+            val completedIds = allProgress
+                .filter { it.mediaType == "ebook" && it.isCompleted }
+                .map { it.mediaId }
+                .toSet()
+            ebooks.filter { it.id !in completedIds }
+        }
 
     /** Mark a media item as completed. */
     suspend fun markComplete(mediaType: String, mediaId: Int) {
