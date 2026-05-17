@@ -330,6 +330,7 @@ class PlayerViewModel @Inject constructor(
                         // history entry so the session shows up as "finished".
                         if (playbackState == Player.STATE_ENDED) {
                             saveBookmark(appendToLog = true)
+                            markComplete()
                         }
                     }
                     override fun onMediaMetadataChanged(metadata: MediaMetadata) {

@@ -151,6 +151,26 @@ class AudioPlayerService : MediaLibraryService() {
                 // to both). Log as a session boundary.
                 if (playbackState == Player.STATE_ENDED) {
                     saveCurrentPositionForAuto(appendToLog = true)
+                    val player = mediaLibrarySession?.player ?: return
+                    val mediaId = player.currentMediaItem?.mediaId ?: return
+                    serviceScope.launch {
+                        try {
+                            when {
+                                mediaId.startsWith("pair_") -> {
+                                    val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
+                                    val pair = repository.getPairById(pairId) ?: return@launch
+                                    repository.markComplete("audiobook", pair.audiobookId)
+                                    repository.markComplete("ebook", pair.ebookId)
+                                }
+                                mediaId.startsWith("audiobook_") -> {
+                                    val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
+                                    repository.markComplete("audiobook", audiobookId)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to mark complete on end", e)
+                        }
+                    }
                 }
             }
         }
