@@ -29,6 +29,7 @@ data class BookPairEntity(
     // Audiobook cover filename as served by /api/files/covers/{filename}.
     // Populated from AudioBookResponse.cover_path on library sync.
     val audiobookCoverPath: String? = null,
+    val ebookSeries: String? = null,
 )
 
 @Entity(tableName = "ebooks")

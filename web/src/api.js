@@ -804,6 +804,28 @@ export async function deleteUnsupportedSource(id) {
     return resp.json();
 }
 
+export async function forceDeleteUnsupportedFile(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/${id}/force`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Force delete failed');
+    }
+    return resp.json();
+}
+
+export async function forceDeleteAllUnsupportedFiles() {
+    const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/force-all`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Force delete all failed');
+    }
+    return resp.json();
+}
+
 /* ── Import Sources ──────────────────────────────────────────────────── */
 
 async function _jsonOrThrow(resp, fallback) {
