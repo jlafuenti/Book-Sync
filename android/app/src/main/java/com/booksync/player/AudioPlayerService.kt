@@ -14,6 +14,7 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -348,21 +349,42 @@ class AudioPlayerService : MediaLibraryService() {
         val token = runBlocking { tokenManager.getAccessToken().firstOrNull() } ?: ""
         val baseUrl = serverUrlManager.currentUrl.trimEnd('/')
 
-        val streamUrl = when {
+        data class CastInfo(val streamUrl: String, val filename: String)
+
+        val castInfo = when {
             mediaId.startsWith("pair_") -> {
                 val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
-                val audiobookId = runBlocking { repository.getPairById(pairId)?.audiobookId }
-                    ?: return null
-                "$baseUrl/api/files/audiobook/$audiobookId?token=$token"
+                val pair = runBlocking { repository.getPairById(pairId) } ?: return null
+                CastInfo(
+                    streamUrl = "$baseUrl/api/files/audiobook/${pair.audiobookId}?token=$token",
+                    filename = pair.audiobookFilename ?: ""
+                )
             }
             mediaId.startsWith("audiobook_") -> {
                 val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
-                "$baseUrl/api/files/audiobook/$audiobookId?token=$token"
+                val audio = runBlocking { repository.getAudiobookById(audiobookId) } ?: return null
+                CastInfo(
+                    streamUrl = "$baseUrl/api/files/audiobook/$audiobookId?token=$token",
+                    filename = audio.filename
+                )
             }
             else -> return null
         }
 
-        return original.buildUpon().setUri(streamUrl).build()
+        val mimeType = when (castInfo.filename.substringAfterLast('.', "").lowercase()) {
+            "mp3"        -> MimeTypes.AUDIO_MPEG
+            "m4b", "m4a" -> MimeTypes.AUDIO_MP4
+            "flac"       -> MimeTypes.AUDIO_FLAC
+            "ogg"        -> MimeTypes.AUDIO_OGG
+            "aac"        -> MimeTypes.AUDIO_AAC
+            "wav"        -> "audio/wav"
+            else         -> MimeTypes.AUDIO_MPEG
+        }
+
+        return original.buildUpon()
+            .setUri(castInfo.streamUrl)
+            .setMimeType(mimeType)
+            .build()
     }
 
     /**
