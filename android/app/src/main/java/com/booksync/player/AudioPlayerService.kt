@@ -349,7 +349,7 @@ class AudioPlayerService : MediaLibraryService() {
         val token = runBlocking { tokenManager.getAccessToken().firstOrNull() } ?: ""
         val baseUrl = serverUrlManager.currentUrl.trimEnd('/')
 
-        data class CastInfo(val streamUrl: String, val filename: String)
+        data class CastInfo(val streamUrl: String, val filename: String, val audiobookId: Int)
 
         val castInfo = when {
             mediaId.startsWith("pair_") -> {
@@ -357,7 +357,8 @@ class AudioPlayerService : MediaLibraryService() {
                 val pair = runBlocking { repository.getPairById(pairId) } ?: return null
                 CastInfo(
                     streamUrl = "$baseUrl/api/files/audiobook/${pair.audiobookId}?token=$token",
-                    filename = pair.audiobookFilename ?: ""
+                    filename = pair.audiobookFilename ?: "",
+                    audiobookId = pair.audiobookId
                 )
             }
             mediaId.startsWith("audiobook_") -> {
@@ -365,7 +366,8 @@ class AudioPlayerService : MediaLibraryService() {
                 val audio = runBlocking { repository.getAudiobookById(audiobookId) } ?: return null
                 CastInfo(
                     streamUrl = "$baseUrl/api/files/audiobook/$audiobookId?token=$token",
-                    filename = audio.filename
+                    filename = audio.filename,
+                    audiobookId = audiobookId
                 )
             }
             else -> return null
@@ -381,9 +383,19 @@ class AudioPlayerService : MediaLibraryService() {
             else         -> MimeTypes.AUDIO_MPEG
         }
 
+        // The Cast receiver runs in a Chrome browser context and cannot access local content://
+        // URIs. Replace any local artwork with an HTTPS URL the Cast device can fetch directly.
+        val castArtworkUri = Uri.parse("$baseUrl/api/files/covers/${castInfo.audiobookId}.jpg?token=$token")
+
+        Log.d(TAG, "buildCastMediaItem: url=${castInfo.streamUrl} mimeType=$mimeType filename=${castInfo.filename} tokenEmpty=${token.isEmpty()}")
         return original.buildUpon()
             .setUri(castInfo.streamUrl)
             .setMimeType(mimeType)
+            .setMediaMetadata(
+                original.mediaMetadata.buildUpon()
+                    .setArtworkUri(castArtworkUri)
+                    .build()
+            )
             .build()
     }
 
@@ -697,12 +709,46 @@ class AudioPlayerService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            // Auto-resumption is disabled intentionally. When this future fails, Android Auto
-            // falls back to the browse UI where "Continue Listening" shows the book at the
-            // correct DB-backed position. The user presses play to start — no auto-play on
-            // connect. This also eliminates the stale-SharedPrefs position bug (PREF_LAST_POSITION
-            // was only written at service destroy time, so could be 0 if the service was
-            // SIGKILL'd mid-session; the DB bookmark is always current).
+            // When Cast is active, CastPlayer.getMediaItemCount() always returns 0 until the
+            // receiver asynchronously confirms the LOAD. handleMediaControllerPlayRequest always
+            // falls back here for Cast — return the last-playing item so the framework can
+            // issue LOAD + PLAY correctly.
+            if (mediaLibrarySession?.player is CastPlayer) {
+                val mediaId = sharedPrefs.getString(PREF_LAST_MEDIA_ID, null)
+                    ?: return Futures.immediateFailedFuture(
+                        UnsupportedOperationException("Cast resumption: no saved media id")
+                    )
+                val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+                serviceScope.launch(Dispatchers.IO) {
+                    val placeholder = MediaItem.Builder().setMediaId(mediaId).build()
+                    val castItem = buildCastMediaItem(placeholder)
+                    if (castItem == null) {
+                        future.setException(UnsupportedOperationException("Cast resumption: cannot build item for $mediaId"))
+                        return@launch
+                    }
+                    val positionMs = when {
+                        mediaId.startsWith("pair_") -> {
+                            val pairId = mediaId.removePrefix("pair_").toIntOrNull()
+                            pairId?.let { repository.getBookmark(it)?.audioPositionMs?.toLong() }
+                                ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
+                        }
+                        mediaId.startsWith("audiobook_") -> {
+                            val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull()
+                            audiobookId?.let { repository.getProgressOnce("audiobook", it)?.audioPositionMs?.toLong() }
+                                ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
+                        }
+                        else -> sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
+                    }
+                    future.set(MediaSession.MediaItemsWithStartPosition(listOf(castItem), 0, positionMs))
+                }
+                return future
+            }
+            // For local playback, auto-resumption is disabled intentionally. When this future
+            // fails, Android Auto falls back to the browse UI where "Continue Listening" shows
+            // the book at the correct DB-backed position. The user presses play to start — no
+            // auto-play on connect. This also eliminates the stale-SharedPrefs position bug
+            // (PREF_LAST_POSITION was only written at service destroy time, so could be 0 if
+            // the service was SIGKILL'd mid-session; the DB bookmark is always current).
             return Futures.immediateFailedFuture(
                 UnsupportedOperationException("Auto-resumption disabled — user initiates playback")
             )
@@ -727,14 +773,24 @@ class AudioPlayerService : MediaLibraryService() {
                         item
                     }
                 }
+                // If Cast is active, rebuild items with the HTTPS server URL and mimeType
+                // that the Cast receiver requires. Local file:// URIs are unreachable from
+                // a Chromecast, and DefaultMediaItemConverter requires mimeType to be set.
+                val isCasting = mediaLibrarySession?.player is CastPlayer
+                Log.d(TAG, "onSetMediaItems castCheck: isCasting=$isCasting player=${mediaLibrarySession?.player?.javaClass?.simpleName}")
+                val finalItems = if (isCasting) {
+                    resolvedItems.map { buildCastMediaItem(it) ?: it }
+                } else {
+                    resolvedItems
+                }
                 // Google Assistant / Android Auto pass startIndex = C.INDEX_UNSET (-1) when
                 // they want the player to use its default. getOrNull(-1) returns null, which
                 // would make us lose the bookmarked position embedded in the resolved item's
                 // extras and start from 0. Normalize to 0 (first item) for both lookup and
                 // the returned MediaItemsWithStartPosition.
                 val effectiveStartIndex =
-                    if (startIndex < 0 || startIndex >= resolvedItems.size) 0 else startIndex
-                val item = resolvedItems.getOrNull(effectiveStartIndex)
+                    if (startIndex < 0 || startIndex >= finalItems.size) 0 else startIndex
+                val item = finalItems.getOrNull(effectiveStartIndex)
                 val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
                 val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
                     startPositionMs
@@ -743,7 +799,7 @@ class AudioPlayerService : MediaLibraryService() {
                 }
                 diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems resolved effectiveStartIndex=$effectiveStartIndex resumeMs=$resumeMs resolvedPosition=$resolvedPosition mediaId=${item?.mediaId}")
                 future.set(
-                    MediaSession.MediaItemsWithStartPosition(resolvedItems, effectiveStartIndex, resolvedPosition)
+                    MediaSession.MediaItemsWithStartPosition(finalItems, effectiveStartIndex, resolvedPosition)
                 )
             }
             return future

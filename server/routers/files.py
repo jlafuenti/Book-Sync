@@ -155,6 +155,7 @@ async def download_audiobook(
         path=file_path,
         filename=audiobook.filename,
         media_type=media_type,
+        headers={"Accept-Ranges": "bytes"},
     )
 
 
