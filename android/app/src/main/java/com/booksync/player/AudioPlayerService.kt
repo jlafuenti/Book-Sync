@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.cast.CastPlayer
+import androidx.media3.cast.MediaItemConverter
 import androidx.media3.cast.SessionAvailabilityListener
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
 
@@ -108,17 +110,62 @@ class AudioPlayerService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
+    private val remoteMediaClientCallback = object : com.google.android.gms.cast.framework.media.RemoteMediaClient.Callback() {
+        override fun onStatusUpdated() {
+            val client = CastContext.getSharedInstance()?.sessionManager?.currentCastSession?.remoteMediaClient
+            val status = client?.mediaStatus
+            Log.d(
+                TAG,
+                "Cast onStatusUpdated: playerState=${status?.playerState} idleReason=${status?.idleReason}" +
+                    " streamPosition=${status?.streamPosition} currentItemId=${status?.currentItemId}"
+            )
+        }
+
+        override fun onMediaError(error: com.google.android.gms.cast.MediaError) {
+            Log.e(
+                TAG,
+                "Cast onMediaError: type=${error.type} reason=${error.reason} detailedCode=${error.detailedErrorCode}"
+            )
+        }
+
+        override fun onSendingRemoteMediaRequest() {
+            Log.d(TAG, "Cast onSendingRemoteMediaRequest")
+        }
+    }
+
+    private fun attachRemoteMediaClientCallback() {
+        try {
+            val client = CastContext.getSharedInstance()
+                ?.sessionManager?.currentCastSession?.remoteMediaClient
+            client?.registerCallback(remoteMediaClientCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "attachRemoteMediaClientCallback failed", e)
+        }
+    }
+
+    private fun detachRemoteMediaClientCallback() {
+        try {
+            val client = CastContext.getSharedInstance()
+                ?.sessionManager?.currentCastSession?.remoteMediaClient
+            client?.unregisterCallback(remoteMediaClientCallback)
+        } catch (_: Exception) {}
+    }
+
     private val castSessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarted(session: CastSession, sessionId: String) {
+            attachRemoteMediaClientCallback()
             castPlayer?.let { switchToPlayer(it, savePosition = true) }
         }
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+            attachRemoteMediaClientCallback()
             castPlayer?.let { switchToPlayer(it, savePosition = false) }
         }
         override fun onSessionEnded(session: CastSession, error: Int) {
+            detachRemoteMediaClientCallback()
             exoPlayer?.let { switchToPlayer(it, savePosition = true) }
         }
         override fun onSessionSuspended(session: CastSession, reason: Int) {
+            detachRemoteMediaClientCallback()
             exoPlayer?.let { switchToPlayer(it, savePosition = true) }
         }
         override fun onSessionStartFailed(session: CastSession, error: Int) {}
@@ -205,7 +252,10 @@ class AudioPlayerService : MediaLibraryService() {
         // initialized by BookSyncApp; it never re-initializes.
         try {
             val castContext = CastContext.getSharedInstance() ?: return
-            val cast = CastPlayer(castContext)
+            // Custom converter ensures the Cast LOAD command uses the HTTPS stream URL as
+            // contentId. DefaultMediaItemConverter uses mediaItem.mediaId (e.g. "pair_62"),
+            // which the Default Media Receiver rejects as INVALID_PARAMS (2001).
+            val cast = CastPlayer(castContext, BookSyncCastMediaItemConverter())
             cast.addListener(playerListener)
             cast.setSessionAvailabilityListener(object : SessionAvailabilityListener {
                 override fun onCastSessionAvailable() {}
@@ -251,6 +301,67 @@ class AudioPlayerService : MediaLibraryService() {
         override fun seekToNextMediaItem() { seekForward() }
         @Suppress("OVERRIDE_DEPRECATION") override fun seekToPreviousWindow() { seekBack() }
         @Suppress("OVERRIDE_DEPRECATION") override fun seekToNextWindow() { seekForward() }
+    }
+
+    /**
+     * Builds Cast LOAD commands that the Default Media Receiver (CC1AD845) will accept.
+     *
+     * Media3's DefaultMediaItemConverter sets `contentId = mediaItem.mediaId` (e.g. "pair_62"),
+     * which the Default Media Receiver rejects as INVALID_PARAMS (statusCode 2001). The receiver
+     * requires contentId to look like a URL. We override the converter to put the HTTPS stream
+     * URL in both contentId AND contentUrl, and copy over the minimal metadata the receiver
+     * actually consumes (title, artist, artwork).
+     */
+    private class BookSyncCastMediaItemConverter : MediaItemConverter {
+        override fun toMediaQueueItem(mediaItem: MediaItem): com.google.android.gms.cast.MediaQueueItem {
+            val localConfig = checkNotNull(mediaItem.localConfiguration) {
+                "MediaItem must have localConfiguration for casting"
+            }
+            val mimeType = checkNotNull(localConfig.mimeType) {
+                "MediaItem must have a mimeType for casting"
+            }
+            val url = localConfig.uri.toString()
+
+            val castMetadata = com.google.android.gms.cast.MediaMetadata(
+                com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MUSIC_TRACK
+            )
+            mediaItem.mediaMetadata.title?.let {
+                castMetadata.putString(
+                    com.google.android.gms.cast.MediaMetadata.KEY_TITLE,
+                    it.toString()
+                )
+            }
+            mediaItem.mediaMetadata.artist?.let {
+                castMetadata.putString(
+                    com.google.android.gms.cast.MediaMetadata.KEY_ARTIST,
+                    it.toString()
+                )
+            }
+            mediaItem.mediaMetadata.artworkUri?.let {
+                castMetadata.addImage(com.google.android.gms.common.images.WebImage(it))
+            }
+
+            val mediaInfo = com.google.android.gms.cast.MediaInfo.Builder(url)
+                .setStreamType(com.google.android.gms.cast.MediaInfo.STREAM_TYPE_BUFFERED)
+                .setContentType(mimeType)
+                .setContentUrl(url)
+                .setMetadata(castMetadata)
+                .build()
+
+            Log.d("AudioPlayerService", "CustomConverter.toMediaQueueItem: contentId=$url contentType=$mimeType title=${mediaItem.mediaMetadata.title}")
+            return com.google.android.gms.cast.MediaQueueItem.Builder(mediaInfo).build()
+        }
+
+        override fun toMediaItem(mediaQueueItem: com.google.android.gms.cast.MediaQueueItem): MediaItem {
+            val info = checkNotNull(mediaQueueItem.media) {
+                "MediaQueueItem must have a MediaInfo"
+            }
+            val uri = info.contentUrl ?: info.contentId
+            return MediaItem.Builder()
+                .setUri(uri)
+                .setMimeType(info.contentType)
+                .build()
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
@@ -333,9 +444,16 @@ class AudioPlayerService : MediaLibraryService() {
             } else {
                 buildLocalMediaItem(currentItem) ?: currentItem
             }
-            newPlayer.setMediaItem(itemForNewPlayer, positionMs)
-            newPlayer.prepare()
-            newPlayer.playWhenReady = playWhenReady && playbackState != Player.STATE_ENDED
+            if (newPlayer is CastPlayer) {
+                // Bypass Media3 CastPlayer.setMediaItem (which calls queueLoad → INVALID_PARAMS).
+                // Send a plain LOAD directly via RemoteMediaClient.
+                val shouldAutoplay = playWhenReady && playbackState != Player.STATE_ENDED
+                sendDirectCastLoad(itemForNewPlayer, positionMs, autoplay = shouldAutoplay)
+            } else {
+                newPlayer.setMediaItem(itemForNewPlayer, positionMs)
+                newPlayer.prepare()
+                newPlayer.playWhenReady = playWhenReady && playbackState != Player.STATE_ENDED
+            }
         }
     }
 
@@ -397,6 +515,79 @@ class AudioPlayerService : MediaLibraryService() {
                     .build()
             )
             .build()
+    }
+
+    /**
+     * Sends a LOAD command directly to the Cast receiver via RemoteMediaClient, bypassing
+     * Media3 CastPlayer's queueLoad path. Diagnostic for INVALID_PARAMS rejections.
+     *
+     * The result callback logs the receiver's exact status code so we can distinguish between:
+     *   - Receiver rejected the LOAD format (statusCode != SUCCESS)
+     *   - Receiver accepted but couldn't fetch the URL (LOAD_FAILED)
+     *   - Receiver played successfully (SUCCESS)
+     */
+    private fun sendDirectCastLoad(castItem: MediaItem, positionMs: Long, autoplay: Boolean) {
+        try {
+            val castContext = CastContext.getSharedInstance()
+            val session = castContext?.sessionManager?.currentCastSession
+            val client = session?.remoteMediaClient
+            if (client == null) {
+                Log.w(TAG, "sendDirectCastLoad: no RemoteMediaClient available")
+                return
+            }
+
+            val localConfig = castItem.localConfiguration
+            if (localConfig?.uri == null || localConfig.mimeType == null) {
+                Log.w(TAG, "sendDirectCastLoad: cast item missing uri/mimeType")
+                return
+            }
+            val url = localConfig.uri.toString()
+            val mimeType = localConfig.mimeType!!
+
+            val castMetadata = com.google.android.gms.cast.MediaMetadata(
+                com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_MUSIC_TRACK
+            )
+            castItem.mediaMetadata.title?.let {
+                castMetadata.putString(
+                    com.google.android.gms.cast.MediaMetadata.KEY_TITLE,
+                    it.toString()
+                )
+            }
+            castItem.mediaMetadata.artist?.let {
+                castMetadata.putString(
+                    com.google.android.gms.cast.MediaMetadata.KEY_ARTIST,
+                    it.toString()
+                )
+            }
+            castItem.mediaMetadata.artworkUri?.let {
+                castMetadata.addImage(com.google.android.gms.common.images.WebImage(it))
+            }
+
+            val mediaInfo = com.google.android.gms.cast.MediaInfo.Builder(url)
+                .setStreamType(com.google.android.gms.cast.MediaInfo.STREAM_TYPE_BUFFERED)
+                .setContentType(mimeType)
+                .setContentUrl(url)
+                .setMetadata(castMetadata)
+                .build()
+
+            val request = com.google.android.gms.cast.MediaLoadRequestData.Builder()
+                .setMediaInfo(mediaInfo)
+                .setAutoplay(autoplay)
+                .setCurrentTime(positionMs)
+                .build()
+
+            Log.d(TAG, "sendDirectCastLoad: dispatching LOAD url=$url positionMs=$positionMs autoplay=$autoplay")
+            val task = client.load(request)
+            task.setResultCallback { result ->
+                val status = result.status
+                Log.d(
+                    TAG,
+                    "sendDirectCastLoad: result code=${status.statusCode} success=${status.isSuccess} message=${status.statusMessage}"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "sendDirectCastLoad: exception while dispatching LOAD", e)
+        }
     }
 
     /**
@@ -709,21 +900,21 @@ class AudioPlayerService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            // When Cast is active, CastPlayer.getMediaItemCount() always returns 0 until the
-            // receiver asynchronously confirms the LOAD. handleMediaControllerPlayRequest always
-            // falls back here for Cast — return the last-playing item so the framework can
-            // issue LOAD + PLAY correctly.
+            // Cast path: bypass Media3's CastPlayer.queueLoad() entirely. queueLoad sends a
+            // QUEUE_LOAD message which the Default Media Receiver consistently rejects with
+            // INVALID_PARAMS (2001) even for properly-formed single-item queues. Instead, send
+            // a plain LOAD via RemoteMediaClient.load() directly, with the result callback
+            // logging the exact receiver status code so we can see what (if anything) is wrong.
             if (mediaLibrarySession?.player is CastPlayer) {
                 val mediaId = sharedPrefs.getString(PREF_LAST_MEDIA_ID, null)
                     ?: return Futures.immediateFailedFuture(
                         UnsupportedOperationException("Cast resumption: no saved media id")
                     )
-                val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
                 serviceScope.launch(Dispatchers.IO) {
                     val placeholder = MediaItem.Builder().setMediaId(mediaId).build()
                     val castItem = buildCastMediaItem(placeholder)
                     if (castItem == null) {
-                        future.setException(UnsupportedOperationException("Cast resumption: cannot build item for $mediaId"))
+                        Log.w(TAG, "Cast resumption: cannot build cast item for $mediaId")
                         return@launch
                     }
                     val positionMs = when {
@@ -739,9 +930,14 @@ class AudioPlayerService : MediaLibraryService() {
                         }
                         else -> sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                     }
-                    future.set(MediaSession.MediaItemsWithStartPosition(listOf(castItem), 0, positionMs))
+                    // CastContext.getSharedInstance() requires the main thread.
+                    withContext(Dispatchers.Main) {
+                        sendDirectCastLoad(castItem, positionMs, autoplay = true)
+                    }
                 }
-                return future
+                return Futures.immediateFailedFuture(
+                    UnsupportedOperationException("Cast LOAD dispatched directly via RemoteMediaClient")
+                )
             }
             // For local playback, auto-resumption is disabled intentionally. When this future
             // fails, Android Auto falls back to the browse UI where "Continue Listening" shows
@@ -762,6 +958,20 @@ class AudioPlayerService : MediaLibraryService() {
             startPositionMs: Long
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems count=${mediaItems.size} startIndex=$startIndex startPos=${startPositionMs}ms pkg=${controller.packageName} ids=${mediaItems.map { it.mediaId }}")
+
+            // When Cast is active, returning items here triggers CastPlayer.setMediaItems → a LOAD,
+            // AND handleMediaControllerPlayRequest still falls through to onPlaybackResumption
+            // (because CastPlayer.getMediaItemCount() is async — stays 0 until the receiver
+            // confirms). That fires a SECOND LOAD ~20ms later, and the Default Media Receiver
+            // rejects the burst with INVALID_PARAMS (2001). Defer to onPlaybackResumption so
+            // only one LOAD is issued.
+            if (mediaLibrarySession?.player is CastPlayer) {
+                Log.d(TAG, "onSetMediaItems: Cast active — deferring LOAD to onPlaybackResumption")
+                return Futures.immediateFailedFuture(
+                    UnsupportedOperationException("Cast path: LOAD owned by onPlaybackResumption")
+                )
+            }
+
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
             serviceScope.launch(Dispatchers.IO) {
                 // Legacy Android Auto path (onPlayFromMediaId) sends MediaItems with only
