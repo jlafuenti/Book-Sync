@@ -3,6 +3,7 @@ package com.booksync.player
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
@@ -50,6 +51,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.Inet4Address
+import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -86,6 +89,8 @@ class AudioPlayerService : MediaLibraryService() {
         private const val PREF_LAST_MEDIA_ID = "last_media_id"
         private const val PREF_LAST_SAVED_AT = "last_position_saved_at"
         private const val AUTO_SAVE_INTERVAL_MS = 5_000L
+        // Generous socket read timeout for slow Cast receivers downloading big audiobook files.
+        private const val NanoHTTPDSocketReadTimeoutMs = 60_000
         // Write a history-log entry every 30 min of continuous playback
         // (in addition to pause/stop boundaries). Keeps the history tab scannable.
         private const val AUTO_LOG_INTERVAL_MS = 30L * 60L * 1000L
@@ -110,15 +115,47 @@ class AudioPlayerService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
+    // Local HTTP server that serves downloaded audiobooks to the Cast receiver over the LAN.
+    // Started in castSessionListener.onSessionStarted, torn down in onSessionEnded. Avoids
+    // depending on public DNS for tandem.lafuenti.com — Google Home devices hardcode 8.8.8.8.
+    private var localCastServer: LocalCastHttpServer? = null
+    private var localCastIp: String? = null
+    private var localCastPort: Int? = null
+    private var localCastPathToken: String? = null
+    // The local (file://) MediaItem we were playing when casting started. Remembered so that
+    // when the Cast session ends we can restore local playback — CastPlayer's own
+    // currentMediaItem carries the http:// LAN URL (we bypass setMediaItem), which ExoPlayer
+    // cannot play (cleartext blocked) and whose mediaId we can't map back to a file.
+    private var lastLocalMediaItem: MediaItem? = null
+    // Last position (ms) the Cast receiver reported. When a Cast session ends, CastPlayer's
+    // currentPosition reads 0 (already disconnected), so we restore local playback from this
+    // value instead of jumping back to 0:00.
+    private var lastKnownCastPositionMs: Long = 0L
+
     private val remoteMediaClientCallback = object : com.google.android.gms.cast.framework.media.RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             val client = CastContext.getSharedInstance()?.sessionManager?.currentCastSession?.remoteMediaClient
-            val status = client?.mediaStatus
-            Log.d(
-                TAG,
-                "Cast onStatusUpdated: playerState=${status?.playerState} idleReason=${status?.idleReason}" +
-                    " streamPosition=${status?.streamPosition} currentItemId=${status?.currentItemId}"
-            )
+            val status = client?.mediaStatus ?: return
+            val stateName = when (status.playerState) {
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_UNKNOWN -> "UNKNOWN"
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE -> "IDLE"
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PLAYING -> "PLAYING"
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PAUSED -> "PAUSED"
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_BUFFERING -> "BUFFERING"
+                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_LOADING -> "LOADING"
+                else -> "state=${status.playerState}"
+            }
+            val idleReasonName = when (status.idleReason) {
+                com.google.android.gms.cast.MediaStatus.IDLE_REASON_NONE -> "none"
+                com.google.android.gms.cast.MediaStatus.IDLE_REASON_FINISHED -> "FINISHED"
+                com.google.android.gms.cast.MediaStatus.IDLE_REASON_CANCELED -> "CANCELED"
+                com.google.android.gms.cast.MediaStatus.IDLE_REASON_INTERRUPTED -> "INTERRUPTED"
+                com.google.android.gms.cast.MediaStatus.IDLE_REASON_ERROR -> "ERROR"
+                else -> "reason=${status.idleReason}"
+            }
+            val pos = status.streamPosition
+            if (pos > 0L) lastKnownCastPositionMs = pos
+            Log.d(TAG, "Cast status: $stateName idle=$idleReasonName pos=$pos")
         }
 
         override fun onMediaError(error: com.google.android.gms.cast.MediaError) {
@@ -126,10 +163,6 @@ class AudioPlayerService : MediaLibraryService() {
                 TAG,
                 "Cast onMediaError: type=${error.type} reason=${error.reason} detailedCode=${error.detailedErrorCode}"
             )
-        }
-
-        override fun onSendingRemoteMediaRequest() {
-            Log.d(TAG, "Cast onSendingRemoteMediaRequest")
         }
     }
 
@@ -154,19 +187,23 @@ class AudioPlayerService : MediaLibraryService() {
     private val castSessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarted(session: CastSession, sessionId: String) {
             attachRemoteMediaClientCallback()
+            startLocalCastServer()
             castPlayer?.let { switchToPlayer(it, savePosition = true) }
         }
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
             attachRemoteMediaClientCallback()
+            startLocalCastServer()
             castPlayer?.let { switchToPlayer(it, savePosition = false) }
         }
         override fun onSessionEnded(session: CastSession, error: Int) {
             detachRemoteMediaClientCallback()
             exoPlayer?.let { switchToPlayer(it, savePosition = true) }
+            stopLocalCastServer()
         }
         override fun onSessionSuspended(session: CastSession, reason: Int) {
             detachRemoteMediaClientCallback()
             exoPlayer?.let { switchToPlayer(it, savePosition = true) }
+            stopLocalCastServer()
         }
         override fun onSessionStartFailed(session: CastSession, error: Int) {}
         override fun onSessionEnding(session: CastSession) {}
@@ -348,7 +385,8 @@ class AudioPlayerService : MediaLibraryService() {
                 .setMetadata(castMetadata)
                 .build()
 
-            Log.d("AudioPlayerService", "CustomConverter.toMediaQueueItem: contentId=$url contentType=$mimeType title=${mediaItem.mediaMetadata.title}")
+            // No verbose logging here — this path is now defensive only; Cast LOADs go through
+            // sendDirectCastLoad which bypasses CastPlayer.setMediaItem entirely.
             return com.google.android.gms.cast.MediaQueueItem.Builder(mediaInfo).build()
         }
 
@@ -392,6 +430,7 @@ class AudioPlayerService : MediaLibraryService() {
     override fun onDestroy() {
         sleepTimerJob?.cancel()
         stopAutoPositionSave()
+        stopLocalCastServer()
         serviceScope.cancel()
         try {
             CastContext.getSharedInstance()?.sessionManager
@@ -411,6 +450,89 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     // =========================================================
+    // Local Cast HTTP server
+    // =========================================================
+
+    /**
+     * Boots the on-device HTTP server that streams downloaded audiobooks to the Cast
+     * receiver over the LAN. Returns true if the server is up and we have a usable
+     * Wi-Fi IPv4 address to put in Cast URLs. Idempotent — safe to call when already
+     * running (will rebind to the current Wi-Fi IP, which is what we want if the phone
+     * just changed networks).
+     */
+    private fun startLocalCastServer() {
+        // If we already have a server running and the IP hasn't changed, leave it alone.
+        val currentIp = detectWifiIpv4()
+        if (currentIp == null) {
+            Log.w(TAG, "startLocalCastServer: no Wi-Fi IPv4 found — Cast streaming will fail")
+            stopLocalCastServer()
+            return
+        }
+        if (localCastServer != null && localCastIp == currentIp) {
+            Log.d(TAG, "startLocalCastServer: already running at http://$currentIp:$localCastPort/")
+            return
+        }
+        // IP changed or no server yet — restart cleanly.
+        stopLocalCastServer()
+
+        val token = UUID.randomUUID().toString().replace("-", "")
+        val server = LocalCastHttpServer(
+            audiobooksDir = File(filesDir, "audiobooks"),
+            pathToken = token,
+        )
+        try {
+            server.start(NanoHTTPDSocketReadTimeoutMs, /* daemon = */ false)
+        } catch (e: Exception) {
+            Log.e(TAG, "startLocalCastServer: failed to start", e)
+            return
+        }
+        localCastServer = server
+        localCastIp = currentIp
+        localCastPort = server.listeningPort
+        localCastPathToken = token
+        Log.i(TAG, "LocalCastHttpServer started at http://$currentIp:${server.listeningPort}/$token/")
+    }
+
+    private fun stopLocalCastServer() {
+        localCastServer?.let { server ->
+            try {
+                server.stop()
+                Log.i(TAG, "LocalCastHttpServer stopped")
+            } catch (e: Exception) {
+                Log.w(TAG, "LocalCastHttpServer stop threw", e)
+            }
+        }
+        localCastServer = null
+        localCastIp = null
+        localCastPort = null
+        localCastPathToken = null
+    }
+
+    /**
+     * Finds the phone's Wi-Fi IPv4 by walking the active network's LinkProperties.
+     * Returns null if there's no Wi-Fi network (e.g. cellular-only).
+     */
+    private fun detectWifiIpv4(): String? {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return null
+        // Walk every network — cast typically requires Wi-Fi, but a multi-homed phone on
+        // Wi-Fi + cellular might have a non-default Wi-Fi network we still want to use.
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) continue
+            val props = cm.getLinkProperties(network) ?: continue
+            for (linkAddress in props.linkAddresses) {
+                val addr = linkAddress.address
+                if (addr is Inet4Address && !addr.isLoopbackAddress && !addr.isAnyLocalAddress) {
+                    return addr.hostAddress
+                }
+            }
+        }
+        return null
+    }
+
+
+    // =========================================================
     // Cast player switching
     // =========================================================
 
@@ -428,70 +550,89 @@ class AudioPlayerService : MediaLibraryService() {
         if (savePosition) saveCurrentPositionForAuto(appendToLog = true)
 
         val currentItem = currentPlayer.currentMediaItem
-        val positionMs = currentPlayer.currentPosition
+        val rawPositionMs = currentPlayer.currentPosition
+        // When a Cast session ends, CastPlayer.currentPosition often reads 0 because it has
+        // already disconnected from the receiver. Fall back to the last position the receiver
+        // reported so local playback resumes where casting left off (instead of 0:00).
+        val positionMs = if (currentPlayer is CastPlayer && rawPositionMs <= 0L && lastKnownCastPositionMs > 0L) {
+            lastKnownCastPositionMs
+        } else {
+            rawPositionMs
+        }
         val playWhenReady = currentPlayer.playWhenReady
         val playbackState = currentPlayer.playbackState
+        val shouldPlay = playWhenReady && playbackState != Player.STATE_ENDED
 
         currentPlayer.stop()
         session.player = newPlayer
 
-        if (currentItem != null) {
-            // Rebuild the item URI to match the target player:
-            //   CastPlayer → server HTTPS URL (Chromecast can't access local files)
-            //   ExoPlayer  → local file:// URI
-            val itemForNewPlayer = if (newPlayer is CastPlayer) {
-                buildCastMediaItem(currentItem) ?: currentItem
-            } else {
-                buildLocalMediaItem(currentItem) ?: currentItem
+        if (newPlayer is CastPlayer) {
+            // Going to Cast. Remember the local item so we can restore it when casting ends.
+            // Seed the last-known cast position with where we're starting so an immediate
+            // disconnect still restores the right spot. Bypass Media3 CastPlayer.setMediaItem
+            // (which calls queueLoad → INVALID_PARAMS) — send a plain LOAD directly via
+            // RemoteMediaClient to the LAN HTTP server.
+            lastKnownCastPositionMs = positionMs
+            val sourceLocalItem = currentItem?.also { lastLocalMediaItem = it } ?: lastLocalMediaItem
+            if (sourceLocalItem != null) {
+                val castItem = buildCastMediaItem(sourceLocalItem) ?: sourceLocalItem
+                sendDirectCastLoad(castItem, positionMs, autoplay = shouldPlay)
             }
-            if (newPlayer is CastPlayer) {
-                // Bypass Media3 CastPlayer.setMediaItem (which calls queueLoad → INVALID_PARAMS).
-                // Send a plain LOAD directly via RemoteMediaClient.
-                val shouldAutoplay = playWhenReady && playbackState != Player.STATE_ENDED
-                sendDirectCastLoad(itemForNewPlayer, positionMs, autoplay = shouldAutoplay)
-            } else {
-                newPlayer.setMediaItem(itemForNewPlayer, positionMs)
+        } else {
+            // Returning to local. CastPlayer's currentMediaItem carries the http:// LAN URL
+            // with an unmappable mediaId, so rebuild from the remembered pre-cast local item.
+            // Never hand ExoPlayer an http:// URI — cleartext is blocked and we want the file.
+            val sourceItem = lastLocalMediaItem ?: currentItem
+            val localItem = sourceItem?.let { buildLocalMediaItem(it) }
+            if (localItem != null) {
+                newPlayer.setMediaItem(localItem, positionMs)
                 newPlayer.prepare()
-                newPlayer.playWhenReady = playWhenReady && playbackState != Player.STATE_ENDED
+                newPlayer.playWhenReady = shouldPlay
+            } else {
+                Log.w(TAG, "switchToPlayer: no local item to restore after Cast; ExoPlayer left idle")
             }
         }
     }
 
     /**
-     * Rebuilds a MediaItem with an HTTPS server URL suitable for the Cast receiver.
-     * The JWT token is appended as a query parameter so the Chromecast can authenticate.
-     * Returns null if the mediaId is unrecognised.
+     * Rebuilds a MediaItem pointing at the on-device LAN HTTP server
+     * (`http://<phone-ip>:<port>/<token>/<filename>`) so the Cast receiver streams the
+     * downloaded audiobook directly from the phone. Returns null if the local cast server
+     * isn't running, the mediaId is unrecognised, or the file isn't downloaded.
      */
     private fun buildCastMediaItem(original: MediaItem): MediaItem? {
+        val ip = localCastIp
+        val port = localCastPort
+        val token = localCastPathToken
+        if (ip == null || port == null || token == null) {
+            Log.w(TAG, "buildCastMediaItem: local cast server not running — cannot build URL")
+            return null
+        }
+
         val mediaId = original.mediaId
-        val token = runBlocking { tokenManager.getAccessToken().firstOrNull() } ?: ""
-        val baseUrl = serverUrlManager.currentUrl.trimEnd('/')
-
-        data class CastInfo(val streamUrl: String, val filename: String, val audiobookId: Int)
-
-        val castInfo = when {
+        val filename = when {
             mediaId.startsWith("pair_") -> {
                 val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
-                val pair = runBlocking { repository.getPairById(pairId) } ?: return null
-                CastInfo(
-                    streamUrl = "$baseUrl/api/files/audiobook/${pair.audiobookId}?token=$token",
-                    filename = pair.audiobookFilename ?: "",
-                    audiobookId = pair.audiobookId
-                )
+                runBlocking { repository.getPairById(pairId) }?.audiobookFilename
             }
             mediaId.startsWith("audiobook_") -> {
                 val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
-                val audio = runBlocking { repository.getAudiobookById(audiobookId) } ?: return null
-                CastInfo(
-                    streamUrl = "$baseUrl/api/files/audiobook/$audiobookId?token=$token",
-                    filename = audio.filename,
-                    audiobookId = audiobookId
-                )
+                runBlocking { repository.getAudiobookById(audiobookId) }?.filename
             }
-            else -> return null
+            else -> null
+        } ?: run {
+            Log.w(TAG, "buildCastMediaItem: no filename for mediaId=$mediaId")
+            return null
         }
 
-        val mimeType = when (castInfo.filename.substringAfterLast('.', "").lowercase()) {
+        // Verify the file exists locally — Cast streams from the phone, so if the file isn't
+        // downloaded the receiver would 404 and idle.
+        if (!File(File(filesDir, "audiobooks"), filename).isFile) {
+            Log.w(TAG, "buildCastMediaItem: local file missing for '$filename'")
+            return null
+        }
+
+        val mimeType = when (filename.substringAfterLast('.', "").lowercase()) {
             "mp3"        -> MimeTypes.AUDIO_MPEG
             "m4b", "m4a" -> MimeTypes.AUDIO_MP4
             "flac"       -> MimeTypes.AUDIO_FLAC
@@ -501,17 +642,22 @@ class AudioPlayerService : MediaLibraryService() {
             else         -> MimeTypes.AUDIO_MPEG
         }
 
-        // The Cast receiver runs in a Chrome browser context and cannot access local content://
-        // URIs. Replace any local artwork with an HTTPS URL the Cast device can fetch directly.
-        val castArtworkUri = Uri.parse("$baseUrl/api/files/covers/${castInfo.audiobookId}.jpg?token=$token")
+        // URL-encode the filename so spaces and other special chars survive the URL parse on
+        // the receiver. Don't encode the path token (it's already hex).
+        val encodedFilename = Uri.encode(filename)
+        val streamUrl = "http://$ip:$port/$token/$encodedFilename"
 
-        Log.d(TAG, "buildCastMediaItem: url=${castInfo.streamUrl} mimeType=$mimeType filename=${castInfo.filename} tokenEmpty=${token.isEmpty()}")
+        // Artwork is intentionally not set — the Cast receiver runs in a Chrome browser context
+        // and can't fetch a content:// URI, and we don't have a public-LAN cover image to
+        // substitute. The Default Media Receiver tolerates missing artwork (just shows its
+        // default icon).
+        Log.d(TAG, "buildCastMediaItem: url=$streamUrl mimeType=$mimeType")
         return original.buildUpon()
-            .setUri(castInfo.streamUrl)
+            .setUri(streamUrl)
             .setMimeType(mimeType)
             .setMediaMetadata(
                 original.mediaMetadata.buildUpon()
-                    .setArtworkUri(castArtworkUri)
+                    .setArtworkUri(null)
                     .build()
             )
             .build()
@@ -576,14 +722,18 @@ class AudioPlayerService : MediaLibraryService() {
                 .setCurrentTime(positionMs)
                 .build()
 
-            Log.d(TAG, "sendDirectCastLoad: dispatching LOAD url=$url positionMs=$positionMs autoplay=$autoplay")
+            Log.d(TAG, "sendDirectCastLoad: LOAD positionMs=$positionMs autoplay=$autoplay")
             val task = client.load(request)
             task.setResultCallback { result ->
                 val status = result.status
-                Log.d(
-                    TAG,
-                    "sendDirectCastLoad: result code=${status.statusCode} success=${status.isSuccess} message=${status.statusMessage}"
-                )
+                if (status.isSuccess) {
+                    Log.d(TAG, "sendDirectCastLoad: receiver acked LOAD")
+                } else {
+                    Log.w(
+                        TAG,
+                        "sendDirectCastLoad: LOAD rejected code=${status.statusCode} message=${status.statusMessage}"
+                    )
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "sendDirectCastLoad: exception while dispatching LOAD", e)
@@ -983,24 +1133,14 @@ class AudioPlayerService : MediaLibraryService() {
                         item
                     }
                 }
-                // If Cast is active, rebuild items with the HTTPS server URL and mimeType
-                // that the Cast receiver requires. Local file:// URIs are unreachable from
-                // a Chromecast, and DefaultMediaItemConverter requires mimeType to be set.
-                val isCasting = mediaLibrarySession?.player is CastPlayer
-                Log.d(TAG, "onSetMediaItems castCheck: isCasting=$isCasting player=${mediaLibrarySession?.player?.javaClass?.simpleName}")
-                val finalItems = if (isCasting) {
-                    resolvedItems.map { buildCastMediaItem(it) ?: it }
-                } else {
-                    resolvedItems
-                }
                 // Google Assistant / Android Auto pass startIndex = C.INDEX_UNSET (-1) when
                 // they want the player to use its default. getOrNull(-1) returns null, which
                 // would make us lose the bookmarked position embedded in the resolved item's
                 // extras and start from 0. Normalize to 0 (first item) for both lookup and
                 // the returned MediaItemsWithStartPosition.
                 val effectiveStartIndex =
-                    if (startIndex < 0 || startIndex >= finalItems.size) 0 else startIndex
-                val item = finalItems.getOrNull(effectiveStartIndex)
+                    if (startIndex < 0 || startIndex >= resolvedItems.size) 0 else startIndex
+                val item = resolvedItems.getOrNull(effectiveStartIndex)
                 val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
                 val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
                     startPositionMs
@@ -1009,7 +1149,7 @@ class AudioPlayerService : MediaLibraryService() {
                 }
                 diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems resolved effectiveStartIndex=$effectiveStartIndex resumeMs=$resumeMs resolvedPosition=$resolvedPosition mediaId=${item?.mediaId}")
                 future.set(
-                    MediaSession.MediaItemsWithStartPosition(finalItems, effectiveStartIndex, resolvedPosition)
+                    MediaSession.MediaItemsWithStartPosition(resolvedItems, effectiveStartIndex, resolvedPosition)
                 )
             }
             return future
