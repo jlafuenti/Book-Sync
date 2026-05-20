@@ -151,10 +151,17 @@ async def download_audiobook(
     if range_header:
         return _range_response(file_path, file_size, media_type, range_header)
 
+    # Don't set `filename=` — that adds Content-Disposition: attachment, which makes the
+    # Cast receiver's HTML5 <audio> element refuse to play (it tries to download instead).
+    # Cast streaming is the only consumer of this endpoint; downloads happen via direct file
+    # access on the device for offline playback.
     return FileResponse(
         path=file_path,
-        filename=audiobook.filename,
         media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline",
+        },
     )
 
 
