@@ -92,6 +92,11 @@ dependencies {
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
 
+    // Embedded HTTP server — serves locally-downloaded audiobooks to the Cast receiver over the
+    // LAN. Avoids relying on public DNS for tandem.lafuenti.com (Google Home Mini hardcodes 8.8.8.8
+    // and ignores the DHCP DNS, so it can't resolve a LAN-only domain).
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
     // WorkManager (Offline Sync)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.hilt:hilt-work:1.2.0")
