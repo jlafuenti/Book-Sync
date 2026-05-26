@@ -1068,11 +1068,11 @@ class ReaderActivity : AppCompatActivity() {
         if (hasInstalledSelectionInterceptor) return
         val webView = navigator?.view?.let { findWebView(it) }
         if (webView == null) {
-            if (selectionInterceptorRetries < 50) {
+            if (selectionInterceptorRetries < 100) {
                 selectionInterceptorRetries++
                 window.decorView.postDelayed({ installSelectionInterceptor() }, 100)
             } else {
-                Log.w(TAG, "Selection interceptor: WebView not found after 50 tries; giving up")
+                Log.w(TAG, "Selection interceptor: WebView not found after 100 tries; giving up")
             }
             return
         }
@@ -1155,7 +1155,13 @@ class ReaderActivity : AppCompatActivity() {
         super.onActionModeStarted(mode)
         if (mode == null) return
         captureSelection()
-        injectCustomItems(mode, mode.menu ?: return)
+        val menu = mode.menu ?: return
+        trimSelectionMenu(menu)
+        injectCustomItems(mode, menu)
+        // Re-render the floating toolbar so our injected items are visible.
+        // Without this, items added after the initial onCreateActionMode snapshot
+        // are silently ignored by the FloatingToolbar.
+        mode.invalidate()
     }
 
     /**
@@ -1462,6 +1468,13 @@ class ReaderActivity : AppCompatActivity() {
             android.R.id.home -> { saveCurrentPosition(); finish(); true }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Retry interceptor install in case the WebView appeared after the initial
+        // polling window closed (common for large EPUBs like DCC). No-op if already installed.
+        installSelectionInterceptor()
     }
 
     override fun onPause() {
