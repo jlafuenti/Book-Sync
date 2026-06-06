@@ -312,24 +312,28 @@ def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 160
     """Load a specific time chunk of audio as a numpy array using ffmpeg."""
     import subprocess
     import numpy as np
-    cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-threads", "0",
-        "-ss", str(start_sec),
-        "-i", file,
-        "-t", str(duration_sec),
-        "-f", "s16le",
-        "-ac", "1",
-        "-acodec", "pcm_s16le",
-        "-ar", str(sr),
-        "-"
-    ]
+
+    def _build_cmd(fast_seek: bool) -> list:
+        base = ["ffmpeg", "-nostdin", "-threads", "0"]
+        if fast_seek:
+            base += ["-ss", str(start_sec), "-i", file]
+        else:
+            base += ["-i", file, "-ss", str(start_sec)]
+        return base + ["-t", str(duration_sec), "-f", "s16le", "-ac", "1",
+                       "-acodec", "pcm_s16le", "-ar", str(sr), "-"]
+
     try:
-        out = subprocess.run(cmd, capture_output=True, check=True).stdout
+        out = subprocess.run(_build_cmd(fast_seek=True), capture_output=True, check=True).stdout
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg failed: {e.stderr.decode()}")
-        raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
+        if start_sec == 0:
+            logger.error(f"FFmpeg failed: {e.stderr.decode()}")
+            raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
+        logger.warning(f"FFmpeg fast seek failed at {start_sec}s, retrying with slow seek: {e.stderr.decode()[:200]}")
+        try:
+            out = subprocess.run(_build_cmd(fast_seek=False), capture_output=True, check=True).stdout
+        except subprocess.CalledProcessError as e2:
+            logger.error(f"FFmpeg slow seek also failed: {e2.stderr.decode()}")
+            raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e2
 
     return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
 
