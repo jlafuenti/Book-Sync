@@ -47,6 +47,10 @@ data class HomeItem(
     // Audiobook cover path as served by /api/files/covers/{audiobookCoverPath}.
     // Null for ebooks or audiobooks whose cover the server hasn't catalogued yet.
     val audiobookCoverPath: String? = null,
+    val ebookDownloaded: Boolean = false,
+    val audiobookDownloaded: Boolean = false,
+    val series: String? = null,
+    val seriesIndex: Float? = null,
 ) {
     enum class MediaType { PAIR, EBOOK, AUDIOBOOK }
 }
@@ -133,6 +137,10 @@ class HomeViewModel @Inject constructor(
                         progressPercent = percent,
                         updatedAtMs = updatedAt,
                         audiobookCoverPath = pair.audiobookCoverPath,
+                        ebookDownloaded = pair.ebookDownloaded,
+                        audiobookDownloaded = pair.audiobookDownloaded,
+                        series = pair.ebookSeries,
+                        seriesIndex = pair.ebookSeriesIndex,
                     )
                 }
                 for (ab in audiobooks) {
@@ -149,6 +157,9 @@ class HomeViewModel @Inject constructor(
                         progressPercent = percent,
                         updatedAtMs = progress?.updatedAt ?: 0L,
                         audiobookCoverPath = ab.coverFilename,
+                        audiobookDownloaded = ab.isDownloaded,
+                        series = ab.series,
+                        seriesIndex = ab.seriesIndex,
                     )
                 }
                 for (eb in ebooks) {
@@ -161,6 +172,9 @@ class HomeViewModel @Inject constructor(
                         ebookId = eb.id,
                         progressPercent = progress?.epubProgressPercent ?: 0f,
                         updatedAtMs = progress?.updatedAt ?: 0L,
+                        ebookDownloaded = eb.isDownloaded,
+                        series = eb.series,
+                        seriesIndex = eb.seriesIndex,
                     )
                 }
                 items.sortedByDescending { it.updatedAtMs }
@@ -223,6 +237,8 @@ class HomeViewModel @Inject constructor(
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
         repository.resolvePairOpenTarget(pairId)
 
+    fun downloadBoth(pair: BookPairEntity)         = enqueue(pair.id, "ALL", "download_pair_${pair.id}")
+    fun downloadBothById(pairId: Int)              = enqueue(pairId,  "ALL", "download_pair_$pairId")
     fun downloadEbook(pair: BookPairEntity)     = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")
     fun downloadAudiobook(pair: BookPairEntity) = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
     fun refreshSyncData(pair: BookPairEntity)   = enqueue(pair.id, "SYNC_MAP",  "download_sync_${pair.id}")

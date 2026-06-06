@@ -47,6 +47,7 @@ enum class LibrarySort(val label: String) {
     RecentlyOpened("Recently opened"),
     TitleAsc("Title A–Z"),
     AuthorAsc("Author A–Z"),
+    SeriesOrder("Series order"),
     SeriesCount("Most books"),
 }
 
@@ -76,6 +77,8 @@ data class LibraryItem(
         get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
     val series: String?
         get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
+    val seriesIndex: Float?
+        get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
 }
 
 /** One stack in series-grouped mode. */
@@ -144,7 +147,7 @@ class LibraryViewModel @Inject constructor(
      * `clearSeriesFilter()` leaves grouping off; the user can re-enable from the
      * toggle.
      */
-    fun drillIntoSeries(name: String)         { _uiState.value = _uiState.value.copy(seriesFilter = name, groupBySeries = false) }
+    fun drillIntoSeries(name: String)         { _uiState.value = _uiState.value.copy(seriesFilter = name, groupBySeries = false, sort = LibrarySort.SeriesOrder) }
     fun clearSeriesFilter()                   { _uiState.value = _uiState.value.copy(seriesFilter = null) }
     fun setSearchQuery(q: String)             { _uiState.value = _uiState.value.copy(searchQuery = q) }
 
@@ -506,6 +509,7 @@ class LibraryViewModel @Inject constructor(
         LibrarySort.RecentlyOpened -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 } // proxy — UI reads progress flows for true ordering
         LibrarySort.TitleAsc       -> compareBy { it.title.lowercase() }
         LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
+        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
         LibrarySort.SeriesCount    -> compareBy { it.title.lowercase() } // only meaningful in series mode
     }
 }
