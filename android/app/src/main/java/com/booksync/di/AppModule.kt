@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.booksync.data.local.BookSyncDatabase
+import com.booksync.data.local.MIGRATION_12_13
 import com.booksync.data.local.dao.*
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DictionaryApi
@@ -129,7 +130,8 @@ object AppModule {
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).fallbackToDestructiveMigration(dropAllTables = true)
+        ).addMigrations(MIGRATION_12_13)
+         .fallbackToDestructiveMigration(dropAllTables = true)
          .build()
 
     @Provides
