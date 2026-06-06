@@ -70,6 +70,8 @@ sealed class BookCardVariant {
         val hasEbookDownloaded: Boolean = false,
         val hasAudiobookDownloaded: Boolean = false,
         val hasMismatchWarning: Boolean = false,
+        val series: String? = null,
+        val seriesIndex: Float? = null,
     ) : BookCardVariant()
 
     data class SingleMedia(
@@ -79,6 +81,8 @@ sealed class BookCardVariant {
         val author: String?,
         val coverImageModel: Any? = null,      // File, Uri, URL string — loaded by Coil
         val isDownloaded: Boolean = false,
+        val series: String? = null,
+        val seriesIndex: Float? = null,
     ) : BookCardVariant() {
         enum class MediaKind { EBOOK, AUDIOBOOK }
     }
@@ -202,6 +206,16 @@ fun BookCard(
                             text = subtitle,
                             color = colors.textSecondary,
                             fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    cardSeriesLabel(variant)?.let { label ->
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = label,
+                            color = colors.accent,
+                            fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -394,4 +408,15 @@ private fun cardSubtitle(variant: BookCardVariant): String? = when (variant) {
     is BookCardVariant.Pair         -> variant.author
     is BookCardVariant.SingleMedia  -> variant.author
     is BookCardVariant.SeriesStack  -> variant.author
+}
+
+private fun cardSeriesLabel(variant: BookCardVariant): String? {
+    val (series, index) = when (variant) {
+        is BookCardVariant.Pair        -> variant.series to variant.seriesIndex
+        is BookCardVariant.SingleMedia -> variant.series to variant.seriesIndex
+        else -> return null
+    }
+    if (series.isNullOrBlank()) return null
+    val suffix = index?.let { v -> if (v % 1f == 0f) " #${v.toInt()}" else " #$v" } ?: ""
+    return "$series$suffix"
 }
