@@ -46,6 +46,21 @@ RUN curl -L --fail -o /tmp/acsm-plugin.zip \
     cd / && \
     rm -rf /tmp/acsm-plugin.zip /tmp/acsm-plugin-patched.zip /tmp/acsm-unpacked
 
+# Install the DeDRM plugin (noDRM fork) so ACSM-fulfilled Adobe ADEPT EPUBs can
+# actually be decrypted. DeACSM only *fulfills* — it downloads the still-
+# encrypted book plus the license token; the AES/RSA decryption is a separate
+# step that DeDRM performs (its ineptepub auto-discovers the DeACSM account
+# key). Without this the pipeline stored encrypted EPUBs as if DRM-free.
+ARG DEDRM_VERSION=10.0.3
+RUN curl -L --fail -o /tmp/dedrm_tools.zip \
+      https://github.com/noDRM/DeDRM_tools/releases/download/v${DEDRM_VERSION}/DeDRM_tools_${DEDRM_VERSION}.zip && \
+    mkdir -p /tmp/dedrm-unpacked && \
+    unzip -q /tmp/dedrm_tools.zip -d /tmp/dedrm-unpacked && \
+    DEDRM_PLUGIN="$(find /tmp/dedrm-unpacked -name 'DeDRM_plugin.zip' | head -1)" && \
+    test -n "$DEDRM_PLUGIN" && \
+    calibre-customize -a "$DEDRM_PLUGIN" && \
+    rm -rf /tmp/dedrm_tools.zip /tmp/dedrm-unpacked
+
 # Copy application code
 COPY . .
 
