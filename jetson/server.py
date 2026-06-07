@@ -312,28 +312,24 @@ def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 160
     """Load a specific time chunk of audio as a numpy array using ffmpeg."""
     import subprocess
     import numpy as np
-
-    def _build_cmd(fast_seek: bool) -> list:
-        base = ["ffmpeg", "-nostdin", "-threads", "0"]
-        if fast_seek:
-            base += ["-ss", str(start_sec), "-i", file]
-        else:
-            base += ["-i", file, "-ss", str(start_sec)]
-        return base + ["-t", str(duration_sec), "-f", "s16le", "-ac", "1",
-                       "-acodec", "pcm_s16le", "-ar", str(sr), "-"]
-
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-threads", "0",
+        "-ss", str(start_sec),
+        "-i", file,
+        "-t", str(duration_sec),
+        "-f", "s16le",
+        "-ac", "1",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sr),
+        "-"
+    ]
     try:
-        out = subprocess.run(_build_cmd(fast_seek=True), capture_output=True, check=True).stdout
+        out = subprocess.run(cmd, capture_output=True, check=True).stdout
     except subprocess.CalledProcessError as e:
-        if start_sec == 0:
-            logger.error(f"FFmpeg failed: {e.stderr.decode()}")
-            raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
-        logger.warning(f"FFmpeg fast seek failed at {start_sec}s, retrying with slow seek: {e.stderr.decode()[:200]}")
-        try:
-            out = subprocess.run(_build_cmd(fast_seek=False), capture_output=True, check=True).stdout
-        except subprocess.CalledProcessError as e2:
-            logger.error(f"FFmpeg slow seek also failed: {e2.stderr.decode()}")
-            raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e2
+        logger.error(f"FFmpeg failed: {e.stderr.decode()}")
+        raise RuntimeError(f"Failed to load audio chunk at {start_sec}s") from e
 
     return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
 
@@ -351,13 +347,22 @@ def _get_audio_duration(file: str) -> float:
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
         return float(out.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        # Fallback to mutagen if ffprobe fails
-        import mutagen
-        fallback = mutagen.File(file)
-        if fallback and fallback.info:
-            return float(fallback.info.length)
-        return 0.0
+    except (subprocess.CalledProcessError, ValueError) as probe_err:
+        # ffprobe could not read the duration (often a corrupt/truncated file).
+        # Try mutagen as a best-effort fallback, but never let a missing optional
+        # dependency or an unreadable file crash the request with a confusing
+        # ModuleNotFoundError — surface a clear, decodable error instead.
+        try:
+            import mutagen
+            fallback = mutagen.File(file)
+            if fallback and fallback.info:
+                return float(fallback.info.length)
+        except Exception as fallback_err:
+            logger.warning(f"Duration fallback (mutagen) failed for {file}: {fallback_err}")
+        raise RuntimeError(
+            f"Could not determine audio duration for {file} — the file is likely "
+            f"corrupt or unreadable: {probe_err}"
+        )
 
 
 def _transcribe_file(audio_path: str, original_filename: str) -> dict:
