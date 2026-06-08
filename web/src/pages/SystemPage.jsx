@@ -869,6 +869,21 @@ function SystemPage({ tab }) {
                         </Link>
                     </div>
 
+                    {/* Troubleshoot Library entry point */}
+                    <div className="system-status-card" style={{ marginBottom: 24 }}>
+                        <div className="system-status-card-left">
+                            <div>
+                                <h5 className="system-status-title">Troubleshoot Library</h5>
+                                <p className="system-status-desc">
+                                    Find and fix corrupt, encrypted, or missing files.
+                                </p>
+                            </div>
+                        </div>
+                        <Link to="/system/troubleshoot" className="system-status-link">
+                            OPEN
+                        </Link>
+                    </div>
+
                     {/* ── Section: Configuration ── */}
                     <div className="system-section-header">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">

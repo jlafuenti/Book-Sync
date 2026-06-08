@@ -913,3 +913,56 @@ export async function acsmDeauthorize() {
     });
     return _jsonOrThrow(resp, 'Failed to revoke authorization');
 }
+
+// ============ Troubleshoot Library ============
+
+export async function getLibraryIssues() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/issues`);
+    return _jsonOrThrow(resp, 'Failed to load library issues');
+}
+
+export async function startLibraryScan() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan`, { method: 'POST' });
+    return _jsonOrThrow(resp, 'Failed to start scan');
+}
+
+export async function getLibraryScanProgress() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan/progress`);
+    return _jsonOrThrow(resp, 'Failed to get scan progress');
+}
+
+export async function cancelLibraryScan() {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan/cancel`, { method: 'POST' });
+    return _jsonOrThrow(resp, 'Failed to cancel scan');
+}
+
+export async function bulkDeleteIssues(items, deleteFile = true) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/bulk-delete?delete_file=${deleteFile}`, {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+    });
+    return _jsonOrThrow(resp, 'Bulk delete failed');
+}
+
+export async function replaceLibraryFile(itemType, itemId, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/replace/${itemType}/${itemId}`, {
+        method: 'POST',
+        body: formData,
+    });
+    return _jsonOrThrow(resp, 'Replace failed');
+}
+
+export async function requeuePair(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/requeue/${pairId}`, { method: 'POST' });
+    return _jsonOrThrow(resp, 'Requeue failed');
+}
+
+export async function dismissFailedAcsm(filename) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/acsm-dismiss`, {
+        method: 'POST',
+        body: JSON.stringify({ filename }),
+    });
+    return _jsonOrThrow(resp, 'Dismiss failed');
+}
