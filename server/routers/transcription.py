@@ -357,6 +357,84 @@ async def update_transcription_text(
 
 
 # ====================================================================
+# Re-alignment (uses cached transcript — no re-transcription needed)
+# ====================================================================
+
+@router.post("/{pair_id}/realign")
+async def realign_pair(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """
+    Regenerate the sync map for an already-transcribed pair using the cached
+    AudioTranscript. Cheap (CPU-only, no whisper). Replaces the existing
+    SyncMap and bumps its version.
+    """
+    import datetime
+    import json
+    import zipfile
+
+    from models.transcript import AudioTranscript
+    from services.transcription import TranscribedSentence
+    from services.epub_parser import extract_book_sentences
+    from services.alignment import align_texts
+    from services.sync_engine import save_sync_map
+
+    result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook))
+        .where(BookPair.id == pair_id)
+    )
+    pair = result.scalar_one_or_none()
+    if not pair or not pair.ebook:
+        raise HTTPException(status_code=404, detail="Book pair not found")
+
+    t_result = await db.execute(
+        select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
+    )
+    transcript = t_result.scalar_one_or_none()
+    if not transcript:
+        raise HTTPException(
+            status_code=404,
+            detail="No cached transcript for this pair — run full transcription instead.",
+        )
+
+    whisper_sentences = [
+        TranscribedSentence(**s) for s in json.loads(transcript.sentences_json)
+    ]
+    try:
+        epub_sentences = await asyncio.to_thread(
+            extract_book_sentences, pair.ebook.file_path
+        )
+    except (zipfile.BadZipFile, FileNotFoundError) as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not read ebook file: {e}",
+        )
+
+    aligned = await asyncio.to_thread(align_texts, epub_sentences, whisper_sentences)
+    if not aligned:
+        raise HTTPException(
+            status_code=422,
+            detail="Alignment produced no points (empty transcript or ebook text).",
+        )
+
+    await save_sync_map(db, pair_id, aligned)
+    pair.status = PairStatus.SYNCED
+    pair.synced_at = datetime.datetime.utcnow()
+    await db.commit()
+
+    matched = sum(1 for p in aligned if p.confidence > 0)
+    return {
+        "status": "ok",
+        "points": len(aligned),
+        "matched": matched,
+        "interpolated": len(aligned) - matched,
+    }
+
+
+# ====================================================================
 # Startup utility
 # ====================================================================
 
