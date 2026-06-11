@@ -6,15 +6,21 @@ string matching and sequence alignment. This is the core algorithm
 that creates the bridge between reading and listening.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, TYPE_CHECKING
 
 from rapidfuzz import fuzz
 import numpy as np
 
-from services.transcription import TranscribedSentence
-from services.epub_parser import EpubSentence
+if TYPE_CHECKING:
+    # Type-hint-only imports: transcription pulls in torch/whisper and
+    # epub_parser pulls in ebooklib/nltk; alignment only needs the dataclass
+    # shapes (duck-typed at runtime), so keep this module import-light.
+    from services.transcription import TranscribedSentence
+    from services.epub_parser import EpubSentence
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +140,177 @@ def _align_with_dtw(
     return alignments
 
 
+def _find_anchors(
+    epub_sentences: List[EpubSentence],
+    whisper_sentences: List[TranscribedSentence],
+    min_len: int = 40,
+    stride: int = 10,
+    score_threshold: float = 0.85,
+    uniqueness_margin: float = 0.05,
+) -> List[Tuple[int, int, float]]:
+    """
+    Find high-confidence, unique anchor matches across the WHOLE book.
+
+    Long sentences (>= min_len normalized chars) are nearly always unique in
+    a novel, so a global fuzzy search with a high threshold gives reliable
+    landmarks. We sample every stride-th candidate to bound runtime, require
+    the best match to beat the second-best by uniqueness_margin (rejects
+    repeated phrases), and keep only the longest increasing subsequence of
+    whisper indices (rejects order-violating false positives).
+
+    Returns [(epub_idx, whisper_idx, score 0..1)] sorted by epub_idx with
+    strictly increasing whisper_idx.
+    """
+    from rapidfuzz import process
+
+    whisper_norm = [_normalize_text(w.text) for w in whisper_sentences]
+    candidates = [
+        i for i in range(len(epub_sentences))
+        if len(_normalize_text(epub_sentences[i].text)) >= min_len
+    ]
+
+    raw_anchors: List[Tuple[int, int, float]] = []
+    for i in candidates[::stride]:
+        e_norm = _normalize_text(epub_sentences[i].text)
+        matches = process.extract(
+            e_norm,
+            whisper_norm,
+            scorer=fuzz.token_set_ratio,
+            limit=2,
+            score_cutoff=score_threshold * 100,
+        )
+        if not matches:
+            continue
+        _, best_score, best_idx = matches[0]
+        if len(matches) > 1 and (best_score - matches[1][1]) < uniqueness_margin * 100:
+            continue  # ambiguous: this sentence appears more than once
+        raw_anchors.append((i, best_idx, best_score / 100.0))
+
+    raw_anchors.sort(key=lambda a: a[0])
+    anchors = _longest_increasing_subsequence(raw_anchors)
+    logger.info(
+        f"Anchors: {len(candidates)} candidates, {len(raw_anchors)} raw, "
+        f"{len(anchors)} after LIS filter"
+    )
+    return anchors
+
+
+def _longest_increasing_subsequence(
+    anchors: List[Tuple[int, int, float]],
+) -> List[Tuple[int, int, float]]:
+    """Longest subsequence with strictly increasing whisper indices.
+    O(n^2) DP — anchors number in the hundreds, so this is instant."""
+    n = len(anchors)
+    if n == 0:
+        return []
+    lengths = [1] * n
+    prev = [-1] * n
+    for i in range(1, n):
+        for j in range(i):
+            if anchors[j][1] < anchors[i][1] and lengths[j] + 1 > lengths[i]:
+                lengths[i] = lengths[j] + 1
+                prev[i] = j
+    best_end = max(range(n), key=lambda k: lengths[k])
+    result = []
+    k = best_end
+    while k != -1:
+        result.append(anchors[k])
+        k = prev[k]
+    result.reverse()
+    return result
+
+
+def _anchor_align(
+    epub_sentences: List[EpubSentence],
+    whisper_sentences: List[TranscribedSentence],
+    max_segment: int = 600,
+) -> List[Tuple[int, int, float]]:
+    """
+    Align using anchors as fixed waypoints, running DTW only on the bounded
+    segments BETWEEN consecutive anchors. A bad region (music, credits,
+    skipped front matter) can no longer poison the rest of the book — drift
+    is confined to one inter-anchor segment.
+    """
+    n, m = len(epub_sentences), len(whisper_sentences)
+
+    anchors = _find_anchors(epub_sentences, whisper_sentences)
+    if len(anchors) < 3:
+        logger.warning("Too few anchors (%d); falling back to chunked DTW", len(anchors))
+        return _chunk_align(epub_sentences, whisper_sentences)
+
+    # Virtual anchors pin the first/last segments.
+    waypoints = [(-1, -1, 1.0)] + anchors + [(n, m, 1.0)]
+
+    all_alignments: List[Tuple[int, int, float]] = []
+    for (e0, w0, _), (e1, w1, a_conf) in zip(waypoints, waypoints[1:]):
+        es, ee = e0 + 1, e1          # epub_sentences[es:ee]
+        ws, we = w0 + 1, w1          # whisper_sentences[ws:we]
+
+        if es < ee and ws < we:
+            epub_seg = epub_sentences[es:ee]
+            whisper_seg = whisper_sentences[ws:we]
+            if len(epub_seg) <= max_segment and len(whisper_seg) <= max_segment:
+                sim = _compute_similarity_matrix(epub_seg, whisper_seg)
+                seg_alignments = _align_with_dtw(epub_seg, whisper_seg, sim)
+            else:
+                # Huge gap between anchors: chunked DTW is acceptable here
+                # because both endpoints are pinned — drift cannot escape
+                # this segment.
+                seg_alignments = _chunk_align(epub_seg, whisper_seg)
+            for ei, wi, conf in seg_alignments:
+                all_alignments.append((ei + es, wi + ws, conf))
+
+        # Emit the real anchor itself (skip the virtual end anchor).
+        if e1 < n:
+            all_alignments.append((e1, w1, a_conf))
+
+    all_alignments.sort(key=lambda t: t[0])
+    return all_alignments
+
+
+def _repair_outliers(
+    aligned_points: List["AlignedPoint"],
+    window: int = 2,
+    max_deviation_ms: int = 60_000,
+) -> List["AlignedPoint"]:
+    """
+    Post-process pass:
+    1. Any matched point (confidence > 0) whose audio_start_ms deviates from
+       the median of its matched neighbors by more than max_deviation_ms is
+       demoted to confidence 0 (so it gets re-interpolated).
+    2. Enforce non-decreasing audio_start_ms across the whole list.
+    Points are assumed ordered by (chapter, sentence_index) book order.
+    """
+    matched_idx = [i for i, p in enumerate(aligned_points) if p.confidence > 0]
+
+    for pos, i in enumerate(matched_idx):
+        neighbors = [
+            aligned_points[matched_idx[j]].audio_start_ms
+            for j in range(max(0, pos - window), min(len(matched_idx), pos + window + 1))
+            if j != pos
+        ]
+        if not neighbors:
+            continue
+        neighbors.sort()
+        median = neighbors[len(neighbors) // 2]
+        if abs(aligned_points[i].audio_start_ms - median) > max_deviation_ms:
+            p = aligned_points[i]
+            logger.info(
+                f"Outlier demoted: ch{p.epub_chapter} s{p.epub_sentence_index} "
+                f"audio={p.audio_start_ms}ms vs neighbor median {median}ms"
+            )
+            p.confidence = 0.0
+
+    last_ms = 0
+    for p in aligned_points:
+        if p.audio_start_ms < last_ms:
+            p.audio_start_ms = last_ms
+            p.audio_end_ms = max(p.audio_end_ms, last_ms)
+            p.confidence = 0.0
+        last_ms = p.audio_start_ms
+    return aligned_points
+
+
 def _chunk_align(
     epub_sentences: List[EpubSentence],
     whisper_sentences: List[TranscribedSentence],
@@ -223,8 +400,8 @@ def align_texts(
         logger.warning("Empty sentence lists — nothing to align")
         return []
 
-    # Get raw alignment
-    raw_alignments = _chunk_align(epub_sentences, whisper_sentences)
+    # Get raw alignment (anchor-bounded DTW — drift confined between anchors)
+    raw_alignments = _anchor_align(epub_sentences, whisper_sentences)
 
     # Build a map from epub index to whisper index + confidence
     epub_to_whisper = {}
@@ -266,7 +443,42 @@ def align_texts(
                 confidence=0.0,  # Interpolated, not directly matched
             ))
 
-    logger.info(f"Generated {len(aligned_points)} aligned points")
+    # Repair outliers / enforce monotonic times, then re-interpolate
+    # timestamps for everything that is now unmatched.
+    aligned_points = _repair_outliers(aligned_points)
+    import bisect
+    matched_ms = {i: (p.audio_start_ms, p.audio_end_ms)
+                  for i, p in enumerate(aligned_points) if p.confidence > 0}
+    matched_keys = sorted(matched_ms.keys())
+    for i, p in enumerate(aligned_points):
+        if p.confidence > 0:
+            continue
+        pos = bisect.bisect_left(matched_keys, i)
+        prev_k = matched_keys[pos - 1] if pos > 0 else None
+        next_k = matched_keys[pos] if pos < len(matched_keys) else None
+        if prev_k is not None and next_k is not None:
+            frac = (i - prev_k) / (next_k - prev_k)
+            start = int(matched_ms[prev_k][1] + frac * (matched_ms[next_k][0] - matched_ms[prev_k][1]))
+        elif prev_k is not None:
+            start = matched_ms[prev_k][1]
+        elif next_k is not None:
+            start = max(0, matched_ms[next_k][0] - 1000)
+        else:
+            start = 0
+        p.audio_start_ms = start
+        p.audio_end_ms = start + 1000
+
+    # Final clamp: interpolation between overlapping segments could step
+    # backwards slightly; guarantee non-decreasing start times.
+    last_ms = 0
+    for p in aligned_points:
+        if p.audio_start_ms < last_ms:
+            p.audio_start_ms = last_ms
+            p.audio_end_ms = max(p.audio_end_ms, last_ms)
+        last_ms = p.audio_start_ms
+
+    logger.info(f"Generated {len(aligned_points)} aligned points "
+                f"({len(matched_keys)} matched, {len(aligned_points) - len(matched_keys)} interpolated)")
     return aligned_points
 
 

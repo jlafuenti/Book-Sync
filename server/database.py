@@ -74,6 +74,7 @@ async def init_db():
 
         # Sync points migration
         await conn.execute(text("ALTER TABLE sync_points ADD COLUMN IF NOT EXISTS audio_text TEXT"))
+        await conn.execute(text("ALTER TABLE sync_points ADD COLUMN IF NOT EXISTS confidence FLOAT NOT NULL DEFAULT 0"))
 
         # Extended metadata migration (W7)
         for table in ("ebooks", "audiobooks"):
