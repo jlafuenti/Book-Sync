@@ -129,7 +129,11 @@ object AppModule {
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).fallbackToDestructiveMigration(dropAllTables = true)
+        ).addMigrations(
+            com.booksync.data.local.MIGRATION_12_13,
+            com.booksync.data.local.MIGRATION_13_14,
+        )
+         .fallbackToDestructiveMigration(dropAllTables = true)
          .build()
 
     @Provides
