@@ -156,6 +156,9 @@ class ReaderActivity : AppCompatActivity() {
         loadSavedPreferences()
         initViews()
         applyWindowInsets()
+        // Install before the navigator exists — the wrapper sits at the content
+        // root and intercepts selection ActionModes from any future WebView.
+        installSelectionInterceptor()
         loadPublication()
     }
 
@@ -303,8 +306,7 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
                 // Wrap WebView's parent so we can intercept the floating selection
-                // ActionMode at creation time. WebView is created lazily by Readium —
-                // a hierarchy listener wraps it the moment it is attached.
+                // ActionMode at creation time (no-op if already installed in onCreate).
                 installSelectionInterceptor()
 
 
@@ -1073,86 +1075,46 @@ class ReaderActivity : AppCompatActivity() {
     // strip path lives only inside the wrapper. See plan in
     // `.claude/plans/playful-painting-salamander.md`.
 
-    /** Set true once we've successfully wrapped the WebView's parent with the interceptor. */
+    /**
+     * Install ONE [SelectionInterceptingFrameLayout] around the activity's
+     * content root, so we intercept TYPE_FLOATING ActionMode creation via
+     * `startActionModeForChild`.
+     *
+     * Key fact: `startActionModeForChild` PROPAGATES UP the whole view
+     * hierarchy (each ViewGroup delegates to its parent until the DecorView
+     * creates the FloatingActionMode). So we don't need to wrap each of
+     * Readium's per-page WebViews — a single wrapper around the activity
+     * content root sees every selection from every WebView, including pages
+     * created later by the pager. The content root exists from setContentView
+     * and is never recreated. Idempotent; onResume() re-calls as a no-op.
+     */
     private var hasInstalledSelectionInterceptor: Boolean = false
 
-    /**
-     * Install a [SelectionInterceptingFrameLayout] around the Readium WebView
-     * so we can intercept TYPE_FLOATING ActionMode creation via
-     * `startActionModeForChild`. Idempotent — checks
-     * `hasInstalledSelectionInterceptor` before doing any work.
-     *
-     * The WebView is created lazily by Readium, so instead of polling we watch
-     * the navigator's view tree with recursive OnHierarchyChangeListeners and
-     * wrap the WebView the instant it is attached. onResume() re-calls this as
-     * a cheap idempotent safety net.
-     */
     private fun installSelectionInterceptor() {
         if (hasInstalledSelectionInterceptor) return
-        val root = navigator?.view as? ViewGroup
-        if (root == null) {
-            Log.d(TAG, "Selection interceptor: navigator view not ready")
-            return
-        }
-        // WebView may already exist (e.g. resume / config change) — wrap now.
-        findWebView(root)?.let { wrapWebView(it); return }
-        watchForWebView(root)
-    }
-
-    /** Recursively watch [group] and all current/future child ViewGroups for a WebView. */
-    private fun watchForWebView(group: ViewGroup) {
-        group.setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
-            override fun onChildViewAdded(parent: View, child: View) {
-                if (hasInstalledSelectionInterceptor) return
-                when (child) {
-                    is android.webkit.WebView ->
-                        // Post: don't mutate the hierarchy from within the add callback.
-                        child.post { wrapWebView(child) }
-                    is ViewGroup -> {
-                        // The new subtree may already contain (or later receive) the WebView.
-                        val wv = findWebView(child)
-                        if (wv != null) wv.post { wrapWebView(wv) } else watchForWebView(child)
-                    }
-                }
-            }
-            override fun onChildViewRemoved(parent: View, child: View) {}
-        })
-        for (i in 0 until group.childCount) {
-            (group.getChildAt(i) as? ViewGroup)?.let { watchForWebView(it) }
-        }
-    }
-
-    /** Swap [webView] -> [interceptor [webView]] inside its parent. Idempotent. */
-    private fun wrapWebView(webView: android.webkit.WebView) {
-        if (hasInstalledSelectionInterceptor) return
-        val parent = webView.parent as? android.view.ViewGroup
-        if (parent == null) {
-            Log.w(TAG, "Selection interceptor: WebView has no parent; cannot wrap")
-            return
-        }
-        if (parent is SelectionInterceptingFrameLayout) {
+        val content = findViewById<ViewGroup>(android.R.id.content) ?: return
+        val root = content.getChildAt(0) ?: return
+        if (root is SelectionInterceptingFrameLayout) {
             hasInstalledSelectionInterceptor = true
             return
         }
-        // Swap webView -> [interceptor [webView]] inside the original parent at the same index.
-        val originalIndex = parent.indexOfChild(webView)
-        val originalParams = webView.layoutParams
-        parent.removeView(webView)
+        val params = root.layoutParams
+        content.removeView(root)
         val interceptor = SelectionInterceptingFrameLayout(this).apply {
             // Don't consume touches ourselves.
             isClickable = false
             isFocusable = false
             addView(
-                webView,
+                root,
                 android.widget.FrameLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
         }
-        parent.addView(interceptor, originalIndex, originalParams)
+        content.addView(interceptor, params)
         hasInstalledSelectionInterceptor = true
-        Log.d(TAG, "Selection interceptor installed (parent=${parent.javaClass.simpleName})")
+        Log.d(TAG, "Selection interceptor installed at activity content root")
     }
 
     /**
