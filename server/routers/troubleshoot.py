@@ -11,6 +11,7 @@ integrity checks.
 import hashlib
 import logging
 import os
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,6 +26,7 @@ from database import get_db
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.library_issue import LibraryCheckResult
 from models.progress import UserProgress
+from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
@@ -146,6 +148,70 @@ async def get_issues(
     except Exception as e:
         logger.debug(f"failed_acsm listing skipped: {e}")
 
+    # Synced pairs that are missing their sync map.
+    sync_map_missing = []
+    all_pairs = (await db.execute(select(BookPair))).scalars().all()
+    syncmap_pair_ids = set(
+        (await db.execute(select(SyncMap.book_pair_id))).scalars().all()
+    )
+    for pair in all_pairs:
+        if pair.status == PairStatus.SYNCED and pair.id not in syncmap_pair_ids:
+            eb = eb_by_id.get(pair.ebook_id)
+            ab = ab_by_id.get(pair.audiobook_id)
+            sync_map_missing.append({
+                "pair_id": pair.id,
+                "ebook_id": pair.ebook_id,
+                "audiobook_id": pair.audiobook_id,
+                "title": (eb.title if eb else None) or (ab.title if ab else f"Pair {pair.id}"),
+                "author": (eb.author if eb else None) or (ab.author if ab else None),
+                "detail": "Marked synced but has no sync map — re-queue to rebuild it",
+            })
+
+    # Duplicate files (same content hash) within each media type.
+    duplicate = []
+    by_hash = defaultdict(list)
+    for eb in ebooks:
+        if eb.file_hash:
+            by_hash[("ebook", eb.file_hash)].append(eb)
+    for ab in audiobooks:
+        if ab.file_hash:
+            by_hash[("audiobook", ab.file_hash)].append(ab)
+    for (itype, h), group in by_hash.items():
+        if len(group) > 1:
+            for it in group:
+                duplicate.append(_item_dict(it, itype, f"{len(group)} copies share hash {h[:12]}…"))
+
+    # Covers: missing (broken/absent) and orphaned (file with no owner).
+    covers_dir = settings.covers_dir
+    missing_cover = []
+    referenced = set()
+
+    def _cover_filename(cover_path: Optional[str]) -> Optional[str]:
+        if not cover_path:
+            return None
+        return os.path.basename(cover_path.split("?")[0])
+
+    for item, itype in [(e, "ebook") for e in ebooks] + [(a, "audiobook") for a in audiobooks]:
+        fn = _cover_filename(item.cover_path)
+        if fn:
+            referenced.add(fn)
+            if not os.path.isfile(os.path.join(covers_dir, fn)):
+                missing_cover.append(_item_dict(item, itype, "Cover reference set but file is missing"))
+        else:
+            missing_cover.append(_item_dict(item, itype, "No cover image"))
+
+    orphaned_cover = []
+    if os.path.isdir(covers_dir):
+        for f in sorted(os.listdir(covers_dir)):
+            fp = os.path.join(covers_dir, f)
+            if os.path.isfile(fp) and f not in referenced:
+                orphaned_cover.append({
+                    "filename": f,
+                    "file_path": fp,
+                    "file_size": os.path.getsize(fp),
+                    "detail": "Cover file not referenced by any book",
+                })
+
     categories = {
         "missing": missing,
         "zero_byte": zero_byte,
@@ -153,6 +219,10 @@ async def get_issues(
         "ebook_drm": ebook_drm,
         "ebook_unreadable": ebook_unreadable,
         "unsupported_format": unsupported,
+        "sync_map_missing": sync_map_missing,
+        "duplicate": duplicate,
+        "missing_cover": missing_cover,
+        "orphaned_cover": orphaned_cover,
         "failed_transcription": failed_transcription,
         "failed_acsm": failed_acsm,
     }
@@ -358,6 +428,28 @@ async def requeue_pair(
     from services.queue_manager import add_to_queue
     await add_to_queue([pair_id])
     return {"status": "queued", "pair_id": pair_id}
+
+
+class DeleteCoversRequest(BaseModel):
+    filenames: List[str]
+
+
+@router.post("/delete-orphan-covers")
+async def delete_orphan_covers(req: DeleteCoversRequest, _: User = Depends(get_editor_user)):
+    """Delete orphaned cover files. Paths are constrained to the covers dir."""
+    covers_dir = os.path.abspath(settings.covers_dir)
+    deleted = 0
+    for name in req.filenames:
+        fp = os.path.abspath(os.path.join(covers_dir, os.path.basename(name)))
+        if os.path.dirname(fp) != covers_dir:
+            continue
+        if os.path.isfile(fp):
+            try:
+                os.unlink(fp)
+                deleted += 1
+            except OSError as e:
+                logger.warning(f"Could not delete cover {fp}: {e}")
+    return {"deleted": deleted}
 
 
 class AcsmDismissRequest(BaseModel):
