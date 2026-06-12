@@ -328,12 +328,16 @@ private fun ContinueRow(
                     title = item.title,
                     author = item.author,
                     coverImageModel = coverModel,
+                    series = item.series,
+                    seriesIndex = item.seriesIndex,
                 )
                 HomeItem.MediaType.EBOOK -> BookCardVariant.SingleMedia(
                     id = item.ebookId ?: 0,
                     kind = BookCardVariant.SingleMedia.MediaKind.EBOOK,
                     title = item.title,
                     author = item.author,
+                    series = item.series,
+                    seriesIndex = item.seriesIndex,
                 )
                 HomeItem.MediaType.AUDIOBOOK -> BookCardVariant.SingleMedia(
                     id = item.audiobookId ?: 0,
@@ -341,6 +345,8 @@ private fun ContinueRow(
                     title = item.title,
                     author = item.author,
                     coverImageModel = coverModel,
+                    series = item.series,
+                    seriesIndex = item.seriesIndex,
                 )
             }
             Box(modifier = Modifier.width(140.dp)) {
@@ -389,6 +395,8 @@ private fun PairRow(
                         hasAudiobookDownloaded = pair.audiobookDownloaded,
                         // Plan: mismatch warning appears only in the "New Pairs" section.
                         hasMismatchWarning = showNewBadge && pair.hasMetadataMismatch(),
+                        series = pair.ebookSeries,
+                        seriesIndex = pair.ebookSeriesIndex,
                     ),
                     onClick = { onPairClick(pair) },
                     onOverflow = { onPairOverflow(pair) },
@@ -501,8 +509,8 @@ private fun HomeItem.toOverflowTarget(
                 pairId = pairId ?: 0,
                 title = title,
                 subtitle = author,
-                hasEbookDownloaded = false,
-                hasAudiobookDownloaded = false,
+                hasEbookDownloaded = ebookDownloaded,
+                hasAudiobookDownloaded = audiobookDownloaded,
                 isTranscribed = false,
                 isQueuedOrTranscribing = false,
                 isComplete = false,
@@ -547,43 +555,27 @@ private fun buildHomeOverflowActions(
     onOpenAudiobookDetails: (Int) -> Unit,
 ): OverflowActions {
     val isOnline by vm.isOnline.collectAsState()
-    // Pull the live pair entity (if present) so delete/download operate on the real record.
-    val recentlyAdded by vm.recentlyAdded.collectAsState()
-    val newPairs by vm.newPairs.collectAsState()
-    val pair = (target as? OverflowTarget.Pair)?.pairId?.let { pid ->
-        (recentlyAdded + newPairs).firstOrNull { it.id == pid }
-    }
 
     return when (target) {
         is OverflowTarget.Pair -> OverflowActions(
-            isOnline              = isOnline,
-            onViewDetails         = { onOpenPairDetails(target.pairId) },
-            onRead                = pair?.let { { onOpenPairReader(it.id) } },
-            onListen              = pair?.let { { onOpenPairPlayer(it.id) } },
-            onDownloadEbook       = pair?.let { { vm.downloadEbook(it) } },
-            onDownloadAudiobook   = pair?.let { { vm.downloadAudiobook(it) } },
-            onDeleteEbook         = pair?.let { { vm.deleteEbookOf(it) } },
-            onDeleteAudiobook     = pair?.let { { vm.deleteAudiobookOf(it) } },
-            onTranscribe          = pair?.let { { vm.addToTranscriptionQueue(it) } },
-            onCancelTranscription = pair?.let { { vm.cancelTranscription(it) } },
-            onRefreshSyncData     = pair?.let { { vm.refreshSyncData(it) } },
-            onMarkComplete        = pair?.let { { vm.markComplete(it) } },
-            onResetProgress       = pair?.let { { vm.resetProgress(it) } },
-            onUnlinkPair          = pair?.let { { vm.unlinkPair(it) } },
+            isOnline      = isOnline,
+            onViewDetails = { onOpenPairDetails(target.pairId) },
+            onRead        = if (target.hasEbookDownloaded) { { onOpenPairReader(target.pairId) } } else null,
+            onListen      = if (target.hasAudiobookDownloaded) { { onOpenPairPlayer(target.pairId) } } else null,
+            onDownloadPair = if (!target.hasEbookDownloaded || !target.hasAudiobookDownloaded)
+                { { vm.downloadBothById(target.pairId) } } else null,
         )
         is OverflowTarget.Ebook -> OverflowActions(
-            isOnline        = isOnline,
-            onViewDetails   = { onOpenEbookDetails(target.ebookId) },
-            onRead          = { onOpenEbook(target.ebookId) },
-            onMarkComplete  = { vm.markCompleteEbook(target.ebookId) },
-            onResetProgress = { vm.resetProgressEbook(target.ebookId) },
+            isOnline      = isOnline,
+            onViewDetails = { onOpenEbookDetails(target.ebookId) },
+            onRead        = if (target.isDownloaded) { { onOpenEbook(target.ebookId) } } else null,
+            onDownloadEbook = if (!target.isDownloaded) { { /* ebook entity not in scope on home */ } } else null,
         )
         is OverflowTarget.Audiobook -> OverflowActions(
-            isOnline        = isOnline,
-            onViewDetails   = { onOpenAudiobookDetails(target.audiobookId) },
-            onListen        = { onOpenAudiobook(target.audiobookId) },
-            onMarkComplete  = { vm.markCompleteAudiobook(target.audiobookId) },
-            onResetProgress = { vm.resetProgressAudiobook(target.audiobookId) },
+            isOnline         = isOnline,
+            onViewDetails    = { onOpenAudiobookDetails(target.audiobookId) },
+            onListen         = if (target.isDownloaded) { { onOpenAudiobook(target.audiobookId) } } else null,
+            onDownloadAudiobook = if (!target.isDownloaded) { { /* audiobook entity not in scope on home */ } } else null,
         )
         // Home has no series-grouped grid; series overflow is library-only.
         is OverflowTarget.Series -> OverflowActions(isOnline = isOnline)
