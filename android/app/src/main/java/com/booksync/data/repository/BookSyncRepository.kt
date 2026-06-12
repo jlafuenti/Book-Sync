@@ -77,6 +77,7 @@ class BookSyncRepository @Inject constructor(
                 syncMapDownloaded = existing?.syncMapDownloaded ?: false,
                 audiobookCoverPath = pair.audiobook.cover_path ?: existing?.audiobookCoverPath,
                 ebookSeries = pair.ebook.series,
+                ebookSeriesIndex = pair.ebook.series_index,
             )
         }
         bookPairDao.upsertPairs(entities)

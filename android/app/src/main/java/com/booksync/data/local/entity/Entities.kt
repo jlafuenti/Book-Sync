@@ -30,6 +30,7 @@ data class BookPairEntity(
     // Populated from AudioBookResponse.cover_path on library sync.
     val audiobookCoverPath: String? = null,
     val ebookSeries: String? = null,
+    val ebookSeriesIndex: Float? = null,
 )
 
 @Entity(tableName = "ebooks")

@@ -12,14 +12,39 @@ import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.ui.library.LibrarySort
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+enum class DownloadedFilter { ALL, PAIRS, EBOOKS, AUDIOBOOKS }
+
+data class DownloadedUiState(
+    val filter: DownloadedFilter = DownloadedFilter.ALL,
+    val sort: LibrarySort = LibrarySort.RecentlyAdded,
+    val searchQuery: String = "",
+)
+
+data class DownloadedItem(
+    val pair: BookPairEntity? = null,
+    val ebook: EBookEntity? = null,
+    val audiobook: AudioBookEntity? = null,
+) {
+    val key: String get() = pair?.let { "pair_${it.id}" } ?: ebook?.let { "ebook_${it.id}" } ?: audiobook?.let { "audio_${it.id}" } ?: ""
+    val title: String get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: ""
+    val author: String? get() = pair?.ebookAuthor ?: pair?.audiobookAuthor ?: ebook?.author ?: audiobook?.author
+    val series: String? get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
+    val seriesIndex: Float? get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
+    val sortId: Int get() = pair?.id ?: ebook?.id ?: audiobook?.id ?: 0
+}
 
 @HiltViewModel
 class DownloadedViewModel @Inject constructor(
@@ -32,11 +57,55 @@ class DownloadedViewModel @Inject constructor(
 
     val serverUrl: String = serverUrlManager.currentUrl
 
-    // --- Flows of currently-downloaded items ---------------------------------
+    // --- Filter / sort state -------------------------------------------------
+
+    private val _uiState = MutableStateFlow(DownloadedUiState())
+    val uiState = _uiState.asStateFlow()
+
+    fun setFilter(f: DownloadedFilter) { _uiState.value = _uiState.value.copy(filter = f) }
+    fun setSort(s: LibrarySort)        { _uiState.value = _uiState.value.copy(sort = s) }
+    fun setSearch(q: String)           { _uiState.value = _uiState.value.copy(searchQuery = q) }
+
+    // --- Raw flows (kept for overflow menu entity look-ups) ------------------
 
     val downloadedPairs      = repository.getDownloadedPairsFlow()
     val downloadedEbooks     = repository.getDownloadedEbooksFlow()
     val downloadedAudiobooks = repository.getDownloadedAudiobooksFlow()
+
+    // --- Unified filtered + sorted item list ---------------------------------
+
+    val items = combine(downloadedPairs, downloadedEbooks, downloadedAudiobooks, _uiState) { pairs, ebooks, audiobooks, ui ->
+        val articleRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
+
+        val allItems = buildList {
+            if (ui.filter == DownloadedFilter.ALL || ui.filter == DownloadedFilter.PAIRS)
+                pairs.forEach { add(DownloadedItem(pair = it)) }
+            if (ui.filter == DownloadedFilter.ALL || ui.filter == DownloadedFilter.EBOOKS)
+                ebooks.forEach { add(DownloadedItem(ebook = it)) }
+            if (ui.filter == DownloadedFilter.ALL || ui.filter == DownloadedFilter.AUDIOBOOKS)
+                audiobooks.forEach { add(DownloadedItem(audiobook = it)) }
+        }
+
+        val searched = if (ui.searchQuery.isBlank()) allItems else {
+            val q = ui.searchQuery.lowercase()
+            allItems.filter { item ->
+                item.title.lowercase().contains(q) ||
+                    item.author?.lowercase()?.contains(q) == true ||
+                    item.series?.lowercase()?.contains(q) == true
+            }
+        }
+
+        searched.sortedWith(comparatorFor(ui.sort, articleRegex))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    private fun comparatorFor(sort: LibrarySort, articleRegex: Regex): Comparator<DownloadedItem> = when (sort) {
+        LibrarySort.RecentlyAdded  -> compareByDescending { it.sortId }
+        LibrarySort.RecentlyOpened -> compareByDescending { it.sortId }
+        LibrarySort.TitleAsc       -> compareBy { it.title.replace(articleRegex, "").lowercase() }
+        LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
+        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+        LibrarySort.SeriesCount    -> compareBy { it.title.replace(articleRegex, "").lowercase() }
+    }
 
     // --- Download progress (pair id → percent 0..100) -----------------------
 
@@ -105,8 +174,6 @@ class DownloadedViewModel @Inject constructor(
 
     /**
      * Wipe every local file. Used by Account → "Clear all downloads".
-     * Iterates the three current snapshots; deletions cascade through the repository's
-     * usual offline-safe paths.
      */
     fun clearAllDownloads() {
         viewModelScope.launch {

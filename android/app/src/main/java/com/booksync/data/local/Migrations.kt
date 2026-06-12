@@ -13,20 +13,15 @@ private fun addColumnIfMissing(db: SupportSQLiteDatabase, sql: String) {
     }
 }
 
-/** v12 -> v13: sync point confidence + bookmark locatorAudioMs. */
+/** v12 -> v13: book pair series index (from main). */
 val MIGRATION_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        addColumnIfMissing(db, "ALTER TABLE sync_points ADD COLUMN confidence REAL NOT NULL DEFAULT 0")
-        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN locatorAudioMs INTEGER")
+        addColumnIfMissing(db, "ALTER TABLE book_pairs ADD COLUMN ebookSeriesIndex REAL")
     }
 }
 
-/**
- * v13 -> v14: same columns, defensively. Some installed test builds were
- * already at DB version 13 with a different schema (no migration path), which
- * made Room's identity check crash at version 13. Bumping to 14 with
- * duplicate-tolerant ALTERs repairs both v12 and stray v13 databases.
- */
+/** v13 -> v14: sync point confidence + bookmark locatorAudioMs.
+ *  Duplicate-tolerant: an interim test build added these columns at v13. */
 val MIGRATION_13_14 = object : Migration(13, 14) {
     override fun migrate(db: SupportSQLiteDatabase) {
         addColumnIfMissing(db, "ALTER TABLE sync_points ADD COLUMN confidence REAL NOT NULL DEFAULT 0")
