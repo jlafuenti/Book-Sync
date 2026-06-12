@@ -966,3 +966,11 @@ export async function dismissFailedAcsm(filename) {
     });
     return _jsonOrThrow(resp, 'Dismiss failed');
 }
+
+export async function deleteOrphanCovers(filenames) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/delete-orphan-covers`, {
+        method: 'POST',
+        body: JSON.stringify({ filenames }),
+    });
+    return _jsonOrThrow(resp, 'Delete failed');
+}

@@ -4,6 +4,7 @@ import {
     getLibraryIssues, startLibraryScan, getLibraryScanProgress, cancelLibraryScan,
     bulkDeleteIssues, replaceLibraryFile, requeuePair, dismissFailedAcsm,
     deleteEbook, deleteAudiobook, convertUnsupportedFile,
+    rescanBook, deleteOrphanCovers,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import './TroubleshootPage.css'
@@ -17,6 +18,10 @@ const CATEGORIES = [
     { key: 'missing', label: 'Missing files (not on storage)', kind: 'item', tone: 'error' },
     { key: 'zero_byte', label: 'Zero-byte / tiny files', kind: 'item', tone: 'warning' },
     { key: 'unsupported_format', label: 'Unsupported formats (MOBI/AZW3)', kind: 'unsupported', tone: 'warning' },
+    { key: 'sync_map_missing', label: 'Synced pairs missing a sync map', kind: 'transcription', tone: 'warning' },
+    { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
+    { key: 'missing_cover', label: 'Missing covers', kind: 'cover', tone: 'warning' },
+    { key: 'orphaned_cover', label: 'Orphaned cover files', kind: 'orphan', tone: 'warning' },
     { key: 'failed_transcription', label: 'Failed transcriptions', kind: 'transcription', tone: 'warning' },
     { key: 'failed_acsm', label: 'Failed ACSM imports', kind: 'acsm', tone: 'warning' },
 ]
@@ -52,7 +57,7 @@ function IssueSection({ cat, rows, canEdit, onChanged }) {
     // Reset selection whenever the underlying rows change.
     useEffect(() => { setSelected(new Set()); lastIdxRef.current = null }, [rows])
 
-    const selectable = cat.kind === 'item' || cat.kind === 'unsupported'
+    const selectable = ['item', 'unsupported', 'dup', 'orphan'].includes(cat.kind)
     const rowKey = (r, i) => `${r.item_type || cat.key}-${r.item_id ?? r.pair_id ?? r.filename ?? i}`
 
     const toggleRow = (i, shiftKey) => {
@@ -80,9 +85,27 @@ function IssueSection({ cat, rows, canEdit, onChanged }) {
     const doBulkDelete = async () => {
         setBusy(true); setMsg(null); setConfirmDelete(false)
         try {
-            await bulkDeleteIssues(selectedItems.map(r => ({ item_type: r.item_type, item_id: r.item_id })))
+            if (cat.kind === 'orphan') {
+                await deleteOrphanCovers(selectedItems.map(r => r.filename))
+            } else {
+                await bulkDeleteIssues(selectedItems.map(r => ({ item_type: r.item_type, item_id: r.item_id })))
+            }
             onChanged()
         } catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doRescan = async (r) => {
+        setBusy(true); setMsg(null)
+        try { await rescanBook(r.item_type, r.item_id); setMsg({ type: 'success', text: 'Rescanned' }); onChanged() }
+        catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doDeleteOrphan = async (r) => {
+        setBusy(true); setMsg(null)
+        try { await deleteOrphanCovers([r.filename]); onChanged() }
+        catch (e) { setMsg({ type: 'error', text: e.message }) }
         finally { setBusy(false) }
     }
 
@@ -206,6 +229,18 @@ function IssueSection({ cat, rows, canEdit, onChanged }) {
                                                         <button className="btn btn-sm btn-danger" disabled={busy}
                                                             onClick={() => doDeleteOne(r)}>Delete</button>
                                                     </>
+                                                )}
+                                                {cat.kind === 'dup' && (
+                                                    <button className="btn btn-sm btn-danger" disabled={busy}
+                                                        onClick={() => doDeleteOne(r)}>Delete</button>
+                                                )}
+                                                {cat.kind === 'cover' && (
+                                                    <button className="btn btn-sm btn-primary" disabled={busy}
+                                                        onClick={() => doRescan(r)}>Rescan</button>
+                                                )}
+                                                {cat.kind === 'orphan' && (
+                                                    <button className="btn btn-sm btn-danger" disabled={busy}
+                                                        onClick={() => doDeleteOrphan(r)}>Delete</button>
                                                 )}
                                                 {cat.kind === 'transcription' && (
                                                     <button className="btn btn-sm btn-primary" disabled={busy}
