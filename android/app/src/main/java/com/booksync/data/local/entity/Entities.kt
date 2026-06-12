@@ -70,7 +70,9 @@ data class SyncPointEntity(
     val epubSentenceIndex: Int,
     val epubTextPreview: String?,
     val audioStartMs: Int,
-    val audioEndMs: Int
+    val audioEndMs: Int,
+    // Alignment confidence 0..1 from the server; 0 means interpolated
+    val confidence: Float = 0f
 )
 
 @Entity(tableName = "bookmarks")
@@ -81,6 +83,9 @@ data class BookmarkEntity(
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
     val epubLocator: String? = null,  // Readium Locator JSON for precise EPUB position
+    // Audio position (ms) at the moment epubLocator was last written; lets the
+    // reader reuse the exact locator when audio hasn't moved much since.
+    val locatorAudioMs: Int? = null,
     val updatedAt: String,
     val syncedToServer: Boolean = true
 )

@@ -192,6 +192,9 @@ interface BookmarkDao {
 
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
     suspend fun updateLocator(pairId: Int, locatorJson: String)
+
+    @Query("UPDATE bookmarks SET epubLocator = :locatorJson, locatorAudioMs = :audioMs WHERE bookPairId = :pairId")
+    suspend fun updateLocatorWithAudio(pairId: Int, locatorJson: String, audioMs: Int?)
 }
 
 @Dao

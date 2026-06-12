@@ -58,6 +58,8 @@ class ReaderActivity : AppCompatActivity() {
         private const val TAG = "ReaderActivity"
         private const val NAV_FRAGMENT_TAG = "EpubNavigatorFragment"
         private const val SAVE_INTERVAL_MS = 5000L
+        /** If audio moved less than this since the locator was captured, reuse it verbatim. */
+        private const val LOCATOR_REUSE_THRESHOLD_MS = 30_000
         private const val PREFS_NAME = "reader_display"
         private const val KEY_FONT_SIZE = "font_size"
         private const val KEY_THEME = "theme"
@@ -139,7 +141,10 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "onCreate pairId=$pairId savedState=${savedInstanceState != null}")
 
         if (savedInstanceState != null && publication == null) {
-            super.onCreate(savedInstanceState)
+            // Pass null: restoring the saved fragment state would make
+            // FragmentManager reflectively instantiate EpubNavigatorFragment
+            // (no zero-arg constructor) and crash before finish() runs.
+            super.onCreate(null)
             Log.w(TAG, "Process death detected, finishing")
             finish()
             return
@@ -299,7 +304,7 @@ class ReaderActivity : AppCompatActivity() {
                 startPositionTracking()
                 // Wrap WebView's parent so we can intercept the floating selection
                 // ActionMode at creation time. WebView is created lazily by Readium —
-                // this method polls until it shows up.
+                // a hierarchy listener wraps it the moment it is attached.
                 installSelectionInterceptor()
 
 
@@ -526,9 +531,24 @@ class ReaderActivity : AppCompatActivity() {
     private suspend fun getInitialLocator(pub: Publication): Locator? {
         return try {
             val bookmark = repository.getBookmarkFlow(pairId).firstOrNull()
-            Log.d(TAG, "Bookmark loaded: source=${bookmark?.source} epubLocator=${bookmark?.epubLocator?.take(80)}")
-            
+            Log.d(TAG, "Bookmark loaded: source=${bookmark?.source} locatorAudioMs=${bookmark?.locatorAudioMs} epubLocator=${bookmark?.epubLocator?.take(80)}")
+
             if (bookmark?.source == "audiobook" && bookmark.audioPositionMs != null) {
+                // FAST PATH: if we hold an exact Readium locator captured when the
+                // audio was at (almost) this same position, reuse it verbatim. This
+                // sidesteps the lossy preview -> spine -> char-fraction chain and
+                // lands on the exact page the user left from.
+                val storedLocatorJson = bookmark.epubLocator
+                val locatorAudioMs = bookmark.locatorAudioMs
+                if (storedLocatorJson != null && locatorAudioMs != null &&
+                    kotlin.math.abs(bookmark.audioPositionMs - locatorAudioMs) < LOCATOR_REUSE_THRESHOLD_MS
+                ) {
+                    Log.d(TAG, "getInitialLocator: reusing stored locator " +
+                        "(audio moved ${bookmark.audioPositionMs - locatorAudioMs}ms)")
+                    return Locator.fromJSON(org.json.JSONObject(storedLocatorJson))
+                }
+
+                // SLOW PATH: audio genuinely moved — recompute from the sync map.
                 val (syncChapter, previewText) = repository.audioToEpubText(pairId, bookmark.audioPositionMs)
                 Log.d(TAG, "getInitialLocator: audioPos=${bookmark.audioPositionMs}ms => syncChapter=$syncChapter, preview='${previewText.take(60)}'")
                 // Find correct spine index via text search, searching near expected chapter
@@ -540,7 +560,11 @@ class ReaderActivity : AppCompatActivity() {
                     val baseLocator = pub.locatorFromLink(link)
                     if (baseLocator != null && previewText.isNotEmpty()) {
                         val progressionVal = findTextProgressionInChapter(chapterIdx, previewText) ?: 0.0
-                        return baseLocator.copy(locations = Locator.Locations(progression = progressionVal))
+                        val computed = baseLocator.copy(locations = Locator.Locations(progression = progressionVal))
+                        // Persist so the NEXT open at this audio position hits the fast path.
+                        repository.updateBookmarkLocator(
+                            pairId, computed.toJSON().toString(), bookmark.audioPositionMs)
+                        return computed
                     }
                 }
             }
@@ -621,6 +645,7 @@ class ReaderActivity : AppCompatActivity() {
                         epubSentenceIndex = syncPoint.epubSentenceIndex,
                         audioPositionMs = syncPoint.audioStartMs,
                         epubLocator = locatorJson,
+                        locatorAudioMs = syncPoint.audioStartMs,
                     )
                 } else {
                     // Only save epub locator — don't corrupt audio position
@@ -1051,31 +1076,55 @@ class ReaderActivity : AppCompatActivity() {
     /** Set true once we've successfully wrapped the WebView's parent with the interceptor. */
     private var hasInstalledSelectionInterceptor: Boolean = false
 
-    /** Number of times we've polled for the WebView; bounded to avoid infinite recursion. */
-    private var selectionInterceptorRetries: Int = 0
-
     /**
-     * Insert a [SelectionInterceptingFrameLayout] between the Readium WebView
-     * and its current parent, so we can intercept TYPE_FLOATING ActionMode
-     * creation via `startActionModeForChild`. Idempotent — checks
+     * Install a [SelectionInterceptingFrameLayout] around the Readium WebView
+     * so we can intercept TYPE_FLOATING ActionMode creation via
+     * `startActionModeForChild`. Idempotent — checks
      * `hasInstalledSelectionInterceptor` before doing any work.
      *
-     * The WebView is created lazily by Readium, so this method polls every
-     * 100 ms (capped at ~5 s) until findWebView returns non-null, then
-     * performs the swap.
+     * The WebView is created lazily by Readium, so instead of polling we watch
+     * the navigator's view tree with recursive OnHierarchyChangeListeners and
+     * wrap the WebView the instant it is attached. onResume() re-calls this as
+     * a cheap idempotent safety net.
      */
     private fun installSelectionInterceptor() {
         if (hasInstalledSelectionInterceptor) return
-        val webView = navigator?.view?.let { findWebView(it) }
-        if (webView == null) {
-            if (selectionInterceptorRetries < 100) {
-                selectionInterceptorRetries++
-                window.decorView.postDelayed({ installSelectionInterceptor() }, 100)
-            } else {
-                Log.w(TAG, "Selection interceptor: WebView not found after 100 tries; giving up")
-            }
+        val root = navigator?.view as? ViewGroup
+        if (root == null) {
+            Log.d(TAG, "Selection interceptor: navigator view not ready")
             return
         }
+        // WebView may already exist (e.g. resume / config change) — wrap now.
+        findWebView(root)?.let { wrapWebView(it); return }
+        watchForWebView(root)
+    }
+
+    /** Recursively watch [group] and all current/future child ViewGroups for a WebView. */
+    private fun watchForWebView(group: ViewGroup) {
+        group.setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
+            override fun onChildViewAdded(parent: View, child: View) {
+                if (hasInstalledSelectionInterceptor) return
+                when (child) {
+                    is android.webkit.WebView ->
+                        // Post: don't mutate the hierarchy from within the add callback.
+                        child.post { wrapWebView(child) }
+                    is ViewGroup -> {
+                        // The new subtree may already contain (or later receive) the WebView.
+                        val wv = findWebView(child)
+                        if (wv != null) wv.post { wrapWebView(wv) } else watchForWebView(child)
+                    }
+                }
+            }
+            override fun onChildViewRemoved(parent: View, child: View) {}
+        })
+        for (i in 0 until group.childCount) {
+            (group.getChildAt(i) as? ViewGroup)?.let { watchForWebView(it) }
+        }
+    }
+
+    /** Swap [webView] -> [interceptor [webView]] inside its parent. Idempotent. */
+    private fun wrapWebView(webView: android.webkit.WebView) {
+        if (hasInstalledSelectionInterceptor) return
         val parent = webView.parent as? android.view.ViewGroup
         if (parent == null) {
             Log.w(TAG, "Selection interceptor: WebView has no parent; cannot wrap")
@@ -1425,6 +1474,10 @@ class ReaderActivity : AppCompatActivity() {
                     source = "ebook",
                     epubChapter = chapterIndex,
                     audioPositionMs = audioMs,
+                    epubLocator = locator.toJSON().toString(),
+                    // Pair the page the user is on with the synced audio position so
+                    // returning from the player within ~30s lands on this exact page.
+                    locatorAudioMs = audioMs,
                 )
                 val timeStr = formatAudioTime(audioMs.toLong())
                 android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
