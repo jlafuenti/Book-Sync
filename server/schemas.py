@@ -224,6 +224,7 @@ class SyncPointResponse(BaseModel):
     audio_start_ms: int
     audio_end_ms: int
     audio_text: Optional[str] = None
+    confidence: float = 0.0
 
     class Config:
         from_attributes = True

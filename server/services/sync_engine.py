@@ -33,7 +33,9 @@ async def save_sync_map(
         select(SyncMap).where(SyncMap.book_pair_id == book_pair_id)
     )
     existing = result.scalar_one_or_none()
+    new_version = 1
     if existing:
+        new_version = (existing.version or 1) + 1
         await db.execute(
             delete(SyncPoint).where(SyncPoint.sync_map_id == existing.id)
         )
@@ -46,7 +48,7 @@ async def save_sync_map(
     # Create new sync map
     sync_map = SyncMap(
         book_pair_id=book_pair_id,
-        version=1,
+        version=new_version,
         total_sentences=len(aligned_points),
         total_chapters=len(chapters),
     )
@@ -62,6 +64,7 @@ async def save_sync_map(
             epub_text_preview=point.epub_text_preview,
             audio_start_ms=point.audio_start_ms,
             audio_end_ms=point.audio_end_ms,
+            confidence=point.confidence,
         )
         db.add(sp)
 
