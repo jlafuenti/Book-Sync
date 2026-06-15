@@ -144,7 +144,9 @@ data class SyncPointDto(
     val epub_sentence_index: Int,
     val epub_text_preview: String? = null,
     val audio_start_ms: Int,
-    val audio_end_ms: Int
+    val audio_end_ms: Int,
+    // Default keeps compatibility with servers that don't send confidence yet
+    val confidence: Float = 0f
 )
 
 @Serializable

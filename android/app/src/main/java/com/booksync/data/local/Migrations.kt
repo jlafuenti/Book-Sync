@@ -3,8 +3,28 @@ package com.booksync.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
+/** Add a column, ignoring the "duplicate column" error if it already exists
+ *  (SQLite has no ADD COLUMN IF NOT EXISTS). */
+private fun addColumnIfMissing(db: SupportSQLiteDatabase, sql: String) {
+    try {
+        db.execSQL(sql)
+    } catch (e: android.database.sqlite.SQLiteException) {
+        if (e.message?.contains("duplicate column", ignoreCase = true) != true) throw e
+    }
+}
+
+/** v12 -> v13: book pair series index (from main). */
 val MIGRATION_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE book_pairs ADD COLUMN ebookSeriesIndex REAL")
+        addColumnIfMissing(db, "ALTER TABLE book_pairs ADD COLUMN ebookSeriesIndex REAL")
+    }
+}
+
+/** v13 -> v14: sync point confidence + bookmark locatorAudioMs.
+ *  Duplicate-tolerant: an interim test build added these columns at v13. */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE sync_points ADD COLUMN confidence REAL NOT NULL DEFAULT 0")
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN locatorAudioMs INTEGER")
     }
 }

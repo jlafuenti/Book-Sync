@@ -457,6 +457,7 @@ class BookSyncRepository @Inject constructor(
                 epubTextPreview = point.epub_text_preview,
                 audioStartMs = point.audio_start_ms,
                 audioEndMs = point.audio_end_ms,
+                confidence = point.confidence,
             )
         }
         syncPointDao.insertPoints(entities)
@@ -555,6 +556,7 @@ class BookSyncRepository @Inject constructor(
                         epubSentenceIndex = remote.epub_sentence_index,
                         audioPositionMs = remote.audio_position_ms,
                         epubLocator = remote.epub_locator ?: existing?.epubLocator,
+                        locatorAudioMs = existing?.locatorAudioMs,
                         updatedAt = remote.updated_at,
                         syncedToServer = true,
                     )
@@ -603,6 +605,9 @@ class BookSyncRepository @Inject constructor(
         epubSentenceIndex: Int? = null,
         audioPositionMs: Int? = null,
         epubLocator: String? = null,
+        // Audio position the epubLocator corresponds to; enables exact locator
+        // reuse when returning from the player with little audio movement.
+        locatorAudioMs: Int? = null,
         // When false (heartbeat saves every 5s), only the Bookmark row is updated
         // and no BookmarkLog row is written — server and local history stay clean.
         // Set true on pause / stop / 30-min-continuous-playback boundaries.
@@ -618,6 +623,9 @@ class BookSyncRepository @Inject constructor(
             epubSentenceIndex = epubSentenceIndex ?: existing?.epubSentenceIndex,
             audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
             epubLocator = epubLocator ?: existing?.epubLocator,
+            locatorAudioMs = locatorAudioMs
+                ?: (if (epubLocator != null) audioPositionMs ?: existing?.locatorAudioMs
+                    else existing?.locatorAudioMs),
             updatedAt = System.currentTimeMillis().toString(),
             syncedToServer = false,
         )
@@ -675,9 +683,17 @@ class BookSyncRepository @Inject constructor(
         }
     }
 
-    /** Update just the EPUB locator JSON for a bookmark (used by Readium reader). */
-    suspend fun updateBookmarkLocator(pairId: Int, locatorJson: String) {
-        bookmarkDao.updateLocator(pairId, locatorJson)
+    /**
+     * Update just the EPUB locator JSON for a bookmark (used by Readium reader).
+     * When [audioMs] is provided, it records the audio position this locator
+     * corresponds to, enabling exact locator reuse on the next reader open.
+     */
+    suspend fun updateBookmarkLocator(pairId: Int, locatorJson: String, audioMs: Int? = null) {
+        if (audioMs != null) {
+            bookmarkDao.updateLocatorWithAudio(pairId, locatorJson, audioMs)
+        } else {
+            bookmarkDao.updateLocator(pairId, locatorJson)
+        }
     }
 
     // ============ Position Conversion ============
@@ -699,6 +715,75 @@ class BookSyncRepository @Inject constructor(
             .replace(Regex("[^a-z0-9 ]"), "") // Keep ONLY a-z, digits, regular space
             .replace(Regex(" +"), " ")        // Collapse multiple spaces
             .trim()
+    }
+
+    /** Character-bigram set of a normalized string, encoded as Ints for speed. */
+    private fun bigramSet(s: String): HashSet<Int> {
+        val set = HashSet<Int>(maxOf(16, s.length))
+        for (i in 0 until s.length - 1) set.add(s[i].code * 1024 + s[i + 1].code)
+        return set
+    }
+
+    /** Dice coefficient between two bigram sets: 2*|A∩B| / (|A|+|B|), 0..1. */
+    private fun diceSimilarity(a: HashSet<Int>, b: HashSet<Int>): Double {
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val (small, large) = if (a.size <= b.size) a to b else b to a
+        var inter = 0
+        for (x in small) if (x in large) inter++
+        return 2.0 * inter / (a.size + b.size)
+    }
+
+    /**
+     * Sliding-window fuzzy search: find the offset in [transcript] whose window
+     * best matches [needle] by bigram Dice similarity. Returns (charOffset, score)
+     * or null if below [threshold]. Tolerates transcription wording differences
+     * that defeat exact substring search (mishears, "Mr." vs "mister", etc).
+     */
+    private fun fuzzyFindInTranscript(
+        transcript: String,
+        needle: String,
+        threshold: Double = 0.60,
+    ): Pair<Int, Double>? {
+        if (needle.length < 20 || transcript.length < needle.length) return null
+        val needleBigrams = bigramSet(needle)
+        val window = needle.length
+        val step = maxOf(10, window / 4)
+        var bestOffset = -1
+        var bestScore = 0.0
+        var offset = 0
+        while (offset + window <= transcript.length) {
+            val score = diceSimilarity(needleBigrams, bigramSet(transcript.substring(offset, offset + window)))
+            if (score > bestScore) { bestScore = score; bestOffset = offset }
+            offset += step
+        }
+        // Refine around the best coarse hit with step 1 for a tighter offset
+        if (bestOffset >= 0 && bestScore >= threshold) {
+            var refinedOffset = bestOffset
+            var refinedScore = bestScore
+            val lo = maxOf(0, bestOffset - step)
+            val hi = minOf(transcript.length - window, bestOffset + step)
+            for (o in lo..hi) {
+                val s = diceSimilarity(needleBigrams, bigramSet(transcript.substring(o, o + window)))
+                if (s > refinedScore) { refinedScore = s; refinedOffset = o }
+            }
+            return refinedOffset to refinedScore
+        }
+        return null
+    }
+
+    /**
+     * If [matchedPoint] is an interpolated point (confidence == 0), prefer the
+     * nearest real whisper-matched point within ±3 list positions — its
+     * timestamp came from the transcript, not interpolation.
+     */
+    private fun nudgeToConfidentPoint(points: List<SyncPointEntity>, matchedPointIdx: Int): SyncPointEntity {
+        val matchedPoint = points[matchedPointIdx]
+        if (matchedPoint.confidence > 0f) return matchedPoint
+        val nearby = (maxOf(0, matchedPointIdx - 3)..minOf(points.lastIndex, matchedPointIdx + 3))
+            .map { points[it] }
+            .filter { it.confidence > 0.5f }
+            .minByOrNull { kotlin.math.abs(it.epubSentenceIndex - matchedPoint.epubSentenceIndex) }
+        return nearby ?: matchedPoint
     }
 
     /**
@@ -728,75 +813,92 @@ class BookSyncRepository @Inject constructor(
         // Try each chapter in range: target first, then expanding outward (±10 to handle offset issues)
         val chaptersToTry = listOf(chapter) + (1..10).flatMap { d -> listOf(chapter - d, chapter + d) }
 
-        for (targetChapter in chaptersToTry) {
+        // Build per-chapter transcripts once; reused by the exact pass and the fuzzy pass.
+        data class ChapterTranscript(
+            val chapter: Int,
+            val points: List<SyncPointEntity>,
+            val transcript: String,
+            val boundaries: List<Pair<Int, Int>>, // (startCharIndex, pointIndex)
+        )
+        val chapterTranscripts = chaptersToTry.mapNotNull { targetChapter ->
             val points = allPoints.filter { it.epubChapter == targetChapter }
                 .sortedBy { it.epubSentenceIndex }
-            if (points.isEmpty()) continue
+            if (points.isEmpty()) return@mapNotNull null
 
-            // Build concatenated transcript with sentence boundary tracking
             val transcriptBuilder = StringBuilder()
-            val sentenceBoundaries = mutableListOf<Pair<Int, Int>>() // (startCharIndex, pointIndex)
-
+            val sentenceBoundaries = mutableListOf<Pair<Int, Int>>()
             for ((idx, point) in points.withIndex()) {
                 val preview = point.epubTextPreview ?: continue
                 val normalized = normalizeForSearch(preview)
                 if (normalized.isEmpty()) continue
-
-                val startPos = transcriptBuilder.length
+                sentenceBoundaries.add(Pair(transcriptBuilder.length, idx))
                 transcriptBuilder.append(normalized)
                 transcriptBuilder.append(" ") // Space between sentences
-                sentenceBoundaries.add(Pair(startPos, idx))
             }
-
             val transcript = transcriptBuilder.toString()
-            if (transcript.isEmpty()) continue
+            if (transcript.isEmpty()) return@mapNotNull null
+            ChapterTranscript(targetChapter, points, transcript, sentenceBoundaries)
+        }
 
-            // Log first 80 chars of transcript for debugging
-            android.util.Log.d("SyncMatch", "Chapter $targetChapter transcript (${transcript.length} chars): '${transcript.take(80)}...'")
+        fun pointAtOffset(ct: ChapterTranscript, matchIndex: Int): SyncPointEntity {
+            var matchedPointIdx = 0
+            for ((startPos, idx) in ct.boundaries) {
+                if (startPos <= matchIndex) matchedPointIdx = idx else break
+            }
+            return nudgeToConfidentPoint(ct.points, matchedPointIdx)
+        }
 
-            // Progressive substring search: try decreasing lengths
-            val searchLengths = listOf(
-                minOf(normalizedEpub.length, 200),
-                minOf(normalizedEpub.length, 150),
-                minOf(normalizedEpub.length, 100),
-                minOf(normalizedEpub.length, 60),
-                minOf(normalizedEpub.length, 30),
-            ).distinct().filter { it > 10 }
+        // PASS 1: exact substring search across ALL candidate chapters. An exact
+        // match anywhere always beats a fuzzy match (a weak fuzzy hit in the hint
+        // chapter must never shadow the true location in a neighboring chapter).
+        val searchLengths = listOf(
+            minOf(normalizedEpub.length, 200),
+            minOf(normalizedEpub.length, 150),
+            minOf(normalizedEpub.length, 100),
+            minOf(normalizedEpub.length, 60),
+            minOf(normalizedEpub.length, 30),
+        ).distinct().filter { it > 10 }
 
+        for (ct in chapterTranscripts) {
             for (searchLen in searchLengths) {
                 // Try from the start of the extracted text
                 val searchText = normalizedEpub.take(searchLen)
-                var matchIndex = transcript.indexOf(searchText)
+                var matchIndex = ct.transcript.indexOf(searchText)
 
                 // Also try from a bit into the text (skip potential chapter headings at start)
                 if (matchIndex < 0 && normalizedEpub.length > searchLen + 30) {
                     val offsetText = normalizedEpub.substring(30).take(searchLen)
-                    matchIndex = transcript.indexOf(offsetText)
+                    matchIndex = ct.transcript.indexOf(offsetText)
                 }
 
                 if (matchIndex >= 0) {
-                    // Map character offset to sentence index
-                    var matchedPointIdx = 0
-                    for ((startPos, idx) in sentenceBoundaries) {
-                        if (startPos <= matchIndex) {
-                            matchedPointIdx = idx
-                        } else {
-                            break
-                        }
-                    }
-
-                    val matchedPoint = points[matchedPointIdx]
-                    android.util.Log.d("SyncMatch", "MATCH found in chapter $targetChapter! " +
+                    val matchedPoint = pointAtOffset(ct, matchIndex)
+                    android.util.Log.d("SyncMatch", "MATCH found in chapter ${ct.chapter}! " +
                         "Sentence ${matchedPoint.epubSentenceIndex}, audio=${matchedPoint.audioStartMs}ms, " +
                         "searchLen=$searchLen, preview='${matchedPoint.epubTextPreview?.take(60)}'")
                     return@withContext matchedPoint
                 }
             }
-
-            android.util.Log.d("SyncMatch", "No substring match in chapter $targetChapter")
         }
 
-        android.util.Log.d("SyncMatch", "No match found in any chapter (searched ±10 around chapter $chapter)")
+        // PASS 2: exact failed everywhere — fuzzy bigram match, taking the BEST
+        // score across all candidate chapters (not the first above threshold).
+        val fuzzyNeedle = normalizedEpub.take(150)
+        var bestFuzzy: Triple<ChapterTranscript, Int, Double>? = null
+        for (ct in chapterTranscripts) {
+            val fuzzy = fuzzyFindInTranscript(ct.transcript, fuzzyNeedle, threshold = 0.6) ?: continue
+            if (bestFuzzy == null || fuzzy.second > bestFuzzy!!.third) {
+                bestFuzzy = Triple(ct, fuzzy.first, fuzzy.second)
+            }
+        }
+        bestFuzzy?.let { (ct, matchIndex, score) ->
+            val matchedPoint = pointAtOffset(ct, matchIndex)
+            android.util.Log.d("SyncMatch", "FUZZY match in chapter ${ct.chapter}! " +
+                "score=%.2f sentence=${matchedPoint.epubSentenceIndex} audio=${matchedPoint.audioStartMs}ms".format(score))
+            return@withContext matchedPoint
+        }
+
+        android.util.Log.d("SyncMatch", "No exact or fuzzy match in any chapter (searched ±10 around chapter $chapter)")
         return@withContext null
     }
 

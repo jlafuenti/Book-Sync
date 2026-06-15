@@ -7,7 +7,7 @@ to an audio time range.
 """
 
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, ForeignKey, Text
+from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -73,6 +73,8 @@ class SyncPoint(Base):
     audio_start_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     audio_end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     audio_text: Mapped[str] = mapped_column(Text, nullable=True)
+    # Alignment confidence 0..1; 0 means interpolated (not directly matched)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     # Relationships
     sync_map = relationship("SyncMap", back_populates="sync_points")
