@@ -5,8 +5,10 @@ import {
     bulkDeleteIssues, replaceLibraryFile, requeuePair, dismissFailedAcsm,
     deleteEbook, deleteAudiobook, convertUnsupportedFile,
     rescanBook, deleteOrphanCovers,
+    getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import './TroubleshootPage.css'
 
 /* ── Category metadata ─────────────────────────────────────────────── */
@@ -44,7 +46,7 @@ function Chevron({ open }) {
 }
 
 /* ── A single issue section (collapsible + bulk select) ────────────── */
-function IssueSection({ cat, rows, canEdit, onChanged }) {
+function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     const [open, setOpen] = useState(false)
     const [selected, setSelected] = useState(new Set())
     const [busy, setBusy] = useState(false)
@@ -205,7 +207,15 @@ function IssueSection({ cat, rows, canEdit, onChanged }) {
                                         </td>
                                     )}
                                     <td>
-                                        <div style={{ fontWeight: 500 }}>{r.title || r.filename || `Item ${r.item_id}`}</div>
+                                        {(() => {
+                                            const title = r.title || r.filename || `Item ${r.item_id}`
+                                            const target = (r.item_type && r.item_id) ? [r.item_type, r.item_id]
+                                                : r.ebook_id ? ['ebook', r.ebook_id]
+                                                    : r.audiobook_id ? ['audiobook', r.audiobook_id] : null
+                                            return target
+                                                ? <button className="ts-title-link" onClick={() => onOpenDetails(target[0], target[1])}>{title}</button>
+                                                : <div style={{ fontWeight: 500 }}>{title}</div>
+                                        })()}
                                         {r.author && <div className="ts-sub">{r.author}</div>}
                                         {r.file_path && <div className="ts-path">{r.file_path}</div>}
                                     </td>
@@ -287,6 +297,8 @@ function TroubleshootPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [scan, setScan] = useState(null)
+    const [editBook, setEditBook] = useState(null)
+    const [editType, setEditType] = useState(null)
     const pollRef = useRef(null)
 
     const load = useCallback(async () => {
@@ -294,6 +306,23 @@ function TroubleshootPage() {
         catch (e) { setError(e.message) }
         finally { setLoading(false) }
     }, [])
+
+    const openDetails = useCallback(async (itemType, itemId) => {
+        try {
+            const full = itemType === 'ebook' ? await getEbook(itemId) : await getAudiobook(itemId)
+            setEditType(itemType)
+            setEditBook(full)
+        } catch (e) { setError(`Could not load details: ${e.message}`) }
+    }, [])
+
+    const handleSaveMeta = async (bookId, meta) => {
+        try {
+            if (editType === 'ebook') await updateEbookMetadata(bookId, meta)
+            else await updateAudiobookMetadata(bookId, meta)
+            setEditBook(null); setEditType(null)
+            await load()
+        } catch (e) { alert('Failed to update metadata: ' + e.message) }
+    }
 
     useEffect(() => {
         load()
@@ -387,8 +416,18 @@ function TroubleshootPage() {
             )}
 
             {activeCats.map(cat => (
-                <IssueSection key={cat.key} cat={cat} rows={data.categories[cat.key]} canEdit={canEdit} onChanged={load} />
+                <IssueSection key={cat.key} cat={cat} rows={data.categories[cat.key]}
+                    canEdit={canEdit} onChanged={load} onOpenDetails={openDetails} />
             ))}
+
+            {editBook && (
+                <EnhancedMetadataModal
+                    book={editBook}
+                    type={editType}
+                    onClose={() => { setEditBook(null); setEditType(null); load() }}
+                    onSave={handleSaveMeta}
+                />
+            )}
         </div>
     )
 }
