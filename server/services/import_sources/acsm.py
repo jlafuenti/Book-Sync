@@ -239,16 +239,15 @@ def deauthorize_adobe_id() -> None:
 def _fulfill_acsm(acsm_path: Path, out_dir: Path) -> Path:
     """
     Fulfill an .acsm using DeACSM's libadobeFulfill directly, bypassing
-    Calibre's `ebook-convert` pipeline. Returns the path to the resulting
-    DRM-free .epub or .pdf.
+    Calibre's `ebook-convert` pipeline, and decrypt the result. Returns the
+    path to the resulting DRM-free .epub or .pdf.
 
-    Why we don't use ebook-convert: when DeACSM produces an EPUB it
-    appends a META-INF/rights.xml proving the user holds a license. The
-    DRM has already been stripped from the content, but Calibre's EPUB
-    Input plugin sees the rights.xml during conversion and aborts with
-    calibre.ebooks.DRMError — a false positive that can't be turned off.
-    Driving the plugin's fulfill() ourselves and writing the EPUB without
-    rights.xml sidesteps the whole problem.
+    Adobe's fulfillment download is ADEPT-ENCRYPTED. The fulfill script
+    (_acsm_fulfill.py) injects the license token as META-INF/rights.xml and
+    then runs DeDRM's ineptepub with the DeACSM account key to produce a
+    genuinely DRM-free EPUB (no encryption.xml). We drive fulfill() ourselves
+    rather than using `ebook-convert` because Calibre's EPUB Input plugin trips
+    on rights.xml with a DRMError before DeDRM can act.
 
     Requires the plugin to be linked to an authorized Adobe identity
     (anonymous registration is enough for most Google Play / Nook books).
@@ -511,7 +510,17 @@ async def process_file(db: AsyncSession, source_path: Path, original_filename: s
             raise ValueError(f"Unsupported file type: {ext}")
 
         out_ext = book_path.suffix.lower()  # ".epub" or ".pdf"
+
+        # Defense in depth: never let a still-encrypted / unreadable EPUB enter
+        # the library. If decryption silently failed upstream, fail the import
+        # here with a clear message instead of storing AES garbage. (sync()
+        # wraps this into a per-item SyncError and moves the file to failed/.)
         if out_ext == ".epub":
+            from services.ebook_integrity import check_ebook_integrity
+            ok, detail = await asyncio.to_thread(check_ebook_integrity, str(book_path))
+            if not ok:
+                raise RuntimeError(f"Ebook failed integrity check after import — {detail}")
+
             meta = await asyncio.to_thread(_read_epub_meta, book_path)
         else:
             # PDFs don't have OPF metadata. Use the filename stem as title;

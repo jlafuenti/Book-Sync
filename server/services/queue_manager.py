@@ -321,6 +321,32 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         ebook_path = pair.ebook.file_path
         audiobook_path = pair.audiobook.file_path
 
+    # Step 0: Audio integrity gate. Validate the source audio is fully decodable
+    # BEFORE doing any work (including before reusing a cached transcript). A
+    # corrupt/incomplete import (truncated container, corrupt media stream) can
+    # never be transcribed, so fail fast with a clear, non-retriable error rather
+    # than uploading ~GBs to the remote server and burning retries on it.
+    from services.audio_integrity import check_audio_integrity
+    from services.ebook_integrity import check_ebook_integrity
+    from services.transcription_providers.base import TranscriptionError
+    await _update_queue_item(item_id, progress=0.01, message="Checking audio integrity...")
+    ok, detail = await _asyncio.to_thread(check_audio_integrity, audiobook_path)
+    if not ok:
+        raise TranscriptionError(
+            f"Audio failed integrity check — corrupt or incomplete source file, "
+            f"re-import required. {audiobook_path}: {detail}"
+        )
+
+    # Also validate the ebook up front. Extraction otherwise happens only AFTER
+    # transcription (Step 2), so a DRM-encrypted/unreadable ebook would waste a
+    # multi-hour transcription before failing. Fail fast here instead.
+    await _update_queue_item(item_id, progress=0.015, message="Checking ebook integrity...")
+    ok_e, detail_e = await _asyncio.to_thread(check_ebook_integrity, ebook_path)
+    if not ok_e:
+        raise TranscriptionError(
+            f"Ebook failed integrity check — {detail_e}. {ebook_path}"
+        )
+
     # Step 1: Transcription (or load from cache)
     # Transcript is persisted immediately after completion, linked to the audio file.
     # EPUB issues cannot cause transcript data to be lost.

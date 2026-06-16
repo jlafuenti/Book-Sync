@@ -18,7 +18,7 @@ from rate_limit import limiter
 
 from database import init_db, bootstrap_superadmin
 from config import settings
-from routers import auth, library, sync, files, transcription, stats, chapters, match, users
+from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
 from routers import import_sources as import_sources_router
 
@@ -159,6 +159,7 @@ app.include_router(transcription.router)
 app.include_router(stats.router)
 app.include_router(settings_router.router)
 app.include_router(import_sources_router.router)
+app.include_router(troubleshoot.router)
 app.include_router(chapters.router, prefix="/api/library")
 app.include_router(match.router, prefix="/api/library")
 
