@@ -80,6 +80,21 @@
     flex-wrap: wrap;
 }
 
+.ts-title-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-weight: 500;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+}
+.ts-title-link:hover {
+    text-decoration: underline;
+}
+
 .ts-sub {
     font-size: 0.8rem;
     color: var(--text-muted);
