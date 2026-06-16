@@ -74,30 +74,16 @@ def _split_into_sentences(text: str) -> List[str]:
     return filtered
 
 
-def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
+def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
     """
-    Extract all sentences from an EPUB file, organized by chapter.
-
-    Args:
-        epub_path: Path to the EPUB file
-
-    Returns:
-        List of EpubSentence objects, ordered by chapter and position.
+    Build the ordered EpubSentence list from a list of HTML/XHTML document
+    strings already in reading order. Shared by the ebooklib path and the
+    zip+OPF fallback path so both produce identical output.
     """
-    logger.info(f"Parsing EPUB: {epub_path}")
-
-    try:
-        book = epub.read_epub(epub_path)
-    except Exception as e:
-        raise RuntimeError(f"Failed to open EPUB '{epub_path}': {e}") from e
-    sentences = []
+    sentences: List[EpubSentence] = []
     chapter_index = 0
 
-    # Get items in reading order
-    items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
-
-    for item in items:
-        content = item.get_content().decode("utf-8", errors="ignore")
+    for content in documents:
         text = _extract_text_from_html(content)
 
         if not text.strip():
@@ -126,9 +112,92 @@ def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
 
         chapter_index += 1
 
-    logger.info(
-        f"Extracted {len(sentences)} sentences from {chapter_index} chapters"
-    )
+    return sentences
+
+
+def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
+    """
+    Read an EPUB's content documents in spine order WITHOUT ebooklib.
+
+    ebooklib (0.18.x) crashes on some otherwise-valid EPUBs — notably Google
+    Books EPUB2 files whose `toc.ncx` won't parse (`_parse_ncx` raises
+    'NoneType has no attribute find', and `ignore_ncx` is forced off when there
+    is no EPUB3 nav document). This walks container.xml -> OPF -> manifest/spine
+    directly, which is immune to the NCX bug. Namespace-agnostic via local-name().
+    """
+    import zipfile
+    from lxml import etree
+
+    with zipfile.ZipFile(epub_path) as z:
+        container = etree.fromstring(z.read("META-INF/container.xml"))
+        opf_paths = container.xpath('//*[local-name()="rootfile"]/@full-path')
+        if not opf_paths:
+            raise RuntimeError("no rootfile in META-INF/container.xml")
+        opf_path = opf_paths[0]
+        opf = etree.fromstring(z.read(opf_path))
+        opf_dir = os.path.dirname(opf_path)
+
+        manifest = {
+            item.get("id"): item.get("href")
+            for item in opf.xpath('//*[local-name()="item"]')
+            if item.get("id") and item.get("href")
+        }
+        spine_ids = [
+            ref.get("idref")
+            for ref in opf.xpath('//*[local-name()="itemref"]')
+            if ref.get("idref")
+        ]
+
+        documents: List[str] = []
+        for sid in spine_ids:
+            href = manifest.get(sid)
+            if not href or not href.lower().split("#")[0].endswith((".xhtml", ".html", ".htm")):
+                continue
+            # Resolve href relative to the OPF directory (zip uses forward slashes).
+            full = href if not opf_dir else f"{opf_dir}/{href}"
+            full = os.path.normpath(full).replace(os.sep, "/").lstrip("/")
+            try:
+                raw = z.read(full)
+            except KeyError:
+                continue
+            documents.append(raw.decode("utf-8", errors="ignore"))
+
+    return documents
+
+
+def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
+    """
+    Extract all sentences from an EPUB file, organized by chapter.
+
+    Args:
+        epub_path: Path to the EPUB file
+
+    Returns:
+        List of EpubSentence objects, ordered by chapter and position.
+    """
+    logger.info(f"Parsing EPUB: {epub_path}")
+
+    try:
+        book = epub.read_epub(epub_path)
+        documents = [
+            item.get_content().decode("utf-8", errors="ignore")
+            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
+        ]
+    except Exception as e:
+        # ebooklib is brittle (e.g. crashes on Google Books EPUB2 NCX). Fall back
+        # to a direct zip+OPF spine walk before giving up.
+        logger.warning(f"ebooklib failed on '{epub_path}' ({e}); trying zip+OPF fallback")
+        try:
+            documents = _extract_epub_documents_via_zip(epub_path)
+        except Exception as fallback_err:
+            raise RuntimeError(
+                f"Failed to open EPUB '{epub_path}': {e} "
+                f"(zip fallback also failed: {fallback_err})"
+            ) from e
+
+    sentences = _build_sentences_from_documents(documents)
+
+    logger.info(f"Extracted {len(sentences)} sentences from EPUB")
 
     return sentences
 

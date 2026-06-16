@@ -1,0 +1,121 @@
+/* Troubleshoot Library — reuses System theme tokens so it matches any scheme. */
+
+.ts-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.ts-summary {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.ts-progress {
+    margin-bottom: 16px;
+    padding: 14px 16px;
+}
+
+.ts-progress-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.ts-section {
+    margin-bottom: 14px;
+}
+
+.ts-section h3 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ts-chevron {
+    transition: transform 0.2s ease;
+}
+.ts-chevron.open {
+    transform: rotate(180deg);
+}
+
+.ts-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 11px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #fff;
+    background: var(--accent);
+}
+.ts-count-badge.error { background: var(--error); }
+.ts-count-badge.warning { background: var(--warning); }
+
+.ts-bulk-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.ts-row-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ts-title-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-weight: 500;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+}
+.ts-title-link:hover {
+    text-decoration: underline;
+}
+
+.ts-sub {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.ts-path {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    word-break: break-all;
+    margin-top: 2px;
+}
+
+.ts-detail {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    max-width: 420px;
+}
+
+.ts-section input[type="checkbox"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}

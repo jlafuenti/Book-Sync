@@ -8,15 +8,19 @@ The script:
      plugin zip (same trick as _acsm_authorize.py).
   2. Calls libadobeFulfill.fulfill() to ask Adobe for the download URL +
      license token for the .acsm.
-  3. Downloads the resulting EPUB or PDF straight to <output_path>.
-  4. Critically, skips DeACSM's own step of appending META-INF/rights.xml
-     to the EPUB. That file makes Calibre's EPUB Input plugin think the
-     book is still DRMed even after the content has been decrypted, which
-     is what was making `ebook-convert input.acsm output.epub` fail with
-     calibre.ebooks.DRMError.
+  3. Downloads the resulting EPUB or PDF.
+  4. For EPUBs: injects the license token as META-INF/rights.xml and then runs
+     real ADEPT decryption (DeDRM ineptepub + the DeACSM account key, via
+     _acsm_decrypt) to produce a genuinely DRM-free EPUB, verifying the output
+     no longer carries META-INF/encryption.xml.
+
+     (Adobe's fulfillment download is ENCRYPTED — earlier versions of this
+     script wrongly assumed the content was already decrypted and merely
+     stripped rights.xml, which left an unreadable AES-encrypted EPUB in the
+     library.)
 
 For PDFs we still patch the DRM-info atom because some readers refuse PDFs
-that look mid-fulfillment. EPUBs ship clean.
+that look mid-fulfillment.
 
 Exit codes:
   0  success
@@ -24,6 +28,7 @@ Exit codes:
   3  could not load plugin modules
   4  fulfillment call failed (auth not set up, ACSM expired, etc.)
   5  download failed (HTTP error or wrong content-type)
+  6  decryption failed / output still encrypted
 """
 
 import os
@@ -135,12 +140,65 @@ def main():
 
     # --- 4. Final placement, with format-specific touch-up ---
     if filetype == ".epub":
-        # Move into place WITHOUT the META-INF/rights.xml that DeACSM's
-        # own download() function would otherwise append. That file is what
-        # makes Calibre's EPUB Input plugin reject the book as DRMed even
-        # though the content has already been decrypted.
-        shutil.move(tmp_download, out_path)
-        print(f"OK: epub fulfilled to {out_path} (download {dt_ms} ms)")
+        # The downloaded EPUB is ADEPT-ENCRYPTED. Inject the license token as
+        # META-INF/rights.xml (so the decryptor can recover the per-book key),
+        # then decrypt with the DeACSM account key. The final EPUB is clean —
+        # no encryption.xml, no rights.xml.
+        from libadobeFulfill import buildRights
+        try:
+            license_token_node = resp.find(
+                f"./{adNS('fulfillmentResult')}/{adNS('resourceItemInfo')}/{adNS('licenseToken')}"
+            )
+            rights_xml_str = buildRights(license_token_node)
+        except Exception as e:
+            print(f"Could not build rights.xml from fulfillment reply: {e}", file=sys.stderr)
+            traceback.print_exc()
+            sys.exit(6)
+
+        # Inject rights.xml into the downloaded (encrypted) EPUB.
+        try:
+            with zipfile.ZipFile(tmp_download, "a") as zf:
+                if "META-INF/rights.xml" not in zf.namelist():
+                    zf.writestr("META-INF/rights.xml", rights_xml_str)
+        except Exception as e:
+            print(f"Could not inject rights.xml: {e}", file=sys.stderr)
+            traceback.print_exc()
+            sys.exit(6)
+
+        # Decrypt. _acsm_decrypt lives next to this script; both run inside
+        # Calibre's env under `calibre-debug -e`, so import it directly.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from _acsm_decrypt import decrypt_epub
+            rc = decrypt_epub(tmp_download, out_path)
+        except Exception as e:
+            print(f"Decryption failed: {e}", file=sys.stderr)
+            traceback.print_exc()
+            sys.exit(6)
+
+        if rc == 1:
+            # ineptepub reports the content was already DRM-free — keep the
+            # download as-is (some ACSMs deliver unencrypted content).
+            shutil.move(tmp_download, out_path)
+        elif rc != 0:
+            print(f"Decryption failed (ineptepub rc={rc})", file=sys.stderr)
+            sys.exit(6)
+
+        # Verify the result is genuinely decrypted before declaring success.
+        try:
+            with zipfile.ZipFile(out_path) as zf:
+                if "META-INF/encryption.xml" in zf.namelist():
+                    print("Output EPUB still contains encryption.xml — decryption did not take", file=sys.stderr)
+                    sys.exit(6)
+        except Exception as e:
+            print(f"Could not verify decrypted EPUB: {e}", file=sys.stderr)
+            sys.exit(6)
+
+        try:
+            os.unlink(tmp_download)
+        except OSError:
+            pass
+        print(f"OK: epub fulfilled and decrypted to {out_path} (download {dt_ms} ms)")
         sys.exit(0)
 
     if filetype == ".pdf":

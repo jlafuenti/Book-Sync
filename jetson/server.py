@@ -351,13 +351,22 @@ def _get_audio_duration(file: str) -> float:
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
         return float(out.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        # Fallback to mutagen if ffprobe fails
-        import mutagen
-        fallback = mutagen.File(file)
-        if fallback and fallback.info:
-            return float(fallback.info.length)
-        return 0.0
+    except (subprocess.CalledProcessError, ValueError) as probe_err:
+        # ffprobe could not read the duration (often a corrupt/truncated file).
+        # Try mutagen as a best-effort fallback, but never let a missing optional
+        # dependency or an unreadable file crash the request with a confusing
+        # ModuleNotFoundError — surface a clear, decodable error instead.
+        try:
+            import mutagen
+            fallback = mutagen.File(file)
+            if fallback and fallback.info:
+                return float(fallback.info.length)
+        except Exception as fallback_err:
+            logger.warning(f"Duration fallback (mutagen) failed for {file}: {fallback_err}")
+        raise RuntimeError(
+            f"Could not determine audio duration for {file} — the file is likely "
+            f"corrupt or unreadable: {probe_err}"
+        )
 
 
 def _transcribe_file(audio_path: str, original_filename: str) -> dict:

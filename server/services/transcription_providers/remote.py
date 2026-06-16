@@ -209,11 +209,23 @@ class RemoteWhisperProvider(TranscriptionProvider):
 
                 elif response.status_code >= 500:
                     error_body = response.text
-                    if any(kw in error_body.lower() for kw in ("out of memory", "oom", "cuda error", "cudaoutofmemory")):
+                    body_low = error_body.lower()
+                    if any(kw in body_low for kw in ("out of memory", "oom", "cuda error", "cudaoutofmemory")):
                         # Treat as retriable — the server frees the job lock after OOM and
                         # accepts new work immediately. ProviderUnavailableError lets the queue retry.
                         raise ProviderUnavailableError(
                             f"Remote server ran out of memory (will retry): {error_body[:300]}"
+                        )
+                    if any(kw in body_low for kw in (
+                        "failed to load audio chunk", "invalid data", "error submitting packet",
+                        "error reading header", "moov atom not found",
+                    )):
+                        # The audio itself is undecodable (corrupt/truncated source). Retrying
+                        # re-uploads the same bad file and fails again — fail fast instead so the
+                        # queue surfaces a clear "re-import required" error.
+                        raise TranscriptionError(
+                            f"Remote server could not decode the audio — corrupt or incomplete "
+                            f"source file, re-import required: {error_body[:300]}"
                         )
                     raise ProviderUnavailableError(
                         f"Remote server internal error ({response.status_code}): {error_body}"
