@@ -3,6 +3,7 @@
 # (httpx is already a prod dependency and provides ASGITransport + AsyncClient.)
 pytest==8.3.*
 pytest-asyncio==0.24.*
+pytest-cov==5.0.*
 aiosqlite==0.20.*
 # services.alignment imports numpy directly; in production it arrives transitively
 # via torch/whisper, but the test suite runs without that heavy stack, so pin it here

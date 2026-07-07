@@ -34,7 +34,8 @@ jobs:
       - name: Run tests
         # conftest points DATABASE_URL at a throwaway SQLite DB, so no Postgres
         # service is needed here. The Postgres migration test self-skips.
-        run: pytest -v
+        # Coverage is measured and reported (term-missing), but not gated yet.
+        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml
 
   migrations:
     # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the

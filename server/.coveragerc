@@ -1,0 +1,11 @@
+# Coverage config for the server test suite. The denominator is the real
+# application code — tests and caches are excluded.
+[run]
+omit =
+    tests/*
+    */__pycache__/*
+
+[report]
+# Don't fail on files that couldn't be imported (e.g. torch-dependent modules
+# skipped in CI); just report what ran.
+skip_empty = True
