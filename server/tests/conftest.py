@@ -105,6 +105,39 @@ async def client():
         yield c
 
 
+@pytest.fixture
+def make_client():
+    """
+    Factory that builds an AsyncClient for a minimal app mounting the given
+    router(s). Reuses the SQLite-bound get_db dependency and disables the
+    limiter. Usage:
+
+        async with make_client(users.router) as c:
+            await c.get(...)
+    """
+    import contextlib
+
+    from fastapi import FastAPI
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+
+    from rate_limit import limiter
+
+    @contextlib.asynccontextmanager
+    async def _factory(*routers):
+        limiter.enabled = False
+        app = FastAPI()
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        for r in routers:
+            app.include_router(r)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+    return _factory
+
+
 @pytest_asyncio.fixture
 def make_user():
     """
