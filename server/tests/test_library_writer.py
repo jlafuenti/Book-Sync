@@ -68,13 +68,15 @@ def test_unsafe_filename_chars_are_sanitized():
 def test_float_series_index_with_integer_value_drops_decimal():
     template = "<Book Number>: <Title>"
     meta = {"series_index": 3.0, "title": "Foo"}
-    assert render_template(template, meta) == "3: Foo"
+    # The literal ':' is sanitized to '_' because ':' is illegal in Windows paths.
+    assert render_template(template, meta) == "3_ Foo"
 
 
 def test_float_series_index_keeps_decimal_when_non_integer():
     template = "<Book Number>: <Title>"
     meta = {"series_index": 3.5, "title": "Foo"}
-    assert render_template(template, meta) == "3.5: Foo"
+    # ':' sanitized to '_'; the .5 decimal is preserved for non-integer indexes.
+    assert render_template(template, meta) == "3.5_ Foo"
 
 
 def test_only_title_falls_back_to_title():
