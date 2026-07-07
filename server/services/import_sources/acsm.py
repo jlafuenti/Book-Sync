@@ -472,9 +472,13 @@ def _detect_source_from_meta(meta: dict, original_filename: str) -> str:
     blob = " ".join(str(v) for v in (meta.get("identifiers") or [])).lower()
     blob += " " + (meta.get("publisher") or "").lower()
     blob += " " + original_filename.lower()
+    # Barnes & Noble names its ACSM files "BN_<id>.acsm"; treat that prefix as a
+    # Nook signal (strict prefix to avoid false positives on stray "bn" substrings).
+    fn = os.path.basename(original_filename).lower()
     if "gpb" in blob or "google" in blob or "play.google" in blob:
         return "google_play"
-    if "barnes" in blob or "nook" in blob or "bn.com" in blob:
+    if ("barnes" in blob or "nook" in blob or "bn.com" in blob
+            or fn.startswith("bn_") or fn.startswith("bn-")):
         return "nook"
     return "acsm"
 
