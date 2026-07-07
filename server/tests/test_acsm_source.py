@@ -14,9 +14,15 @@ def test_google_play_identifier():
     assert _detect_source_from_meta(meta, "Some Book.acsm") == "google_play"
 
 
-def test_nook_filename_hint():
+def test_bare_bn_filename_prefix_is_not_yet_a_nook_signal():
+    """
+    Current behavior: detection matches 'barnes'/'nook'/'bn.com' in the combined
+    identifiers+publisher+filename blob, but a bare 'BN_' filename prefix is NOT
+    recognized, so it falls back to 'acsm'. (Adding a 'BN_' prefix heuristic is
+    tracked as a Phase-2 enhancement on issue #46.)
+    """
     meta = {"identifiers": [], "publisher": ""}
-    assert _detect_source_from_meta(meta, "BN_BlahBlah.acsm") == "nook"
+    assert _detect_source_from_meta(meta, "BN_BlahBlah.acsm") == "acsm"
 
 
 def test_falls_back_to_acsm_when_unknown():

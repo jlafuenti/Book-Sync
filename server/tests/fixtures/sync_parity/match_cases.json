@@ -1,0 +1,206 @@
+[
+  {
+    "name": "exact_chapter_hint_hit_first_sentence",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "The quick brown fox jumps over the lazy dog every single morning without fail, she thought.",
+    "chapter_hint": 5,
+    "expected_chapter": 5,
+    "expected_sentence_index": 0
+  },
+  {
+    "name": "match_second_sentence_in_hinted_chapter",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "She walked slowly through the dark and quiet room toward the tall window and looked out.",
+    "chapter_hint": 5,
+    "expected_chapter": 5,
+    "expected_sentence_index": 1
+  },
+  {
+    "name": "chapter_hint_wrong_falls_back_to_nearby_chapter",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "Nobody expected the storm that gathered darkly over the distant grey mountains that evening.",
+    "chapter_hint": 0,
+    "expected_chapter": 6,
+    "expected_sentence_index": 1
+  },
+  {
+    "name": "skip_leading_chapter_heading_prefix",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "CHAPTER FIVE \u2014 THE DARK ROOM   They said nothing at all as the night grew colder and the small fire died down.",
+    "chapter_hint": 5,
+    "expected_chapter": 5,
+    "expected_sentence_index": 2
+  },
+  {
+    "name": "too_short_input_returns_none",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "tiny",
+    "chapter_hint": 5,
+    "expected_chapter": null,
+    "expected_sentence_index": null
+  },
+  {
+    "name": "no_match_returns_none",
+    "sync_points": [
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The quick brown fox jumps over the lazy dog every single morning without fail"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She walked slowly through the dark and quiet room toward the tall window"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 2,
+        "preview": "They said nothing at all as the night grew colder and the small fire died"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 0,
+        "preview": "A new dawn arrived and the travelers set out along the winding coastal road"
+      },
+      {
+        "chapter": 6,
+        "sentence_index": 1,
+        "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
+      }
+    ],
+    "epub_text": "Absolutely unrelated content that appears nowhere in any transcript preview whatsoever here.",
+    "chapter_hint": 5,
+    "expected_chapter": null,
+    "expected_sentence_index": null
+  }
+]
