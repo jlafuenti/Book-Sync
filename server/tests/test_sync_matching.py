@@ -154,6 +154,36 @@ async def test_convert_no_sync_map_returns_input_unchanged(db):
     assert (ch, si, ms, preview) == (3, 7, None, None)
 
 
+async def test_bookmark_roundtrip_persists_epub_locator(client, make_user, auth_header, db):
+    """PUT then GET a bookmark preserves the client-supplied epub_locator (the
+    field that was silently dropped before the Phase-2 fix)."""
+    from models.book import EBook, AudioBook, BookPair
+
+    eb = EBook(title="E", filename="e.epub", file_path="/x/e.epub")
+    ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a.m4b")
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id)
+    db.add(pair)
+    await db.commit()
+    await db.refresh(pair)
+
+    user = await make_user(username="reader")
+    locator = "epubcfi(/6/4[chap01]!/4/2/2[para05]/1:12)"
+    put = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        headers=auth_header(user),
+        json={"source": "ebook", "epub_chapter": 1, "epub_sentence_index": 3,
+              "epub_locator": locator},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["epub_locator"] == locator
+
+    got = await client.get(f"/api/sync/bookmark/{pair.id}", headers=auth_header(user))
+    assert got.status_code == 200
+    assert got.json()["epub_locator"] == locator
+
+
 async def test_convert_empty_sync_map_returns_input_unchanged(db):
     # A SyncMap with zero points is treated the same as no map.
     sm = SyncMap(book_pair_id=2, version=1, total_sentences=0, total_chapters=0)

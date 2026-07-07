@@ -24,9 +24,14 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
-_TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "booksync_test.db")
-# SQLAlchemy wants a forward-slashed absolute path in the URL (Windows-safe).
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + _TEST_DB_PATH.replace("\\", "/")
+# The Postgres migration-smoke job (RUN_PG_TESTS=1) runs against a real Postgres
+# service and supplies its own DATABASE_URL — don't clobber it with SQLite there.
+_PG_MODE = os.environ.get("RUN_PG_TESTS") == "1"
+
+if not _PG_MODE:
+    _TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "booksync_test.db")
+    # SQLAlchemy wants a forward-slashed absolute path in the URL (Windows-safe).
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + _TEST_DB_PATH.replace("\\", "/")
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -52,6 +57,10 @@ from routers.auth import hash_password, create_access_token  # noqa: E402
 @pytest_asyncio.fixture(autouse=True)
 async def _fresh_schema():
     """Drop and recreate all tables before each test for isolation."""
+    if _PG_MODE:
+        # The Postgres migration test manages its own schema via init_db().
+        yield
+        return
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
