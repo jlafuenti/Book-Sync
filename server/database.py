@@ -9,13 +9,15 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
-# Create async engine
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    pool_size=10,
-    max_overflow=20,
-)
+# Create async engine. pool_size/max_overflow are QueuePool options that the
+# SQLite (aiosqlite) dialect rejects — it uses NullPool — so only pass them for
+# the real Postgres engine. This lets the test suite point DATABASE_URL at a
+# throwaway SQLite DB without tripping over invalid kwargs.
+_engine_kwargs: dict = {"echo": False}
+if not settings.database_url.startswith("sqlite"):
+    _engine_kwargs.update(pool_size=10, max_overflow=20)
+
+engine = create_async_engine(settings.database_url, **_engine_kwargs)
 
 # Session factory
 async_session = async_sessionmaker(
