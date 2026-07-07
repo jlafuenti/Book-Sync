@@ -33,5 +33,49 @@ jobs:
 
       - name: Run tests
         # conftest points DATABASE_URL at a throwaway SQLite DB, so no Postgres
-        # service is needed for Phase 1.
+        # service is needed here. The Postgres migration test self-skips.
         run: pytest -v
+
+  migrations:
+    # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the
+    # SQLite job can't exercise. Runs only the migration smoke test.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: booksync
+          POSTGRES_PASSWORD: booksync
+          POSTGRES_DB: booksync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U booksync"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
+          pip install -r /tmp/req-ci.txt -r requirements-dev.txt
+
+      - name: Run migration smoke test
+        env:
+          RUN_PG_TESTS: "1"
+          DATABASE_URL: postgresql+asyncpg://booksync:booksync@localhost:5432/booksync_test
+        run: pytest tests/test_migrations_postgres.py -v

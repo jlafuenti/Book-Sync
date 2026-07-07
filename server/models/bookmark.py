@@ -7,7 +7,7 @@ BookmarkLog provides an audit trail of all position changes.
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, Enum, ForeignKey
+from sqlalchemy import String, DateTime, Integer, Enum, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -43,6 +43,11 @@ class Bookmark(Base):
 
     # Audio position (in milliseconds)
     audio_position_ms: Mapped[int] = mapped_column(Integer, nullable=True)
+
+    # Precise client-side EPUB locator/CFI. The client (Android) sends this so a
+    # bookmark can resume at the exact reading position; the server stores and
+    # echoes it back. Independent of the sync-map derived position.
+    epub_locator: Mapped[str] = mapped_column(Text, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

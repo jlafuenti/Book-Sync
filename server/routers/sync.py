@@ -185,6 +185,7 @@ async def update_bookmark(
             epub_chapter=epub_ch,
             epub_sentence_index=epub_si,
             audio_position_ms=audio_ms,
+            epub_locator=update.epub_locator,
         )
         db.add(bookmark)
         await db.flush()
@@ -214,6 +215,10 @@ async def update_bookmark(
         bookmark.epub_chapter = epub_ch
         bookmark.epub_sentence_index = epub_si
         bookmark.audio_position_ms = audio_ms
+        # Only overwrite the locator when the client sent one (audiobook-source
+        # updates omit it and must not wipe the stored ebook locator).
+        if update.epub_locator is not None:
+            bookmark.epub_locator = update.epub_locator
         bookmark.updated_at = datetime.utcnow()
         bookmark.synced_at = datetime.utcnow()
 

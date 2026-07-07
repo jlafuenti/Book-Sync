@@ -10,9 +10,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import List, Callable, Optional
 
-import torch
-import whisper
-import whisper.transcribe
+# torch and whisper are imported lazily inside the functions that use them
+# (_get_whisper_device / model loading). Keeping them out of module scope lets
+# the transcription-provider package — and the queue manager that depends on it —
+# be imported without the heavy ML stack (e.g. in tests / CI).
 import mutagen
 import nltk
 import tqdm as tqdm_module
@@ -99,6 +100,8 @@ def _format_duration(seconds: float) -> str:
 
 def _get_whisper_device() -> str:
     """Determine which device to use for Whisper inference."""
+    import torch
+
     device_setting = settings.whisper_device.lower()
 
     if device_setting == "auto":
@@ -214,6 +217,8 @@ def transcribe_audiobook(
         progress_callback(0.0, total_duration)
 
     # Step 2: Load model
+    import whisper
+
     device = _get_whisper_device()
     model_name = settings.whisper_model
 
