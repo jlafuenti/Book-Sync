@@ -22,6 +22,13 @@ def keyB():
     return Fernet.generate_key().decode()
 
 
+def test_dev_fallback_key_is_valid(monkeypatch):
+    """With CREDENTIAL_ENC_KEYS unset, the insecure dev fallback must still be a
+    valid Fernet key (regression: _DEV_KEY used to be malformed and crashed)."""
+    monkeypatch.setattr(app_settings, "credential_enc_keys", "")
+    assert credentials.decrypt(credentials.encrypt("zero-config")) == "zero-config"
+
+
 def test_encrypt_decrypt_roundtrip(monkeypatch, keyA):
     monkeypatch.setattr(app_settings, "credential_enc_keys", keyA)
     blob = credentials.encrypt("super-secret-token")
