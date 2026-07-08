@@ -47,6 +47,15 @@ def test_invalid_key_rejected_in_prod(monkeypatch):
         credentials.validate_startup()
 
 
+def test_invalid_key_rejected_in_dev_too(monkeypatch):
+    """A malformed key is a config typo, not a dev/prod posture choice — it must
+    fail loudly regardless of APP_ENV, not silently drop to fewer keys."""
+    monkeypatch.setattr(app_settings, "credential_enc_keys", "not-a-valid-fernet-key")
+    monkeypatch.setattr(app_settings, "app_env", "dev")
+    with pytest.raises(RuntimeError):
+        credentials.validate_startup()
+
+
 def test_encrypt_decrypt_roundtrip(monkeypatch, keyA):
     monkeypatch.setattr(app_settings, "credential_enc_keys", keyA)
     blob = credentials.encrypt("super-secret-token")

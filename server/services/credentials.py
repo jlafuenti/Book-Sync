@@ -60,10 +60,12 @@ def _build_fernet() -> MultiFernet:
         except Exception as e:
             invalid.append(k)
             logger.error(f"Invalid Fernet key in CREDENTIAL_ENC_KEYS: {e}")
-    if invalid and settings.app_env == "prod":
+    # A malformed key is a config typo, not a dev/prod security-posture choice —
+    # fail fast in both modes rather than silently falling back to fewer keys.
+    if invalid:
         raise RuntimeError(
             f"CREDENTIAL_ENC_KEYS contains {len(invalid)} invalid Fernet key(s) — "
-            f"refusing to start in prod. " + _KEY_GEN_HINT
+            f"refusing to start. " + _KEY_GEN_HINT
         )
     if not fernets:
         raise RuntimeError("CREDENTIAL_ENC_KEYS contained no valid Fernet keys")
