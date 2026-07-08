@@ -45,27 +45,7 @@ jobs:
         # docs/testing.md for the policy.
         run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
 
-      - name: DEBUG coverage hits
-        if: github.event_name == 'pull_request'
-        working-directory: server
-        run: |
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
-          t = ET.parse("coverage.xml")
-          want = {"routers/library.py": range(1618, 1624), "routers/sync.py": range(214, 224)}
-          print("cov sources:", [s.text for s in t.iter("source")])
-          for cls in t.iter("class"):
-              fn = cls.get("filename", "").replace("\\", "/")
-              for key, rng in want.items():
-                  if fn.endswith(key):
-                      for ln in cls.iter("line"):
-                          n = int(ln.get("number"))
-                          if n in rng:
-                              print(f"{key} line {n} hits {ln.get('hits')}")
-          PY
-
       - name: Check patch coverage (PRs)
-        continue-on-error: true
         # Stop-the-bleeding gate: lines a PR changes must be >=80% covered. Runs
         # from the repo root so diff-cover can resolve git paths. The exclude list
         # is the intentionally-manual / hardware / env-specific set (kept in sync
