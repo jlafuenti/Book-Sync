@@ -1,0 +1,15 @@
+# Coverage config for the server test suite. The denominator is the real
+# application code — tests and caches are excluded.
+[run]
+# SQLAlchemy's async runs DB work in a greenlet; without this, coverage loses
+# the trace across the greenlet switch and misses lines that execute after an
+# `await` into the DB (surfaced as false "uncovered" lines in CI on Python 3.12).
+concurrency = greenlet
+omit =
+    tests/*
+    */__pycache__/*
+
+[report]
+# Don't fail on files that couldn't be imported (e.g. torch-dependent modules
+# skipped in CI); just report what ran.
+skip_empty = True

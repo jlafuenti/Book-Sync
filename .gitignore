@@ -11,6 +11,11 @@ __pycache__/
 .env
 venv/
 
+# Test / coverage artifacts
+.coverage
+coverage.xml
+.pytest_cache/
+
 # Docker
 *.log
 
@@ -46,3 +51,6 @@ android/build/
 android/local.properties
 android/captures/
 android/.externalNativeBuild/
+
+# Sync-parity fixtures copied from server/ at build time (single source of truth is the server)
+android/app/src/test/resources/sync_parity/

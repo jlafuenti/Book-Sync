@@ -1,0 +1,46 @@
+[
+  {
+    "input": "Hello,   World!",
+    "expected": "hello world"
+  },
+  {
+    "input": "The quick\tbrown\nfox",
+    "expected": "the quick brown fox"
+  },
+  {
+    "input": "MixedCASE 123 !!!",
+    "expected": "mixedcase 123"
+  },
+  {
+    "input": "punctuation: don't stop",
+    "expected": "punctuation dont stop"
+  },
+  {
+    "input": "glued\u2014words",
+    "expected": "gluedwords"
+  },
+  {
+    "input": "   leading and   trailing   ",
+    "expected": "leading and trailing"
+  },
+  {
+    "input": "zero\u200bwidth\u200bspace",
+    "expected": "zero width space"
+  },
+  {
+    "input": "nbsp\u00a0separated\u00a0words",
+    "expected": "nbsp separated words"
+  },
+  {
+    "input": "thin\u2009and\u202fnarrow",
+    "expected": "thin and narrow"
+  },
+  {
+    "input": "",
+    "expected": ""
+  },
+  {
+    "input": "!!!???",
+    "expected": ""
+  }
+]

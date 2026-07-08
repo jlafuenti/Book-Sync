@@ -1,0 +1,53 @@
+"""
+Shared test-data factories.
+
+Async helpers that seed rows into the SQLite test DB. Import these instead of
+re-implementing seeding per test file. (User creation lives in the `make_user`
+fixture in conftest.py.)
+"""
+
+from models.book import EBook, AudioBook, BookPair, PairStatus
+from models.sync_map import SyncMap, SyncPoint
+
+
+async def make_book_pair(db, status=PairStatus.SYNCED, *,
+                         ebook_title="E", audiobook_title="A"):
+    """Create an EBook + AudioBook + BookPair and return the committed pair."""
+    eb = EBook(title=ebook_title, filename="e.epub", file_path="/x/e.epub")
+    ab = AudioBook(title=audiobook_title, filename="a.m4b", file_path="/x/a.m4b")
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=status)
+    db.add(pair)
+    await db.commit()
+    await db.refresh(pair)
+    return pair
+
+
+# Default sync points (chapter, sentence_index, audio_start_ms, preview).
+# ch=1/s=1 has a NULL preview to exercise the nearest-preview fallback.
+DEFAULT_SYNC_POINTS = [
+    (0, 0, 0, "chapter one opening line"),
+    (0, 1, 5000, "second sentence here"),
+    (1, 0, 10000, "chapter two begins now"),
+    (1, 1, 15000, None),
+    (1, 2, 20000, "later sentence in two"),
+]
+
+
+async def make_sync_map(db, book_pair_id=1, points=None):
+    """Create a SyncMap + ordered SyncPoints for a pair and return the map."""
+    points = DEFAULT_SYNC_POINTS if points is None else points
+    chapters = {ch for ch, *_ in points}
+    sm = SyncMap(book_pair_id=book_pair_id, version=1,
+                 total_sentences=len(points), total_chapters=len(chapters))
+    db.add(sm)
+    await db.flush()
+    for ch, si, ms, preview in points:
+        db.add(SyncPoint(
+            sync_map_id=sm.id, epub_chapter=ch, epub_sentence_index=si,
+            epub_text_preview=preview, audio_start_ms=ms, audio_end_ms=ms + 3000,
+            confidence=1.0,
+        ))
+    await db.commit()
+    return sm

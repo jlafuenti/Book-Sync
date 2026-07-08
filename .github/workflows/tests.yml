@@ -1,0 +1,121 @@
+name: Server tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so diff-cover can compare a PR against its base branch.
+          fetch-depth: 0
+          # Check out the PR's actual head commit (not the ephemeral merge commit
+          # GitHub creates for pull_request), so coverage.xml line numbers and the
+          # diff line numbers line up for diff-cover. Falls back to the pushed SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install the app deps EXCEPT the heavy transcription stack (torch,
+          # openai-whisper). The test suite is import-light: routers import those
+          # lazily, and the alignment tests only need numpy (pinned in
+          # requirements-dev.txt). This keeps CI fast.
+          grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
+          pip install -r /tmp/req-ci.txt -r requirements-dev.txt
+
+      - name: Run tests
+        # conftest points DATABASE_URL at a throwaway SQLite DB, so no Postgres
+        # service is needed here. The Postgres migration test self-skips.
+        # Global coverage floor (anti-backslide) — ratchet upward over time; see
+        # docs/testing.md for the policy.
+        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
+
+      - name: Check patch coverage (PRs)
+        # Stop-the-bleeding gate: lines a PR changes must be >=80% covered. Runs
+        # from the repo root so diff-cover can resolve git paths. The exclude list
+        # is the intentionally-manual / hardware / env-specific set (kept in sync
+        # with docs/testing.md).
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git fetch --no-tags origin ${{ github.base_ref }}
+          # diff-cover matches --exclude as fnmatch globs against the full path
+          # ('*' spans '/'), so the '*/' prefix form is what matches. NOTE: --exclude
+          # takes all patterns after a SINGLE flag (repeated flags => only the last
+          # wins), so keep them as one space-separated list. --markdown-report writes
+          # a summary we surface on the PR (below), even when the gate fails.
+          diff_exit=0
+          diff-cover server/coverage.xml \
+            --markdown-report patch-coverage.md \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 \
+            --exclude '*/database.py' '*/services/transcription.py' '*/transcription_providers/*' \
+              '*/services/import_sources/*' '*/import_scheduler.py' '*/abs_metadata.py' \
+              '*/audio_integrity.py' '*/ebook_integrity.py' '*/epub_parser.py' '*/library_verify.py' \
+              '*/routers/chapters.py' '*/routers/files.py' '*/routers/import_sources.py' \
+              '*/routers/troubleshoot.py' '*/scripts/*' || diff_exit=$?
+          {
+            echo "### Patch coverage (changed lines)"
+            echo
+            cat patch-coverage.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$diff_exit"
+
+  migrations:
+    # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the
+    # SQLite job can't exercise. Runs only the migration smoke test.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: booksync
+          POSTGRES_PASSWORD: booksync
+          POSTGRES_DB: booksync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U booksync"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
+          pip install -r /tmp/req-ci.txt -r requirements-dev.txt
+
+      - name: Run migration smoke test
+        env:
+          RUN_PG_TESTS: "1"
+          DATABASE_URL: postgresql+asyncpg://booksync:booksync@localhost:5432/booksync_test
+        run: pytest tests/test_migrations_postgres.py -v
