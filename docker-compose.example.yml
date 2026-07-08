@@ -1,3 +1,8 @@
+# Template — copy this to docker-compose.yml and fill in your paths/secrets:
+#   cp docker-compose.example.yml docker-compose.yml
+# docker-compose.yml is gitignored, so your real secrets and volume paths never
+# show up in `git status`/`git diff` and can't drift into a merge conflict when
+# you pull updates to this template.
 services:
   server:
     build: ./server
