@@ -57,15 +57,24 @@ jobs:
           # diff-cover matches --exclude as fnmatch globs against the full path
           # ('*' spans '/'), so the '*/' prefix form is what matches. NOTE: --exclude
           # takes all patterns after a SINGLE flag (repeated flags => only the last
-          # wins), so keep them as one space-separated list.
+          # wins), so keep them as one space-separated list. --markdown-report writes
+          # a summary we surface on the PR (below), even when the gate fails.
+          diff_exit=0
           diff-cover server/coverage.xml \
+            --markdown-report patch-coverage.md \
             --compare-branch=origin/${{ github.base_ref }} \
             --fail-under=80 \
             --exclude '*/database.py' '*/services/transcription.py' '*/transcription_providers/*' \
               '*/services/import_sources/*' '*/import_scheduler.py' '*/abs_metadata.py' \
               '*/audio_integrity.py' '*/ebook_integrity.py' '*/epub_parser.py' '*/library_verify.py' \
               '*/routers/chapters.py' '*/routers/files.py' '*/routers/import_sources.py' \
-              '*/routers/troubleshoot.py' '*/scripts/*'
+              '*/routers/troubleshoot.py' '*/scripts/*' || diff_exit=$?
+          {
+            echo "### Patch coverage (changed lines)"
+            echo
+            cat patch-coverage.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$diff_exit"
 
   migrations:
     # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the
