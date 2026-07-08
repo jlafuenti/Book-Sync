@@ -43,13 +43,7 @@ jobs:
         # service is needed here. The Postgres migration test self-skips.
         # Global coverage floor (anti-backslide) — ratchet upward over time; see
         # docs/testing.md for the policy.
-        # Force the C tracer: the default sys.monitoring core misses lines in
-        # async code on Python 3.12, which broke diff-cover's patch coverage.
-        env:
-          COVERAGE_CORE: pytrace
-        run: |
-          python -c "import coverage; print('coverage', coverage.__version__, 'core env =', __import__('os').environ.get('COVERAGE_CORE'))"
-          pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
+        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
 
       - name: DEBUG coverage hits
         if: github.event_name == 'pull_request'
