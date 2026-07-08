@@ -1,0 +1,66 @@
+name: Web tests
+
+# Only runs when the web app (or this workflow) changes.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "web/**"
+      - ".github/workflows/web-tests.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web-tests.yml"
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + the PR head SHA so diff-cover's changed-line mapping
+          # lines up with the coverage report (see the server workflow for why).
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests + coverage
+        run: npm run coverage
+
+      - name: Check patch coverage (PRs)
+        # Stop-the-bleeding gate: changed web lines must be >=80% covered. Vacuous
+        # (passes) when a PR changes no source lines. Reuses diff-cover for parity
+        # with the server. There is no global floor yet — web coverage is ~0 until
+        # the pages get tests; add one once it's non-trivial.
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          python -m pip install --quiet diff-cover
+          git fetch --no-tags origin ${{ github.base_ref }}
+          diff_exit=0
+          diff-cover web/coverage/cobertura-coverage.xml \
+            --markdown-report web-patch-coverage.md \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 || diff_exit=$?
+          {
+            echo "### Web patch coverage (changed lines)"
+            echo
+            cat web-patch-coverage.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$diff_exit"
