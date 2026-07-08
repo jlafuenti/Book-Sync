@@ -1559,9 +1559,9 @@ async def upload_ebook(
         f.write(content)
 
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-    
+
     # Metadata extraction
-    meta = extract_metadata(filepath, "ebook")
+    meta = await extract_metadata(filepath, "ebook", db)
 
     ebook = EBook(
         title=meta["title"] or file.filename,
@@ -1601,9 +1601,9 @@ async def upload_audiobook(
         f.write(content)
 
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-    
+
     # Metadata extraction
-    meta = extract_metadata(filepath, "audiobook")
+    meta = await extract_metadata(filepath, "audiobook", db)
 
     audiobook = AudioBook(
         title=meta["title"] or file.filename,
@@ -1619,6 +1619,8 @@ async def upload_audiobook(
     db.add(audiobook)
     await db.flush()
     await db.refresh(audiobook)
+    return audiobook
+
 
 class MetadataUpdate(BaseModel):
     title: Optional[str] = None

@@ -7,6 +7,7 @@ because MultiFernet tries every key when decrypting; new writes use
 the first key.
 """
 
+import base64
 import logging
 from typing import Optional
 
@@ -20,7 +21,10 @@ from models.import_source import ImportSourceCredential
 logger = logging.getLogger(__name__)
 
 
-_DEV_KEY = b"dev-credential-enc-key-change-me-please-32by="
+# A fixed, INSECURE fallback key so zero-config local dev works. A valid Fernet
+# key is urlsafe-base64 of exactly 32 bytes; the seed below is 32 ASCII bytes.
+# Real deployments MUST set CREDENTIAL_ENC_KEYS (see the warning in _build_fernet).
+_DEV_KEY = base64.urlsafe_b64encode(b"booksync-insecure-dev-key-000000")
 _warned_default = False
 
 
