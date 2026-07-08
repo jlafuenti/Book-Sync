@@ -17,6 +17,10 @@ jobs:
         with:
           # Full history so diff-cover can compare a PR against its base branch.
           fetch-depth: 0
+          # Check out the PR's actual head commit (not the ephemeral merge commit
+          # GitHub creates for pull_request), so coverage.xml line numbers and the
+          # diff line numbers line up for diff-cover. Falls back to the pushed SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
