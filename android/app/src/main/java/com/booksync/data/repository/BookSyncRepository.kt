@@ -1,5 +1,7 @@
 package com.booksync.data.repository
 
+import com.booksync.sync.SyncMatcher
+
 import android.content.Context
 import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
@@ -698,24 +700,6 @@ class BookSyncRepository @Inject constructor(
 
     // ============ Position Conversion ============
 
-    /** Normalize text for comparison: lowercase, convert ALL whitespace to spaces, strip punctuation */
-    private fun normalizeForSearch(text: String): String {
-        return text.lowercase()
-            // Convert newlines and tabs to spaces FIRST (before stripping non-alphanumeric)
-            .replace('\n', ' ')
-            .replace('\r', ' ')
-            .replace('\t', ' ')
-            // Convert Unicode whitespace variants to regular spaces
-            .replace('\u00A0', ' ')  // non-breaking space (very common in epubs)
-            .replace('\u2002', ' ')  // en space
-            .replace('\u2003', ' ')  // em space
-            .replace('\u2009', ' ')  // thin space
-            .replace('\u200B', ' ')  // zero-width space
-            .replace('\u202F', ' ')  // narrow no-break space
-            .replace(Regex("[^a-z0-9 ]"), "") // Keep ONLY a-z, digits, regular space
-            .replace(Regex(" +"), " ")        // Collapse multiple spaces
-            .trim()
-    }
 
     /** Character-bigram set of a normalized string, encoded as Ints for speed. */
     private fun bigramSet(s: String): HashSet<Int> {
@@ -807,7 +791,7 @@ class BookSyncRepository @Inject constructor(
         val availableChapters = allPoints.map { it.epubChapter }.distinct().sorted()
         android.util.Log.d("SyncMatch", "Available sync chapters: $availableChapters")
 
-        val normalizedEpub = normalizeForSearch(epubText)
+        val normalizedEpub = SyncMatcher.normalizeForSearch(epubText)
         android.util.Log.d("SyncMatch", "Searching transcript for epubText (length ${normalizedEpub.length}): '${normalizedEpub.take(100)}...'")
 
         // Try each chapter in range: target first, then expanding outward (±10 to handle offset issues)
@@ -829,7 +813,7 @@ class BookSyncRepository @Inject constructor(
             val sentenceBoundaries = mutableListOf<Pair<Int, Int>>()
             for ((idx, point) in points.withIndex()) {
                 val preview = point.epubTextPreview ?: continue
-                val normalized = normalizeForSearch(preview)
+                val normalized = SyncMatcher.normalizeForSearch(preview)
                 if (normalized.isEmpty()) continue
                 sentenceBoundaries.add(Pair(transcriptBuilder.length, idx))
                 transcriptBuilder.append(normalized)

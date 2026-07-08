@@ -128,3 +128,13 @@ dependencies {
     // Core library desugaring (required by Readium)
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
+
+// Mirror the shared cross-platform sync-parity fixtures (single source of truth:
+// the server) into the unit-test resources so SyncMatcherParityTest can load them.
+// rootDir is the android/ project; the server lives one level up in the repo.
+val copySyncParityFixtures by tasks.registering(Copy::class) {
+    from("$rootDir/../server/tests/fixtures/sync_parity")
+    into(layout.projectDirectory.dir("src/test/resources/sync_parity"))
+}
+tasks.named("preBuild") { dependsOn(copySyncParityFixtures) }
+tasks.withType<Test>().configureEach { dependsOn(copySyncParityFixtures) }
