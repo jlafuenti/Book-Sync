@@ -1,0 +1,39 @@
+name: Android tests
+
+# Only runs when the Android app (or the shared sync-parity fixtures it tests) changes.
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "android/**"
+      - "server/tests/fixtures/sync_parity/**"
+      - ".github/workflows/android-tests.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "server/tests/fixtures/sync_parity/**"
+      - ".github/workflows/android-tests.yml"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run JVM unit tests
+        working-directory: android
+        # JVM unit tests only (no emulator). Compiles the app + test sources and runs
+        # SyncMatcherParityTest against the shared fixtures. Espresso/Compose UI tests
+        # are deferred (they need an emulator).
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --stacktrace
