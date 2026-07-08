@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 60 * 24  # 24 hours
     jwt_refresh_token_expire_days: int = 30
 
+    # Deployment mode. "prod" (the default) refuses to start with known-default
+    # secrets (JWT_SECRET_KEY / CREDENTIAL_ENC_KEYS); set to "dev" for local
+    # development so zero-config defaults work.
+    app_env: str = Field(default="prod", alias="APP_ENV")
+
+    # Public self-registration (POST /api/auth/register). New accounts still
+    # require admin approval (is_active=False) unless disabled here entirely.
+    allow_public_registration: bool = Field(default=True, alias="ALLOW_PUBLIC_REGISTRATION")
+
     # Whisper Transcription
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisper_device: str = Field(
@@ -90,3 +99,29 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Known placeholder JWT secrets shipped in code/compose defaults — never valid
+# for a production deployment.
+DEFAULT_JWT_SECRETS = {"dev-secret-change-me", "change-me-to-a-random-secret-key"}
+
+
+def check_jwt_secret(s: "Settings") -> None:
+    """Refuse to run with a known-default JWT secret outside dev mode.
+
+    Extracted as a plain function (rather than inlined in main.py's lifespan)
+    so it's testable without booting the app.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if s.jwt_secret_key not in DEFAULT_JWT_SECRETS:
+        return
+    if s.app_env == "prod":
+        raise RuntimeError(
+            "JWT_SECRET_KEY is unset/default — refusing to start in prod. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\" "
+            "and set JWT_SECRET_KEY, or set APP_ENV=dev for local development."
+        )
+    logger.warning(
+        "Using default JWT secret key (dev mode). Set JWT_SECRET_KEY for production!"
+    )

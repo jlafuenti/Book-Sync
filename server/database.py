@@ -110,6 +110,8 @@ async def init_db():
         # RBAC migration
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'"))
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT false"))
+        # Token revocation: bump to invalidate all previously issued JWTs for a user
+        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
         # Migrate existing is_admin=true users to role='admin' (one-time)
         await conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true AND role = 'user'"))
 
@@ -150,12 +152,16 @@ async def bootstrap_superadmin():
         user_count = result.scalar()
 
         if user_count == 0:
-            # Fresh install — create default superadmin
+            # Fresh install — create superadmin with a randomly generated
+            # password (never "admin"/"admin"). The operator reads it from
+            # server/container logs and must change it on first login.
+            import secrets
             from routers.auth import hash_password
+            generated_password = secrets.token_urlsafe(16)
             user = User(
                 username="admin",
                 email="admin@localhost",
-                hashed_password=hash_password("admin"),
+                hashed_password=hash_password(generated_password),
                 role="superadmin",
                 is_admin=True,
                 is_active=True,
@@ -163,7 +169,11 @@ async def bootstrap_superadmin():
             )
             session.add(user)
             await session.commit()
-            logger.info("Created default superadmin account (admin/admin). Password reset required on first login.")
+            logger.warning(
+                "Created default superadmin account 'admin' with a randomly generated "
+                "password: %s — change it via first login (password reset is required).",
+                generated_password,
+            )
         else:
             # Existing install — ensure at least one superadmin exists
             result = await session.execute(

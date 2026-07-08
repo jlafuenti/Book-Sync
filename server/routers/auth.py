@@ -46,18 +46,18 @@ def create_token(data: dict, expires_delta: timedelta) -> str:
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_access_token(user_id: int) -> str:
-    """Create an access token for a user."""
+def create_access_token(user: User) -> str:
+    """Create an access token for a user, bound to their current token_version."""
     return create_token(
-        {"sub": str(user_id), "type": "access"},
+        {"sub": str(user.id), "type": "access", "ver": user.token_version},
         timedelta(minutes=settings.jwt_access_token_expire_minutes),
     )
 
 
-def create_refresh_token(user_id: int) -> str:
-    """Create a refresh token for a user."""
+def create_refresh_token(user: User) -> str:
+    """Create a refresh token for a user, bound to their current token_version."""
     return create_token(
-        {"sub": str(user_id), "type": "refresh"},
+        {"sub": str(user.id), "type": "refresh", "ver": user.token_version},
         timedelta(days=settings.jwt_refresh_token_expire_days),
     )
 
@@ -82,6 +82,7 @@ async def get_current_user(
         )
         user_id: Optional[str] = payload.get("sub")
         token_type: Optional[str] = payload.get("type")
+        token_version = payload.get("ver", 0)
         if user_id is None or token_type != "access":
             raise credentials_exception
     except JWTError:
@@ -89,7 +90,7 @@ async def get_current_user(
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or token_version != user.token_version:
         raise credentials_exception
     return user
 
@@ -154,6 +155,12 @@ def get_client_ip(request: Request) -> str:
 @limiter.limit("5/minute")
 async def register(user_data: UserCreate, request: Request, db: AsyncSession = Depends(get_db)):
     """Submit an access request. Account must be approved by an admin before login."""
+    if not settings.allow_public_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled",
+        )
+
     # Check for existing username
     result = await db.execute(select(User).where(User.username == user_data.username))
     if result.scalar_one_or_none():
@@ -225,8 +232,8 @@ async def login(credentials: UserLogin, request: Request, db: AsyncSession = Dep
     )
 
     return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user),
+        refresh_token=create_refresh_token(user),
     )
 
 
@@ -240,6 +247,7 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
         )
         user_id = payload.get("sub")
         token_type = payload.get("type")
+        token_version = payload.get("ver", 0)
         if user_id is None or token_type != "refresh":
             raise HTTPException(status_code=401, detail="Invalid refresh token")
     except JWTError:
@@ -247,12 +255,12 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or disabled")
+    if not user or not user.is_active or token_version != user.token_version:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     return TokenResponse(
-        access_token=create_access_token(user.id),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user),
+        refresh_token=create_refresh_token(user),
     )
 
 
@@ -297,6 +305,7 @@ async def change_password(
 
     current_user.hashed_password = hash_password(body.new_password)
     current_user.must_reset_password = False
+    current_user.token_version += 1
     await db.flush()
 
     await log_audit(
@@ -306,3 +315,23 @@ async def change_password(
     )
 
     return {"message": "Password changed successfully"}
+
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Log out. Bumps token_version, invalidating all outstanding tokens for
+    this user (all devices — there is no per-session token store)."""
+    current_user.token_version += 1
+    await db.flush()
+
+    await log_audit(
+        db, "logout", user_id=current_user.id,
+        details="User logged out",
+        ip_address=get_client_ip(request),
+    )
+
+    return {"message": "Logged out"}
