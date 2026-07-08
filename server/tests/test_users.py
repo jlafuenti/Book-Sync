@@ -12,7 +12,7 @@ from sqlalchemy import select
 from database import async_session
 from models.audit_log import AuditLog
 from models.user import User
-from routers import users
+from routers import users, auth
 
 
 async def _fresh(model, id_):
@@ -163,6 +163,20 @@ async def test_reset_password_sets_must_reset(make_client, make_user, auth_heade
     assert r.status_code == 200
     refreshed = await _fresh(User, target.id)
     assert refreshed.must_reset_password is True
+
+
+async def test_reset_password_invalidates_existing_token(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    target = await make_user(username="t", role="user", password="oldpw")
+    target_header = auth_header(target)
+    async with make_client(users.router, auth.router) as c:
+        assert (await c.get("/api/auth/me", headers=target_header)).status_code == 200
+
+        r = await c.post(f"/api/users/{target.id}/reset-password",
+                          headers=auth_header(admin), json={"new_password": "brandnew1"})
+        assert r.status_code == 200
+
+        assert (await c.get("/api/auth/me", headers=target_header)).status_code == 401
 
 
 async def test_reset_superadmin_password_forbidden_for_admin(make_client, make_user, auth_header):

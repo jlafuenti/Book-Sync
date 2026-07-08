@@ -105,7 +105,14 @@ export async function getMe() {
     return resp.json();
 }
 
-export function logout() {
+export async function logout() {
+    // Best-effort: invalidate server-side tokens, but always clear local
+    // tokens even if the request fails (e.g. offline, token already expired).
+    try {
+        await fetchWithAuth(`${API_BASE}/auth/logout`, { method: 'POST' });
+    } catch {
+        // ignore — local logout must still succeed
+    }
     clearTokens();
 }
 

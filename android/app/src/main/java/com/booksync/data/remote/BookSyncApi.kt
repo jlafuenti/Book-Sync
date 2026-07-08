@@ -31,6 +31,9 @@ interface BookSyncApi {
     @POST("api/auth/change-password")
     suspend fun changePassword(@Body request: PasswordChangeRequest): Response<Unit>
 
+    @POST("api/auth/logout")
+    suspend fun logout(): Response<Unit>
+
     // ============ Library ============
 
     @GET("api/library/ebooks")

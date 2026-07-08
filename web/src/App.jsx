@@ -119,8 +119,8 @@ function AppShell({ user, setUser }) {
     const [drawerOpen, setDrawerOpen] = useState(false)
     const navigate = useNavigate()
 
-    const handleLogout = () => {
-        logout()
+    const handleLogout = async () => {
+        await logout()
         setUser(null)
     }
 
