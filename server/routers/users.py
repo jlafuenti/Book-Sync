@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 @router.get("/", response_model=list[UserResponse])
 async def list_users(
-    filter: Optional[str] = Query(None, regex="^(pending|active|inactive|all)$"),
+    filter: Optional[str] = Query(None, pattern="^(pending|active|inactive|all)$"),
     _: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):

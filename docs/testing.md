@@ -20,6 +20,52 @@ Notes:
 - On Windows, if a venv fails to build under a long path, create it at a short path
   (e.g. `C:\bst`) — pip's dist-info paths can exceed `MAX_PATH`.
 
+### Fast red-green loop
+
+`pytest-watch` reruns the suite on save — the core TDD loop. Focus on the file you're
+working on for the fastest feedback:
+
+```bash
+cd server
+ptw -- tests/test_users.py        # rerun just this file on every save
+```
+
+Tests use a low bcrypt cost (set in `conftest.py`) so auth/user-heavy suites stay fast.
+
+## Writing a test (server)
+
+Write the failing test first, watch it fail for the right reason, then make it pass.
+
+**Fixtures & helpers** (from `conftest.py` / `tests/factories.py`):
+- `db` — an `AsyncSession` on the SQLite test DB (schema is fresh per test).
+- `make_user(username=…, role=…, password=…, is_active=…)` — insert a `User`.
+- `auth_header(user)` — `Authorization: Bearer …` for that user.
+- `make_client(*routers)` — an `httpx.AsyncClient` for a minimal app mounting just the
+  router(s) under test (avoids the heavy full app). Async context manager.
+- `tests.factories.make_book_pair(db, …)` / `make_sync_map(db, …)` — seed common rows.
+
+**Pattern — a router endpoint test:**
+
+```python
+from routers import users
+from tests.factories import make_book_pair  # if you need domain rows
+
+async def test_admin_can_list_users(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(users.router) as client:
+        r = await client.get("/api/users/", headers=auth_header(admin))
+    assert r.status_code == 200
+```
+
+**Pattern — pure logic (golden vectors):** put inputs/expected in a small data list or a
+JSON fixture under `tests/fixtures/` and `@pytest.mark.parametrize` over them (see
+`test_metadata_utils.py` and `tests/fixtures/sync_parity/`). For logic mirrored on the
+Android client, add the vectors to `sync_parity/` so both platforms assert the same contract.
+
+Cross-request DB state: the app commits per request via its own session, so read back with a
+**fresh** `async_session()` (not the `db` fixture, which holds its own snapshot) — see
+`test_queue_manager.py::_get`.
+
 ## Coverage gates (CI)
 
 Coverage is measured with `pytest-cov` and enforced by **two independent gates** in the
