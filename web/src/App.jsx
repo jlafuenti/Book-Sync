@@ -111,7 +111,7 @@ function getMobilePageTitle(pathname) {
     return 'Tandem'
 }
 
-function AppShell({ user, setUser }) {
+export function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
     const [sidebarHovered, setSidebarHovered] = useState(false)
