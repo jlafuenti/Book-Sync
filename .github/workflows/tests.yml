@@ -46,8 +46,10 @@ jobs:
         # Force the C tracer: the default sys.monitoring core misses lines in
         # async code on Python 3.12, which broke diff-cover's patch coverage.
         env:
-          COVERAGE_CORE: ctrace
-        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
+          COVERAGE_CORE: pytrace
+        run: |
+          python -c "import coverage; print('coverage', coverage.__version__, 'core env =', __import__('os').environ.get('COVERAGE_CORE'))"
+          pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
 
       - name: DEBUG coverage hits
         if: github.event_name == 'pull_request'
