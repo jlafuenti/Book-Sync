@@ -14,6 +14,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so diff-cover can compare a PR against its base branch.
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -34,8 +37,31 @@ jobs:
       - name: Run tests
         # conftest points DATABASE_URL at a throwaway SQLite DB, so no Postgres
         # service is needed here. The Postgres migration test self-skips.
-        # Coverage is measured and reported (term-missing), but not gated yet.
-        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml
+        # Global coverage floor (anti-backslide) — ratchet upward over time; see
+        # docs/testing.md for the policy.
+        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
+
+      - name: Check patch coverage (PRs)
+        # Stop-the-bleeding gate: lines a PR changes must be >=80% covered. Runs
+        # from the repo root so diff-cover can resolve git paths. The exclude list
+        # is the intentionally-manual / hardware / env-specific set (kept in sync
+        # with docs/testing.md).
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git fetch --no-tags origin ${{ github.base_ref }}
+          # diff-cover matches --exclude as fnmatch globs against the full path
+          # ('*' spans '/'), so the '*/' prefix form is what matches. NOTE: --exclude
+          # takes all patterns after a SINGLE flag (repeated flags => only the last
+          # wins), so keep them as one space-separated list.
+          diff-cover server/coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 \
+            --exclude '*/database.py' '*/services/transcription.py' '*/transcription_providers/*' \
+              '*/services/import_sources/*' '*/import_scheduler.py' '*/abs_metadata.py' \
+              '*/audio_integrity.py' '*/ebook_integrity.py' '*/epub_parser.py' '*/library_verify.py' \
+              '*/routers/chapters.py' '*/routers/files.py' '*/routers/import_sources.py' \
+              '*/routers/troubleshoot.py' '*/scripts/*'
 
   migrations:
     # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the
