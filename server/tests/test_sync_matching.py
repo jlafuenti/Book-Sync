@@ -183,6 +183,26 @@ async def test_bookmark_roundtrip_persists_epub_locator(client, make_user, auth_
     assert got.status_code == 200
     assert got.json()["epub_locator"] == locator
 
+    # A second update (existing bookmark, update branch) changes the locator...
+    new_locator = "epubcfi(/6/8[chap02]!/4/2/6[para20]/1:0)"
+    upd = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        headers=auth_header(user),
+        json={"source": "ebook", "epub_chapter": 2, "epub_sentence_index": 20,
+              "epub_locator": new_locator},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["epub_locator"] == new_locator
+
+    # ...and an audiobook-source update that omits the locator must NOT wipe it.
+    aud = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        headers=auth_header(user),
+        json={"source": "audiobook", "audio_position_ms": 5000},
+    )
+    assert aud.status_code == 200
+    assert aud.json()["epub_locator"] == new_locator
+
 
 async def test_convert_empty_sync_map_returns_input_unchanged(db):
     # A SyncMap with zero points is treated the same as no map.
