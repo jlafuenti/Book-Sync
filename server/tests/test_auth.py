@@ -72,7 +72,7 @@ async def test_successful_login_writes_audit_row(client, make_user, db):
 
 async def test_refresh_with_valid_refresh_token(client, make_user):
     user = await make_user(username="dave", password="pw")
-    token = create_refresh_token(user.id)
+    token = create_refresh_token(user)
     r = await client.post("/api/auth/refresh", json={"refresh_token": token})
     assert r.status_code == 200
     assert r.json()["access_token"]
@@ -81,7 +81,7 @@ async def test_refresh_with_valid_refresh_token(client, make_user):
 async def test_refresh_rejects_access_token(client, make_user):
     """An access token presented to /refresh must be rejected on the type check."""
     user = await make_user(username="erin", password="pw")
-    access = create_access_token(user.id)
+    access = create_access_token(user)
     r = await client.post("/api/auth/refresh", json={"refresh_token": access})
     assert r.status_code == 401
 
@@ -99,7 +99,7 @@ async def test_refresh_rejects_wrong_secret(client, make_user):
 
 async def test_refresh_rejects_disabled_user(client, make_user):
     user = await make_user(username="grace", password="pw", is_active=False)
-    token = create_refresh_token(user.id)
+    token = create_refresh_token(user)
     r = await client.post("/api/auth/refresh", json={"refresh_token": token})
     assert r.status_code == 401
 
@@ -233,3 +233,82 @@ async def test_change_password_wrong_old_rejected(client, make_user, auth_header
     # Unchanged: flag still set, old password still valid.
     assert refreshed.must_reset_password is True
     assert verify_password("oldpw", refreshed.hashed_password)
+
+
+# ---------------------------------------------------------------------------
+# Token revocation (token_version)
+# ---------------------------------------------------------------------------
+
+async def test_login_use_refresh_cycle_works_within_one_version(client, make_user):
+    """Regression: normal login -> use -> refresh still works untouched."""
+    await make_user(username="mallory", password="pw")
+    login_resp = await client.post("/api/auth/login", json={"username": "mallory", "password": "pw"})
+    tokens = login_resp.json()
+
+    me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"})
+    assert me.status_code == 200
+
+    refreshed = await client.post("/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+    assert refreshed.status_code == 200
+    new_access = refreshed.json()["access_token"]
+    me2 = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {new_access}"})
+    assert me2.status_code == 200
+
+
+async def test_token_rejected_after_version_bump(client, make_user, auth_header, db):
+    """A token minted at ver=0 stops working once token_version is bumped."""
+    user = await make_user(username="nate", password="pw")
+    header = auth_header(user)
+
+    r = await client.get("/api/auth/me", headers=header)
+    assert r.status_code == 200
+
+    stored = (await db.execute(select(User).where(User.id == user.id))).scalar_one()
+    stored.token_version += 1
+    await db.commit()
+
+    r = await client.get("/api/auth/me", headers=header)
+    assert r.status_code == 401
+
+
+async def test_change_password_invalidates_previous_tokens(client, make_user, auth_header):
+    user = await make_user(username="olga", password="oldpw")
+    old_header = auth_header(user)
+    old_refresh = create_refresh_token(user)
+
+    r = await client.post(
+        "/api/auth/change-password",
+        headers=old_header,
+        json={"old_password": "oldpw", "new_password": "brandnewpw"},
+    )
+    assert r.status_code == 200
+
+    # The access token issued before the change no longer works...
+    assert (await client.get("/api/auth/me", headers=old_header)).status_code == 401
+    # ...and neither does the refresh token issued before the change.
+    r = await client.post("/api/auth/refresh", json={"refresh_token": old_refresh})
+    assert r.status_code == 401
+
+
+async def test_logout_invalidates_existing_token(client, make_user, auth_header):
+    user = await make_user(username="peggy", password="pw")
+    header = auth_header(user)
+
+    r = await client.post("/api/auth/logout", headers=header)
+    assert r.status_code == 200
+
+    r = await client.get("/api/auth/me", headers=header)
+    assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Public registration toggle
+# ---------------------------------------------------------------------------
+
+async def test_register_disabled_returns_403(client, monkeypatch):
+    monkeypatch.setattr(settings, "allow_public_registration", False)
+    r = await client.post(
+        "/api/auth/register",
+        json={"username": "quentin", "email": "q@example.com", "password": "pw12345"},
+    )
+    assert r.status_code == 403

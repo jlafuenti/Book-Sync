@@ -111,7 +111,7 @@ function getMobilePageTitle(pathname) {
     return 'Tandem'
 }
 
-function AppShell({ user, setUser }) {
+export function AppShell({ user, setUser }) {
     const location = useLocation()
     const { hasMinRole } = useAuth()
     const [sidebarHovered, setSidebarHovered] = useState(false)
@@ -119,8 +119,8 @@ function AppShell({ user, setUser }) {
     const [drawerOpen, setDrawerOpen] = useState(false)
     const navigate = useNavigate()
 
-    const handleLogout = () => {
-        logout()
+    const handleLogout = async () => {
+        await logout()
         setUser(null)
     }
 

@@ -28,29 +28,54 @@ _DEV_KEY = base64.urlsafe_b64encode(b"booksync-insecure-dev-key-000000")
 _warned_default = False
 
 
+_KEY_GEN_HINT = (
+    "Generate one with: python -c 'from cryptography.fernet import Fernet; "
+    "print(Fernet.generate_key().decode())' and set CREDENTIAL_ENC_KEYS=<key> "
+    "in your environment."
+)
+
+
 def _build_fernet() -> MultiFernet:
     global _warned_default
     raw = (settings.credential_enc_keys or "").strip()
     if not raw:
+        if settings.app_env == "prod":
+            raise RuntimeError(
+                "CREDENTIAL_ENC_KEYS is unset — refusing to start in prod. " + _KEY_GEN_HINT
+            )
         if not _warned_default:
             logger.warning(
-                "CREDENTIAL_ENC_KEYS not set — using insecure default key. "
-                "Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' "
-                "and set CREDENTIAL_ENC_KEYS=<key> in your environment."
+                "CREDENTIAL_ENC_KEYS not set — using insecure default key (dev mode). "
+                + _KEY_GEN_HINT
             )
             _warned_default = True
         return MultiFernet([Fernet(_DEV_KEY)])
 
     keys = [k.strip() for k in raw.split(",") if k.strip()]
     fernets = []
+    invalid = []
     for k in keys:
         try:
             fernets.append(Fernet(k.encode() if isinstance(k, str) else k))
         except Exception as e:
-            logger.error(f"Invalid Fernet key in CREDENTIAL_ENC_KEYS (skipped): {e}")
+            invalid.append(k)
+            logger.error(f"Invalid Fernet key in CREDENTIAL_ENC_KEYS: {e}")
+    # A malformed key is a config typo, not a dev/prod security-posture choice —
+    # fail fast in both modes rather than silently falling back to fewer keys.
+    if invalid:
+        raise RuntimeError(
+            f"CREDENTIAL_ENC_KEYS contains {len(invalid)} invalid Fernet key(s) — "
+            f"refusing to start. " + _KEY_GEN_HINT
+        )
     if not fernets:
         raise RuntimeError("CREDENTIAL_ENC_KEYS contained no valid Fernet keys")
     return MultiFernet(fernets)
+
+
+def validate_startup() -> None:
+    """Eagerly build the Fernet keyset so startup fails fast instead of on
+    first credential read."""
+    _build_fernet()
 
 
 def encrypt(plaintext: str) -> bytes:

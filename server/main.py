@@ -17,7 +17,8 @@ from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 
 from database import init_db, bootstrap_superadmin
-from config import settings
+from config import settings, check_jwt_secret
+from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
 from routers import import_sources as import_sources_router
@@ -78,14 +79,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
     logger.info("BookSync server starting up...")
+
+    # Fail fast on insecure defaults before touching the DB or minting tokens.
+    check_jwt_secret(settings)
+    validate_credential_keys()
+
     await init_db()
     logger.info("Database initialized")
     await bootstrap_superadmin()
 
-    # JWT secret key warning
-    if settings.jwt_secret_key == "dev-secret-change-me":
-        logger.warning("WARNING: Using default JWT secret key. Set JWT_SECRET_KEY environment variable for production!")
-    
     # Reset any stale transcription jobs (legacy)
     from routers.transcription import reset_stale_transcriptions
     await reset_stale_transcriptions()

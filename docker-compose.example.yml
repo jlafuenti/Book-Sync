@@ -1,3 +1,8 @@
+# Template — copy this to docker-compose.yml and fill in your paths/secrets:
+#   cp docker-compose.example.yml docker-compose.yml
+# docker-compose.yml is gitignored, so your real secrets and volume paths never
+# show up in `git status`/`git diff` and can't drift into a merge conflict when
+# you pull updates to this template.
 services:
   server:
     build: ./server
@@ -10,7 +15,13 @@ services:
       - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
     environment:
       - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
-      - JWT_SECRET_KEY=change-me-to-a-random-secret-key
+      # APP_ENV=prod (the default) refuses to start unless JWT_SECRET_KEY and
+      # CREDENTIAL_ENC_KEYS below are set to real values. Set APP_ENV=dev only
+      # for local development — it allows the zero-config insecure defaults.
+      - APP_ENV=prod
+      # Generate with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(64))"
+      - JWT_SECRET_KEY=
       - WHISPER_MODEL=small
       - WHISPER_DEVICE=auto
       - EBOOK_DIR=/data/ebooks
@@ -22,7 +33,7 @@ services:
       # keys are tried for decryption, so rotation is "prepend a new key".
       # Generate with:
       #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
-      - CREDENTIAL_ENC_KEYS=change-me-generate-a-real-fernet-key
+      - CREDENTIAL_ENC_KEYS=
     depends_on:
       db:
         condition: service_healthy

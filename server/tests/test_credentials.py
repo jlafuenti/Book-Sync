@@ -26,7 +26,34 @@ def test_dev_fallback_key_is_valid(monkeypatch):
     """With CREDENTIAL_ENC_KEYS unset, the insecure dev fallback must still be a
     valid Fernet key (regression: _DEV_KEY used to be malformed and crashed)."""
     monkeypatch.setattr(app_settings, "credential_enc_keys", "")
+    monkeypatch.setattr(app_settings, "app_env", "dev")
     assert credentials.decrypt(credentials.encrypt("zero-config")) == "zero-config"
+
+
+def test_dev_key_rejected_in_prod(monkeypatch):
+    """The insecure dev fallback must never be used in prod mode."""
+    monkeypatch.setattr(app_settings, "credential_enc_keys", "")
+    monkeypatch.setattr(app_settings, "app_env", "prod")
+    with pytest.raises(RuntimeError):
+        credentials.encrypt("should-not-work")
+
+
+def test_invalid_key_rejected_in_prod(monkeypatch):
+    """A typo'd/invalid Fernet key must fail loudly at startup in prod, not
+    silently fall back to fewer keys than configured."""
+    monkeypatch.setattr(app_settings, "credential_enc_keys", "not-a-valid-fernet-key")
+    monkeypatch.setattr(app_settings, "app_env", "prod")
+    with pytest.raises(RuntimeError):
+        credentials.validate_startup()
+
+
+def test_invalid_key_rejected_in_dev_too(monkeypatch):
+    """A malformed key is a config typo, not a dev/prod posture choice — it must
+    fail loudly regardless of APP_ENV, not silently drop to fewer keys."""
+    monkeypatch.setattr(app_settings, "credential_enc_keys", "not-a-valid-fernet-key")
+    monkeypatch.setattr(app_settings, "app_env", "dev")
+    with pytest.raises(RuntimeError):
+        credentials.validate_startup()
 
 
 def test_encrypt_decrypt_roundtrip(monkeypatch, keyA):
