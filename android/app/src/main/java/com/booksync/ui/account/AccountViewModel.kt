@@ -169,6 +169,15 @@ class AccountViewModel @Inject constructor(
 
     /** Clears stored tokens; BookSyncNavigation observes the clear and routes to Login. */
     fun logout() {
-        viewModelScope.launch { tokenManager.clearTokens() }
+        viewModelScope.launch {
+            // Best-effort: invalidate server-side tokens, but always clear local
+            // tokens even if the request fails (e.g. offline, token already expired).
+            try {
+                api.logout()
+            } catch (_: Exception) {
+                // ignore — local logout must still succeed
+            }
+            tokenManager.clearTokens()
+        }
     }
 }

@@ -33,6 +33,10 @@ if not _PG_MODE:
     # SQLAlchemy wants a forward-slashed absolute path in the URL (Windows-safe).
     os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + _TEST_DB_PATH.replace("\\", "/")
 
+# Tests rely on the zero-config dev defaults (default JWT secret, insecure
+# dev Fernet key) — run in dev mode unless a test explicitly overrides it.
+os.environ.setdefault("APP_ENV", "dev")
+
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -182,6 +186,6 @@ def make_user():
 def auth_header():
     """Return a callable that builds a Bearer auth header for a user."""
     def _header(user: User) -> dict:
-        return {"Authorization": f"Bearer {create_access_token(user.id)}"}
+        return {"Authorization": f"Bearer {create_access_token(user)}"}
 
     return _header

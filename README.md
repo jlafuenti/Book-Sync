@@ -15,15 +15,17 @@ single position in sync across devices.
 
 ## Running
 
-Use Docker Compose for the full stack (server + Postgres + web):
+Use Docker Compose for the full stack (server + Postgres + web). Copy the template once, then
+customize your paths/secrets — `docker-compose.yml` is gitignored so your local copy never
+conflicts with future pulls:
 
 ```bash
+cp docker-compose.example.yml docker-compose.yml
+# edit docker-compose.yml: ebook/audiobook dirs, JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS
 docker compose up --build
 ```
 
-See `docker-compose.yml` for the volumes/env you need to set (ebook/audiobook dirs, JWT
-secret, credential encryption key). `docker-compose.jetson.yml` adds the remote transcription
-worker.
+`docker-compose.jetson.yml` adds the remote transcription worker.
 
 ## Development & tests
 

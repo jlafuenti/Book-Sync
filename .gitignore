@@ -22,6 +22,9 @@ coverage.xml
 
 # Docker
 *.log
+# Real deployment compose file (secrets, volume paths) — copy from
+# docker-compose.example.yml and customize; never tracked.
+/docker-compose.yml
 
 # OS files
 .DS_Store

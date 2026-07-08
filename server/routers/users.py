@@ -261,6 +261,7 @@ async def reset_password(
 
     user.hashed_password = hash_password(data.new_password)
     user.must_reset_password = True
+    user.token_version += 1
     await db.flush()
 
     await log_audit(
