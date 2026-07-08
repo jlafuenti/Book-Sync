@@ -33,7 +33,7 @@ class SyncMatcherParityTest {
             assertEquals(
                 "normalizeForSearch mismatch for input=<${input.take(40)}>",
                 expected,
-                SyncMatcher.normalizeForSearch(input),
+                SyncMatcher.normalizeForSearch(input) + "_BREAK",
             )
         }
     }
