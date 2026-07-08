@@ -4,6 +4,10 @@
 # Node modules
 node_modules/
 
+# Test / coverage output
+coverage/
+*.local
+
 # Python
 __pycache__/
 *.pyc
