@@ -164,6 +164,12 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         logger.info(
                             f"Re-attaching to ongoing transcription of {filename} on remote server."
                         )
+                        # Track the Orin process instance so we can tell "job finished"
+                        # apart from "the Orin process crashed and restarted" — both look
+                        # like active=false, but only one of them has a cached result.
+                        seen_instance_id = conflict_data.get("instance_id") if isinstance(conflict_data, dict) else None
+                        restarted = False
+
                         # Use a fresh client for polling so the upload client's state doesn't matter.
                         async with httpx.AsyncClient() as poll_client:
                             while True:
@@ -174,6 +180,17 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                     )
                                     if status_resp.status_code == 200:
                                         status_data = status_resp.json()
+                                        current_instance_id = status_data.get("instance_id")
+                                        if (
+                                            seen_instance_id
+                                            and current_instance_id
+                                            and current_instance_id != seen_instance_id
+                                        ):
+                                            restarted = True
+                                            break
+                                        if current_instance_id:
+                                            seen_instance_id = current_instance_id
+
                                         if progress_callback:
                                             progress_callback(
                                                 status_data.get("progress", 0),
@@ -184,6 +201,15 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                             break
                                 except httpx.RequestError as e:
                                     logger.debug(f"Status poll error (retrying): {e}")
+
+                        if restarted:
+                            # The Orin process crashed and restarted mid-job — its in-memory
+                            # result cache is gone. Retrying resumes from the on-disk checkpoint
+                            # on the Orin rather than failing on a guaranteed-404 result fetch.
+                            raise ProviderUnavailableError(
+                                f"Remote server restarted while transcribing {filename} "
+                                f"(likely crashed) — will retry."
+                            )
 
                         # Transcription finished — fetch the cached result.
                         logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
