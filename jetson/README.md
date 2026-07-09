@@ -90,3 +90,16 @@ BookSync → Settings → Transcription:
 - **Test Connection / transcriptions fail with 401**: the key in `jetson/docker-compose.yml`
   doesn't match what's saved in BookSync → Settings → Transcription. Regenerate from the UI and
   copy it into the compose file again (then `docker compose up -d` to pick up the new env var).
+- **`up` fails with "container name ... already in use"**: an older deployment (e.g. from before
+  this file lived in `jetson/`, or from a differently-named checkout directory) is still running
+  under the fixed `container_name: booksync_transcriber`. The template pins `name:
+  booksync-transcriber` at the top so the project/volume names no longer depend on the checkout
+  directory, but you still need to retire the old container by hand:
+  ```bash
+  docker rm -f booksync_transcriber   # stop/remove the stale container holding the name
+  docker volume ls | grep whisper_models   # confirm which volume actually has your downloaded model
+  docker compose up -d --build   # now reuses booksync-transcriber_whisper_models, no re-download
+  ```
+  If `docker compose up` had already run once before you fixed the name conflict, it may have
+  created empty `<old-dirname>_whisper_models` / `<old-dirname>_booksync_checkpoints` volumes —
+  safe to `docker volume rm` those once the real deployment is confirmed working.
