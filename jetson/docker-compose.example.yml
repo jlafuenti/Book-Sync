@@ -1,20 +1,20 @@
 # Docker Compose for the Jetson Orin Nano transcription server.
-# Deploy this file ON the Jetson alongside the ./jetson directory.
+# Deploy this file ON the Jetson, from inside this jetson/ directory.
 #
 # Usage:
-#   cp docker-compose.jetson.example.yml docker-compose.jetson.yml
-#   # edit docker-compose.jetson.yml: set TRANSCRIPTION_API_KEY below
-#   docker compose -f docker-compose.jetson.yml up -d
+#   cp docker-compose.example.yml docker-compose.yml
+#   # edit docker-compose.yml: set TRANSCRIPTION_API_KEY below
+#   docker compose up -d --build
 #
-# See jetson/README.md for the full deploy walkthrough (sparse clone,
-# generating the key, pointing the main BookSync server at this host).
+# See README.md (this directory) for the full deploy walkthrough (sparse
+# clone, generating the key, pointing the main BookSync server at this host).
 #
-# docker-compose.jetson.yml is gitignored (it carries a real secret below),
-# so pulling updates to this template never conflicts with your local copy.
+# docker-compose.yml is gitignored (it carries a real secret below), so
+# pulling updates to this template never conflicts with your local copy.
 services:
   transcriber:
     build:
-      context: ./jetson
+      context: .
       dockerfile: Dockerfile
     container_name: booksync_transcriber
     runtime: nvidia

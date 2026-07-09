@@ -27,8 +27,8 @@ coverage.xml
 /docker-compose.yml
 
 # Real Jetson deployment compose file (carries TRANSCRIPTION_API_KEY) — copy
-# from docker-compose.jetson.example.yml and customize; never tracked.
-/docker-compose.jetson.yml
+# from jetson/docker-compose.example.yml and customize; never tracked.
+/jetson/docker-compose.yml
 
 # OS files
 .DS_Store
