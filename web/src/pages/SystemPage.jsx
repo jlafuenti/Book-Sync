@@ -246,7 +246,7 @@ function SettingsSection() {
 const SECRET_PLACEHOLDER = '********'
 
 /* ── TranscriptionSettingsSection ─────────────────────────────────── */
-function TranscriptionSettingsSection() {
+export function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
     const [remoteUrl, setRemoteUrl] = useState('')
     const [remoteKey, setRemoteKey] = useState('')
