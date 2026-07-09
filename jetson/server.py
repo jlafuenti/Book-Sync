@@ -22,6 +22,7 @@ import shutil
 import logging
 import tempfile
 import threading
+import uuid
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
@@ -55,6 +56,7 @@ SCALE_UP_AFTER_N_SUCCESSES = 3      # Successful small chunks before doubling ba
 PREEMPTIVE_RELOAD_THRESHOLD_MB = 1200  # Reload model if available memory below this
 MAX_CHUNKS_BETWEEN_RELOADS = 15     # Force model reload after this many chunks
 CHECKPOINT_DIR = "/tmp/booksync_checkpoints"
+OVERSIZED_CHUNK_TOLERANCE = 1.5     # ffmpeg returned this much more audio than requested -> reject
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -64,6 +66,11 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("transcription-server")
+
+# Unique per-process id, regenerated on every restart (including OoM-kills).
+# Lets clients detect "the server restarted" vs. "the job actually finished"
+# when /v1/status reports active=false.
+INSTANCE_ID = uuid.uuid4().hex
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -172,6 +179,17 @@ def _is_oom_error(exc: Exception) -> bool:
     """Check if an exception is an out-of-memory error."""
     msg = str(exc).lower()
     return any(kw in msg for kw in ("out of memory", "oom", "cuda", "cudamalloc", "alloc"))
+
+
+class OversizedChunkError(RuntimeError):
+    """Raised when ffmpeg returns far more audio than the requested chunk size.
+
+    Seen with malformed/mis-concatenated source files where a timestamp
+    discontinuity causes ffmpeg's `-t` to stop capping the output duration.
+    Handled the same way as an OoM (shrink and retry) since feeding an
+    unbounded array straight into faster-whisper is what actually OoMs the
+    Jetson.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +480,15 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                     logger.warning(f"  Chunk at {start_sec}s returned no audio data. Done.")
                     break
 
+                actual_chunk_sec = len(audio_array) / 16000
+                if actual_chunk_sec > current_chunk_size * OVERSIZED_CHUNK_TOLERANCE:
+                    del audio_array
+                    raise OversizedChunkError(
+                        f"ffmpeg returned {actual_chunk_sec:.1f}s of audio for a "
+                        f"{current_chunk_size}s request at {start_sec}s — likely a "
+                        f"timestamp discontinuity in a malformed/corrupt source file"
+                    )
+
                 segments_gen, info = model.transcribe(
                     audio_array,
                     vad_filter=VAD_FILTER,
@@ -527,6 +554,27 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                 # (audio_array is deleted, so check via sentences/position instead)
                 if start_sec >= total_duration:
                     break
+
+            except OversizedChunkError as e:
+                logger.error(f"  Oversized chunk at {start_sec}s: {e}")
+
+                # No transcribe() call happened, so there's nothing to reload —
+                # just shrink and retry at the same position.
+                current_chunk_size = current_chunk_size // 2
+                if current_chunk_size < MIN_CHUNK_SIZE_SEC:
+                    logger.error(
+                        f"  Chunk size {current_chunk_size}s below minimum "
+                        f"({MIN_CHUNK_SIZE_SEC}s) and ffmpeg is still returning "
+                        f"oversized audio at {start_sec}s. Aborting — source file "
+                        f"is likely corrupt/malformed and needs to be re-imported."
+                    )
+                    raise
+                logger.info(
+                    f"  Retrying @ {start_sec}s with reduced chunk size "
+                    f"{current_chunk_size}s"
+                )
+                consecutive_small_successes = 0
+                # Do NOT advance start_sec — retry same position
 
             except Exception as e:
                 if _is_oom_error(e):
@@ -683,6 +731,7 @@ def get_status():
             "progress": _job_status.progress,
             "message": _job_status.message,
             "current_file": _job_status.current_file,
+            "instance_id": INSTANCE_ID,
         }
 
 @app.get("/v1/result/{filename}")
@@ -730,6 +779,7 @@ async def transcribe(request: Request, audio_file: UploadFile = File(...)):
                 status_code=409,
                 content={
                     "detail": "A transcription is already in progress.",
+                    "instance_id": INSTANCE_ID,
                     "current_job": {
                         "file": _job_status.current_file,
                         "progress": _job_status.progress,
