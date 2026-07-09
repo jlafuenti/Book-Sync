@@ -152,6 +152,45 @@ async def test_upload_ebook_cover_accepts_allowed_extension(
     assert r.status_code == 200, r.text
 
 
+async def test_upload_audiobook_cover_rejects_bad_extension(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = AudioBook(title="Some Audiobook", filename="b.m4b", file_path="/x/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("evil.svg", b"<svg/>", "image/svg+xml")},
+        )
+
+    assert r.status_code == 400
+    assert "Unsupported cover format" in r.json()["detail"]
+
+
+async def test_upload_audiobook_cover_accepts_allowed_extension(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = AudioBook(title="Some Audiobook", filename="b.m4b", file_path="/x/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+
+    assert r.status_code == 200, r.text
+
+
 # --- replace_file's untrusted fallback branch -------------------------------
 
 async def test_replace_file_fallback_sanitizes_traversal_filename(
