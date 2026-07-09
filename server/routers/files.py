@@ -27,38 +27,78 @@ from utils import safe_join
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 
-async def get_user_for_streaming(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    token_query: Optional[str] = Query(None, alias="token"),
-) -> User:
-    """Auth dependency for audio streaming: accepts JWT via Authorization header
-    OR as a ?token= query parameter (required for Chromecast receiver requests)."""
-    # Prefer the Authorization: Bearer header; fall back to query param
-    auth_header = request.headers.get("authorization", "") if request else ""
-    token: Optional[str] = None
-    if auth_header.lower().startswith("bearer "):
-        token = auth_header[7:]
-    elif token_query:
-        token = token_query
-
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+def _decode_or_401(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        user_id: Optional[str] = payload.get("sub")
-        token_type: Optional[str] = payload.get("type")
-        if user_id is None or token_type != "access":
-            raise HTTPException(status_code=401, detail="Invalid token")
+        return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
+async def _load_active_user(db: AsyncSession, payload: dict) -> User:
+    user_id: Optional[str] = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid token")
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
+
+
+async def _resolve_media_user(
+    request: Request,
+    db: AsyncSession,
+    token_query: Optional[str],
+    resource_type: str,
+    resource_id: str,
+) -> User:
+    """Shared auth resolver for media endpoints: accepts a full access token
+    via the Authorization header (never exposed in a URL/log), or a token
+    scoped to this exact resource via ?token= (required for consumers that
+    can't send a header, e.g. img tags, the Cast SDK's media URL)."""
+    auth_header = request.headers.get("authorization", "") if request else ""
+
+    if auth_header.lower().startswith("bearer "):
+        payload = _decode_or_401(auth_header[7:])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token")
+    elif token_query:
+        payload = _decode_or_401(token_query)
+        if (
+            payload.get("type") != "media"
+            or payload.get("resource_type") != resource_type
+            or payload.get("resource_id") != resource_id
+        ):
+            raise HTTPException(status_code=401, detail="Invalid or mismatched media token")
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user = await _load_active_user(db, payload)
+    if payload.get("type") == "media" and payload.get("ver", 0) != user.token_version:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
+async def get_user_for_cover(
+    filename: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    token_query: Optional[str] = Query(None, alias="token"),
+) -> User:
+    """Auth dependency for cover serving: accepts a full access token via
+    header, or a media token scoped to this exact filename via ?token=."""
+    return await _resolve_media_user(request, db, token_query, "cover", filename)
+
+
+async def get_user_for_audiobook(
+    audiobook_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    token_query: Optional[str] = Query(None, alias="token"),
+) -> User:
+    """Auth dependency for audio streaming: accepts a full access token via
+    header, or a media token scoped to this exact audiobook_id via ?token=."""
+    return await _resolve_media_user(request, db, token_query, "audiobook", str(audiobook_id))
 
 # MIME type mapping
 MIME_TYPES = {
@@ -105,7 +145,7 @@ async def download_ebook(
 @router.get("/covers/{filename}")
 async def get_cover(
     filename: str,
-    _: User = Depends(get_user_for_streaming),
+    _: User = Depends(get_user_for_cover),
 ):
     """Serve a cover image by filename. Requires auth via header or ?token= query param."""
     file_path = safe_join(settings.covers_dir, filename)
@@ -127,7 +167,7 @@ async def download_audiobook(
     audiobook_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_user_for_streaming),
+    _: User = Depends(get_user_for_audiobook),
 ):
     """
     Download or stream an audiobook file.

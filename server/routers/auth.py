@@ -18,7 +18,7 @@ from config import settings
 from models.user import User, ROLE_HIERARCHY
 from schemas import (
     UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
-    PasswordChange,
+    PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
 from rate_limit import limiter
 
@@ -59,6 +59,21 @@ def create_refresh_token(user: User) -> str:
     return create_token(
         {"sub": str(user.id), "type": "refresh", "ver": user.token_version},
         timedelta(days=settings.jwt_refresh_token_expire_days),
+    )
+
+
+def create_media_token(user: User, resource_type: str, resource_id: str) -> str:
+    """Create a short-lived, resource-scoped token for cover/audio URLs that
+    can't carry an Authorization header (img tags, Cast SDK media URLs)."""
+    return create_token(
+        {
+            "sub": str(user.id),
+            "type": "media",
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "ver": user.token_version,
+        },
+        timedelta(minutes=settings.jwt_media_token_expire_minutes),
     )
 
 
@@ -261,6 +276,45 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
     return TokenResponse(
         access_token=create_access_token(user),
         refresh_token=create_refresh_token(user),
+    )
+
+
+VALID_MEDIA_RESOURCE_TYPES = {"cover", "audiobook"}
+
+
+@router.get("/media-token", response_model=MediaTokenResponse)
+async def get_media_token(
+    resource_type: str,
+    resource_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Mint a short-lived token scoped to one cover/audiobook resource, for
+    use in URLs that can't carry an Authorization header (img tags, Cast)."""
+    if resource_type not in VALID_MEDIA_RESOURCE_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid resource_type")
+    token = create_media_token(current_user, resource_type, resource_id)
+    return MediaTokenResponse(
+        token=token,
+        expires_in=settings.jwt_media_token_expire_minutes * 60,
+    )
+
+
+@router.post("/media-token/batch", response_model=MediaTokenBatchResponse)
+async def get_media_tokens_batch(
+    body: MediaTokenBatchRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Mint scoped media tokens for multiple resources in one round-trip
+    (e.g. all covers visible on a library grid page)."""
+    tokens = {}
+    for r in body.resources[:200]:
+        if r.resource_type not in VALID_MEDIA_RESOURCE_TYPES or not r.resource_id:
+            continue
+        key = f"{r.resource_type}:{r.resource_id}"
+        tokens[key] = create_media_token(current_user, r.resource_type, r.resource_id)
+    return MediaTokenBatchResponse(
+        tokens=tokens,
+        expires_in=settings.jwt_media_token_expire_minutes * 60,
     )
 
 

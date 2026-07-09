@@ -32,14 +32,60 @@ function clearTokens() {
     localStorage.removeItem('tandem_refresh');
 }
 
+// Short-lived tokens scoped to one cover/audiobook resource, minted via
+// /api/auth/media-token. Used instead of the long-lived access token on URLs
+// that can't carry an Authorization header (img tags, the <audio> element,
+// Cast SDK media URLs) -- see issue #50.
+const mediaTokenCache = new Map(); // "cover:filename" -> { token, expiresAt }
+const MEDIA_TOKEN_BUFFER_MS = 60_000;
+
+async function getMediaToken(resourceType, resourceId) {
+    const key = `${resourceType}:${resourceId}`;
+    const cached = mediaTokenCache.get(key);
+    if (cached && cached.expiresAt - Date.now() > MEDIA_TOKEN_BUFFER_MS) {
+        return cached.token;
+    }
+    const resp = await fetchWithAuth(
+        `${API_BASE}/auth/media-token?resource_type=${resourceType}&resource_id=${encodeURIComponent(resourceId)}`
+    );
+    if (!resp.ok) throw new Error('Failed to get media token');
+    const { token, expires_in } = await resp.json();
+    mediaTokenCache.set(key, { token, expiresAt: Date.now() + expires_in * 1000 });
+    return token;
+}
+
 /**
- * Append ?token= to a cover_path URL so the browser <img> tag
- * can authenticate against the /api/files/covers/ endpoint.
+ * Mint media tokens for multiple resources in one round-trip (e.g. all covers
+ * visible on a library grid page) so individual coverSrc() calls resolve
+ * from cache instead of firing N separate requests.
+ */
+export async function prefetchMediaTokens(resources) {
+    if (!resources.length) return;
+    const resp = await fetchWithAuth(`${API_BASE}/auth/media-token/batch`, {
+        method: 'POST',
+        body: JSON.stringify({
+            resources: resources.map((r) => ({ resource_type: r.resourceType, resource_id: r.resourceId })),
+        }),
+    });
+    if (!resp.ok) return;
+    const { tokens, expires_in } = await resp.json();
+    const expiresAt = Date.now() + expires_in * 1000;
+    for (const [key, token] of Object.entries(tokens)) {
+        mediaTokenCache.set(key, { token, expiresAt });
+    }
+}
+
+/**
+ * Append a short-lived, resource-scoped ?token= to a cover_path URL so the
+ * browser <img> tag can authenticate against the /api/files/covers/ endpoint
+ * without exposing the long-lived login token in the URL.
  * Returns null/undefined as-is so callers can still check falsiness.
  */
-export function coverSrc(path) {
+export async function coverSrc(path) {
     if (!path) return path;
-    return `${path}${path.includes('?') ? '&' : '?'}token=${accessToken || ''}`;
+    const filename = path.split('/').pop().split('?')[0];
+    const token = await getMediaToken('cover', filename);
+    return `${path}${path.includes('?') ? '&' : '?'}token=${token}`;
 }
 
 async function fetchWithAuth(url, options = {}) {
@@ -511,8 +557,9 @@ export async function fetchEbookBlob(ebookId) {
     return resp.arrayBuffer();
 }
 
-export function getAudiobookStreamUrl(audiobookId) {
-    return `${API_BASE}/files/audiobook/${audiobookId}?token=${accessToken}`;
+export async function getAudiobookStreamUrl(audiobookId) {
+    const token = await getMediaToken('audiobook', String(audiobookId));
+    return `${API_BASE}/files/audiobook/${audiobookId}?token=${token}`;
 }
 
 // ============ Settings ============

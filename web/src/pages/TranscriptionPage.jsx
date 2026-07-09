@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-    getPairs, coverSrc,
+    getPairs,
     startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue,
     getTranscriptionQueue, getQueueHistory, removeFromQueue, updateQueuePriority,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
+import CoverImg from '../components/CoverImg'
 import './TranscriptionPage.css'
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -525,7 +526,7 @@ function TranscriptionPage({ tab }) {
                 {isOpen && seriesPairs.map(pair => (
                     <div key={pair.id} className="transcription-book-row">
                         {pair.ebook?.cover_path
-                            ? <img src={coverSrc(pair.ebook.cover_path)} className="transcription-book-thumb" alt="" />
+                            ? <CoverImg path={pair.ebook.cover_path} className="transcription-book-thumb" alt="" />
                             : <div className="transcription-book-thumb">📚</div>
                         }
                         <div className="transcription-book-index">
@@ -562,7 +563,7 @@ function TranscriptionPage({ tab }) {
         <div key={pair.id} className="transcription-card">
             <div className="transcription-card-cover">
                 {pair.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
+                    ? <CoverImg path={pair.ebook.cover_path} alt="" />
                     : <div className="transcription-card-placeholder">📚</div>
                 }
                 {renderStatusBadge(pair)}
@@ -600,7 +601,7 @@ function TranscriptionPage({ tab }) {
             <div key={pair.id} className="transcription-card">
                 <div className="transcription-card-cover">
                     {pair.ebook?.cover_path
-                        ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
+                        ? <CoverImg path={pair.ebook.cover_path} alt="" />
                         : <div className="transcription-card-placeholder">📚</div>
                     }
                     {progress != null && !isError && (
@@ -637,7 +638,7 @@ function TranscriptionPage({ tab }) {
         return (
             <div key={pair.id} className="transcription-progress-card">
                 {pair.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} className="transcription-progress-thumb" alt="" />
+                    ? <CoverImg path={pair.ebook.cover_path} className="transcription-progress-thumb" alt="" />
                     : <div className="transcription-progress-thumb">📚</div>
                 }
                 <div className="transcription-progress-body">
@@ -678,7 +679,7 @@ function TranscriptionPage({ tab }) {
         <div key={pair.id} className="transcription-card">
             <div className="transcription-card-cover">
                 {pair.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} alt="" />
+                    ? <CoverImg path={pair.ebook.cover_path} alt="" />
                     : <div className="transcription-card-placeholder">📚</div>
                 }
                 <span className="transcription-status-badge synced">Synced</span>
@@ -709,7 +710,7 @@ function TranscriptionPage({ tab }) {
     const renderTranscribedListRow = (pair) => (
         <div key={pair.id} className="transcription-book-row">
             {pair.ebook?.cover_path
-                ? <img src={coverSrc(pair.ebook.cover_path)} className="transcription-book-thumb" alt="" />
+                ? <CoverImg path={pair.ebook.cover_path} className="transcription-book-thumb" alt="" />
                 : <div className="transcription-book-thumb">📚</div>
             }
             <div className="transcription-book-info">
@@ -748,7 +749,7 @@ function TranscriptionPage({ tab }) {
             >
                 <div className="transcription-card-cover">
                     {coverPath
-                        ? <img src={coverSrc(coverPath)} alt="" />
+                        ? <CoverImg path={coverPath} alt="" />
                         : <div className="transcription-card-placeholder">📚</div>
                     }
                     <span className="transcription-queue-badge">{idx + 1}</span>
@@ -828,7 +829,7 @@ function TranscriptionPage({ tab }) {
     const renderMobileItem = (pair, action) => (
         <div key={pair.id} className="tx-mobile-item">
             {pair.ebook?.cover_path
-                ? <img src={coverSrc(pair.ebook.cover_path)} className="tx-mobile-item-thumb" alt="" />
+                ? <CoverImg path={pair.ebook.cover_path} className="tx-mobile-item-thumb" alt="" />
                 : <div className="tx-mobile-item-thumb-placeholder">📚</div>
             }
             <div className="tx-mobile-item-info">
@@ -852,7 +853,7 @@ function TranscriptionPage({ tab }) {
         return (
             <div key={pair.id} className="tx-mobile-active-card">
                 {pair.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} className="tx-mobile-active-thumb" alt="" />
+                    ? <CoverImg path={pair.ebook.cover_path} className="tx-mobile-active-thumb" alt="" />
                     : <div className="tx-mobile-item-thumb-placeholder" style={{ width: 80, height: 112 }}>📚</div>
                 }
                 <div className="tx-mobile-active-body">
@@ -888,7 +889,7 @@ function TranscriptionPage({ tab }) {
         return (
             <div key={item.id} className="tx-mobile-item">
                 {pair?.ebook?.cover_path
-                    ? <img src={coverSrc(pair.ebook.cover_path)} className="tx-mobile-item-thumb" alt="" />
+                    ? <CoverImg path={pair.ebook.cover_path} className="tx-mobile-item-thumb" alt="" />
                     : <div className="tx-mobile-item-thumb-placeholder">📚</div>
                 }
                 <div className="tx-mobile-item-info">
@@ -962,7 +963,7 @@ function TranscriptionPage({ tab }) {
                                                 return (
                                                     <div className="tx-mobile-active-card">
                                                         {pair.ebook?.cover_path
-                                                            ? <img src={coverSrc(pair.ebook.cover_path)} className="tx-mobile-active-thumb" alt="" />
+                                                            ? <CoverImg path={pair.ebook.cover_path} className="tx-mobile-active-thumb" alt="" />
                                                             : <div className="tx-mobile-item-thumb-placeholder" style={{ width: 80, height: 112 }}>📚</div>
                                                         }
                                                         <div className="tx-mobile-active-body">
