@@ -48,6 +48,19 @@ async def _load_settings_from_db() -> dict:
     return settings_dict
 
 
+async def _load_remote_key() -> str:
+    """Load the decrypted Jetson shared secret from the credential store."""
+    from database import async_session
+    from services import credentials as credential_store
+
+    try:
+        async with async_session() as db:
+            return await credential_store.get_credential(db, "transcription_remote") or ""
+    except Exception as e:
+        logger.warning(f"Could not load transcription remote key from DB: {e}")
+        return ""
+
+
 async def get_transcription_provider() -> "TranscriptionProvider":
     """
     Factory that returns the right provider based on system settings.
@@ -61,6 +74,7 @@ async def get_transcription_provider() -> "TranscriptionProvider":
     :class:`FallbackProvider` that wraps both remote and local.
     """
     db_settings = await _load_settings_from_db()
+    remote_key = await _load_remote_key()
 
     provider_mode = str(db_settings.get("transcription_provider", "remote_with_fallback"))
     remote_url = str(db_settings.get("transcription_remote_url", ""))
@@ -77,13 +91,14 @@ async def get_transcription_provider() -> "TranscriptionProvider":
                 "Remote transcription URL is not configured. "
                 "Set it in Settings → Transcription."
             )
-        return RemoteWhisperProvider(remote_url, timeout=remote_timeout)
+        return RemoteWhisperProvider(remote_url, timeout=remote_timeout, api_key=remote_key)
 
     else:  # "remote_with_fallback" (default)
         logger.info(f"Using Remote-with-Fallback provider: {remote_url}")
         return FallbackProvider(
             remote_url=remote_url,
             remote_timeout=remote_timeout,
+            remote_key=remote_key,
         )
 
 
@@ -93,8 +108,11 @@ class FallbackProvider(TranscriptionProvider):
     ``ProviderUnavailableError``, falls back to local Whisper.
     """
 
-    def __init__(self, remote_url: str, remote_timeout: int = 7200):
-        self._remote = RemoteWhisperProvider(remote_url, timeout=remote_timeout) if remote_url else None
+    def __init__(self, remote_url: str, remote_timeout: int = 7200, remote_key: str = ""):
+        self._remote = (
+            RemoteWhisperProvider(remote_url, timeout=remote_timeout, api_key=remote_key)
+            if remote_url else None
+        )
         self._local = LocalWhisperProvider()
 
     async def transcribe(self, audio_path, progress_callback=None):

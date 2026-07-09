@@ -31,16 +31,19 @@ class RemoteWhisperProvider(TranscriptionProvider):
     Intended for use with the Jetson Orin Nano transcription server.
     """
 
-    def __init__(self, remote_url: str, timeout: int = 7200):
+    def __init__(self, remote_url: str, timeout: int = 7200, api_key: str = ""):
         self.remote_url = remote_url.rstrip("/")
         self.timeout = timeout
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     async def _poll_progress(self, stop_event: asyncio.Event, progress_callback: Callable):
         """Polls the remote server for progress while transcription is running."""
         async with httpx.AsyncClient() as client:
             while not stop_event.is_set():
                 try:
-                    resp = await client.get(f"{self.remote_url}/v1/status", timeout=2.0)
+                    resp = await client.get(
+                        f"{self.remote_url}/v1/status", timeout=2.0, headers=self._headers
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         if data.get("active"):
@@ -70,7 +73,9 @@ class RemoteWhisperProvider(TranscriptionProvider):
             while True:
                 await asyncio.sleep(30)
                 try:
-                    resp = await client.get(f"{self.remote_url}/v1/status", timeout=10.0)
+                    resp = await client.get(
+                        f"{self.remote_url}/v1/status", timeout=10.0, headers=self._headers
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         if progress_callback:
@@ -103,7 +108,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
         try:
             async with httpx.AsyncClient() as check_client:
                 cached_check = await check_client.get(
-                    f"{self.remote_url}/v1/result/{filename}", timeout=10.0
+                    f"{self.remote_url}/v1/result/{filename}", timeout=10.0, headers=self._headers
                 )
             if cached_check.status_code == 200:
                 logger.info(f"Found cached result for {filename} on remote server — skipping upload.")
@@ -138,7 +143,8 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         try:
                             response = await client.post(
                                 f"{self.remote_url}/v1/transcribe",
-                                files=files
+                                files=files,
+                                headers=self._headers,
                             )
                         except httpx.ConnectError as e:
                             raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
@@ -176,7 +182,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                 await asyncio.sleep(10)
                                 try:
                                     status_resp = await poll_client.get(
-                                        f"{self.remote_url}/v1/status", timeout=10.0
+                                        f"{self.remote_url}/v1/status", timeout=10.0, headers=self._headers
                                     )
                                     if status_resp.status_code == 200:
                                         status_data = status_resp.json()
@@ -215,7 +221,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
                         async with httpx.AsyncClient() as result_client:
                             result_resp = await result_client.get(
-                                f"{self.remote_url}/v1/result/{filename}", timeout=60.0
+                                f"{self.remote_url}/v1/result/{filename}", timeout=60.0, headers=self._headers
                             )
                         if result_resp.status_code == 200:
                             data = result_resp.json()
@@ -301,7 +307,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
         try:
             import httpx
             async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(f"{self.remote_url}/v1/health")
+                resp = await client.get(f"{self.remote_url}/v1/health", headers=self._headers)
                 if resp.status_code == 200:
                     data = resp.json()
                     return data.get("model_loaded", False)

@@ -98,3 +98,59 @@ async def test_get_masks_stored_abs_token(make_client, make_user, auth_header, e
         get = await c.get("/api/settings/", headers=auth_header(admin))
     # The GET masks the real secret with the placeholder.
     assert get.json()["abs_api_token"] == _SECRET_PLACEHOLDER
+
+
+async def test_transcription_remote_key_routed_to_credential_store(make_client, make_user, auth_header, enc_key):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        # Set a real key -> stored (encrypted) in the credential store.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"transcription_remote_key": "secret-jetson-key"})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "transcription_remote") == "secret-jetson-key"
+
+        # Placeholder -> leave unchanged.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"transcription_remote_key": _SECRET_PLACEHOLDER})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "transcription_remote") == "secret-jetson-key"
+
+        # Empty string -> clear it.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"transcription_remote_key": ""})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "transcription_remote") is None
+
+
+async def test_get_masks_stored_transcription_remote_key(make_client, make_user, auth_header, enc_key):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"transcription_remote_key": "secret-jetson-key"})
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+    assert get.json()["transcription_remote_key"] == _SECRET_PLACEHOLDER
+
+
+async def test_generate_transcription_remote_key_requires_admin(make_client, make_user, auth_header):
+    user = await make_user(username="u", role="user")
+    async with make_client(settings_router.router) as c:
+        r = await c.post("/api/settings/transcription-remote-key/generate", headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_generate_transcription_remote_key_persists_and_returns_once(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        gen = await c.post("/api/settings/transcription-remote-key/generate", headers=auth_header(admin))
+        assert gen.status_code == 200
+        key = gen.json()["key"]
+        assert len(key) > 20  # secrets.token_urlsafe(32) output
+
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "transcription_remote") == key
+
+        # GET only ever returns the masked placeholder, never the plaintext key.
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+        assert get.json()["transcription_remote_key"] == _SECRET_PLACEHOLDER
