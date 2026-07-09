@@ -1,8 +1,9 @@
 # Deploying the Jetson transcription worker
 
 `jetson/` runs a standalone faster-whisper transcription server on a Jetson Orin Nano (or similar).
-It's a separate host from the main BookSync stack, so it gets its own clone and its own compose
-file — nothing else in this repo needs to be present on the Jetson.
+It's a separate host from the main BookSync stack, so it gets its own clone — nothing else in this
+repo needs to be present on the Jetson. The compose file lives in this directory, so deploy
+commands run from inside `jetson/` with no `-f` flag needed.
 
 ## Prerequisites
 
@@ -15,21 +16,22 @@ file — nothing else in this repo needs to be present on the Jetson.
 
 ## 1. Sparse clone
 
-The Jetson only needs `jetson/` and the compose template — not `server/`, `web/`, or `android/`:
+The Jetson only needs this directory — not `server/`, `web/`, or `android/`:
 
 ```bash
 git clone --filter=blob:none --sparse https://github.com/jlafuenti/Book-Sync.git booksync-jetson
 cd booksync-jetson
-git sparse-checkout set jetson docker-compose.jetson.example.yml
+git sparse-checkout set jetson
+cd jetson
 ```
 
 ## 2. Copy the compose template
 
-`docker-compose.jetson.yml` is gitignored (it will carry a real secret in the next step), so
-copying it once means future `git pull`s never conflict with your local edits:
+`docker-compose.yml` (in this directory) is gitignored — it will carry a real secret in the next
+step, so copying it once means future `git pull`s never conflict with your local edits:
 
 ```bash
-cp docker-compose.jetson.example.yml docker-compose.jetson.yml
+cp docker-compose.example.yml docker-compose.yml
 ```
 
 ## 3. Generate the shared API key
@@ -52,7 +54,7 @@ Paste your generated value into both places — it's compared byte-for-byte, so 
 exactly:
 
 ```yaml
-# docker-compose.jetson.yml
+# jetson/docker-compose.yml
 environment:
   - TRANSCRIPTION_API_KEY=<paste-here>
 ```
@@ -62,8 +64,10 @@ paste it into that field and click Save).
 
 ## 4. Deploy
 
+From inside `jetson/`:
+
 ```bash
-docker compose -f docker-compose.jetson.yml up -d --build
+docker compose up -d --build
 ```
 
 First boot downloads the whisper model (persisted in the `whisper_models` volume across
@@ -81,9 +85,8 @@ BookSync → Settings → Transcription:
 ## Troubleshooting
 
 - **Container exits immediately on startup**: `TRANSCRIPTION_API_KEY` is unset or blank in
-  `docker-compose.jetson.yml` — the server refuses to start rather than run unauthenticated. Check
-  `docker compose -f docker-compose.jetson.yml logs transcriber` for the exact message.
-- **Test Connection / transcriptions fail with 401**: the key in `docker-compose.jetson.yml`
+  `jetson/docker-compose.yml` — the server refuses to start rather than run unauthenticated. Check
+  `docker compose logs transcriber` (from inside `jetson/`) for the exact message.
+- **Test Connection / transcriptions fail with 401**: the key in `jetson/docker-compose.yml`
   doesn't match what's saved in BookSync → Settings → Transcription. Regenerate from the UI and
-  copy it into the compose file again (then `docker compose -f docker-compose.jetson.yml up -d`
-  to pick up the new env var).
+  copy it into the compose file again (then `docker compose up -d` to pick up the new env var).
