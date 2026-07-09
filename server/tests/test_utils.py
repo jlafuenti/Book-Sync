@@ -71,3 +71,23 @@ def test_safe_join_rejects_hidden_name(tmp_path):
     with pytest.raises(HTTPException) as exc:
         safe_join(tmp_path, ".htaccess")
     assert exc.value.status_code == 400
+
+
+def test_safe_join_rejects_symlink_escape(tmp_path):
+    """A basename can't contain traversal characters, but a symlink *inside*
+    base_dir can still resolve outside it -- the final containment check
+    (candidate.relative_to(base)) is what catches that, not the basename
+    reduction."""
+    base = tmp_path / "base"
+    base.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = base / "escape.epub"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks not supported in this environment")
+
+    with pytest.raises(HTTPException) as exc:
+        safe_join(base, "escape.epub")
+    assert exc.value.status_code == 400
