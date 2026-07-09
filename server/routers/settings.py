@@ -1,3 +1,4 @@
+import secrets
 from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -33,6 +34,7 @@ DEFAULT_SETTINGS = {
     ],
     "transcription_provider": "remote_with_fallback",
     "transcription_remote_url": "",
+    "transcription_remote_key": "",
     "transcription_remote_timeout": 86400,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium",
@@ -78,6 +80,10 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
     abs_token = await credential_store.get_credential(db, "abs")
     settings_dict["abs_api_token"] = _SECRET_PLACEHOLDER if abs_token else ""
 
+    # Same masking for the Jetson shared secret.
+    remote_key = await credential_store.get_credential(db, "transcription_remote")
+    settings_dict["transcription_remote_key"] = _SECRET_PLACEHOLDER if remote_key else ""
+
     return settings_dict
 
 @router.put("/", response_model=Dict[str, Any])
@@ -98,6 +104,15 @@ async def update_settings(
                 await credential_store.delete_credential(db, "abs")
             else:
                 await credential_store.set_credential(db, "abs", str(value))
+            continue
+
+        if key == "transcription_remote_key":
+            if value is None or value == _SECRET_PLACEHOLDER:
+                continue
+            if value == "":
+                await credential_store.delete_credential(db, "transcription_remote")
+            else:
+                await credential_store.set_credential(db, "transcription_remote", str(value))
             continue
 
         # Serialize before saving
@@ -150,23 +165,52 @@ async def test_abs_connection(url: str, token: str, _: User = Depends(get_admin_
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+@router.post("/transcription-remote-key/generate")
+async def generate_transcription_remote_key(
+    db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)
+):
+    """
+    Generate and persist a new shared secret for the Jetson transcription
+    server. Returned once, in plaintext, so the admin can copy it into the
+    Jetson's TRANSCRIPTION_API_KEY — it's stored encrypted from here on and
+    GET /api/settings only ever returns the masked placeholder for it.
+    """
+    key = secrets.token_urlsafe(32)
+    await credential_store.set_credential(db, "transcription_remote", key)
+    await db.commit()
+    return {"key": key}
+
+
 @router.get("/test-remote")
-async def test_remote_connection(url: str, _: User = Depends(get_admin_user)):
+async def test_remote_connection(
+    url: str,
+    key: str = "",
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
     """
     Test the connection to a remote transcription server from the backend.
     This avoids CORS and VPN routing issues where the frontend browser
     cannot reach a local LAN IP like the Jetson directly.
     """
     import httpx
-    
+
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
-        
+
+    # Prefer an explicitly-passed key (e.g. just generated but not yet saved
+    # to the URL field's sibling state) over the one already on file.
+    api_key = key or await credential_store.get_credential(db, "transcription_remote")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Remote Server API Key is required")
+
     full_url = url if url.endswith("/v1/health") else f"{url.rstrip('/')}/v1/health"
-    
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(full_url)
+            response = await client.get(
+                full_url, headers={"Authorization": f"Bearer {api_key}"}
+            )
             response.raise_for_status()
             data = response.json()
             return {
@@ -178,6 +222,8 @@ async def test_remote_connection(url: str, _: User = Depends(get_admin_user)):
     except httpx.RequestError as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {str(e)}")
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=400, detail="Authentication failed — check the Remote Server API Key")
         raise HTTPException(status_code=400, detail=f"Server returned HTTP {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Integration error: {str(e)}")

@@ -17,6 +17,7 @@ import gc
 import hashlib
 import json
 import os
+import secrets
 import time
 import shutil
 import logging
@@ -26,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -46,6 +47,19 @@ WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 VAD_FILTER = os.environ.get("VAD_FILTER", "true").lower() in ("true", "1", "yes")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))
+
+# Shared secret required on every /v1/* request (Authorization: Bearer <key>).
+# Anyone who can reach this port can submit transcription jobs and read cached
+# results, so we refuse to start without one rather than silently running open.
+TRANSCRIPTION_API_KEY = os.environ.get("TRANSCRIPTION_API_KEY", "")
+if not TRANSCRIPTION_API_KEY:
+    raise RuntimeError(
+        "TRANSCRIPTION_API_KEY is unset — refusing to start. Generate a key in "
+        "BookSync → Settings → Transcription → Remote Server API Key "
+        "(click \"Generate Key\"), then copy that same value into "
+        "TRANSCRIPTION_API_KEY here. (Or generate one yourself with: "
+        "python -c \"import secrets; print(secrets.token_urlsafe(32))\")."
+    )
 
 # ---------------------------------------------------------------------------
 # Adaptive chunking & memory management constants
@@ -669,22 +683,23 @@ def _format_duration(seconds: float) -> str:
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(
     title="BookSync Transcription Server",
     description="faster-whisper transcription API for Jetson Orin Nano",
     version="1.0.0",
 )
 
-# Enable CORS for the frontend "Test Connection" button
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: the browser never talks to this server directly. The
+# BookSync web app's "Test Connection" button proxies through the main
+# server's /api/settings/test-remote, and the transcription pipeline itself
+# is server-to-server httpx (not subject to CORS).
+
+
+def verify_api_key(authorization: str = Header(default="")) -> None:
+    """Require `Authorization: Bearer <TRANSCRIPTION_API_KEY>` on every /v1/* route."""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(token, TRANSCRIPTION_API_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 @app.on_event("startup")
@@ -694,7 +709,7 @@ def startup_event():
     _cleanup_old_checkpoints()
 
 
-@app.get("/v1/health")
+@app.get("/v1/health", dependencies=[Depends(verify_api_key)])
 def health():
     """Health check — returns model info and GPU status."""
     gpu_available = False
@@ -722,7 +737,7 @@ def health():
     }
 
 
-@app.get("/v1/status")
+@app.get("/v1/status", dependencies=[Depends(verify_api_key)])
 def get_status():
     """Get the progress of the current transcription job."""
     with _job_lock:
@@ -734,7 +749,7 @@ def get_status():
             "instance_id": INSTANCE_ID,
         }
 
-@app.get("/v1/result/{filename}")
+@app.get("/v1/result/{filename}", dependencies=[Depends(verify_api_key)])
 def get_result(filename: str):
     """Get the cached result of a completed transcription job."""
     with _results_lock:
@@ -745,7 +760,7 @@ def get_result(filename: str):
     raise HTTPException(status_code=404, detail="Result not found or expired")
 
 
-@app.post("/v1/transcribe")
+@app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])
 async def transcribe(request: Request, audio_file: UploadFile = File(...)):
     """
     Transcribe an uploaded audio file.
