@@ -11,6 +11,12 @@
 #
 # docker-compose.yml is gitignored (it carries a real secret below), so
 # pulling updates to this template never conflicts with your local copy.
+#
+# name: pinned rather than left to default to the checkout directory's
+# basename — otherwise renaming/relocating the checkout silently creates a
+# new, empty set of volumes instead of reusing the ones with your
+# already-downloaded model.
+name: booksync-transcriber
 services:
   transcriber:
     build:
