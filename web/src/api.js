@@ -535,12 +535,14 @@ export async function updateSettings(settings) {
     return resp.json();
 }
 
-export async function testRemoteConnection(url) {
+export async function testRemoteConnection(url, key = '') {
     if (!url) throw new Error("URL is required");
-    // We ping via the backend to avoid CORS and VPN local-routing issues 
+    // We ping via the backend to avoid CORS and VPN local-routing issues
     // where the user's browser cannot reach the Jetson directly.
-    const resp = await fetchWithAuth(`${API_BASE}/settings/test-remote?url=${encodeURIComponent(url)}`);
-    
+    const resp = await fetchWithAuth(
+        `${API_BASE}/settings/test-remote?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`
+    );
+
     if (!resp.ok) {
         let msg = `HTTP ${resp.status}`;
         try {
@@ -549,6 +551,14 @@ export async function testRemoteConnection(url) {
         } catch(e) {}
         throw new Error(msg);
     }
+    return resp.json();
+}
+
+export async function generateTranscriptionRemoteKey() {
+    const resp = await fetchWithAuth(`${API_BASE}/settings/transcription-remote-key/generate`, {
+        method: 'POST',
+    });
+    if (!resp.ok) throw new Error('Failed to generate key');
     return resp.json();
 }
 
