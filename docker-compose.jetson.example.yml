@@ -2,8 +2,15 @@
 # Deploy this file ON the Jetson alongside the ./jetson directory.
 #
 # Usage:
+#   cp docker-compose.jetson.example.yml docker-compose.jetson.yml
+#   # edit docker-compose.jetson.yml: set TRANSCRIPTION_API_KEY below
 #   docker compose -f docker-compose.jetson.yml up -d
 #
+# See jetson/README.md for the full deploy walkthrough (sparse clone,
+# generating the key, pointing the main BookSync server at this host).
+#
+# docker-compose.jetson.yml is gitignored (it carries a real secret below),
+# so pulling updates to this template never conflicts with your local copy.
 services:
   transcriber:
     build:
@@ -22,6 +29,12 @@ services:
       - WHISPER_COMPUTE_TYPE=float16
       - WHISPER_DEVICE=cuda
       - VAD_FILTER=true
+      # Shared secret required on every request to this server. Generate it in
+      # BookSync → Settings → Transcription → Remote Server API Key ("Generate
+      # Key" button — persists it there and shows the value once), then paste
+      # the same value here. Without it, this container refuses to start.
+      # CLI fallback: python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - TRANSCRIPTION_API_KEY=
     deploy:
       resources:
         reservations:

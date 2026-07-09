@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
+    generateTranscriptionRemoteKey,
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
@@ -242,10 +243,13 @@ function SettingsSection() {
     )
 }
 
+const SECRET_PLACEHOLDER = '********'
+
 /* ── TranscriptionSettingsSection ─────────────────────────────────── */
 function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
     const [remoteUrl, setRemoteUrl] = useState('')
+    const [remoteKey, setRemoteKey] = useState('')
     const [remoteTimeout, setRemoteTimeout] = useState(7200)
     const [autoTranscribe, setAutoTranscribe] = useState(false)
     const [whisperModel, setWhisperModel] = useState('medium')
@@ -253,6 +257,8 @@ function TranscriptionSettingsSection() {
     const [msg, setMsg] = useState(null)
     const [testResult, setTestResult] = useState(null)
     const [isTesting, setIsTesting] = useState(false)
+    const [isGeneratingKey, setIsGeneratingKey] = useState(false)
+    const [keyJustGenerated, setKeyJustGenerated] = useState(false)
 
     useEffect(() => { loadSettings() }, [])
 
@@ -261,6 +267,7 @@ function TranscriptionSettingsSection() {
             const s = await getSettings()
             if (s.transcription_provider) setProvider(s.transcription_provider)
             if (s.transcription_remote_url !== undefined) setRemoteUrl(s.transcription_remote_url)
+            if (s.transcription_remote_key !== undefined) setRemoteKey(s.transcription_remote_key || '')
             if (s.transcription_remote_timeout !== undefined) setRemoteTimeout(s.transcription_remote_timeout)
             if (s.auto_transcribe_enabled !== undefined) setAutoTranscribe(s.auto_transcribe_enabled)
             if (s.whisper_model) setWhisperModel(s.whisper_model)
@@ -274,6 +281,7 @@ function TranscriptionSettingsSection() {
             await updateSettings({
                 transcription_provider: provider,
                 transcription_remote_url: remoteUrl,
+                transcription_remote_key: remoteKey,
                 transcription_remote_timeout: parseInt(remoteTimeout) || 7200,
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
@@ -283,11 +291,24 @@ function TranscriptionSettingsSection() {
         finally { setLoading(false) }
     }
 
+    const handleGenerateKey = async () => {
+        setIsGeneratingKey(true); setTestResult(null)
+        try {
+            const r = await generateTranscriptionRemoteKey()
+            setRemoteKey(r.key)
+            setKeyJustGenerated(true)
+        } catch (err) { setTestResult({ success: false, text: `❌ Failed to generate key: ${err.message}` }) }
+        finally { setIsGeneratingKey(false) }
+    }
+
     const handleTest = async () => {
         if (!remoteUrl) { setTestResult({ success: false, text: "Enter a URL first" }); return }
         setIsTesting(true); setTestResult(null)
         try {
-            const r = await testRemoteConnection(remoteUrl)
+            // The masked placeholder isn't a real key — let the backend fall
+            // back to whatever's already saved instead of sending it literally.
+            const keyToSend = remoteKey === SECRET_PLACEHOLDER ? '' : remoteKey
+            const r = await testRemoteConnection(remoteUrl, keyToSend)
             setTestResult(r.success === true
                 ? { success: true, text: `✅ Connected! GPU: ${r.gpu_name || 'None'}, Model: ${r.model_loaded ? 'Loaded' : 'Not Loaded'}` }
                 : { success: false, text: '❌ Server responded but not healthy' })
@@ -318,6 +339,27 @@ function TranscriptionSettingsSection() {
                         </button>
                     </div>
                     {testResult && <p className={`system-form-hint ${testResult.success ? 'success' : 'error'}`} style={{ marginTop: 6 }}>{testResult.text}</p>}
+                    <div className="system-form-row" style={{ marginTop: 12 }}>
+                        <label className="system-form-label">Remote Server API Key</label>
+                        <div className="system-form-inline">
+                            <input type="password" className="input" value={remoteKey}
+                                onChange={e => { setRemoteKey(e.target.value); setKeyJustGenerated(false) }}
+                                placeholder="Shared secret for the Jetson server"
+                                style={{ flex: '1 1 240px' }} />
+                            <button className="btn btn-secondary" onClick={handleGenerateKey} disabled={isGeneratingKey} style={{ whiteSpace: 'nowrap' }}>
+                                {isGeneratingKey ? 'Generating…' : 'Generate Key'}
+                            </button>
+                        </div>
+                        {keyJustGenerated
+                            ? <p className="system-form-hint success" style={{ marginTop: 6 }}>
+                                Saved. Copy this into <code>TRANSCRIPTION_API_KEY</code> on the Jetson
+                                (docker-compose.jetson.yml) and restart the transcriber container —
+                                this value won't be shown again.
+                              </p>
+                            : <p className="system-form-hint" style={{ marginTop: 6 }}>
+                                Required by the Jetson server. "Generate Key" creates and saves one immediately.
+                              </p>}
+                    </div>
                     <div className="system-form-row" style={{ marginTop: 12 }}>
                         <label className="system-form-label">Remote Timeout (s)</label>
                         <input type="number" className="input" value={remoteTimeout}

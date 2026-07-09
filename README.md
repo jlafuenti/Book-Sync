@@ -25,7 +25,9 @@ cp docker-compose.example.yml docker-compose.yml
 docker compose up --build
 ```
 
-`docker-compose.jetson.yml` adds the remote transcription worker.
+The Jetson Orin Nano remote transcription worker deploys separately, on its own host — see
+[jetson/README.md](jetson/README.md) for the sparse-clone-and-deploy walkthrough
+(`docker-compose.jetson.example.yml` is the template, same gitignored-copy pattern as above).
 
 ## Development & tests
 
