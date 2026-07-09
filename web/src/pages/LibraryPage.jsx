@@ -103,7 +103,7 @@ function TypeBadge({ mediaType }) {
 
 // ---- Book Card (Grid View) ----
 
-function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
+export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -185,7 +185,7 @@ function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdi
 
 // ---- Book Row (List View) ----
 
-function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
+export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
     const coverUrl = useCoverSrc(book.cover_path)
 
     const handleClick = (e) => {

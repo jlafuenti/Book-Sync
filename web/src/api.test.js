@@ -164,3 +164,49 @@ describe('getAudiobookStreamUrl()', () => {
         expect(url).toBe('/api/files/audiobook/42?token=scoped-audio-token')
     })
 })
+
+describe('prefetchMediaTokens()', () => {
+    it('batch-mints tokens and warms the cache so coverSrc() does not refetch', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({
+                tokens: { 'cover:a.jpg': 'tok-a', 'cover:b.jpg': 'tok-b' },
+                expires_in: 900,
+            }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { prefetchMediaTokens, coverSrc } = await import('./api')
+        await prefetchMediaTokens([
+            { resourceType: 'cover', resourceId: 'a.jpg' },
+            { resourceType: 'cover', resourceId: 'b.jpg' },
+        ])
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/auth/media-token/batch',
+            expect.objectContaining({ method: 'POST' }),
+        )
+
+        const src = await coverSrc('/api/files/covers/a.jpg')
+        expect(src).toBe('/api/files/covers/a.jpg?token=tok-a')
+        // Only the one batch call -- coverSrc() found the token already cached.
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does nothing for an empty resource list', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { prefetchMediaTokens } = await import('./api')
+        await prefetchMediaTokens([])
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('silently no-ops when the batch request fails', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }))
+
+        const { prefetchMediaTokens } = await import('./api')
+        await expect(prefetchMediaTokens([{ resourceType: 'cover', resourceId: 'a.jpg' }])).resolves.toBeUndefined()
+    })
+})

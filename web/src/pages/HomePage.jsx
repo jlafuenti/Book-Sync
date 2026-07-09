@@ -106,7 +106,7 @@ function Carousel({ children, className = '' }) {
 
 // ---- Book Card ----
 
-function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onListen, onMarkComplete, onResetProgress, onViewDetails, isPair, isEbook }) {
+export function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onListen, onMarkComplete, onResetProgress, onViewDetails, isPair, isEbook }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 

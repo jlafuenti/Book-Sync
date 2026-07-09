@@ -54,7 +54,7 @@ function FilterBar({ text, onText, author, onAuthor, series, onSeries, authors, 
     )
 }
 
-function BookRow({ item, selected, onSelect }) {
+export function BookRow({ item, selected, onSelect }) {
     return (
         <div
             className={`unpaired-row${selected ? ' unpaired-row-selected' : ''}`}
