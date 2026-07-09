@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, deletePair, coverSrc } from '../api';
+import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, deletePair } from '../api';
+import CoverImg from './CoverImg';
 
 export default function MetadataCleanupModal({ onClose, onComplete }) {
     const [discrepancies, setDiscrepancies] = useState([]);
@@ -185,7 +186,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                                                 onClick={() => handleSelect(d.field, 'ebook')}
                                             >
                                                 {d.field === 'cover_path' ? (
-                                                    d.ebook_value ? <img src={coverSrc(d.ebook_value)} alt="Ebook Cover" style={{ height: '80px', borderRadius: '4px', objectFit: 'cover' }} /> : <em>No Cover</em>
+                                                    d.ebook_value ? <CoverImg path={d.ebook_value} alt="Ebook Cover" style={{ height: '80px', borderRadius: '4px', objectFit: 'cover' }} /> : <em>No Cover</em>
                                                 ) : (
                                                     d.ebook_value || <em>Empty</em>
                                                 )}
@@ -201,7 +202,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                                                 onClick={() => handleSelect(d.field, 'audiobook')}
                                             >
                                                 {d.field === 'cover_path' ? (
-                                                    d.audiobook_value ? <img src={coverSrc(d.audiobook_value)} alt="Audiobook Cover" style={{ height: '80px', borderRadius: '4px', objectFit: 'cover' }} /> : <em>No Cover</em>
+                                                    d.audiobook_value ? <CoverImg path={d.audiobook_value} alt="Audiobook Cover" style={{ height: '80px', borderRadius: '4px', objectFit: 'cover' }} /> : <em>No Cover</em>
                                                 ) : (
                                                     d.audiobook_value || <em>Empty</em>
                                                 )}

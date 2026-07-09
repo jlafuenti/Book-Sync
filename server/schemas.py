@@ -53,6 +53,25 @@ class TokenRefresh(BaseModel):
     refresh_token: str
 
 
+class MediaTokenResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
+class MediaTokenRequest(BaseModel):
+    resource_type: str
+    resource_id: str
+
+
+class MediaTokenBatchRequest(BaseModel):
+    resources: List[MediaTokenRequest]
+
+
+class MediaTokenBatchResponse(BaseModel):
+    tokens: dict[str, str]
+    expires_in: int
+
+
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6)

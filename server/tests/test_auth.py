@@ -17,6 +17,7 @@ from models.audit_log import AuditLog
 from models.user import ROLE_HIERARCHY, User
 from routers.auth import (
     create_access_token,
+    create_media_token,
     create_refresh_token,
     get_admin_user,
     get_editor_user,
@@ -312,3 +313,80 @@ async def test_register_disabled_returns_403(client, monkeypatch):
         json={"username": "quentin", "email": "q@example.com", "password": "pw12345"},
     )
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Media tokens (issue #50)
+# ---------------------------------------------------------------------------
+
+async def test_create_media_token_has_expected_claims(make_user):
+    user = await make_user(username="rex", password="pw")
+    token = create_media_token(user, "cover", "some cover.jpg")
+    payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    assert payload["sub"] == str(user.id)
+    assert payload["type"] == "media"
+    assert payload["resource_type"] == "cover"
+    assert payload["resource_id"] == "some cover.jpg"
+    assert payload["ver"] == user.token_version
+
+
+async def test_media_token_endpoint_requires_auth(client):
+    r = await client.get("/api/auth/media-token", params={"resource_type": "cover", "resource_id": "x.jpg"})
+    assert r.status_code == 401
+
+
+async def test_media_token_endpoint_rejects_invalid_resource_type(client, make_user, auth_header):
+    user = await make_user(username="sam", password="pw")
+    r = await client.get(
+        "/api/auth/media-token",
+        params={"resource_type": "ebook", "resource_id": "x.epub"},
+        headers=auth_header(user),
+    )
+    assert r.status_code == 400
+
+
+async def test_media_token_endpoint_returns_scoped_token(client, make_user, auth_header):
+    user = await make_user(username="tara", password="pw")
+    r = await client.get(
+        "/api/auth/media-token",
+        params={"resource_type": "audiobook", "resource_id": "7"},
+        headers=auth_header(user),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expires_in"] == settings.jwt_media_token_expire_minutes * 60
+    payload = jwt.decode(body["token"], settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+    assert payload["resource_type"] == "audiobook"
+    assert payload["resource_id"] == "7"
+
+
+async def test_media_token_batch_mints_per_resource(client, make_user, auth_header):
+    user = await make_user(username="uma", password="pw")
+    r = await client.post(
+        "/api/auth/media-token/batch",
+        json={"resources": [
+            {"resource_type": "cover", "resource_id": "a.jpg"},
+            {"resource_type": "audiobook", "resource_id": "3"},
+        ]},
+        headers=auth_header(user),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body["tokens"].keys()) == {"cover:a.jpg", "audiobook:3"}
+    for key, token in body["tokens"].items():
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        assert payload["type"] == "media"
+
+
+async def test_media_token_batch_skips_invalid_resource_type(client, make_user, auth_header):
+    user = await make_user(username="vic", password="pw")
+    r = await client.post(
+        "/api/auth/media-token/batch",
+        json={"resources": [
+            {"resource_type": "cover", "resource_id": "a.jpg"},
+            {"resource_type": "ebook", "resource_id": "b.epub"},
+        ]},
+        headers=auth_header(user),
+    )
+    assert r.status_code == 200
+    assert list(r.json()["tokens"].keys()) == ["cover:a.jpg"]
