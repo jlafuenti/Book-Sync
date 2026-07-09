@@ -48,6 +48,7 @@ from schemas import (
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
+from utils import safe_join
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -55,6 +56,7 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 # Supported file extensions
 EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
 AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav", ".aac", ".wma"}
+COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 # Regex patterns for filename parsing
 # Pattern 1: Author - [Series Num] - Title
@@ -1553,7 +1555,7 @@ async def upload_ebook(
         )
 
     # Save file
-    filepath = os.path.join(settings.ebook_dir, file.filename)
+    filepath = safe_join(settings.ebook_dir, file.filename)
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
@@ -1561,15 +1563,15 @@ async def upload_ebook(
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
 
     # Metadata extraction
-    meta = await extract_metadata(filepath, "ebook", db)
+    meta = await extract_metadata(str(filepath), "ebook", db)
 
     ebook = EBook(
-        title=meta["title"] or file.filename,
+        title=meta["title"] or filepath.name,
         author=meta["author"],
         series=meta["series"],
         series_index=meta["series_index"],
-        filename=file.filename,
-        file_path=filepath,
+        filename=filepath.name,
+        file_path=str(filepath),
         file_hash=file_hash,
         file_size=len(content),
         format=ext.lstrip("."),
@@ -1595,7 +1597,7 @@ async def upload_audiobook(
         )
 
     # Save file
-    filepath = os.path.join(settings.audiobook_dir, file.filename)
+    filepath = safe_join(settings.audiobook_dir, file.filename)
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
@@ -1603,15 +1605,15 @@ async def upload_audiobook(
     file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
 
     # Metadata extraction
-    meta = await extract_metadata(filepath, "audiobook", db)
+    meta = await extract_metadata(str(filepath), "audiobook", db)
 
     audiobook = AudioBook(
-        title=meta["title"] or file.filename,
+        title=meta["title"] or filepath.name,
         author=meta["author"],
         series=meta["series"],
         series_index=meta["series_index"],
-        filename=file.filename,
-        file_path=filepath,
+        filename=filepath.name,
+        file_path=str(filepath),
         file_hash=file_hash,
         file_size=len(content),
         format=ext.lstrip("."),
@@ -1941,12 +1943,17 @@ async def upload_ebook_cover(
         
     covers_path = Path(settings.covers_dir)
     covers_path.mkdir(parents=True, exist_ok=True)
-    
-    ext = Path(file.filename).suffix
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in COVER_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported cover format: {ext}. Supported: {COVER_EXTENSIONS}",
+        )
     safe_title = sanitize_filename(book.title) if book.title else "ebook"
     new_filename = f"{safe_title}_{book.id}{ext}"
-    dest_path = covers_path / new_filename
-    
+    dest_path = safe_join(covers_path, new_filename)
+
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
@@ -2009,12 +2016,17 @@ async def upload_audiobook_cover(
         
     covers_path = Path(settings.covers_dir)
     covers_path.mkdir(parents=True, exist_ok=True)
-    
-    ext = Path(file.filename).suffix
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in COVER_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported cover format: {ext}. Supported: {COVER_EXTENSIONS}",
+        )
     safe_title = sanitize_filename(book.title) if book.title else "audiobook"
     new_filename = f"{safe_title}_{book.id}{ext}"
-    dest_path = covers_path / new_filename
-    
+    dest_path = safe_join(covers_path, new_filename)
+
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         

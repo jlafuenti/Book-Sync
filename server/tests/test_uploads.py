@@ -157,3 +157,67 @@ async def test_upload_requires_editor_role(make_user, auth_header, temp_library_
             files={"file": ("book.epub", b"data", "application/epub+zip")},
         )
     assert r.status_code == 403
+
+
+# --- Path traversal (issue #49) -------------------------------------------
+
+async def test_upload_ebook_neutralizes_path_traversal_filename(
+    make_user, auth_header, stub_metadata, temp_library_dirs, tmp_path,
+):
+    """A `../../evil.epub`-style filename must not escape ebook_dir: the
+    upload lands, sanitized to a basename, inside the configured directory."""
+    ebook_dir, _ = temp_library_dirs
+    stub_metadata()
+    editor = await make_user(username="ed", role="editor")
+    content = b"traversal-attempt"
+
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            headers=auth_header(editor),
+            files={"file": ("../../evil.epub", content, "application/epub+zip")},
+        )
+
+    assert r.status_code == 201, r.text
+    assert (ebook_dir / "evil.epub").read_bytes() == content
+    # Nothing was written outside the configured library dir.
+    assert not (tmp_path / "evil.epub").exists()
+
+
+async def test_upload_audiobook_neutralizes_path_traversal_filename(
+    make_user, auth_header, stub_metadata, temp_library_dirs, tmp_path,
+):
+    _, audio_dir = temp_library_dirs
+    stub_metadata()
+    editor = await make_user(username="ed", role="editor")
+    content = b"traversal-attempt"
+
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/audiobook",
+            headers=auth_header(editor),
+            files={"file": ("../../evil.m4b", content, "audio/mp4")},
+        )
+
+    assert r.status_code == 201, r.text
+    assert (audio_dir / "evil.m4b").read_bytes() == content
+    assert not (tmp_path / "evil.m4b").exists()
+
+
+async def test_upload_ebook_rejects_empty_basename_after_traversal(
+    make_user, auth_header, temp_library_dirs,
+):
+    """A filename that reduces to nothing after stripping directory
+    components (e.g. `../../`) is rejected rather than written with an empty
+    name."""
+    editor = await make_user(username="ed", role="editor")
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            headers=auth_header(editor),
+            files={"file": ("../../", b"x", "application/epub+zip")},
+        )
+    # Starlette/httpx may treat this as an empty filename, or it reaches the
+    # extension check with ext == "" first -- both are rejections, just with
+    # possibly different messages, so only assert the safe outcome: no 2xx.
+    assert r.status_code == 400
