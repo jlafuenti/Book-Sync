@@ -28,6 +28,7 @@ from models.library_issue import LibraryCheckResult
 from models.progress import UserProgress
 from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
+from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
@@ -344,8 +345,8 @@ async def replace_file(
     default_dir = settings.ebook_dir if item_type == "ebook" else settings.audiobook_dir
     dest_dir = os.path.dirname(old_path) if old_path else default_dir
     os.makedirs(dest_dir, exist_ok=True)
-    base = Path(old_path).stem if old_path else Path(file.filename).stem
-    dest_path = os.path.join(dest_dir, base + new_ext)
+    base = Path(old_path).stem if old_path else Path(safe_join(dest_dir, file.filename).name).stem
+    dest_path = str(safe_join(dest_dir, base + new_ext))
 
     content = await file.read()
     with open(dest_path, "wb") as f:

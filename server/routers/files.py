@@ -22,6 +22,7 @@ from models.book import EBook, AudioBook, BookPair
 from models.sync_map import SyncMap
 from schemas import SyncMapResponse
 from routers.auth import get_current_user
+from utils import safe_join
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -107,8 +108,7 @@ async def get_cover(
     _: User = Depends(get_user_for_streaming),
 ):
     """Serve a cover image by filename. Requires auth via header or ?token= query param."""
-    covers_dir = Path(settings.covers_dir)
-    file_path = covers_dir / filename
+    file_path = safe_join(settings.covers_dir, filename)
 
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Cover not found")
