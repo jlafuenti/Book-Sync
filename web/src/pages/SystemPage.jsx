@@ -259,6 +259,7 @@ function TranscriptionSettingsSection() {
     const [isTesting, setIsTesting] = useState(false)
     const [isGeneratingKey, setIsGeneratingKey] = useState(false)
     const [keyJustGenerated, setKeyJustGenerated] = useState(false)
+    const [keyCopied, setKeyCopied] = useState(false)
 
     useEffect(() => { loadSettings() }, [])
 
@@ -292,13 +293,20 @@ function TranscriptionSettingsSection() {
     }
 
     const handleGenerateKey = async () => {
-        setIsGeneratingKey(true); setTestResult(null)
+        setIsGeneratingKey(true); setTestResult(null); setKeyCopied(false)
         try {
             const r = await generateTranscriptionRemoteKey()
             setRemoteKey(r.key)
             setKeyJustGenerated(true)
         } catch (err) { setTestResult({ success: false, text: `❌ Failed to generate key: ${err.message}` }) }
         finally { setIsGeneratingKey(false) }
+    }
+
+    const handleCopyKey = async () => {
+        try {
+            await navigator.clipboard.writeText(remoteKey)
+            setKeyCopied(true)
+        } catch (err) { setTestResult({ success: false, text: `❌ Couldn't copy — select the text and copy manually` }) }
     }
 
     const handleTest = async () => {
@@ -342,19 +350,28 @@ function TranscriptionSettingsSection() {
                     <div className="system-form-row" style={{ marginTop: 12 }}>
                         <label className="system-form-label">Remote Server API Key</label>
                         <div className="system-form-inline">
-                            <input type="password" className="input" value={remoteKey}
-                                onChange={e => { setRemoteKey(e.target.value); setKeyJustGenerated(false) }}
+                            {/* Plain text right after generating (so it's readable to copy by hand);
+                                masked otherwise, since a previously-saved key is never re-fetched in the clear. */}
+                            <input type={keyJustGenerated ? 'text' : 'password'} className="input" value={remoteKey}
+                                onFocus={e => e.target.select()}
+                                onChange={e => { setRemoteKey(e.target.value); setKeyJustGenerated(false); setKeyCopied(false) }}
                                 placeholder="Shared secret for the Jetson server"
-                                style={{ flex: '1 1 240px' }} />
+                                style={{ flex: '1 1 240px', fontFamily: keyJustGenerated ? 'monospace' : undefined }} />
+                            {keyJustGenerated && (
+                                <button className="btn btn-secondary" onClick={handleCopyKey} style={{ whiteSpace: 'nowrap' }}>
+                                    {keyCopied ? 'Copied!' : 'Copy'}
+                                </button>
+                            )}
                             <button className="btn btn-secondary" onClick={handleGenerateKey} disabled={isGeneratingKey} style={{ whiteSpace: 'nowrap' }}>
                                 {isGeneratingKey ? 'Generating…' : 'Generate Key'}
                             </button>
                         </div>
                         {keyJustGenerated
                             ? <p className="system-form-hint success" style={{ marginTop: 6 }}>
-                                Saved. Copy this into <code>TRANSCRIPTION_API_KEY</code> on the Jetson
-                                (docker-compose.jetson.yml) and restart the transcriber container —
-                                this value won't be shown again.
+                                Saved. Copy this into <code>TRANSCRIPTION_API_KEY</code> in{' '}
+                                <code>jetson/docker-compose.yml</code> on the Jetson and restart the
+                                transcriber container (<code>docker compose up -d</code>) — this value
+                                won't be shown again.
                               </p>
                             : <p className="system-form-hint" style={{ marginTop: 6 }}>
                                 Required by the Jetson server. "Generate Key" creates and saves one immediately.
