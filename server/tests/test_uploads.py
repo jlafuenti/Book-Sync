@@ -16,7 +16,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from config import settings
-from models.book import EBook, AudioBook
+from database import async_session
+from models.book import EBook, AudioBook, BookPair
 import routers.library as library
 
 
@@ -202,6 +203,70 @@ async def test_upload_audiobook_neutralizes_path_traversal_filename(
     assert r.status_code == 201, r.text
     assert (audio_dir / "evil.m4b").read_bytes() == content
     assert not (tmp_path / "evil.m4b").exists()
+
+
+async def test_upload_ebook_auto_matches_existing_audiobook(
+    make_user, auth_header, stub_metadata, temp_library_dirs, db,
+):
+    """Uploads must run through the same ingest path as scan (issue #43
+    follow-up), which includes auto-matching. Seed an unpaired audiobook,
+    upload a title/author-matching ebook, and confirm a BookPair appears."""
+    async with async_session() as session:
+        audiobook = AudioBook(
+            title="Same Title Book",
+            author="Same Author",
+            filename="audio.m4b",
+            file_path="/fake/audio.m4b",
+            file_hash="deadbeef",
+            file_size=123,
+            format="m4b",
+        )
+        session.add(audiobook)
+        await session.commit()
+
+    stub_metadata(title="Same Title Book", author="Same Author", series=None, series_index=None)
+    editor = await make_user(username="ed", role="editor")
+
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            headers=auth_header(editor),
+            files={"file": ("book.epub", b"fake-epub-bytes", "application/epub+zip")},
+        )
+
+    assert r.status_code == 201, r.text
+    pairs = (await db.execute(select(BookPair))).scalars().all()
+    assert len(pairs) == 1
+
+
+async def test_upload_ebook_duplicate_path_rejected(
+    make_user, auth_header, stub_metadata, temp_library_dirs, db,
+):
+    """Re-uploading a filename that already exists in the library must not
+    silently overwrite the file or create a second DB row (issue #43)."""
+    ebook_dir, _ = temp_library_dirs
+    stub_metadata()
+    editor = await make_user(username="ed", role="editor")
+    original_content = b"original-bytes"
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            "/api/library/upload/ebook",
+            headers=auth_header(editor),
+            files={"file": ("book.epub", original_content, "application/epub+zip")},
+        )
+        assert r1.status_code == 201, r1.text
+
+        r2 = await client.post(
+            "/api/library/upload/ebook",
+            headers=auth_header(editor),
+            files={"file": ("book.epub", b"new-conflicting-bytes", "application/epub+zip")},
+        )
+
+    assert r2.status_code == 409, r2.text
+    assert (ebook_dir / "book.epub").read_bytes() == original_content
+    rows = (await db.execute(select(EBook).where(EBook.filename == "book.epub"))).scalars().all()
+    assert len(rows) == 1
 
 
 async def test_upload_ebook_rejects_empty_basename_after_traversal(
