@@ -257,3 +257,77 @@ async def test_test_remote_requires_a_key(make_client, make_user, auth_header, e
         )
     assert r.status_code == 400
     assert "API Key" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard (issue #51) -- test-abs / test-remote are admin-only and must
+# keep reaching LAN targets (that's their whole point), but should still
+# reject a non-http(s) scheme.
+# ---------------------------------------------------------------------------
+
+async def test_test_remote_rejects_invalid_scheme(make_client, make_user, auth_header, enc_key, monkeypatch):
+    def handler(request):
+        raise AssertionError("transport should not be reached for an invalid scheme")
+    _patch_jetson_transport(monkeypatch, handler)
+    admin = await make_user(username="admin1", role="admin")
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-remote",
+            params={"url": "file:///etc/passwd", "key": "some-key"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 400
+    assert "Invalid URL" in r.json()["detail"]
+
+
+async def test_test_remote_allows_private_lan_url(make_client, make_user, auth_header, enc_key, monkeypatch):
+    """Regression guard: the LAN-reaching Jetson use case must still work
+    now that a guard sits in front of it."""
+    admin = await make_user(username="admin1", role="admin")
+    _patch_jetson_transport(monkeypatch, _jetson_health_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-remote",
+            params={"url": "http://192.168.1.50:9000", "key": "correct-key"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+
+def _abs_libraries_handler(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"libraries": [{"id": "1", "name": "Audiobooks", "mediaType": "book"}]})
+
+
+async def test_test_abs_rejects_invalid_scheme(make_client, make_user, auth_header, monkeypatch):
+    def handler(request):
+        raise AssertionError("transport should not be reached for an invalid scheme")
+    _patch_jetson_transport(monkeypatch, handler)
+    admin = await make_user(username="admin1", role="admin")
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-abs",
+            params={"url": "file:///etc/passwd", "token": "tok"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 400
+    assert "Invalid URL" in r.json()["detail"]
+
+
+async def test_test_abs_allows_private_lan_url(make_client, make_user, auth_header, monkeypatch):
+    """Regression guard: the LAN-reaching ABS use case must still work now
+    that a guard sits in front of it."""
+    admin = await make_user(username="admin1", role="admin")
+    _patch_jetson_transport(monkeypatch, _abs_libraries_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-abs",
+            params={"url": "http://192.168.1.60:13378", "token": "tok"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
