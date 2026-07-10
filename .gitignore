@@ -40,8 +40,10 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
-CLAUDE.md
 .claude/settings.local.json
+
+# Local Claude Code secrets (URL/login for the live UI) — CLAUDE.md itself is tracked
+CLAUDE.local.md
 
 # Build outputs
 web/dist/
