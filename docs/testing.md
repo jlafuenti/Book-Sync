@@ -1,7 +1,8 @@
 # Testing & coverage policy
 
 The backend test suite lives in `server/tests/` and runs on SQLite (no Docker needed) plus a
-small Postgres migration-smoke job. See issue #46 for the history.
+small Postgres migration-smoke job. See issue #46 for the history. Web, Android, and Jetson
+suites are covered in their own sections below.
 
 ## Running the tests
 
@@ -19,6 +20,12 @@ Notes:
   `RUN_PG_TESTS=1` and a Postgres `DATABASE_URL` are set (it runs in its own CI job).
 - On Windows, if a venv fails to build under a long path, create it at a short path
   (e.g. `C:\bst`) — pip's dist-info paths can exceed `MAX_PATH`.
+- **Match CI, not your global Python.** CI runs Python 3.12 with the pinned dev deps and
+  installs `requirements.txt` minus the heavy transcription stack:
+  `grep -viE '^(torch|openai-whisper)' requirements.txt > req-ci.txt && pip install -r req-ci.txt -r requirements-dev.txt`.
+  Running against a global interpreter with unpinned pytest or missing prod deps (e.g.
+  `audible`) produces failures that don't exist in CI. Tests that need optional heavy deps
+  should `pytest.importorskip(...)` so a missing dep skips instead of breaking collection.
 
 ### Fast red-green loop
 
@@ -133,3 +140,57 @@ The floor is a starting point, not the goal. As coverage grows:
    - `library_verify`.
 3. Genuinely untestable branches (hardware/external) can be marked `# pragma: no cover` rather
    than excluding a whole file.
+
+## Web (`web/`)
+
+Vitest + React Testing Library on jsdom; config lives in the `test` block of
+`web/vite.config.js`, shared setup in `web/src/test/setup.js` (jest-dom matchers, `cleanup()`,
+a `setViewport(width)` matchMedia mock, and HTMLMediaElement `play`/`pause` stubs — jsdom has
+no media engine).
+
+```bash
+cd web
+npm test          # watch mode — the web red-green loop
+npx vitest run    # one-shot
+npm run coverage  # what CI runs
+```
+
+Write the failing test first here too. Web changes have repeatedly landed code-first and
+needed follow-up commits when the patch-coverage gate failed — the gate is a backstop, not
+the workflow. Tests live next to the code (`src/**/*.test.jsx`); mock the API at the
+`fetch`/module boundary as the existing page tests do.
+
+CI (`.github/workflows/web-tests.yml`): ≥80% patch coverage via diff-cover on PRs. There is
+no global floor yet; once overall coverage is non-trivial, add vitest `coverage.thresholds`
+and ratchet like the server.
+
+## Android (`android/`)
+
+JVM unit tests only (no emulator in CI).
+
+```bash
+cd android
+./gradlew :app:testDebugUnitTest
+```
+
+The key test is `SyncMatcherParityTest`, which asserts `SyncMatcher.normalizeForSearch`
+matches the server's `_normalize_for_search` for every golden vector in
+`server/tests/fixtures/sync_parity/` (fixtures are copied in by the
+`copySyncParityFixtures` Gradle task). **Any matcher change must update the shared fixtures**
+so both platforms stay pinned to the same contract. The `match_cases.json` half
+(`getSyncPointForEpubText` ↔ `_match_text_to_sync_points`) is not yet enforced on Android —
+see issue #41.
+
+## Jetson (`jetson/`)
+
+`jetson/test_server.py` covers the shared-secret auth guard. It is **not wired into CI**
+(the service's faster-whisper/ffmpeg stack isn't installed there), so run it manually
+whenever `jetson/server.py` changes:
+
+```bash
+cd jetson && python -m pytest test_server.py -v
+```
+
+The transcription pipeline itself (chunking, oversized-chunk OOM guard) has no automated
+tests; the client-side retry logic is covered in
+`server/tests/test_remote_transcription_provider.py`.
