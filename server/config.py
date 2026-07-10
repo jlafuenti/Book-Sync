@@ -152,3 +152,21 @@ def check_db_credentials(s: "Settings") -> None:
     logger.warning(
         "Using default Postgres credentials (dev mode). Set POSTGRES_PASSWORD for production!"
     )
+
+
+def check_cors_origins(s: "Settings") -> None:
+    """Refuse to run with a wildcard CORS origin outside dev mode."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if s.cors_origins_list != ["*"]:
+        return
+    if s.app_env == "prod":
+        raise RuntimeError(
+            "CORS_ORIGINS is unset/wildcard (\"*\") — refusing to start in prod. "
+            "Set CORS_ORIGINS to a comma-separated list of allowed web origins "
+            "(e.g. http://your-host:3000), or set APP_ENV=dev for local development."
+        )
+    logger.warning(
+        "Using wildcard CORS origin (dev mode). Set CORS_ORIGINS for production!"
+    )
