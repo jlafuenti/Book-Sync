@@ -609,8 +609,8 @@ export async function generateTranscriptionRemoteKey() {
     return resp.json();
 }
 
-export async function testAbsConnection(url, token) {
-    if (!url || !token) throw new Error("URL and token are required");
+export async function testAbsConnection(url, token = '') {
+    if (!url) throw new Error("URL is required");
     const resp = await fetchWithAuth(
         `${API_BASE}/settings/test-abs?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`
     );

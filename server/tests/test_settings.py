@@ -331,3 +331,67 @@ async def test_test_abs_allows_private_lan_url(make_client, make_user, auth_head
         )
     assert r.status_code == 200
     assert r.json()["success"] is True
+
+
+async def test_test_abs_falls_back_to_saved_token_when_placeholder_sent(
+    make_client, make_user, auth_header, enc_key, monkeypatch,
+):
+    """The UI's token field round-trips the masked GET value -- clicking
+    "Test Connection" without retyping the key must test against the real
+    stored credential, not send "********" literally to ABS (issue: this
+    previously 401'd every time unless the user retyped an unchanged key)."""
+    admin = await make_user(username="admin1", role="admin")
+    async with async_session() as s:
+        await credentials.set_credential(s, "abs", "real-abs-token")
+        await s.commit()
+
+    seen_auth = []
+
+    def handler(request):
+        seen_auth.append(request.headers.get("authorization"))
+        return _abs_libraries_handler(request)
+
+    _patch_jetson_transport(monkeypatch, handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-abs",
+            params={"url": "http://192.168.1.60:13378", "token": _SECRET_PLACEHOLDER},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+    assert seen_auth == ["Bearer real-abs-token"]
+
+
+async def test_test_abs_falls_back_to_saved_token_when_no_token_passed(
+    make_client, make_user, auth_header, enc_key, monkeypatch,
+):
+    admin = await make_user(username="admin1", role="admin")
+    async with async_session() as s:
+        await credentials.set_credential(s, "abs", "real-abs-token")
+        await s.commit()
+    _patch_jetson_transport(monkeypatch, _abs_libraries_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-abs",
+            params={"url": "http://192.168.1.60:13378"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+
+async def test_test_abs_requires_a_token(make_client, make_user, auth_header, enc_key):
+    """No token passed and none saved -> a clear 400, not an unauthenticated
+    request sent to ABS."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-abs",
+            params={"url": "http://192.168.1.60:13378"},
+            headers=auth_header(admin),
+        )
+    assert r.status_code == 400
+    assert "token" in r.json()["detail"].lower()
