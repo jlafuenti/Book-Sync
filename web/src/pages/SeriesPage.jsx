@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata, coverSrc } from '../api'
+import { getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
+import CoverImg from '../components/CoverImg'
 import './SeriesPage.css'
 
 const SORT_LABELS = { name: 'Name', count: 'Book Count', recent: 'Recently Added' }
@@ -671,7 +672,7 @@ export default function SeriesPage() {
 
 // ---- Series Card (Grid) ----
 
-function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onStartSelect, onClick, onAuthorClick }) {
+export function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onStartSelect, onClick, onAuthorClick }) {
     const { name, author, items, covers } = group
 
     const ebookCount = items.filter(i => i.hasEbook).length
@@ -720,7 +721,7 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onStartSe
                 ) : (
                     <div className={stackClass}>
                         {covers.map((c, i) => (
-                            <img key={i} className="series-cover-img" src={coverSrc(c)} alt="" loading="lazy" draggable={false} />
+                            <CoverImg key={i} path={c} className="series-cover-img" alt="" loading="lazy" draggable={false} />
                         ))}
                     </div>
                 )}
@@ -755,7 +756,7 @@ function SeriesCard({ group, selectMode, selectedKeys, onToggleSelect, onStartSe
 
 // ---- Series List Row (collapsible) ----
 
-function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, isExpanded, onToggleExpand, onSeriesClick, onAuthorClick }) {
+export function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, isExpanded, onToggleExpand, onSeriesClick, onAuthorClick }) {
     const { name, author, items, covers } = group
 
     const ebookCount = items.filter(i => i.hasEbook).length
@@ -807,7 +808,7 @@ function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, isExpa
                 {/* Thumbnail */}
                 <div className="series-list-thumb" onClick={onSeriesClick} style={{ cursor: 'pointer' }}>
                     {covers.length > 0 ? (
-                        <img src={coverSrc(covers[0])} alt="" className="series-list-thumb-img" loading="lazy" />
+                        <CoverImg path={covers[0]} alt="" className="series-list-thumb-img" loading="lazy" />
                     ) : (
                         <div className="series-list-thumb-placeholder">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="20" height="20">
@@ -850,7 +851,7 @@ function SeriesListRow({ group, selectMode, selectedKeys, onToggleSelect, isExpa
 
 // ---- Individual book row within expanded series ----
 
-function SeriesBookRow({ item }) {
+export function SeriesBookRow({ item }) {
     const typeIcon = item.type === 'pair'
         ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
         : item.type === 'audiobook'
@@ -861,7 +862,7 @@ function SeriesBookRow({ item }) {
         <div className="series-book-row">
             <div className="series-book-row-thumb">
                 {item.cover_path ? (
-                    <img src={coverSrc(item.cover_path)} alt="" className="series-list-thumb-img" loading="lazy" />
+                    <CoverImg path={item.cover_path} alt="" className="series-list-thumb-img" loading="lazy" />
                 ) : (
                     <div className="series-list-thumb-placeholder" style={{ fontSize: '0.8rem' }}>📖</div>
                 )}

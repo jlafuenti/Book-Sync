@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, coverSrc, getProgress, updateProgress, getBookmark, updateBookmark } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark, updateBookmark } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
+import CoverImg from '../components/CoverImg'
 import { useAuth } from '../contexts/AuthContext'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 
@@ -206,7 +207,7 @@ function BookDetailPage() {
             <div className="book-detail-hero">
                 <div className="book-detail-cover">
                     {book.cover_path ? (
-                        <img src={coverSrc(book.cover_path)} alt={book.title} />
+                        <CoverImg path={book.cover_path} alt={book.title} />
                     ) : (
                         <div className="book-detail-cover-placeholder">
                             <span className="book-detail-cover-initial">{initials}</span>

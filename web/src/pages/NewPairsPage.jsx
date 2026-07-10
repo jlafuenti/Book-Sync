@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, coverSrc } from '../api'
+import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
+import CoverImg from '../components/CoverImg'
 
 const FIELDS_LABEL = {
     title: 'Title',
@@ -373,7 +374,7 @@ export default function NewPairsPage() {
                                                                         />
                                                                         {isCover
                                                                             ? (d.ebook_value
-                                                                                ? <img src={coverSrc(d.ebook_value)} alt="Ebook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                                ? <CoverImg path={d.ebook_value} alt="Ebook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
                                                                                 : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
                                                                             : <span style={{ wordBreak: 'break-word' }}>{d.ebook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
                                                                         }
@@ -390,7 +391,7 @@ export default function NewPairsPage() {
                                                                         />
                                                                         {isCover
                                                                             ? (d.audiobook_value
-                                                                                ? <img src={coverSrc(d.audiobook_value)} alt="Audiobook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
+                                                                                ? <CoverImg path={d.audiobook_value} alt="Audiobook cover" style={{ height: 80, borderRadius: 4, objectFit: 'cover' }} />
                                                                                 : <em style={{ color: 'var(--text-muted)' }}>No cover</em>)
                                                                             : <span style={{ wordBreak: 'break-word' }}>{d.audiobook_value ?? <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</span>
                                                                         }

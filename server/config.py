@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60 * 24  # 24 hours
     jwt_refresh_token_expire_days: int = 30
+    # Short-lived, resource-scoped token for cover/audio URLs that can't carry
+    # an Authorization header (img tags, Cast SDK media URLs). See issue #50.
+    jwt_media_token_expire_minutes: int = 15
 
     # Deployment mode. "prod" (the default) refuses to start with known-default
     # secrets (JWT_SECRET_KEY / CREDENTIAL_ENC_KEYS); set to "dev" for local
