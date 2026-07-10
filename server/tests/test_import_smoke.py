@@ -35,6 +35,10 @@ ROUTER_MODULES = [
 @pytest.mark.parametrize("module_name", ROUTER_MODULES)
 def test_router_module_imports(module_name):
     """Every router module imports without error and exposes an APIRouter."""
+    if module_name == "routers.import_sources":
+        # Pulls in services.import_sources -> the `audible` package, a prod dep
+        # CI always installs but local envs may lack. Skip locally, enforce in CI.
+        pytest.importorskip("audible")
     module = importlib.import_module(module_name)
     assert hasattr(module, "router"), f"{module_name} has no `router` attribute"
 

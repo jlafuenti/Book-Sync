@@ -5,6 +5,12 @@ import { cleanup } from '@testing-library/react'
 // Unmount React trees between tests.
 afterEach(() => cleanup())
 
+// jsdom has no media engine — HTMLMediaElement methods throw "Not implemented"
+// (e.g. AudioPlayerContext calling audio.pause() on unmount). Stub them.
+window.HTMLMediaElement.prototype.play = vi.fn(() => Promise.resolve())
+window.HTMLMediaElement.prototype.pause = vi.fn()
+window.HTMLMediaElement.prototype.load = vi.fn()
+
 /**
  * jsdom has no layout engine, so window.matchMedia is undefined. Install a mock
  * driven by a viewport width, so components using useIsMobile() (which queries
