@@ -21,7 +21,7 @@ conflicts with future pulls:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
-# edit docker-compose.yml: ebook/audiobook dirs, JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS, POSTGRES_PASSWORD
+# edit docker-compose.yml: ebook/audiobook dirs, JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS, POSTGRES_PASSWORD, CORS_ORIGINS
 docker compose up --build
 ```
 
