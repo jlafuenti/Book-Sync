@@ -1,12 +1,13 @@
 """
-Startup-time hardening checks (issues #35, #37): refusing to boot with
-default secrets in prod, and never seeding a guessable superadmin password.
+Startup-time hardening checks (issues #35, #37, #72): refusing to boot with
+default secrets/credentials in prod, and never seeding a guessable superadmin
+password.
 """
 
 import pytest
 from sqlalchemy import select, func
 
-from config import settings, check_jwt_secret
+from config import settings, check_jwt_secret, check_db_credentials
 from database import bootstrap_superadmin
 from models.user import User
 from routers.auth import verify_password
@@ -29,6 +30,25 @@ def test_check_jwt_secret_allows_real_secret_in_prod(monkeypatch):
     monkeypatch.setattr(settings, "jwt_secret_key", "a-real-randomly-generated-secret")
     monkeypatch.setattr(settings, "app_env", "prod")
     check_jwt_secret(settings)  # should not raise
+
+
+def test_check_db_credentials_raises_on_default_in_prod(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://booksync:booksync@db:5432/booksync")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    with pytest.raises(RuntimeError):
+        check_db_credentials(settings)
+
+
+def test_check_db_credentials_warns_on_default_in_dev(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://booksync:booksync@db:5432/booksync")
+    monkeypatch.setattr(settings, "app_env", "dev")
+    check_db_credentials(settings)  # should not raise
+
+
+def test_check_db_credentials_allows_real_value_in_prod(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://booksync:a-real-generated-password@db:5432/booksync")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    check_db_credentials(settings)  # should not raise
 
 
 async def test_bootstrap_superadmin_password_is_not_admin(db):

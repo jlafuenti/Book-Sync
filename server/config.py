@@ -128,3 +128,27 @@ def check_jwt_secret(s: "Settings") -> None:
     logger.warning(
         "Using default JWT secret key (dev mode). Set JWT_SECRET_KEY for production!"
     )
+
+
+# Known placeholder Postgres credentials shipped in code/compose defaults —
+# never valid for a production deployment.
+DEFAULT_DB_CREDENTIALS = "booksync:booksync"
+
+
+def check_db_credentials(s: "Settings") -> None:
+    """Refuse to run with the default Postgres credentials outside dev mode."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if DEFAULT_DB_CREDENTIALS not in s.database_url:
+        return
+    if s.app_env == "prod":
+        raise RuntimeError(
+            "DATABASE_URL still contains the default booksync:booksync credentials — "
+            "refusing to start in prod. Generate a real password with: "
+            "python -c \"import secrets; print(secrets.token_urlsafe(32))\" "
+            "and set POSTGRES_PASSWORD/DATABASE_URL, or set APP_ENV=dev for local development."
+        )
+    logger.warning(
+        "Using default Postgres credentials (dev mode). Set POSTGRES_PASSWORD for production!"
+    )

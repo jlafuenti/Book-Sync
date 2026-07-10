@@ -14,10 +14,12 @@ services:
       - ./data:/data/app
       - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
     environment:
-      - DATABASE_URL=postgresql+asyncpg://booksync:booksync@db:5432/booksync
-      # APP_ENV=prod (the default) refuses to start unless JWT_SECRET_KEY and
-      # CREDENTIAL_ENC_KEYS below are set to real values. Set APP_ENV=dev only
-      # for local development — it allows the zero-config insecure defaults.
+      # Password comes from POSTGRES_PASSWORD below — keep both in sync.
+      - DATABASE_URL=postgresql+asyncpg://booksync:${POSTGRES_PASSWORD}@db:5432/booksync
+      # APP_ENV=prod (the default) refuses to start unless JWT_SECRET_KEY,
+      # CREDENTIAL_ENC_KEYS, and POSTGRES_PASSWORD below are set to real values.
+      # Set APP_ENV=dev only for local development — it allows the zero-config
+      # insecure defaults.
       - APP_ENV=prod
       # Generate with:
       #   python -c "import secrets; print(secrets.token_urlsafe(64))"
@@ -48,7 +50,11 @@ services:
     image: postgres:16-alpine
     environment:
       - POSTGRES_USER=booksync
-      - POSTGRES_PASSWORD=booksync
+      # Generate with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # Only applied on first init of the booksync_db volume — see README for
+      # how to rotate the password on an already-initialized deployment.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=booksync
     volumes:
       - booksync_db:/var/lib/postgresql/data
