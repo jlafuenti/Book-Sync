@@ -17,7 +17,7 @@ from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 
 from database import init_db, bootstrap_superadmin
-from config import settings, check_jwt_secret
+from config import settings, check_jwt_secret, check_db_credentials
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
 
     # Fail fast on insecure defaults before touching the DB or minting tokens.
     check_jwt_secret(settings)
+    check_db_credentials(settings)
     validate_credential_keys()
 
     await init_db()
