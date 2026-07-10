@@ -6,7 +6,14 @@ verification (see plan). These tests pin down the lightweight metadata-vs-
 filename heuristics so future refactors don't silently regress them.
 """
 
-from services.import_sources.acsm import _detect_source_from_meta
+import pytest
+
+# services.import_sources.__init__ eagerly imports the Audible source, whose
+# `audible` package is a heavy prod dep not present in every local env (CI
+# installs it). Skip this file instead of breaking collection of the suite.
+pytest.importorskip("audible")
+
+from services.import_sources.acsm import _detect_source_from_meta  # noqa: E402
 
 
 def test_google_play_identifier():
