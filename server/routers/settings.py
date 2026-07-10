@@ -8,6 +8,7 @@ from database import get_db
 from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
+from services.url_safety import assert_safe_url, UnsafeUrlError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -142,6 +143,11 @@ async def test_abs_connection(url: str, token: str, _: User = Depends(get_admin_
         raise HTTPException(status_code=400, detail="URL and token are required")
 
     try:
+        assert_safe_url(url, allow_private=True)
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
+
+    try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.get(
                 f"{url.rstrip('/')}/api/libraries",
@@ -197,6 +203,11 @@ async def test_remote_connection(
 
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+
+    try:
+        assert_safe_url(url, allow_private=True)
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
 
     # Prefer an explicitly-passed key (e.g. just generated but not yet saved
     # to the URL field's sibling state) over the one already on file.

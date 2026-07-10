@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models.settings import SystemSetting
 from services import credentials
 from services.metadata_utils import extract_series_and_index
+from services.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ def fetch_abs_index(abs_url: str, api_token: str, abs_prefix: str) -> dict[str, 
     headers = {"Authorization": f"Bearer {api_token}"}
     index: dict[str, dict] = {}
     try:
+        assert_safe_url(abs_url, allow_private=True)
         # Find the audiobook library
         r = httpx.get(f"{abs_url}/api/libraries", headers=headers, timeout=15)
         r.raise_for_status()
