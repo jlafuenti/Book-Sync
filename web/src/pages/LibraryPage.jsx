@@ -4,7 +4,7 @@ import {
     getEbooks, getAudiobooks, getPairs, getNewPairs, uploadEbook, uploadAudiobook, scanLibrary,
     normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata,
     rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles,
-    cleanupOrphans, coverSrc, acknowledgeNewItems, acknowledgeNewPairs,
+    cleanupOrphans, acknowledgeNewItems, acknowledgeNewPairs,
     getAllProgress
 } from '../api'
 import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
@@ -14,6 +14,7 @@ import FilterPill from '../components/FilterPill'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
+import useCoverSrc from '../hooks/useCoverSrc'
 import './LibraryPage.css'
 
 // ---- Sort helper ----
@@ -102,7 +103,7 @@ function TypeBadge({ mediaType }) {
 
 // ---- Book Card (Grid View) ----
 
-function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
+export function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdit, onDelete, onNavigate, canEdit }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -115,7 +116,7 @@ function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdi
         return () => window.removeEventListener('mousedown', handler)
     }, [menuOpen])
 
-    const coverUrl = coverSrc(book.cover_path)
+    const coverUrl = useCoverSrc(book.cover_path)
 
     const handleClick = (e) => {
         if (selectMode) { onSelect(e); return }
@@ -184,8 +185,8 @@ function BookCard({ book, selectMode, isSelected, onSelect, onStartSelect, onEdi
 
 // ---- Book Row (List View) ----
 
-function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
-    const coverUrl = coverSrc(book.cover_path)
+export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDelete, onNavigate, canEdit }) {
+    const coverUrl = useCoverSrc(book.cover_path)
 
     const handleClick = (e) => {
         if (selectMode) { onSelect(e); return }

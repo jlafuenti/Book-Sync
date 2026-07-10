@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     getAllProgress, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
-    updateProgress, resetPairProgress, getProgress as apiGetProgress, getBookmark, updateBookmark, coverSrc,
+    updateProgress, resetPairProgress, getProgress as apiGetProgress, getBookmark, updateBookmark,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import useIsMobile from '../hooks/useIsMobile'
+import useCoverSrc from '../hooks/useCoverSrc'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
+import CoverImg from '../components/CoverImg'
 import './HomePage.css'
 
 // ---- Helpers ----
@@ -104,7 +106,7 @@ function Carousel({ children, className = '' }) {
 
 // ---- Book Card ----
 
-function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onListen, onMarkComplete, onResetProgress, onViewDetails, isPair, isEbook }) {
+export function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onListen, onMarkComplete, onResetProgress, onViewDetails, isPair, isEbook }) {
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef(null)
 
@@ -117,7 +119,7 @@ function BookCard({ book, size = 'continue', progress, onPrimary, onRead, onList
         return () => window.removeEventListener('mousedown', handler)
     }, [menuOpen])
 
-    const coverUrl = coverSrc(book?.cover_path)
+    const coverUrl = useCoverSrc(book?.cover_path)
 
     return (
         <div className={`home-book-card ${size}-size`} onClick={onPrimary}>
@@ -684,7 +686,6 @@ function HomePage() {
                     <Carousel>
                         {seriesItems.map(s => {
                             const book = s.nextBook
-                            const coverUrl = coverSrc(book?.cover_path)
 
                             if (isMobile) {
                                 return (
@@ -693,8 +694,8 @@ function HomePage() {
                                         className="home-series-card-mobile"
                                         onClick={() => navigate('/series')}
                                     >
-                                        {coverUrl ? (
-                                            <img src={coverUrl} alt={s.seriesName} loading="lazy" />
+                                        {book?.cover_path ? (
+                                            <CoverImg path={book?.cover_path} alt={s.seriesName} loading="lazy" />
                                         ) : (
                                             <div className="series-card-placeholder">
                                                 <span>📖</span>
@@ -716,8 +717,8 @@ function HomePage() {
                                     onClick={() => navigate('/series')}
                                 >
                                     <div className="home-book-card-cover">
-                                        {coverUrl ? (
-                                            <img src={coverUrl} alt={book?.title} loading="lazy" />
+                                        {book?.cover_path ? (
+                                            <CoverImg path={book?.cover_path} alt={book?.title} loading="lazy" />
                                         ) : (
                                             <div className="home-book-card-placeholder">
                                                 <span>📖</span>
@@ -753,7 +754,7 @@ function HomePage() {
                                     >
                                         <div className="recent-card-thumb">
                                             {book.cover_path ? (
-                                                <img src={coverSrc(book.cover_path)} alt={book.title} loading="lazy" />
+                                                <CoverImg path={book.cover_path} alt={book.title} loading="lazy" />
                                             ) : (
                                                 <div className="recent-card-thumb-placeholder">
                                                     <span>{book.mediaType === 'ebook' ? '📚' : '🎧'}</span>
@@ -776,7 +777,7 @@ function HomePage() {
                                 >
                                     <div className="home-book-card-cover">
                                         {book.cover_path ? (
-                                            <img src={coverSrc(book.cover_path)} alt={book.title} loading="lazy" />
+                                            <CoverImg path={book.cover_path} alt={book.title} loading="lazy" />
                                         ) : (
                                             <div className="home-book-card-placeholder">
                                                 <span>{book.mediaType === 'ebook' ? '📚' : '🎧'}</span>

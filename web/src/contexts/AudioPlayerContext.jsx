@@ -23,6 +23,9 @@ export function AudioPlayerProvider({ children }) {
     // Latest audiobook / timing refs so the beforeunload handler can read
     // current state without re-binding the listener on every state change.
     const currentAudiobookRef = useRef(null)
+    // Guards the stream-error recovery below against retry loops: only one
+    // re-mint attempt per load, cleared once playback resumes successfully.
+    const recoveringStreamRef = useRef(false)
 
     const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
     const [pairedEbookId, setPairedEbookId] = useState(null)
@@ -64,11 +67,39 @@ export function AudioPlayerProvider({ children }) {
             }
         }
 
+        // The media token embedded in audio.src is short-lived (15 min, see
+        // issue #50). A long pause/seek session can outlive it, causing the
+        // browser to fail a byte-range (re)request with a 401. Re-mint a
+        // fresh scoped URL and resume from the same position -- once per
+        // error, to avoid retry loops on genuine playback failures.
+        const onError = async () => {
+            const ab = currentAudiobookRef.current
+            if (!ab || recoveringStreamRef.current) return
+            recoveringStreamRef.current = true
+            try {
+                const wasPlaying = !audio.paused
+                const posSeconds = audio.currentTime
+                const url = await getAudiobookStreamUrl(ab.id)
+                audio.src = url
+                audio.load()
+                const onCanPlay = () => {
+                    audio.currentTime = posSeconds
+                    if (wasPlaying) audio.play()
+                    audio.removeEventListener('canplay', onCanPlay)
+                    recoveringStreamRef.current = false
+                }
+                audio.addEventListener('canplay', onCanPlay)
+            } catch {
+                recoveringStreamRef.current = false
+            }
+        }
+
         audio.addEventListener('play', onPlay)
         audio.addEventListener('pause', onPause)
         audio.addEventListener('timeupdate', onTimeUpdate)
         audio.addEventListener('durationchange', onDurationChange)
         audio.addEventListener('ended', onEnded)
+        audio.addEventListener('error', onError)
 
         return () => {
             audio.removeEventListener('play', onPlay)
@@ -76,6 +107,7 @@ export function AudioPlayerProvider({ children }) {
             audio.removeEventListener('timeupdate', onTimeUpdate)
             audio.removeEventListener('durationchange', onDurationChange)
             audio.removeEventListener('ended', onEnded)
+            audio.removeEventListener('error', onError)
             audio.pause()
             audio.src = ''
         }
@@ -157,7 +189,7 @@ export function AudioPlayerProvider({ children }) {
         }
     }, [])
 
-    const play = useCallback((audiobookId, audiobook, positionMs = 0, pairedEbookIdArg = null) => {
+    const play = useCallback(async (audiobookId, audiobook, positionMs = 0, pairedEbookIdArg = null) => {
         setPairedEbookId(pairedEbookIdArg)
         const audio = audioRef.current
         if (!audio) return
@@ -172,7 +204,7 @@ export function AudioPlayerProvider({ children }) {
         }
 
         // Load new audiobook
-        const url = getAudiobookStreamUrl(audiobookId)
+        const url = await getAudiobookStreamUrl(audiobookId)
         audio.src = url
         audio.playbackRate = speed
 

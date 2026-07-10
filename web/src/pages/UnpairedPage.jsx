@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { getPairs, getEbooks, getAudiobooks, createPair, coverSrc } from '../api'
+import { getPairs, getEbooks, getAudiobooks, createPair } from '../api'
+import CoverImg from '../components/CoverImg'
 
 function matchesFilters(item, text, author, series) {
     if (author && item.author !== author) return false
@@ -53,7 +54,7 @@ function FilterBar({ text, onText, author, onAuthor, series, onSeries, authors, 
     )
 }
 
-function BookRow({ item, selected, onSelect }) {
+export function BookRow({ item, selected, onSelect }) {
     return (
         <div
             className={`unpaired-row${selected ? ' unpaired-row-selected' : ''}`}
@@ -61,7 +62,7 @@ function BookRow({ item, selected, onSelect }) {
         >
             <div className="unpaired-row-cover">
                 {item.cover_path
-                    ? <img src={coverSrc(item.cover_path)} alt="" />
+                    ? <CoverImg path={item.cover_path} alt="" />
                     : <span className="unpaired-row-cover-placeholder">📄</span>
                 }
             </div>
