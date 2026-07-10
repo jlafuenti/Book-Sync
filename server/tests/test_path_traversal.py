@@ -191,6 +191,72 @@ async def test_upload_audiobook_cover_accepts_allowed_extension(
     assert r.status_code == 200, r.text
 
 
+# --- Old cover cleanup on re-upload (issue #44) -----------------------------
+
+async def test_upload_ebook_cover_deletes_old_cover_on_extension_change(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = EBook(title="Some Book", filename="b.epub", file_path="/x/b.epub")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+        assert (temp_covers_dir / old_filename).exists()
+
+        r2 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert not (temp_covers_dir / old_filename).exists()
+    remaining = list(temp_covers_dir.iterdir())
+    assert len(remaining) == 1
+    assert remaining[0].read_bytes() == b"jpg-bytes"
+
+
+async def test_upload_audiobook_cover_deletes_old_cover_on_extension_change(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = AudioBook(title="Some Audiobook", filename="b.m4b", file_path="/x/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+        assert (temp_covers_dir / old_filename).exists()
+
+        r2 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert not (temp_covers_dir / old_filename).exists()
+    remaining = list(temp_covers_dir.iterdir())
+    assert len(remaining) == 1
+    assert remaining[0].read_bytes() == b"jpg-bytes"
+
+
 # --- replace_file's untrusted fallback branch -------------------------------
 
 async def test_replace_file_fallback_sanitizes_traversal_filename(
