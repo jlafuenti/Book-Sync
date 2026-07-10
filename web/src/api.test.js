@@ -210,3 +210,52 @@ describe('prefetchMediaTokens()', () => {
         await expect(prefetchMediaTokens([{ resourceType: 'cover', resourceId: 'a.jpg' }])).resolves.toBeUndefined()
     })
 })
+
+describe('testAbsConnection()', () => {
+    it('sends the url and token as query params and returns the parsed result', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ success: true, book_libraries: ['Audiobooks'] }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { testAbsConnection } = await import('./api')
+        const result = await testAbsConnection('http://192.168.1.60:13378', 'my-token')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/settings/test-abs?url=http%3A%2F%2F192.168.1.60%3A13378&token=my-token',
+            expect.anything(),
+        )
+        expect(result).toEqual({ success: true, book_libraries: ['Audiobooks'] })
+    })
+
+    it('defaults to an empty token so the backend falls back to the saved credential', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ success: true }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { testAbsConnection } = await import('./api')
+        await testAbsConnection('http://192.168.1.60:13378')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/settings/test-abs?url=http%3A%2F%2F192.168.1.60%3A13378&token=',
+            expect.anything(),
+        )
+    })
+
+    it('requires a url', async () => {
+        const { testAbsConnection } = await import('./api')
+        await expect(testAbsConnection('')).rejects.toThrow('URL is required')
+    })
+
+    it('throws with the server-provided detail message on failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400, json: async () => ({ detail: 'Authentication failed — check your API token' }),
+        }))
+
+        const { testAbsConnection } = await import('./api')
+        await expect(testAbsConnection('http://192.168.1.60:13378', 'wrong')).rejects.toThrow(
+            'Authentication failed — check your API token'
+        )
+    })
+})
