@@ -24,6 +24,10 @@ services:
       # Generate with:
       #   python -c "import secrets; print(secrets.token_urlsafe(64))"
       - JWT_SECRET_KEY=
+      # Comma-separated list of allowed web origins for CORS. APP_ENV=prod
+      # refuses to start with the wildcard default — set this to your actual
+      # web frontend origin(s).
+      - CORS_ORIGINS=http://localhost:3000
       - WHISPER_MODEL=small
       - WHISPER_DEVICE=auto
       - EBOOK_DIR=/data/ebooks
