@@ -443,10 +443,13 @@ function ABSSettingsSection() {
     }
 
     const handleTest = async () => {
-        if (!url || !token) { setTestResult({ success: false, text: 'Enter URL and token first' }); return }
+        if (!url) { setTestResult({ success: false, text: 'Enter URL first' }); return }
         setIsTesting(true); setTestResult(null)
         try {
-            const r = await testAbsConnection(url, token)
+            // The masked placeholder isn't a real token -- let the backend
+            // fall back to whatever's already saved instead of sending it literally.
+            const tokenToSend = token === SECRET_PLACEHOLDER ? '' : token
+            const r = await testAbsConnection(url, tokenToSend)
             setTestResult({ success: true, text: `✅ Connected! Libraries: ${r.book_libraries?.join(', ') || 'none'}` })
         } catch (err) { setTestResult({ success: false, text: `❌ ${err.message}` }) }
         finally { setIsTesting(false) }
