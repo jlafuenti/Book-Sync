@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TranscriptionSettingsSection } from './SystemPage'
+import { TranscriptionSettingsSection, ABSSettingsSection } from './SystemPage'
 
-// TranscriptionSettingsSection talks to the API directly (no props), so mock
-// the module it imports from rather than mounting the whole page/router.
+// TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
+// (no props), so mock the module they import from rather than mounting the
+// whole page/router.
 const {
     getSettingsMock, updateSettingsMock, testRemoteConnectionMock, generateKeyMock,
+    testAbsConnectionMock,
 } = vi.hoisted(() => ({
     getSettingsMock: vi.fn(),
     updateSettingsMock: vi.fn(),
     testRemoteConnectionMock: vi.fn(),
     generateKeyMock: vi.fn(),
+    testAbsConnectionMock: vi.fn(),
 }))
 
 vi.mock('../api', async (importOriginal) => {
@@ -21,6 +24,7 @@ vi.mock('../api', async (importOriginal) => {
         updateSettings: updateSettingsMock,
         testRemoteConnection: testRemoteConnectionMock,
         generateTranscriptionRemoteKey: generateKeyMock,
+        testAbsConnection: testAbsConnectionMock,
     }
 })
 
@@ -32,17 +36,23 @@ function baseSettings(overrides = {}) {
         transcription_remote_timeout: 7200,
         auto_transcribe_enabled: false,
         whisper_model: 'medium',
+        abs_enabled: false,
+        abs_url: '',
+        abs_api_token: '',
+        abs_audiobooks_prefix: '',
         ...overrides,
     }
 }
 
 const KEY_PLACEHOLDER_TEXT = 'Shared secret for the Jetson server'
+const ABS_TOKEN_PLACEHOLDER_TEXT = 'Paste your ABS API token'
 
 beforeEach(() => {
     getSettingsMock.mockReset().mockResolvedValue(baseSettings())
     updateSettingsMock.mockReset().mockResolvedValue({})
     testRemoteConnectionMock.mockReset()
     generateKeyMock.mockReset()
+    testAbsConnectionMock.mockReset()
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 
@@ -154,6 +164,61 @@ describe('TranscriptionSettingsSection', () => {
         testRemoteConnectionMock.mockRejectedValue(new Error('Connection failed: timeout'))
         render(<TranscriptionSettingsSection />)
         await screen.findByPlaceholderText(KEY_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        expect(await screen.findByText(/Connection failed: timeout/)).toBeInTheDocument()
+    })
+})
+
+describe('ABSSettingsSection', () => {
+    it('sends an empty token to Test Connection when the field still shows the masked placeholder', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({
+            abs_enabled: true, abs_url: 'http://192.168.1.60:13378', abs_api_token: '********',
+        }))
+        testAbsConnectionMock.mockResolvedValue({ success: true, book_libraries: ['Audiobooks'] })
+        render(<ABSSettingsSection />)
+        const tokenInput = await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
+        await waitFor(() => expect(tokenInput).toHaveValue('********'))
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        await waitFor(() => expect(testAbsConnectionMock).toHaveBeenCalledWith(
+            'http://192.168.1.60:13378', ''
+        ))
+        expect(await screen.findByText(/Connected! Libraries: Audiobooks/)).toBeInTheDocument()
+    })
+
+    it('sends the real token to Test Connection when one was freshly typed', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ abs_enabled: true, abs_url: 'http://192.168.1.60:13378' }))
+        testAbsConnectionMock.mockResolvedValue({ success: true, book_libraries: [] })
+        render(<ABSSettingsSection />)
+        const tokenInput = await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
+        fireEvent.change(tokenInput, { target: { value: 'freshly-typed-token' } })
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        await waitFor(() => expect(testAbsConnectionMock).toHaveBeenCalledWith(
+            'http://192.168.1.60:13378', 'freshly-typed-token'
+        ))
+    })
+
+    it('requires a URL before testing', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ abs_enabled: true }))
+        render(<ABSSettingsSection />)
+        await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        expect(await screen.findByText('Enter URL first')).toBeInTheDocument()
+        expect(testAbsConnectionMock).not.toHaveBeenCalled()
+    })
+
+    it('reports a connection error from Test Connection', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ abs_enabled: true, abs_url: 'http://192.168.1.60:13378' }))
+        testAbsConnectionMock.mockRejectedValue(new Error('Connection failed: timeout'))
+        render(<ABSSettingsSection />)
+        await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
 
         fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
 

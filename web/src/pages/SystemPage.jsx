@@ -410,7 +410,7 @@ export function TranscriptionSettingsSection() {
 }
 
 /* ── ABSSettingsSection ────────────────────────────────────────────── */
-function ABSSettingsSection() {
+export function ABSSettingsSection() {
     const [enabled, setEnabled] = useState(false)
     const [url, setUrl] = useState('')
     const [token, setToken] = useState('')
