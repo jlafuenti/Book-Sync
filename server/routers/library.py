@@ -48,7 +48,7 @@ from schemas import (
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
-from utils import safe_join
+from utils import resolve_cover_url, safe_join
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -1938,9 +1938,17 @@ async def upload_ebook_cover(
     new_filename = f"{safe_title}_{book.id}{ext}"
     dest_path = safe_join(covers_path, new_filename)
 
+    old_path = resolve_cover_url(book.cover_path, covers_path)
+
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-        
+
+    if old_path and old_path.is_file() and old_path != dest_path:
+        try:
+            old_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to delete old cover {old_path}: {e}")
+
     book.cover_path = f"/api/files/covers/{new_filename}"
     await db.commit()
     await db.refresh(book)
@@ -2011,9 +2019,17 @@ async def upload_audiobook_cover(
     new_filename = f"{safe_title}_{book.id}{ext}"
     dest_path = safe_join(covers_path, new_filename)
 
+    old_path = resolve_cover_url(book.cover_path, covers_path)
+
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-        
+
+    if old_path and old_path.is_file() and old_path != dest_path:
+        try:
+            old_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to delete old cover {old_path}: {e}")
+
     book.cover_path = f"/api/files/covers/{new_filename}"
     await db.commit()
     await db.refresh(book)

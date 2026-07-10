@@ -202,3 +202,33 @@ async def test_apply_cover_accepts_public_image_and_saves(
     assert cover_path.startswith("/api/files/covers/")
     saved = temp_covers_dir / cover_path.split("/")[-1]
     assert saved.read_bytes() == image_bytes
+
+
+async def test_apply_cover_deletes_old_cover_file(
+    make_user, auth_header, make_client, db, temp_covers_dir, monkeypatch,
+):
+    """Issue #44: book.cover_path is a URL, not a filesystem path -- applying
+    a new cover must still delete the file the old URL pointed to."""
+    old_cover = temp_covers_dir / "old_cover.jpg"
+    old_cover.write_bytes(b"old-jpeg-bytes")
+
+    image_bytes = b"\xff\xd8\xff\xe0new-fake-jpeg-bytes"
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=image_bytes)
+
+    _patch_match_transport(monkeypatch, handler)
+    editor = await make_user(username="ed", role="editor")
+    book = await _make_ebook(db)
+    book.cover_path = "/api/files/covers/old_cover.jpg"
+    await db.commit()
+
+    async with make_client(match.router) as client:
+        r = await _apply_cover(client, auth_header(editor), book.id, "http://public.example/cover.jpg")
+
+    assert r.status_code == 200, r.text
+    assert not old_cover.exists()
+    new_cover_path = r.json()["cover_path"]
+    saved = temp_covers_dir / new_cover_path.split("/")[-1]
+    assert saved.read_bytes() == image_bytes
+    assert [f.name for f in temp_covers_dir.iterdir()] == [saved.name]
