@@ -1554,31 +1554,23 @@ async def upload_ebook(
             detail=f"Unsupported ebook format: {ext}. Supported: {EBOOK_EXTENSIONS}",
         )
 
-    # Save file
     filepath = safe_join(settings.ebook_dir, file.filename)
+    if filepath.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A file named '{filepath.name}' already exists in the library",
+        )
+
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
 
-    file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-
-    # Metadata extraction
-    meta = await extract_metadata(str(filepath), "ebook", db)
-
-    ebook = EBook(
-        title=meta["title"] or filepath.name,
-        author=meta["author"],
-        series=meta["series"],
-        series_index=meta["series_index"],
-        filename=filepath.name,
-        file_path=str(filepath),
-        file_hash=file_hash,
-        file_size=len(content),
-        format=ext.lstrip("."),
-    )
-    db.add(ebook)
-    await db.flush()
-    await db.refresh(ebook)
+    # Delegate to the same ingest path the directory scanner uses, so uploads
+    # get cover extraction, metadata enrichment, and auto-matching for free.
+    await scan_files_impl(db, [str(filepath)])
+    ebook = (
+        await db.execute(select(EBook).where(EBook.file_path == str(filepath)))
+    ).scalar_one()
     return ebook
 
 
@@ -1596,31 +1588,23 @@ async def upload_audiobook(
             detail=f"Unsupported audiobook format: {ext}. Supported: {AUDIOBOOK_EXTENSIONS}",
         )
 
-    # Save file
     filepath = safe_join(settings.audiobook_dir, file.filename)
+    if filepath.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"A file named '{filepath.name}' already exists in the library",
+        )
+
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
 
-    file_hash = hashlib.sha256(content[:10 * 1024 * 1024]).hexdigest()
-
-    # Metadata extraction
-    meta = await extract_metadata(str(filepath), "audiobook", db)
-
-    audiobook = AudioBook(
-        title=meta["title"] or filepath.name,
-        author=meta["author"],
-        series=meta["series"],
-        series_index=meta["series_index"],
-        filename=filepath.name,
-        file_path=str(filepath),
-        file_hash=file_hash,
-        file_size=len(content),
-        format=ext.lstrip("."),
-    )
-    db.add(audiobook)
-    await db.flush()
-    await db.refresh(audiobook)
+    # Delegate to the same ingest path the directory scanner uses, so uploads
+    # get cover extraction, metadata enrichment, and auto-matching for free.
+    await scan_files_impl(db, [str(filepath)])
+    audiobook = (
+        await db.execute(select(AudioBook).where(AudioBook.file_path == str(filepath)))
+    ).scalar_one()
     return audiobook
 
 
