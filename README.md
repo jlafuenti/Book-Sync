@@ -21,9 +21,22 @@ conflicts with future pulls:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
-# edit docker-compose.yml: ebook/audiobook dirs, JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS
+# edit docker-compose.yml: ebook/audiobook dirs, JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS, POSTGRES_PASSWORD
 docker compose up --build
 ```
+
+**Note:** `POSTGRES_PASSWORD` is only applied by Postgres on first initialization of the data
+volume. If you're changing it on an *existing* deployment (not a fresh install), editing
+`docker-compose.yml` alone won't rotate the stored password — the `server` container will just
+fail to authenticate. Rotate it in place first:
+
+```bash
+docker compose exec db psql -U booksync -d booksync -c \
+  "ALTER ROLE booksync WITH PASSWORD 'your-new-generated-password';"
+```
+
+Then update `POSTGRES_PASSWORD`/`DATABASE_URL` in `docker-compose.yml` to match and restart the
+`server` service. This does not touch or wipe any data in the `booksync_db` volume.
 
 The Jetson Orin Nano remote transcription worker deploys separately, on its own host — see
 [jetson/README.md](jetson/README.md) for the sparse-clone-and-deploy walkthrough
