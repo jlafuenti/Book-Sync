@@ -14,8 +14,19 @@ from models.book import EBook, AudioBook
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from routers.library import sanitize_filename
+from services.url_safety import assert_safe_url, UnsafeUrlError
 
 logger = logging.getLogger(__name__)
+
+MAX_COVER_REDIRECTS = 5
+MAX_COVER_BYTES = 25 * 1024 * 1024
+
+_COVER_EXT_BY_CONTENT_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 
 router = APIRouter(
     prefix="/match",
@@ -167,6 +178,53 @@ class ApplyCoverRequest(BaseModel):
     book_id: int
     cover_url: str
 
+
+async def _fetch_cover_safely(url: str) -> tuple[bytes, str]:
+    """Fetch a remote cover image with an SSRF guard re-checked on every
+    redirect hop (follow_redirects=True would connect to the redirect
+    target before any hook could inspect it, so redirects are followed
+    manually here instead), a content-type check, and a size cap."""
+    current_url = url
+    async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
+        for _ in range(MAX_COVER_REDIRECTS + 1):
+            try:
+                assert_safe_url(current_url, allow_private=False)
+            except UnsafeUrlError as e:
+                logger.warning(f"Rejected unsafe cover URL {current_url!r}: {e}")
+                raise HTTPException(status_code=400, detail="Cover URL is not allowed")
+
+            try:
+                resp = await client.get(current_url)
+            except Exception as e:
+                logger.error(f"Failed to download remote cover: {repr(e)}")
+                raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
+
+            if resp.is_redirect:
+                next_url = str(resp.next_request.url) if resp.next_request else resp.headers.get("location")
+                if not next_url:
+                    raise HTTPException(status_code=502, detail="Invalid redirect from remote URL")
+                current_url = next_url
+                continue
+
+            try:
+                resp.raise_for_status()
+            except Exception as e:
+                logger.error(f"Failed to download remote cover: {repr(e)}")
+                raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
+
+            content_type = resp.headers.get("content-type", "")
+            if not content_type.split(";")[0].strip().lower().startswith("image/"):
+                raise HTTPException(status_code=400, detail="Remote URL did not return an image")
+
+            content = resp.content
+            if len(content) > MAX_COVER_BYTES:
+                raise HTTPException(status_code=413, detail="Remote cover image too large")
+
+            return content, content_type
+
+    raise HTTPException(status_code=400, detail="Too many redirects fetching cover")
+
+
 @router.post("/apply-cover")
 async def apply_remote_cover(
     req: ApplyCoverRequest,
@@ -176,31 +234,23 @@ async def apply_remote_cover(
     """Download a remote cover URL and apply it to a book."""
     if req.book_type not in ["ebook", "audiobook"]:
         raise HTTPException(status_code=400, detail="Invalid book_type")
-        
+
     model = EBook if req.book_type == "ebook" else AudioBook
     result = await db.execute(select(model).filter(model.id == req.book_id))
     book = result.scalar_one_or_none()
-    
+
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-        
-    # Download the image
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        try:
-            resp = await client.get(req.cover_url, timeout=60.0)
-            resp.raise_for_status()
-            content = resp.content
-        except Exception as e:
-            logger.error(f"Failed to download remote cover: {repr(e)}")
-            raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
-            
+
+    content, content_type = await _fetch_cover_safely(req.cover_url)
+
     # Save the file
     covers_path = Path(settings.covers_dir)
     covers_path.mkdir(parents=True, exist_ok=True)
     
     title_safe = sanitize_filename(book.title or "Unknown Title")
     author_safe = sanitize_filename(book.author or "Unknown Author")
-    ext = ".jpg" # Mostly jpgs from these APIs
+    ext = _COVER_EXT_BY_CONTENT_TYPE.get(content_type.split(";")[0].strip().lower(), ".jpg")
     filename = f"{author_safe} - {title_safe}{ext}"
     
     # Handle collisions
