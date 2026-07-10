@@ -8,6 +8,7 @@ from database import get_db
 from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
+from services.url_safety import assert_safe_url, UnsafeUrlError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -134,18 +135,36 @@ async def update_settings(
     return await get_settings(db)
 
 @router.get("/test-abs")
-async def test_abs_connection(url: str, token: str, _: User = Depends(get_admin_user)):
+async def test_abs_connection(
+    url: str,
+    token: str = "",
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
     """Test the connection to an Audiobookshelf server."""
     import httpx
 
-    if not url or not token:
-        raise HTTPException(status_code=400, detail="URL and token are required")
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    try:
+        assert_safe_url(url, allow_private=True)
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
+
+    # Prefer an explicitly-passed token over the one already on file, same
+    # fallback as test-remote. A UI that round-trips the masked GET value
+    # (the "********" placeholder) or leaves the field blank should still
+    # test against the real stored credential, not fail or send the mask.
+    api_token = token if (token and token != _SECRET_PLACEHOLDER) else await credential_store.get_credential(db, "abs")
+    if not api_token:
+        raise HTTPException(status_code=400, detail="API token is required")
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.get(
                 f"{url.rstrip('/')}/api/libraries",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {api_token}"},
             )
             r.raise_for_status()
             libraries = r.json().get("libraries", [])
@@ -197,6 +216,11 @@ async def test_remote_connection(
 
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+
+    try:
+        assert_safe_url(url, allow_private=True)
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
 
     # Prefer an explicitly-passed key (e.g. just generated but not yet saved
     # to the URL field's sibling state) over the one already on file.
