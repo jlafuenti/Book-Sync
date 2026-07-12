@@ -8,6 +8,7 @@ and the content-type/size checks, alongside a happy-path regression case.
 """
 
 import socket
+from pathlib import Path
 
 import httpx
 import pytest
@@ -232,3 +233,39 @@ async def test_apply_cover_deletes_old_cover_file(
     saved = temp_covers_dir / new_cover_path.split("/")[-1]
     assert saved.read_bytes() == image_bytes
     assert [f.name for f in temp_covers_dir.iterdir()] == [saved.name]
+
+
+async def test_apply_cover_logs_and_continues_when_old_unlink_fails(
+    make_user, auth_header, make_client, db, temp_covers_dir, monkeypatch, caplog,
+):
+    """If deleting the old cover file fails (e.g. permissions/locked file),
+    the request must still succeed and the new cover must still be recorded --
+    the delete failure is logged, not fatal."""
+    old_cover = temp_covers_dir / "old_cover.jpg"
+    old_cover.write_bytes(b"old-jpeg-bytes")
+
+    def raising_unlink(self, *args, **kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr(Path, "unlink", raising_unlink)
+
+    image_bytes = b"\xff\xd8\xff\xe0new-fake-jpeg-bytes"
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=image_bytes)
+
+    _patch_match_transport(monkeypatch, handler)
+    editor = await make_user(username="ed", role="editor")
+    book = await _make_ebook(db)
+    book.cover_path = "/api/files/covers/old_cover.jpg"
+    await db.commit()
+
+    async with make_client(match.router) as client:
+        r = await _apply_cover(client, auth_header(editor), book.id, "http://public.example/cover.jpg")
+
+    assert r.status_code == 200, r.text
+    assert old_cover.exists()  # unlink failed, so the old file is still there
+    new_cover_path = r.json()["cover_path"]
+    saved = temp_covers_dir / new_cover_path.split("/")[-1]
+    assert saved.read_bytes() == image_bytes
+    assert "Failed to delete old cover" in caplog.text
