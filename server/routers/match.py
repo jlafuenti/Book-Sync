@@ -15,6 +15,7 @@ from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from routers.library import sanitize_filename
 from services.url_safety import assert_safe_url, UnsafeUrlError
+from utils import resolve_cover_url
 
 logger = logging.getLogger(__name__)
 
@@ -270,13 +271,12 @@ async def apply_remote_cover(
         raise HTTPException(status_code=500, detail="Failed to save cover file")
         
     # Remove old cover if it exists
-    if book.cover_path:
-        old_path = Path(book.cover_path)
-        if old_path.exists() and old_path != file_path:
-            try:
-                old_path.unlink()
-            except IOError as e:
-                logger.warning(f"Failed to delete old cover {old_path}: {e}")
+    old_path = resolve_cover_url(book.cover_path, covers_path)
+    if old_path and old_path.is_file() and old_path != file_path:
+        try:
+            old_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to delete old cover {old_path}: {e}")
                 
     # Update DB
     url_path = f"/api/files/covers/{filename}"

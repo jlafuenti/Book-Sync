@@ -6,6 +6,7 @@ already exercised by test_uploads.py.
 """
 
 import contextlib
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -189,6 +190,142 @@ async def test_upload_audiobook_cover_accepts_allowed_extension(
         )
 
     assert r.status_code == 200, r.text
+
+
+# --- Old cover cleanup on re-upload (issue #44) -----------------------------
+
+async def test_upload_ebook_cover_deletes_old_cover_on_extension_change(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = EBook(title="Some Book", filename="b.epub", file_path="/x/b.epub")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+        assert (temp_covers_dir / old_filename).exists()
+
+        r2 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert not (temp_covers_dir / old_filename).exists()
+    remaining = list(temp_covers_dir.iterdir())
+    assert len(remaining) == 1
+    assert remaining[0].read_bytes() == b"jpg-bytes"
+
+
+async def test_upload_audiobook_cover_deletes_old_cover_on_extension_change(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = AudioBook(title="Some Audiobook", filename="b.m4b", file_path="/x/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+        assert (temp_covers_dir / old_filename).exists()
+
+        r2 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert not (temp_covers_dir / old_filename).exists()
+    remaining = list(temp_covers_dir.iterdir())
+    assert len(remaining) == 1
+    assert remaining[0].read_bytes() == b"jpg-bytes"
+
+
+async def test_upload_ebook_cover_logs_and_continues_when_old_unlink_fails(
+    make_user, auth_header, temp_covers_dir, db, monkeypatch, caplog,
+):
+    """Mirrors the match.py behavior: if the old cover can't be deleted (e.g.
+    locked/permissions), the upload still succeeds and the failure is logged."""
+    editor = await make_user(username="ed", role="editor")
+    book = EBook(title="Some Book", filename="b.epub", file_path="/x/b.epub")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+
+        def raising_unlink(self, *args, **kwargs):
+            raise OSError("locked")
+
+        monkeypatch.setattr(Path, "unlink", raising_unlink)
+
+        r2 = await client.post(
+            f"/api/library/ebooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert (temp_covers_dir / old_filename).exists()  # unlink failed, old file remains
+    assert "Failed to delete old cover" in caplog.text
+
+
+async def test_upload_audiobook_cover_logs_and_continues_when_old_unlink_fails(
+    make_user, auth_header, temp_covers_dir, db, monkeypatch, caplog,
+):
+    editor = await make_user(username="ed", role="editor")
+    book = AudioBook(title="Some Audiobook", filename="b.m4b", file_path="/x/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    async with _library_client() as client:
+        r1 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.png", b"png-bytes", "image/png")},
+        )
+        assert r1.status_code == 200, r1.text
+        old_filename = r1.json()["cover_path"].split("/")[-1]
+
+        def raising_unlink(self, *args, **kwargs):
+            raise OSError("locked")
+
+        monkeypatch.setattr(Path, "unlink", raising_unlink)
+
+        r2 = await client.post(
+            f"/api/library/audiobooks/{book.id}/cover",
+            headers=auth_header(editor),
+            files={"file": ("cover.jpg", b"jpg-bytes", "image/jpeg")},
+        )
+        assert r2.status_code == 200, r2.text
+
+    assert (temp_covers_dir / old_filename).exists()  # unlink failed, old file remains
+    assert "Failed to delete old cover" in caplog.text
 
 
 # --- replace_file's untrusted fallback branch -------------------------------
