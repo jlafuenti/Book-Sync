@@ -113,3 +113,14 @@ def test_resolve_cover_url_returns_none_for_traversal_attempt(tmp_path):
     must be neutralized (basename-only) or rejected, never escape."""
     result = resolve_cover_url("/api/files/covers/../../etc/passwd", tmp_path)
     assert result is None or result.parent == tmp_path.resolve()
+
+
+def test_resolve_cover_url_returns_none_when_basename_is_empty(tmp_path):
+    """A URL with no filename segment (e.g. a bare directory URL) reduces to
+    an empty basename, which safe_join rejects -- resolve_cover_url must
+    swallow that and return None rather than raising."""
+    assert resolve_cover_url("/api/files/covers/", tmp_path) is None
+
+
+def test_resolve_cover_url_returns_none_for_hidden_name(tmp_path):
+    assert resolve_cover_url("/api/files/covers/.htaccess", tmp_path) is None
