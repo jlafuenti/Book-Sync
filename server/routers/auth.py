@@ -125,6 +125,7 @@ def require_role(minimum_role: str):
 
 
 # Convenience aliases
+get_superadmin_user = require_role("superadmin")
 get_admin_user = require_role("admin")
 get_editor_user = require_role("editor")
 

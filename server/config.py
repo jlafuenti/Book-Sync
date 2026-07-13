@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     app_data_dir: str = Field(default="/data/app", alias="APP_DATA_DIR")
     covers_dir: str = Field(default="/data/app/covers", alias="COVERS_DIR")
     imports_dir: str = Field(default="/data/imports", alias="IMPORTS_DIR")
+    # Directory where the nightly backup sidecar writes pg_dump/covers archives.
+    # Mounted read-only into the server so it can list backups and read a dump
+    # during a UI-triggered restore. See docs/backup-restore.md.
+    backups_dir: str = Field(default="/backups", alias="BACKUPS_DIR")
 
     # Credential encryption — comma-separated list of Fernet keys.
     # First key is used to encrypt new writes; all keys are tried for decryption,

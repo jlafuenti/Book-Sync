@@ -12,7 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     zip \
     unzip \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# PostgreSQL 16 client (pg_restore) for the UI-triggered restore (issue #60).
+# The db service runs Postgres 16, so restoring its custom-format dumps needs a
+# v16 client; Debian bookworm only ships v15, so pull v16 from the PGDG repo.
+RUN install -d /usr/share/postgresql-common/pgdg && \
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

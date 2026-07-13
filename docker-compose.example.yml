@@ -13,6 +13,10 @@ services:
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
       - ./data:/data/app
       - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
+      # Read-only view of the backups dir so the UI can list backups and read a
+      # dump during a superadmin-triggered restore (issue #60). Must match the
+      # `backup` service's /backups mount below.
+      - /path/to/nas/booksync-backups:/backups:ro # ← REPLACE with your NAS backups path
     environment:
       # Password comes from POSTGRES_PASSWORD below — keep both in sync.
       - DATABASE_URL=postgresql+asyncpg://booksync:${POSTGRES_PASSWORD}@db:5432/booksync
@@ -67,6 +71,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Nightly backup sidecar (issue #60). Dumps the database (custom format) and
+  # archives covers into /backups once a day, keeping a rolling daily+monthly
+  # set. postgres:16-alpine so pg_dump matches the db major version.
+  # See docs/backup-restore.md.
+  backup:
+    image: postgres:16-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - PGHOST=db
+      - PGUSER=booksync
+      - PGDATABASE=booksync
+      # Same password as the db service / DATABASE_URL above.
+      - PGPASSWORD=${POSTGRES_PASSWORD}
+      - BACKUP_HOUR=3 # local hour (0-23) for the daily run
+      - BACKUP_KEEP_DAILY=14 # keep this many recent daily dumps
+      - BACKUP_KEEP_MONTHLY=6 # plus this many 1st-of-month dumps
+    volumes:
+      - ./data:/data/app:ro # read covers to archive (read-only)
+      # IMPORTANT: point this at a NAS path OFF the docker host's disk — a backup
+      # on the same disk that dies is worthless. Must match the server's
+      # /backups mount above.
+      - /path/to/nas/booksync-backups:/backups # ← REPLACE with your NAS backups path
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: [ "/bin/sh", "/usr/local/bin/backup.sh" ]
+    restart: unless-stopped
 
   web:
     build: ./web
