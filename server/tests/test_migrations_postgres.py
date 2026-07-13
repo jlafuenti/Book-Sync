@@ -48,10 +48,15 @@ def _alembic_config():
 
 
 def _sync_engine():
-    """A sync (psycopg2) engine on the same DB the app/env.py use, for asserts."""
-    import database
+    """A sync (psycopg2) engine on the same DB the app/env.py use, for asserts.
 
-    sync_url = str(database.engine.url).replace("+asyncpg", "+psycopg2")
+    Derive the URL from settings.database_url (the raw string) exactly like
+    alembic/env.py does — NOT from str(database.engine.url), which masks the
+    password as '***' and would make psycopg2 authenticate with a literal '***'.
+    """
+    from config import settings
+
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
     return create_engine(sync_url)
 
 
