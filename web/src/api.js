@@ -457,6 +457,34 @@ export async function getDiskUsage() {
     return resp.json();
 }
 
+// ============ Backups (issue #60) ============
+
+export async function getBackupStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/backup`);
+    if (!resp.ok) throw new Error('Failed to fetch backup status');
+    return resp.json();
+}
+
+export async function listBackups() {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/backups`);
+    if (!resp.ok) throw new Error('Failed to list backups');
+    return resp.json();
+}
+
+export async function restoreBackup(backupId) {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup_id: backupId, confirm: true }),
+    });
+    if (!resp.ok) {
+        let detail = 'Failed to restore backup';
+        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
+        throw new Error(detail);
+    }
+    return resp.json();
+}
+
 // ============ Progress ============
 
 export async function getAllProgress() {

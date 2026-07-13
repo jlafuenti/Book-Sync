@@ -6,7 +6,8 @@ import {
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
-    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue
+    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
+    getBackupStatus, listBackups, restoreBackup
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
@@ -773,6 +774,158 @@ function UnsupportedFilesTab({ canAdmin }) {
     )
 }
 
+/* ── BackupSection ─────────────────────────────────────────────────── */
+// Shows where nightly backups are written, the last successful run, the list
+// of available backups, and (superadmin only) a guarded Restore. See
+// docs/backup-restore.md and issue #60.
+export function BackupSection() {
+    const { hasMinRole } = useAuth()
+    const canRestore = hasMinRole('superadmin')
+
+    const [status, setStatus] = useState(null)
+    const [backups, setBackups] = useState([])
+    const [location, setLocation] = useState('')
+    const [selectedId, setSelectedId] = useState(null)
+    const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState(null)
+
+    const [confirming, setConfirming] = useState(false)
+    const [confirmText, setConfirmText] = useState('')
+    const [restoring, setRestoring] = useState(false)
+    const [restoreError, setRestoreError] = useState(null)
+    const [message, setMessage] = useState(null)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        setLoadError(null)
+        try {
+            const [st, list] = await Promise.all([getBackupStatus(), listBackups()])
+            setStatus(st)
+            setBackups(list.items || [])
+            setLocation(list.location || st.location || '')
+            setSelectedId(prev => prev || (list.items && list.items[0] ? list.items[0].id : null))
+        } catch (err) {
+            setLoadError('Failed to load backups')
+            console.error(err)
+        } finally {
+            setLoading(false)
+        }
+    }, [])
+
+    useEffect(() => { load() }, [load])
+
+    async function doRestore() {
+        setRestoring(true)
+        setRestoreError(null)
+        setMessage(null)
+        try {
+            const result = await restoreBackup(selectedId)
+            setMessage(`Restored ${result.backup_id}${result.covers_restored ? ' (with covers)' : ''}. Reload the app if positions look stale.`)
+            setConfirming(false)
+            setConfirmText('')
+            await load()
+        } catch (err) {
+            setRestoreError(err.message || 'Restore failed')
+        } finally {
+            setRestoring(false)
+        }
+    }
+
+    if (loading) return <div className="loading-page"><div className="spinner" /></div>
+    if (loadError) {
+        return (
+            <div className="alert alert-error">
+                {loadError}
+                <button className="btn btn-sm btn-secondary" onClick={load} style={{ marginLeft: 'auto' }}>Retry</button>
+            </div>
+        )
+    }
+
+    const configured = status && status.configured
+
+    return (
+        <div className="system-backup">
+            <p className="system-form-hint" style={{ marginTop: 0 }}>
+                Backups are written to <code>{location || '(not configured)'}</code>
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+                {configured ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span>Last successful backup: <strong>{status.last_backup_utc}</strong></span>
+                        {status.stale
+                            ? <span className="badge badge-error">Overdue</span>
+                            : <span className="badge badge-active">Up to date</span>}
+                    </div>
+                ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>No backups found yet.</span>
+                        <span className="badge badge-error">Overdue</span>
+                    </div>
+                )}
+            </div>
+
+            {backups.length > 0 && (
+                <div className="system-backup-list" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {backups.map(b => (
+                        <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: canRestore ? 'pointer' : 'default' }}>
+                            {canRestore && (
+                                <input
+                                    type="radio"
+                                    name="backup-select"
+                                    checked={selectedId === b.id}
+                                    onChange={() => setSelectedId(b.id)}
+                                />
+                            )}
+                            <span className="system-backup-id"><strong>{b.id}</strong></span>
+                            <span className="system-form-hint">
+                                {formatBytes(b.db_size_bytes)}{b.covers_file ? ' · + covers' : ''}
+                            </span>
+                        </label>
+                    ))}
+                </div>
+            )}
+
+            {message && <div className="alert alert-success" style={{ marginTop: 12 }}>{message}</div>}
+
+            {canRestore && selectedId && (
+                <div style={{ marginTop: 16 }}>
+                    {!confirming ? (
+                        <button className="btn btn-danger" onClick={() => { setConfirming(true); setRestoreError(null); setMessage(null) }}>
+                            Restore…
+                        </button>
+                    ) : (
+                        <div className="system-backup-confirm">
+                            <p className="system-form-hint" style={{ marginTop: 0 }}>
+                                This overwrites the live database (and covers) with <strong>{selectedId}</strong> and
+                                briefly disrupts the app. Type <code>RESTORE</code> to confirm.
+                            </p>
+                            <input
+                                type="text"
+                                placeholder="Type RESTORE to confirm"
+                                value={confirmText}
+                                onChange={e => setConfirmText(e.target.value)}
+                                style={{ marginRight: 8 }}
+                            />
+                            <button
+                                className="btn btn-danger"
+                                disabled={confirmText !== 'RESTORE' || restoring}
+                                onClick={doRestore}
+                            >
+                                {restoring ? 'Restoring…' : 'Confirm restore'}
+                            </button>
+                            <button className="btn btn-secondary" onClick={() => { setConfirming(false); setConfirmText('') }} style={{ marginLeft: 8 }}>
+                                Cancel
+                            </button>
+                        </div>
+                    )}
+                    {restoreError && <div className="alert alert-error" style={{ marginTop: 12 }}>{restoreError}</div>}
+                </div>
+            )}
+        </div>
+    )
+}
+
 /* ── SystemPage ────────────────────────────────────────────────────── */
 function SystemPage({ tab }) {
     const { hasMinRole } = useAuth()
@@ -1003,6 +1156,23 @@ function SystemPage({ tab }) {
                             </>
                         )}
                     </div>
+
+                    {/* ── Section: Backups (admin only) ── */}
+                    {canAdmin && (
+                        <>
+                            <div className="system-section-header" style={{ marginTop: 8 }}>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
+                                    <ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                                </svg>
+                                <h3>Backups</h3>
+                            </div>
+                            <div className="system-card" style={{ marginBottom: 24 }}>
+                                <div className="system-card-body">
+                                    <BackupSection />
+                                </div>
+                            </div>
+                        </>
+                    )}
 
                     {/* ── Section: User Management (admin only) ── */}
                     {canAdmin && (

@@ -42,6 +42,16 @@ The Jetson Orin Nano remote transcription worker deploys separately, on its own 
 [jetson/README.md](jetson/README.md) for the sparse-clone-and-deploy walkthrough
 (`jetson/docker-compose.example.yml` is the template, same gitignored-copy pattern as above).
 
+### Backups
+
+The compose stack includes a `backup` sidecar that dumps Postgres and archives covers to
+`/backups` nightly (point it at a NAS path off the host disk). Set your NAS path in both the
+`backup` and `server` `/backups` mounts, then manage/restore backups from **System → Backups**
+in the web UI. **Store `CREDENTIAL_ENC_KEYS`, `JWT_SECRET_KEY`, and `POSTGRES_PASSWORD` in your
+password manager** — without the Fernet keys, the encrypted import-source credentials in a
+restored dump can't be decrypted. Full details, monitoring, and the restore/test-drill
+procedure: **[docs/backup-restore.md](docs/backup-restore.md)**.
+
 ## Development & tests
 
 Tests run in CI on every push/PR. **Write a failing test first**, then make it pass.

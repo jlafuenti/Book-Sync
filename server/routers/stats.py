@@ -2,17 +2,35 @@
 System statistics router.
 """
 
+import asyncio
 import os
+import re
 import shutil
+import tarfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import settings
 from models.user import User
-from routers.auth import get_current_user
+from routers.auth import get_current_user, get_admin_user, get_superadmin_user
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+# ── Backup artifact naming (must match scripts/backup.sh) ──────────────────
+_DB_PREFIX = "booksync-db-"
+_DB_SUFFIX = ".dump"
+_COVERS_PREFIX = "booksync-covers-"
+_COVERS_SUFFIX = ".tgz"
+# Backup ids are a plain calendar date; the strict pattern also blocks path
+# traversal since a valid id can never contain a separator.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A daily backup older than this means at least one nightly run was missed.
+_BACKUP_STALE_AFTER_SECONDS = 36 * 3600
 
 
 class DiskUsageStats(BaseModel):
@@ -120,3 +138,173 @@ async def get_disk_usage(
         app_data_total_human=format_bytes(ad_total),
         app_data_free_human=format_bytes(ad_free),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Backups (issue #60) — status, listing, and a guarded restore.
+#
+# The nightly `backup` compose sidecar writes custom-format pg_dump files and
+# covers archives into `settings.backups_dir` (mounted read-only into the
+# server). The server reads that directory to report status / list backups, and
+# a superadmin can restore a chosen one over the live database. See
+# docs/backup-restore.md and scripts/backup.sh.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class BackupStatus(BaseModel):
+    configured: bool
+    location: str
+    last_backup_utc: Optional[str]
+    age_seconds: Optional[int]
+    stale: bool
+    latest_db_file: Optional[str]
+    latest_db_size_bytes: Optional[int]
+
+
+class BackupItem(BaseModel):
+    id: str  # YYYY-MM-DD
+    db_file: str
+    db_size_bytes: int
+    covers_file: Optional[str]
+    covers_size_bytes: Optional[int]
+
+
+class BackupListResponse(BaseModel):
+    location: str
+    items: list[BackupItem]
+
+
+class RestoreRequest(BaseModel):
+    backup_id: str
+    confirm: bool = False
+
+
+def _list_db_dumps(backups_dir: str):
+    """Return [(date, Path)] for DB dumps in backups_dir, oldest→newest by date."""
+    out = []
+    try:
+        for entry in Path(backups_dir).iterdir():
+            name = entry.name
+            if name.startswith(_DB_PREFIX) and name.endswith(_DB_SUFFIX) and entry.is_file():
+                date = name[len(_DB_PREFIX):-len(_DB_SUFFIX)]
+                if _DATE_RE.match(date):
+                    out.append((date, entry))
+    except OSError:
+        return []
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+@router.get("/backup", response_model=BackupStatus)
+async def get_backup_status(_: User = Depends(get_current_user)):
+    """Lightweight backup health: last successful run + staleness flag."""
+    location = settings.backups_dir
+    dumps = _list_db_dumps(location)
+    if not dumps:
+        return BackupStatus(
+            configured=False, location=location, last_backup_utc=None,
+            age_seconds=None, stale=True, latest_db_file=None, latest_db_size_bytes=None,
+        )
+    _, path = dumps[-1]
+    st = path.stat()
+    age = int(time.time() - st.st_mtime)
+    last_utc = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return BackupStatus(
+        configured=True, location=location, last_backup_utc=last_utc,
+        age_seconds=max(age, 0), stale=age > _BACKUP_STALE_AFTER_SECONDS,
+        latest_db_file=path.name, latest_db_size_bytes=st.st_size,
+    )
+
+
+@router.get("/backups", response_model=BackupListResponse)
+async def list_backups(_: User = Depends(get_admin_user)):
+    """List available backups (newest first) for the restore picker."""
+    location = settings.backups_dir
+    items = []
+    for date, path in reversed(_list_db_dumps(location)):
+        covers = Path(location) / f"{_COVERS_PREFIX}{date}{_COVERS_SUFFIX}"
+        has_covers = covers.is_file()
+        items.append(BackupItem(
+            id=date,
+            db_file=path.name,
+            db_size_bytes=path.stat().st_size,
+            covers_file=covers.name if has_covers else None,
+            covers_size_bytes=covers.stat().st_size if has_covers else None,
+        ))
+    return BackupListResponse(location=location, items=items)
+
+
+async def _run_pg_restore(dump_path: str) -> None:  # pragma: no cover — integration-only (needs real Postgres + pg_restore); exercised by the restore drill
+    """Restore a custom-format pg_dump over the live database.
+
+    Terminates other backends and disposes the app's connection pool so the
+    ``--clean`` DROPs aren't blocked by held locks, then shells out to
+    ``pg_restore``. Isolated behind this seam so tests can stub it.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.engine.url import make_url
+
+    from database import engine
+
+    url = make_url(settings.database_url)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            ))
+    finally:
+        await engine.dispose()
+
+    env = dict(os.environ)
+    if url.password:
+        env["PGPASSWORD"] = url.password
+    cmd = [
+        "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges",
+        "-h", url.host or "localhost",
+        "-p", str(url.port or 5432),
+        "-U", url.username or "booksync",
+        "-d", url.database or "booksync",
+        dump_path,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, env=env,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"pg_restore exited {proc.returncode}: {stderr.decode(errors='replace')[:500]}"
+        )
+
+
+def _restore_covers(covers_path: str) -> None:  # pragma: no cover — integration-only (filesystem untar); exercised by the restore drill
+    """Unpack a covers archive into app_data_dir, replacing the covers/ dir."""
+    with tarfile.open(covers_path, "r:gz") as tar:
+        tar.extractall(settings.app_data_dir, filter="data")
+
+
+@router.post("/restore")
+async def restore_backup(body: RestoreRequest, _: User = Depends(get_superadmin_user)):
+    """Restore a selected backup's DB (and covers) over the live deployment."""
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Restore requires confirm=true")
+    if not _DATE_RE.match(body.backup_id):
+        raise HTTPException(status_code=400, detail="Invalid backup_id")
+
+    backups = Path(settings.backups_dir)
+    dump_path = backups / f"{_DB_PREFIX}{body.backup_id}{_DB_SUFFIX}"
+    if not dump_path.is_file():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    covers_path = backups / f"{_COVERS_PREFIX}{body.backup_id}{_COVERS_SUFFIX}"
+
+    try:
+        await _run_pg_restore(str(dump_path))
+        covers_restored = False
+        if covers_path.is_file():
+            _restore_covers(str(covers_path))
+            covers_restored = True
+    except Exception as e:  # noqa: BLE001 — surface any restore failure to the caller
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+
+    return {"restored": True, "backup_id": body.backup_id, "covers_restored": covers_restored}

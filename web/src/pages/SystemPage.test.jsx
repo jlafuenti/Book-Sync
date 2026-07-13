@@ -1,19 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TranscriptionSettingsSection, ABSSettingsSection } from './SystemPage'
+import { TranscriptionSettingsSection, ABSSettingsSection, BackupSection } from './SystemPage'
 
 // TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
 // (no props), so mock the module they import from rather than mounting the
 // whole page/router.
 const {
     getSettingsMock, updateSettingsMock, testRemoteConnectionMock, generateKeyMock,
-    testAbsConnectionMock,
+    testAbsConnectionMock, getBackupStatusMock, listBackupsMock, restoreBackupMock,
+    authRef,
 } = vi.hoisted(() => ({
     getSettingsMock: vi.fn(),
     updateSettingsMock: vi.fn(),
     testRemoteConnectionMock: vi.fn(),
     generateKeyMock: vi.fn(),
     testAbsConnectionMock: vi.fn(),
+    getBackupStatusMock: vi.fn(),
+    listBackupsMock: vi.fn(),
+    restoreBackupMock: vi.fn(),
+    authRef: { role: 'superadmin' },
 }))
 
 vi.mock('../api', async (importOriginal) => {
@@ -25,8 +30,18 @@ vi.mock('../api', async (importOriginal) => {
         testRemoteConnection: testRemoteConnectionMock,
         generateTranscriptionRemoteKey: generateKeyMock,
         testAbsConnection: testAbsConnectionMock,
+        getBackupStatus: getBackupStatusMock,
+        listBackups: listBackupsMock,
+        restoreBackup: restoreBackupMock,
     }
 })
+
+const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+vi.mock('../contexts/AuthContext', () => ({
+    useAuth: () => ({
+        hasMinRole: (min) => (ROLE_HIERARCHY[authRef.role] || 0) >= (ROLE_HIERARCHY[min] || 0),
+    }),
+}))
 
 function baseSettings(overrides = {}) {
     return {
@@ -223,5 +238,99 @@ describe('ABSSettingsSection', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
 
         expect(await screen.findByText(/Connection failed: timeout/)).toBeInTheDocument()
+    })
+})
+
+describe('BackupSection', () => {
+    function recentStatus(overrides = {}) {
+        return {
+            configured: true,
+            location: '/backups',
+            last_backup_utc: '2026-07-13T03:00:11Z',
+            age_seconds: 120,
+            stale: false,
+            latest_db_file: 'booksync-db-2026-07-13.dump',
+            latest_db_size_bytes: 2048,
+            ...overrides,
+        }
+    }
+    function backupList() {
+        return {
+            location: '/backups',
+            items: [
+                { id: '2026-07-13', db_file: 'booksync-db-2026-07-13.dump', db_size_bytes: 2048, covers_file: 'booksync-covers-2026-07-13.tgz', covers_size_bytes: 512 },
+                { id: '2026-07-11', db_file: 'booksync-db-2026-07-11.dump', db_size_bytes: 1024, covers_file: null, covers_size_bytes: null },
+            ],
+        }
+    }
+
+    beforeEach(() => {
+        authRef.role = 'superadmin'
+        getBackupStatusMock.mockReset().mockResolvedValue(recentStatus())
+        listBackupsMock.mockReset().mockResolvedValue(backupList())
+        restoreBackupMock.mockReset().mockResolvedValue({ restored: true, backup_id: '2026-07-13', covers_restored: true })
+    })
+
+    it('shows the backup location and last successful run', async () => {
+        render(<BackupSection />)
+        expect(await screen.findByText('/backups')).toBeInTheDocument()
+        expect(screen.getByText(/2026-07-13T03:00:11Z/)).toBeInTheDocument()
+    })
+
+    it('flags a stale/overdue backup', async () => {
+        getBackupStatusMock.mockResolvedValue(recentStatus({ stale: true }))
+        render(<BackupSection />)
+        expect(await screen.findByText(/Overdue/i)).toBeInTheDocument()
+    })
+
+    it('reports when no backups have run yet', async () => {
+        getBackupStatusMock.mockResolvedValue(recentStatus({ configured: false, stale: true, last_backup_utc: null, age_seconds: null, latest_db_file: null, latest_db_size_bytes: null }))
+        listBackupsMock.mockResolvedValue({ location: '/backups', items: [] })
+        render(<BackupSection />)
+        expect(await screen.findByText(/No backups/i)).toBeInTheDocument()
+    })
+
+    it('lists available backups', async () => {
+        render(<BackupSection />)
+        expect(await screen.findByText('2026-07-13')).toBeInTheDocument()
+        expect(screen.getByText('2026-07-11')).toBeInTheDocument()
+    })
+
+    it('hides the Restore control from non-superadmins', async () => {
+        authRef.role = 'admin'
+        render(<BackupSection />)
+        await screen.findByText('2026-07-13')
+        expect(screen.queryByRole('button', { name: /Restore/i })).not.toBeInTheDocument()
+    })
+
+    it('restores the selected backup after typed confirmation (superadmin)', async () => {
+        render(<BackupSection />)
+        await screen.findByText('2026-07-13')
+
+        fireEvent.click(screen.getByRole('button', { name: /^Restore/i }))
+
+        const confirmInput = await screen.findByPlaceholderText(/RESTORE/i)
+        // Confirm is disabled until the exact word is typed.
+        const confirmBtn = screen.getByRole('button', { name: /Confirm restore/i })
+        expect(confirmBtn).toBeDisabled()
+
+        fireEvent.change(confirmInput, { target: { value: 'RESTORE' } })
+        expect(confirmBtn).toBeEnabled()
+        fireEvent.click(confirmBtn)
+
+        await waitFor(() => expect(restoreBackupMock).toHaveBeenCalledWith('2026-07-13'))
+        expect(await screen.findByText(/Restored/i)).toBeInTheDocument()
+    })
+
+    it('surfaces a restore failure', async () => {
+        restoreBackupMock.mockRejectedValue(new Error('pg_restore exploded'))
+        render(<BackupSection />)
+        await screen.findByText('2026-07-13')
+
+        fireEvent.click(screen.getByRole('button', { name: /^Restore/i }))
+        fireEvent.change(await screen.findByPlaceholderText(/RESTORE/i), { target: { value: 'RESTORE' } })
+        fireEvent.click(screen.getByRole('button', { name: /Confirm restore/i }))
+
+        expect(await screen.findByText(/pg_restore exploded/)).toBeInTheDocument()
     })
 })
