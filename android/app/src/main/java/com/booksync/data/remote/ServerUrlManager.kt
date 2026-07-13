@@ -13,7 +13,10 @@ import javax.inject.Singleton
 
 private val KEY_SERVER_URL = stringPreferencesKey("server_url")
 
-const val DEFAULT_SERVER_URL = "https://booksync.example.com"
+const val DEFAULT_SERVER_URL = "https://tandem.example.com"
+
+/** Old production hostname; its DNS record no longer exists. Stored values are migrated. */
+const val LEGACY_SERVER_URL = "https://booksync.example.com"
 
 @Singleton
 class ServerUrlManager @Inject constructor(
@@ -33,7 +36,15 @@ class ServerUrlManager @Inject constructor(
         private set
 
     init {
-        currentUrl = runBlocking { dataStore.data.first()[KEY_SERVER_URL] ?: DEFAULT_SERVER_URL }
+        currentUrl = runBlocking {
+            val stored = dataStore.data.first()[KEY_SERVER_URL]
+            if (stored == LEGACY_SERVER_URL) {
+                dataStore.edit { it[KEY_SERVER_URL] = DEFAULT_SERVER_URL }
+                DEFAULT_SERVER_URL
+            } else {
+                stored ?: DEFAULT_SERVER_URL
+            }
+        }
     }
 
     /** Convenience for the Retrofit setup in AppModule. */
