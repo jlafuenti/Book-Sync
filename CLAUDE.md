@@ -63,8 +63,15 @@ docker compose -f docker-compose.jetson.yml logs -f # tail Jetson logs
 ### Backend (server/)
 ```bash
 pip install -r server/requirements.txt
+cd server && alembic upgrade head          # apply DB migrations (schema is Alembic-managed)
 cd server && uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+Schema is managed by **Alembic** (`server/alembic/`), not by app startup. In the
+container this runs automatically (`server/entrypoint.sh` → `alembic upgrade head`
+before uvicorn); locally you run it yourself. To change the schema: edit the ORM
+model → `alembic revision --autogenerate -m "..."` → review the generated script →
+commit. CI fails if models and migrations drift (`alembic check`). An existing DB
+that predates Alembic must be stamped once: `alembic stamp head`.
 
 ### Frontend (web/)
 ```bash
@@ -107,7 +114,8 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 ### Key Server Files
 - `server/main.py` — App entrypoint, registers 9 routers, lifespan startup
 - `server/config.py` — Pydantic Settings; all env vars loaded here
-- `server/database.py` — Async SQLAlchemy session factory, table creation on startup
+- `server/database.py` — Async SQLAlchemy session factory + superadmin bootstrap
+- `server/alembic/` — Alembic migrations (schema management); `env.py` derives a sync psycopg2 URL from `DATABASE_URL`, `versions/` holds the revisions
 - `server/models/` — ORM models: `User`, `EBook`, `AudioBook`, `BookPair`, `SyncMap`, `SyncPoint`, `AudioTranscript`, `TranscriptionQueueItem`, `Bookmark`, `UserProgress`
 - `server/routers/library.py` — Largest file (~93KB); handles directory scanning, file uploads, auto-matching, metadata extraction
 - `server/services/queue_manager.py` — Background async job processor with cancellation and retry

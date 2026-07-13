@@ -16,7 +16,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 
-from database import init_db, bootstrap_superadmin
+from database import bootstrap_superadmin
 from config import settings, check_jwt_secret, check_db_credentials, check_cors_origins
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
@@ -86,8 +86,9 @@ async def lifespan(app: FastAPI):
     check_cors_origins(settings)
     validate_credential_keys()
 
-    await init_db()
-    logger.info("Database initialized")
+    # Schema is owned by Alembic now (issue #53): `alembic upgrade head` runs in
+    # the container entrypoint before uvicorn, so the DB is already migrated by
+    # the time we get here. We only seed data.
     await bootstrap_superadmin()
 
     # Reset any stale transcription jobs (legacy)

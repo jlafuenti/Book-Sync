@@ -18,6 +18,11 @@ Notes:
   `async_session()` calls both hit the test DB. No Postgres required.
 - The Postgres migration test (`test_migrations_postgres.py`) self-skips unless
   `RUN_PG_TESTS=1` and a Postgres `DATABASE_URL` are set (it runs in its own CI job).
+  It drives the **Alembic** migrations (issue #53): `alembic upgrade head` builds the
+  full schema, downgrade→upgrade proves reversibility, and `alembic check` is the
+  model↔migration drift gate. Schema is Alembic-managed (`server/alembic/`), not built
+  at app startup — the container runs `alembic upgrade head` via `entrypoint.sh` before
+  uvicorn; an existing pre-Alembic DB must be `alembic stamp head`ed once.
 - On Windows, if a venv fails to build under a long path, create it at a short path
   (e.g. `C:\bst`) — pip's dist-info paths can exceed `MAX_PATH`.
 - **Match CI, not your global Python.** CI runs Python 3.12 with the pinned dev deps and
