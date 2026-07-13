@@ -77,8 +77,10 @@ jobs:
           exit "$diff_exit"
 
   migrations:
-    # Guards the raw JSONB / IF NOT EXISTS / ALTER TYPE SQL in init_db() that the
-    # SQLite job can't exercise. Runs only the migration smoke test.
+    # Exercises the Alembic migrations against real Postgres (the SQLite job
+    # can't — they use JSONB / native enums). Runs the migration test suite
+    # (upgrade / downgrade / reversibility / drift) plus an explicit
+    # `alembic upgrade head` + `alembic check` gate for clear logs.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -114,8 +116,18 @@ jobs:
           grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
           pip install -r /tmp/req-ci.txt -r requirements-dev.txt
 
-      - name: Run migration smoke test
+      - name: Run migration tests (upgrade / downgrade / drift)
         env:
           RUN_PG_TESTS: "1"
           DATABASE_URL: postgresql+asyncpg://booksync:booksync@localhost:5432/booksync_test
         run: pytest tests/test_migrations_postgres.py -v
+
+      - name: Explicit alembic upgrade head + drift check
+        # Belt-and-suspenders on top of the test above, with readable CLI output:
+        # a fresh upgrade must succeed and `alembic check` must find no diff
+        # between the ORM models and the migrations.
+        env:
+          DATABASE_URL: postgresql+asyncpg://booksync:booksync@localhost:5432/booksync_test
+        run: |
+          alembic upgrade head
+          alembic check

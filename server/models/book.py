@@ -5,9 +5,15 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 import enum
 from datetime import datetime
 from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float, JSON
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
+# Portable JSON everywhere, but real JSONB on Postgres so fresh databases built
+# from these models match the production schema (which the old boot-time ALTER
+# block created as JSONB). SQLite (tests) still gets plain JSON.
+JSON_OR_JSONB = JSON().with_variant(JSONB(), "postgresql")
 
 
 class PairStatus(str, enum.Enum):
@@ -63,7 +69,7 @@ class EBook(Base):
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Hashes of audiobooks this ebook must not be auto-paired with (set on manual unpair)
-    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
@@ -116,7 +122,7 @@ class AudioBook(Base):
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Hashes of ebooks this audiobook must not be auto-paired with (set on manual unpair)
-    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")
@@ -141,7 +147,7 @@ class BookPair(Base):
     )
     matched_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
-    ignored_fields: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    ignored_fields: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # New-pairs inbox: cleared once user resolves/skips all discrepancies or manually acknowledges
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
