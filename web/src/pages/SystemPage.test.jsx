@@ -258,8 +258,8 @@ describe('BackupSection', () => {
         return {
             location: '/backups',
             items: [
-                { id: '2026-07-13', db_file: 'booksync-db-2026-07-13.dump', db_size_bytes: 2048, covers_file: 'booksync-covers-2026-07-13.tgz', covers_size_bytes: 512 },
-                { id: '2026-07-11', db_file: 'booksync-db-2026-07-11.dump', db_size_bytes: 1024, covers_file: null, covers_size_bytes: null },
+                { id: '2026-07-13', db_file: 'booksync-db-2026-07-13.dump', db_size_bytes: 2048, has_covers: true },
+                { id: '2026-07-11', db_file: 'booksync-db-2026-07-11.dump', db_size_bytes: 1024, has_covers: false },
             ],
         }
     }
@@ -290,10 +290,12 @@ describe('BackupSection', () => {
         expect(await screen.findByText(/No backups/i)).toBeInTheDocument()
     })
 
-    it('lists available backups', async () => {
+    it('lists available backups and marks which have covers', async () => {
         render(<BackupSection />)
         expect(await screen.findByText('2026-07-13')).toBeInTheDocument()
         expect(screen.getByText('2026-07-11')).toBeInTheDocument()
+        // Only the has_covers backup shows the "+ covers" indicator.
+        expect(screen.getAllByText(/\+ covers/)).toHaveLength(1)
     })
 
     it('hides the Restore control from non-superadmins', async () => {

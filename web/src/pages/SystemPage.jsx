@@ -879,7 +879,7 @@ export function BackupSection() {
                             )}
                             <span className="system-backup-id"><strong>{b.id}</strong></span>
                             <span className="system-form-hint">
-                                {formatBytes(b.db_size_bytes)}{b.covers_file ? ' · + covers' : ''}
+                                {formatBytes(b.db_size_bytes)}{b.has_covers ? ' · + covers' : ''}
                             </span>
                         </label>
                     ))}

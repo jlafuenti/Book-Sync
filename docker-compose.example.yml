@@ -91,7 +91,7 @@ services:
       - BACKUP_KEEP_DAILY=14 # keep this many recent daily dumps
       - BACKUP_KEEP_MONTHLY=6 # plus this many 1st-of-month dumps
     volumes:
-      - ./data:/data/app:ro # read covers to archive (read-only)
+      - ./data:/data/app:ro # read covers for the nightly snapshot (read-only)
       # IMPORTANT: point this at a NAS path OFF the docker host's disk — a backup
       # on the same disk that dies is worthless. Must match the server's
       # /backups mount above.

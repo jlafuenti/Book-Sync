@@ -39,12 +39,18 @@ async def test_disk_usage_requires_auth(make_client):
 # Backup status / list / restore (issue #60)
 # ---------------------------------------------------------------------------
 
-def _make_backup(backups_dir, date, *, db_size=128, covers=True, covers_size=64, mtime=None):
-    """Create fake backup artifacts for `date` (YYYY-MM-DD) in backups_dir."""
+def _make_backup(backups_dir, date, *, db_size=128, covers=True, mtime=None):
+    """Create fake backup artifacts for `date` (YYYY-MM-DD) in backups_dir.
+
+    Covers are a per-date snapshot directory (hardlink-snapshot scheme), not a
+    tarball — a non-empty ``covers/<date>/`` dir means that date has covers.
+    """
     db = backups_dir / f"booksync-db-{date}.dump"
     db.write_bytes(b"x" * db_size)
     if covers:
-        (backups_dir / f"booksync-covers-{date}.tgz").write_bytes(b"y" * covers_size)
+        snap = backups_dir / "covers" / date
+        snap.mkdir(parents=True, exist_ok=True)
+        (snap / "cover.jpg").write_bytes(b"y" * 64)
     if mtime is not None:
         os.utime(db, (mtime, mtime))
     return db
@@ -109,7 +115,7 @@ async def test_backup_status_requires_auth(make_client):
 
 async def test_backups_list(make_client, make_user, auth_header, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
-    _make_backup(tmp_path, "2026-07-11", db_size=100, covers=True, covers_size=10)
+    _make_backup(tmp_path, "2026-07-11", db_size=100, covers=True)
     _make_backup(tmp_path, "2026-07-13", db_size=300, covers=False)
 
     user = await make_user(username="a", role="admin")
@@ -124,10 +130,8 @@ async def test_backups_list(make_client, make_user, auth_header, monkeypatch, tm
     latest, older = items
     assert latest["db_file"] == "booksync-db-2026-07-13.dump"
     assert latest["db_size_bytes"] == 300
-    assert latest["covers_file"] is None
-    assert latest["covers_size_bytes"] is None
-    assert older["covers_file"] == "booksync-covers-2026-07-11.tgz"
-    assert older["covers_size_bytes"] == 10
+    assert latest["has_covers"] is False
+    assert older["has_covers"] is True
 
 
 async def test_backups_list_requires_admin(make_client, make_user, auth_header, monkeypatch, tmp_path):
@@ -170,7 +174,7 @@ async def test_restore_happy_path(make_client, make_user, auth_header, monkeypat
     body = r.json()
     assert body == {"restored": True, "backup_id": "2026-07-12", "covers_restored": True}
     assert restore_spies["db"].endswith("booksync-db-2026-07-12.dump")
-    assert restore_spies["covers"].endswith("booksync-covers-2026-07-12.tgz")
+    assert restore_spies["covers"].endswith(os.path.join("covers", "2026-07-12"))
 
 
 async def test_restore_without_covers(make_client, make_user, auth_header, monkeypatch, tmp_path, restore_spies):

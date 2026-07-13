@@ -6,7 +6,6 @@ import asyncio
 import os
 import re
 import shutil
-import tarfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,8 +23,8 @@ router = APIRouter(prefix="/api/stats", tags=["stats"])
 # ── Backup artifact naming (must match scripts/backup.sh) ──────────────────
 _DB_PREFIX = "booksync-db-"
 _DB_SUFFIX = ".dump"
-_COVERS_PREFIX = "booksync-covers-"
-_COVERS_SUFFIX = ".tgz"
+# Covers are stored as per-date hardlink-snapshot directories: covers/<date>/.
+_COVERS_SUBDIR = "covers"
 # Backup ids are a plain calendar date; the strict pattern also blocks path
 # traversal since a valid id can never contain a separator.
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -165,8 +164,7 @@ class BackupItem(BaseModel):
     id: str  # YYYY-MM-DD
     db_file: str
     db_size_bytes: int
-    covers_file: Optional[str]
-    covers_size_bytes: Optional[int]
+    has_covers: bool
 
 
 class BackupListResponse(BaseModel):
@@ -193,6 +191,19 @@ def _list_db_dumps(backups_dir: str):
         return []
     out.sort(key=lambda t: t[0])
     return out
+
+
+def _covers_snapshot(backups_dir: str, date: str) -> Path:
+    """Path to the per-date covers snapshot directory (covers/<date>/)."""
+    return Path(backups_dir) / _COVERS_SUBDIR / date
+
+
+def _has_covers(snapshot: Path) -> bool:
+    """True if the snapshot directory exists and holds at least one entry."""
+    try:
+        return snapshot.is_dir() and any(snapshot.iterdir())
+    except OSError:
+        return False
 
 
 @router.get("/backup", response_model=BackupStatus)
@@ -222,14 +233,11 @@ async def list_backups(_: User = Depends(get_admin_user)):
     location = settings.backups_dir
     items = []
     for date, path in reversed(_list_db_dumps(location)):
-        covers = Path(location) / f"{_COVERS_PREFIX}{date}{_COVERS_SUFFIX}"
-        has_covers = covers.is_file()
         items.append(BackupItem(
             id=date,
             db_file=path.name,
             db_size_bytes=path.stat().st_size,
-            covers_file=covers.name if has_covers else None,
-            covers_size_bytes=covers.stat().st_size if has_covers else None,
+            has_covers=_has_covers(_covers_snapshot(location, date)),
         ))
     return BackupListResponse(location=location, items=items)
 
@@ -278,10 +286,9 @@ async def _run_pg_restore(dump_path: str) -> None:  # pragma: no cover — integ
         )
 
 
-def _restore_covers(covers_path: str) -> None:  # pragma: no cover — integration-only (filesystem untar); exercised by the restore drill
-    """Unpack a covers archive into app_data_dir, replacing the covers/ dir."""
-    with tarfile.open(covers_path, "r:gz") as tar:
-        tar.extractall(settings.app_data_dir, filter="data")
+def _restore_covers(snapshot_dir: str) -> None:  # pragma: no cover — integration-only (filesystem copy); exercised by the restore drill
+    """Copy a covers snapshot directory into the live covers dir (merge/overwrite)."""
+    shutil.copytree(snapshot_dir, settings.covers_dir, dirs_exist_ok=True)
 
 
 @router.post("/restore")
@@ -296,12 +303,12 @@ async def restore_backup(body: RestoreRequest, _: User = Depends(get_superadmin_
     dump_path = backups / f"{_DB_PREFIX}{body.backup_id}{_DB_SUFFIX}"
     if not dump_path.is_file():
         raise HTTPException(status_code=404, detail="Backup not found")
-    covers_path = backups / f"{_COVERS_PREFIX}{body.backup_id}{_COVERS_SUFFIX}"
+    covers_path = _covers_snapshot(settings.backups_dir, body.backup_id)
 
     try:
         await _run_pg_restore(str(dump_path))
         covers_restored = False
-        if covers_path.is_file():
+        if _has_covers(covers_path):
             _restore_covers(str(covers_path))
             covers_restored = True
     except Exception as e:  # noqa: BLE001 — surface any restore failure to the caller
