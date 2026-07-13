@@ -3,6 +3,8 @@ uvicorn[standard]==0.30.0
 sqlalchemy[asyncio]==2.0.35
 asyncpg==0.30.0
 alembic==1.13.0
+# Sync driver used only by Alembic migrations (the app itself uses asyncpg).
+psycopg2-binary==2.9.9
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1

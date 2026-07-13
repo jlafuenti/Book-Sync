@@ -71,4 +71,6 @@ RUN mkdir -p /data/ebooks /data/audiobooks /data/app /data/imports
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run migrations (alembic upgrade head) then uvicorn. Invoked via `sh` so it
+# doesn't depend on the file's executable bit surviving a Windows checkout.
+CMD ["sh", "entrypoint.sh"]

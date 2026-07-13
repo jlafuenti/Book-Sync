@@ -2,10 +2,11 @@
 Shared pytest harness for the BookSync backend.
 
 Strategy (see issue #46): DB-backed tests run against a throwaway **SQLite**
-database. The ORM models use SQLAlchemy's portable ``JSON`` type, so
-``Base.metadata.create_all`` builds the whole schema on SQLite — no Postgres and
-no Docker required. We deliberately do NOT call ``database.init_db()``: its raw
-``JSONB`` / ``ADD COLUMN IF NOT EXISTS`` migration SQL is Postgres-only.
+database. The ORM models use SQLAlchemy's portable ``JSON`` type (with a Postgres
+``JSONB`` variant), so ``Base.metadata.create_all`` builds the whole schema on
+SQLite — no Postgres and no Docker required. Production schema is managed by
+Alembic (issue #53), which uses Postgres-only DDL and is exercised separately by
+``test_migrations_postgres.py``; the SQLite suite never runs it.
 
 The key trick: we set ``DATABASE_URL`` to the SQLite URL *before* importing any
 application module. ``config.Settings`` reads it at import time, so the
@@ -24,8 +25,9 @@ _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
-# The Postgres migration-smoke job (RUN_PG_TESTS=1) runs against a real Postgres
-# service and supplies its own DATABASE_URL — don't clobber it with SQLite there.
+# The Postgres migration job (RUN_PG_TESTS=1) runs the Alembic migrations against
+# a real Postgres service and supplies its own DATABASE_URL — don't clobber it
+# with SQLite there.
 _PG_MODE = os.environ.get("RUN_PG_TESTS") == "1"
 
 if not _PG_MODE:
@@ -45,7 +47,7 @@ import database  # noqa: E402  (binds engine to SQLite via DATABASE_URL above)
 from database import Base, engine, async_session  # noqa: E402
 
 # Import every model module so Base.metadata knows the full schema. Mirrors the
-# import list in database.init_db().
+# import list in alembic/env.py.
 from models import user, book, sync_map, bookmark, progress  # noqa: E402,F401
 from models.settings import SystemSetting  # noqa: E402,F401
 from models.transcription_queue import TranscriptionQueueItem  # noqa: E402,F401
@@ -69,7 +71,7 @@ _auth.pwd_context = _CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt_
 async def _fresh_schema():
     """Drop and recreate all tables before each test for isolation."""
     if _PG_MODE:
-        # The Postgres migration test manages its own schema via init_db().
+        # The Postgres migration test manages its own schema via Alembic.
         yield
         return
     async with engine.begin() as conn:
