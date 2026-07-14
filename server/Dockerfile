@@ -12,15 +12,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     zip \
     unzip \
+    gnupg \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
+
+# PostgreSQL 16 client (pg_restore) for the UI-triggered restore (issue #60).
+# The db service runs Postgres 16, so restoring its custom-format dumps needs a
+# v16 client; Debian bookworm only ships v15, so pull v16 from the PGDG repo.
+RUN install -d /usr/share/postgresql-common/pgdg && \
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install Python dependencies (includes audible + audible-cli for the
 # Audible import source).
-COPY requirements.txt .
+COPY requirements.txt requirements-local.txt ./
 RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt
+
+# Local (server-side) Whisper — torch + openai-whisper — is opt-in because torch
+# pulls multi-GB nvidia-cu* CUDA wheels that are pure build cost when
+# transcription is offloaded to a remote/Jetson worker. Default build skips them.
+# Enable with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+ARG INSTALL_LOCAL_WHISPER=false
+RUN if [ "$INSTALL_LOCAL_WHISPER" = "true" ] || [ "$INSTALL_LOCAL_WHISPER" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-local.txt ; \
+    else \
+        echo "Skipping local Whisper (torch/openai-whisper) — remote-transcription-only image." ; \
+    fi
 
 # Install the acsm-calibre-plugin (DeACSM) so Calibre can convert .acsm
 # files (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.

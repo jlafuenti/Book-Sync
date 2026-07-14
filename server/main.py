@@ -123,9 +123,14 @@ async def lifespan(app: FastAPI):
     from services import import_scheduler
     await import_scheduler.start()
 
+    # Start the backup scheduler (nightly pg_dump + covers snapshot, retention)
+    from services import backup_service
+    await backup_service.start()
+
     yield
 
     # Shutdown
+    await backup_service.stop()
     await import_scheduler.stop()
     await stop_queue_manager()
     logger.info("BookSync server shutting down...")

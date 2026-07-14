@@ -13,6 +13,11 @@ services:
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
       - ./data:/data/app
       - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
+      # Backups dir (issue #60): the server writes nightly + manual backups here,
+      # lists/deletes/downloads them, and restores from them — so it's read-write.
+      # IMPORTANT: point this at a NAS path OFF the docker host's disk — a backup
+      # on the same disk that dies is worthless.
+      - /path/to/nas/booksync-backups:/backups # ← REPLACE with your NAS backups path
     environment:
       # Password comes from POSTGRES_PASSWORD below — keep both in sync.
       - DATABASE_URL=postgresql+asyncpg://booksync:${POSTGRES_PASSWORD}@db:5432/booksync
@@ -67,6 +72,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Backups (issue #60) are owned by the `server` service itself — it runs the
+  # nightly schedule, manual backups, restore, and pruning in-process. There is
+  # no separate backup container. Schedule + retention are configured from the
+  # web UI (System → Backups). See docs/backup-restore.md.
 
   web:
     build: ./web

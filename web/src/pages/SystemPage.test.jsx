@@ -1,19 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TranscriptionSettingsSection, ABSSettingsSection } from './SystemPage'
+import { TranscriptionSettingsSection, ABSSettingsSection, BackupSection } from './SystemPage'
 
 // TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
 // (no props), so mock the module they import from rather than mounting the
 // whole page/router.
 const {
     getSettingsMock, updateSettingsMock, testRemoteConnectionMock, generateKeyMock,
-    testAbsConnectionMock,
+    testAbsConnectionMock, getBackupStatusMock, listBackupsMock, restoreBackupMock,
+    createBackupMock, deleteBackupMock, downloadBackupMock,
+    authRef,
 } = vi.hoisted(() => ({
     getSettingsMock: vi.fn(),
     updateSettingsMock: vi.fn(),
     testRemoteConnectionMock: vi.fn(),
     generateKeyMock: vi.fn(),
     testAbsConnectionMock: vi.fn(),
+    getBackupStatusMock: vi.fn(),
+    listBackupsMock: vi.fn(),
+    restoreBackupMock: vi.fn(),
+    createBackupMock: vi.fn(),
+    deleteBackupMock: vi.fn(),
+    downloadBackupMock: vi.fn(),
+    authRef: { role: 'superadmin' },
 }))
 
 vi.mock('../api', async (importOriginal) => {
@@ -25,8 +34,21 @@ vi.mock('../api', async (importOriginal) => {
         testRemoteConnection: testRemoteConnectionMock,
         generateTranscriptionRemoteKey: generateKeyMock,
         testAbsConnection: testAbsConnectionMock,
+        getBackupStatus: getBackupStatusMock,
+        listBackups: listBackupsMock,
+        restoreBackup: restoreBackupMock,
+        createBackup: createBackupMock,
+        deleteBackup: deleteBackupMock,
+        downloadBackup: downloadBackupMock,
     }
 })
+
+const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+vi.mock('../contexts/AuthContext', () => ({
+    useAuth: () => ({
+        hasMinRole: (min) => (ROLE_HIERARCHY[authRef.role] || 0) >= (ROLE_HIERARCHY[min] || 0),
+    }),
+}))
 
 function baseSettings(overrides = {}) {
     return {
@@ -223,5 +245,157 @@ describe('ABSSettingsSection', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
 
         expect(await screen.findByText(/Connection failed: timeout/)).toBeInTheDocument()
+    })
+})
+
+describe('BackupSection', () => {
+    function recentStatus(overrides = {}) {
+        return {
+            configured: true,
+            location: '/backups',
+            last_backup_utc: '2026-07-13T03:00:11Z',
+            age_seconds: 120,
+            stale: false,
+            latest_db_file: 'booksync-db-2026-07-13.dump',
+            latest_db_size_bytes: 2048,
+            ...overrides,
+        }
+    }
+    function backupList() {
+        return {
+            location: '/backups',
+            items: [
+                { id: '2026-07-13_090000-manual', db_file: 'booksync-db-2026-07-13_090000-manual.dump', db_size_bytes: 4096, has_covers: true, is_manual: true, label: 'before reorg', created_utc: '2026-07-13T09:00:00Z' },
+                { id: '2026-07-13', db_file: 'booksync-db-2026-07-13.dump', db_size_bytes: 2048, has_covers: true, is_manual: false, label: null, created_utc: '2026-07-13T03:00:00Z' },
+                { id: '2026-07-11', db_file: 'booksync-db-2026-07-11.dump', db_size_bytes: 1024, has_covers: false, is_manual: false, label: null, created_utc: '2026-07-11T03:00:00Z' },
+            ],
+        }
+    }
+    function backupSettings(overrides = {}) {
+        return { backup_enabled: true, backup_hour: 3, backup_keep_daily: 14, backup_keep_monthly: 6, ...overrides }
+    }
+
+    beforeEach(() => {
+        authRef.role = 'superadmin'
+        getBackupStatusMock.mockReset().mockResolvedValue(recentStatus())
+        listBackupsMock.mockReset().mockResolvedValue(backupList())
+        getSettingsMock.mockReset().mockResolvedValue(backupSettings())
+        updateSettingsMock.mockReset().mockResolvedValue({})
+        restoreBackupMock.mockReset().mockResolvedValue({ restored: true, backup_id: '2026-07-13', covers_restored: true })
+        createBackupMock.mockReset().mockResolvedValue({ id: '2026-07-14_120000-manual', is_manual: true })
+        deleteBackupMock.mockReset().mockResolvedValue({ deleted: true })
+        downloadBackupMock.mockReset().mockResolvedValue(undefined)
+    })
+
+    it('shows the backup location and last successful run', async () => {
+        render(<BackupSection />)
+        expect(await screen.findByText('/backups')).toBeInTheDocument()
+        expect(screen.getByText(/2026-07-13T03:00:11Z/)).toBeInTheDocument()
+    })
+
+    it('flags a stale/overdue backup', async () => {
+        getBackupStatusMock.mockResolvedValue(recentStatus({ stale: true }))
+        render(<BackupSection />)
+        expect(await screen.findByText(/Overdue/i)).toBeInTheDocument()
+    })
+
+    it('reports when no backups have run yet', async () => {
+        getBackupStatusMock.mockResolvedValue(recentStatus({ configured: false, stale: true, last_backup_utc: null, age_seconds: null, latest_db_file: null, latest_db_size_bytes: null }))
+        listBackupsMock.mockResolvedValue({ location: '/backups', items: [] })
+        render(<BackupSection />)
+        expect(await screen.findByText(/No backups/i)).toBeInTheDocument()
+    })
+
+    it('lists backups with covers, manual badge and label', async () => {
+        render(<BackupSection />)
+        expect(await screen.findByText('2026-07-13_090000-manual')).toBeInTheDocument()
+        expect(screen.getByText('2026-07-11')).toBeInTheDocument()
+        expect(screen.getByText(/before reorg/)).toBeInTheDocument()
+        expect(screen.getByText(/Manual/)).toBeInTheDocument()
+        expect(screen.getAllByText(/\+ covers/)).toHaveLength(2)  // the two has_covers rows
+    })
+
+    it('loads retention/schedule config and saves it', async () => {
+        render(<BackupSection />)
+        const keepDaily = await screen.findByLabelText('Keep daily')
+        expect(keepDaily).toHaveValue(14)
+
+        fireEvent.change(keepDaily, { target: { value: '7' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({ backup_keep_daily: 7, backup_hour: 3, backup_keep_monthly: 6, backup_enabled: true })
+        ))
+        expect(await screen.findByText('Saved')).toBeInTheDocument()
+    })
+
+    it('creates a manual backup with a label (superadmin)', async () => {
+        render(<BackupSection />)
+        const labelInput = await screen.findByPlaceholderText(/Optional label/i)
+        fireEvent.change(labelInput, { target: { value: 'pre upgrade' } })
+        fireEvent.click(screen.getByRole('button', { name: /Create backup/i }))
+
+        await waitFor(() => expect(createBackupMock).toHaveBeenCalledWith('pre upgrade'))
+        // List is refreshed after a successful create.
+        await waitFor(() => expect(listBackupsMock.mock.calls.length).toBeGreaterThan(1))
+    })
+
+    it('restores a row after typed confirmation (superadmin)', async () => {
+        render(<BackupSection />)
+        await screen.findByText('2026-07-11')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Restore 2026-07-11' }))
+        const confirmInput = await screen.findByPlaceholderText(/RESTORE/i)
+        const confirmBtn = screen.getByRole('button', { name: /Confirm restore/i })
+        expect(confirmBtn).toBeDisabled()
+        fireEvent.change(confirmInput, { target: { value: 'RESTORE' } })
+        fireEvent.click(confirmBtn)
+
+        await waitFor(() => expect(restoreBackupMock).toHaveBeenCalledWith('2026-07-11'))
+        expect(await screen.findByText(/Restored/i)).toBeInTheDocument()
+    })
+
+    it('deletes a row after confirmation (superadmin)', async () => {
+        render(<BackupSection />)
+        await screen.findByText('2026-07-11')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Delete 2026-07-11' }))
+        fireEvent.click(await screen.findByRole('button', { name: /Confirm delete/i }))
+
+        await waitFor(() => expect(deleteBackupMock).toHaveBeenCalledWith('2026-07-11'))
+        await waitFor(() => expect(listBackupsMock.mock.calls.length).toBeGreaterThan(1))
+    })
+
+    it('downloads a row (superadmin)', async () => {
+        render(<BackupSection />)
+        await screen.findByText('2026-07-11')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Download 2026-07-11' }))
+        await waitFor(() => expect(downloadBackupMock).toHaveBeenCalledWith('2026-07-11'))
+    })
+
+    it('surfaces a restore failure', async () => {
+        restoreBackupMock.mockRejectedValue(new Error('pg_restore exploded'))
+        render(<BackupSection />)
+        await screen.findByText('2026-07-11')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Restore 2026-07-11' }))
+        fireEvent.change(await screen.findByPlaceholderText(/RESTORE/i), { target: { value: 'RESTORE' } })
+        fireEvent.click(screen.getByRole('button', { name: /Confirm restore/i }))
+
+        expect(await screen.findByText(/pg_restore exploded/)).toBeInTheDocument()
+    })
+
+    it('hides create/restore/delete/download from non-superadmins but keeps config', async () => {
+        authRef.role = 'admin'
+        render(<BackupSection />)
+        await screen.findByText('2026-07-11')
+
+        expect(screen.queryByRole('button', { name: /Create backup/i })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /^Restore / })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /^Delete / })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /^Download / })).not.toBeInTheDocument()
+        // Admins can still edit retention/schedule.
+        expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
     })
 })

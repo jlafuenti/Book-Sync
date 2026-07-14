@@ -33,6 +33,15 @@ class LocalWhisperProvider(TranscriptionProvider):
                 progress_callback=progress_callback,
             )
             return sentences
+        except ImportError as e:
+            # The default image is remote-transcription-only — torch/openai-whisper
+            # aren't installed. Give an actionable message instead of a raw ImportError.
+            logger.error(f"Local Whisper unavailable (ML deps not installed): {e}")
+            raise TranscriptionError(
+                "Local Whisper isn't installed in this image (remote-transcription-only "
+                "build). Set TRANSCRIPTION_PROVIDER=remote, or rebuild the server image "
+                "with --build-arg INSTALL_LOCAL_WHISPER=1."
+            ) from e
         except Exception as e:
             logger.error(f"Local Whisper transcription failed: {e}", exc_info=True)
             raise TranscriptionError(f"Local transcription failed: {e}") from e

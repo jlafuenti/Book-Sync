@@ -6,7 +6,8 @@ import {
     testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
-    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue
+    getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
+    getBackupStatus, listBackups, restoreBackup, createBackup, deleteBackup, downloadBackup
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
@@ -773,6 +774,290 @@ function UnsupportedFilesTab({ canAdmin }) {
     )
 }
 
+/* ── BackupSection ─────────────────────────────────────────────────── */
+// Backup location + last run, retention/schedule config (admin), a manual
+// backup creator, and per-row restore/delete/download (superadmin). See
+// docs/backup-restore.md and issue #60.
+export function BackupSection() {
+    const { hasMinRole } = useAuth()
+    const canManage = hasMinRole('superadmin')   // create / restore / delete / download
+    const canConfig = hasMinRole('admin')        // edit retention / schedule
+
+    const [status, setStatus] = useState(null)
+    const [backups, setBackups] = useState([])
+    const [location, setLocation] = useState('')
+    const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState(null)
+    const [message, setMessage] = useState(null)
+    const [actionError, setActionError] = useState(null)
+
+    // Retention / schedule config
+    const [cfg, setCfg] = useState({ backup_enabled: true, backup_hour: 3, backup_keep_daily: 14, backup_keep_monthly: 6 })
+    const [savingCfg, setSavingCfg] = useState(false)
+    const [cfgSaved, setCfgSaved] = useState(false)
+
+    // Manual create
+    const [label, setLabel] = useState('')
+    const [creating, setCreating] = useState(false)
+
+    // Per-row confirm dialogs: { id, kind: 'restore' | 'delete' }
+    const [dialog, setDialog] = useState(null)
+    const [confirmText, setConfirmText] = useState('')
+    const [busy, setBusy] = useState(false)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        setLoadError(null)
+        try {
+            const [st, list, settings] = await Promise.all([getBackupStatus(), listBackups(), getSettings()])
+            setStatus(st)
+            setBackups(list.items || [])
+            setLocation(list.location || st.location || '')
+            setCfg({
+                backup_enabled: settings.backup_enabled,
+                backup_hour: settings.backup_hour,
+                backup_keep_daily: settings.backup_keep_daily,
+                backup_keep_monthly: settings.backup_keep_monthly,
+            })
+        } catch (err) {
+            setLoadError('Failed to load backups')
+            console.error(err)
+        } finally {
+            setLoading(false)
+        }
+    }, [])
+
+    useEffect(() => { load() }, [load])
+
+    async function saveConfig() {
+        setSavingCfg(true)
+        setCfgSaved(false)
+        setActionError(null)
+        try {
+            await updateSettings({
+                backup_enabled: !!cfg.backup_enabled,
+                backup_hour: Number(cfg.backup_hour),
+                backup_keep_daily: Number(cfg.backup_keep_daily),
+                backup_keep_monthly: Number(cfg.backup_keep_monthly),
+            })
+            setCfgSaved(true)
+        } catch (err) {
+            setActionError(err.message || 'Failed to save settings')
+        } finally {
+            setSavingCfg(false)
+        }
+    }
+
+    async function doCreate() {
+        setCreating(true)
+        setActionError(null)
+        setMessage(null)
+        try {
+            const item = await createBackup(label.trim())
+            setLabel('')
+            setMessage(`Created backup ${item.id}.`)
+            await load()
+        } catch (err) {
+            setActionError(err.message || 'Backup failed')
+        } finally {
+            setCreating(false)
+        }
+    }
+
+    async function doRestore(id) {
+        setBusy(true)
+        setActionError(null)
+        setMessage(null)
+        try {
+            const result = await restoreBackup(id)
+            setMessage(`Restored ${result.backup_id}${result.covers_restored ? ' (with covers)' : ''}. Reload the app if positions look stale.`)
+            setDialog(null)
+            setConfirmText('')
+            await load()
+        } catch (err) {
+            setActionError(err.message || 'Restore failed')
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function doDelete(id) {
+        setBusy(true)
+        setActionError(null)
+        setMessage(null)
+        try {
+            await deleteBackup(id)
+            setMessage(`Deleted backup ${id}.`)
+            setDialog(null)
+            await load()
+        } catch (err) {
+            setActionError(err.message || 'Delete failed')
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function doDownload(id) {
+        setActionError(null)
+        try {
+            await downloadBackup(id)
+        } catch (err) {
+            setActionError(err.message || 'Download failed')
+        }
+    }
+
+    if (loading) return <div className="loading-page"><div className="spinner" /></div>
+    if (loadError) {
+        return (
+            <div className="alert alert-error">
+                {loadError}
+                <button className="btn btn-sm btn-secondary" onClick={load} style={{ marginLeft: 'auto' }}>Retry</button>
+            </div>
+        )
+    }
+
+    const configured = status && status.configured
+
+    return (
+        <div className="system-backup">
+            <p className="system-form-hint" style={{ marginTop: 0 }}>
+                Backups are written to <code>{location || '(not configured)'}</code>
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+                {configured ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span>Last successful backup: <strong>{status.last_backup_utc}</strong></span>
+                        {status.stale
+                            ? <span className="badge badge-error">Overdue</span>
+                            : <span className="badge badge-active">Up to date</span>}
+                    </div>
+                ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span>No backups found yet.</span>
+                        <span className="badge badge-error">Overdue</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Retention / schedule config */}
+            {canConfig && (
+                <div className="system-backup-config" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                            type="checkbox"
+                            aria-label="Nightly backups"
+                            checked={!!cfg.backup_enabled}
+                            onChange={e => { setCfg({ ...cfg, backup_enabled: e.target.checked }); setCfgSaved(false) }}
+                        />
+                        Nightly backups
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        Hour (UTC)
+                        <input type="number" min="0" max="23" aria-label="Backup hour (UTC)" style={{ width: 60 }}
+                            value={cfg.backup_hour}
+                            onChange={e => { setCfg({ ...cfg, backup_hour: e.target.value }); setCfgSaved(false) }} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        Keep daily
+                        <input type="number" min="1" aria-label="Keep daily" style={{ width: 60 }}
+                            value={cfg.backup_keep_daily}
+                            onChange={e => { setCfg({ ...cfg, backup_keep_daily: e.target.value }); setCfgSaved(false) }} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        Keep monthly
+                        <input type="number" min="0" aria-label="Keep monthly" style={{ width: 60 }}
+                            value={cfg.backup_keep_monthly}
+                            onChange={e => { setCfg({ ...cfg, backup_keep_monthly: e.target.value }); setCfgSaved(false) }} />
+                    </label>
+                    <button className="btn btn-secondary btn-sm" onClick={saveConfig} disabled={savingCfg}>
+                        {savingCfg ? 'Saving…' : 'Save'}
+                    </button>
+                    {cfgSaved && <span className="system-form-hint">Saved</span>}
+                </div>
+            )}
+
+            {/* Create a manual backup */}
+            {canManage && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <input
+                        type="text"
+                        placeholder="Optional label (e.g. before big reorg)"
+                        value={label}
+                        onChange={e => setLabel(e.target.value)}
+                        style={{ flex: '1 1 260px' }}
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={doCreate} disabled={creating}>
+                        {creating ? 'Creating…' : 'Create backup'}
+                    </button>
+                </div>
+            )}
+
+            {message && <div className="alert alert-success" style={{ marginBottom: 12 }}>{message}</div>}
+            {actionError && <div className="alert alert-error" style={{ marginBottom: 12 }}>{actionError}</div>}
+
+            {backups.length > 0 && (
+                <div className="system-backup-list" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {backups.map(b => (
+                        <div key={b.id} className="system-backup-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span className="system-backup-id"><strong>{b.id}</strong></span>
+                            {b.is_manual && <span className="badge badge-active">Manual</span>}
+                            {b.label && <span className="system-form-hint">“{b.label}”</span>}
+                            <span className="system-form-hint">
+                                {formatBytes(b.db_size_bytes)}{b.has_covers ? ' · + covers' : ''}
+                            </span>
+                            {canManage && (
+                                <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                                    <button className="btn btn-sm btn-secondary" aria-label={`Download ${b.id}`}
+                                        onClick={() => doDownload(b.id)}>Download</button>
+                                    <button className="btn btn-sm btn-secondary" aria-label={`Restore ${b.id}`}
+                                        onClick={() => { setDialog({ id: b.id, kind: 'restore' }); setConfirmText(''); setActionError(null); setMessage(null) }}>Restore</button>
+                                    <button className="btn btn-sm btn-danger" aria-label={`Delete ${b.id}`}
+                                        onClick={() => { setDialog({ id: b.id, kind: 'delete' }); setActionError(null); setMessage(null) }}>Delete</button>
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Restore confirm (typed) */}
+            {dialog && dialog.kind === 'restore' && (
+                <div className="system-backup-confirm" style={{ marginTop: 16 }}>
+                    <p className="system-form-hint" style={{ marginTop: 0 }}>
+                        This overwrites the live database (and covers) with <strong>{dialog.id}</strong> and
+                        briefly disrupts the app. Type <code>RESTORE</code> to confirm.
+                    </p>
+                    <input
+                        type="text"
+                        placeholder="Type RESTORE to confirm"
+                        value={confirmText}
+                        onChange={e => setConfirmText(e.target.value)}
+                        style={{ marginRight: 8 }}
+                    />
+                    <button className="btn btn-danger" disabled={confirmText !== 'RESTORE' || busy} onClick={() => doRestore(dialog.id)}>
+                        {busy ? 'Restoring…' : 'Confirm restore'}
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => { setDialog(null); setConfirmText('') }} style={{ marginLeft: 8 }}>Cancel</button>
+                </div>
+            )}
+
+            {/* Delete confirm */}
+            {dialog && dialog.kind === 'delete' && (
+                <div className="system-backup-confirm" style={{ marginTop: 16 }}>
+                    <p className="system-form-hint" style={{ marginTop: 0 }}>
+                        Delete backup <strong>{dialog.id}</strong>? This can't be undone.
+                    </p>
+                    <button className="btn btn-danger" disabled={busy} onClick={() => doDelete(dialog.id)}>
+                        {busy ? 'Deleting…' : 'Confirm delete'}
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => setDialog(null)} style={{ marginLeft: 8 }}>Cancel</button>
+                </div>
+            )}
+        </div>
+    )
+}
+
 /* ── SystemPage ────────────────────────────────────────────────────── */
 function SystemPage({ tab }) {
     const { hasMinRole } = useAuth()
@@ -1003,6 +1288,15 @@ function SystemPage({ tab }) {
                             </>
                         )}
                     </div>
+
+                    {/* ── Section: Backups (admin only) — collapsed by default ── */}
+                    {canAdmin && (
+                        <div style={{ marginTop: 8, marginBottom: 24 }}>
+                            <CollapsibleCard title="Backups">
+                                <BackupSection />
+                            </CollapsibleCard>
+                        </div>
+                    )}
 
                     {/* ── Section: User Management (admin only) ── */}
                     {canAdmin && (
