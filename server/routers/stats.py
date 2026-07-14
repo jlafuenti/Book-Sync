@@ -9,8 +9,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from database import get_db
 from models.user import User
 from routers.auth import get_current_user, get_admin_user, get_superadmin_user
 from services import backup_service
@@ -218,10 +220,18 @@ async def download_backup(backup_id: str, _: User = Depends(get_superadmin_user)
 
 
 @router.post("/restore")
-async def restore_backup(body: RestoreRequest, _: User = Depends(get_superadmin_user)):
+async def restore_backup(
+    body: RestoreRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_superadmin_user),
+):
     """Restore a selected backup's DB (and covers) over the live deployment."""
     if not body.confirm:
         raise HTTPException(status_code=400, detail="Restore requires confirm=true")
+    # Release this request's own DB connection before the restore terminates all
+    # other backends and swaps the database out. Otherwise get_db's teardown
+    # commit runs on a killed connection and 500s even though the restore ran.
+    await db.close()
     try:
         return await backup_service.restore(body.backup_id)
     except backup_service.InvalidBackupId:

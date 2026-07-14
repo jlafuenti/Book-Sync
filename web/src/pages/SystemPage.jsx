@@ -1289,21 +1289,13 @@ function SystemPage({ tab }) {
                         )}
                     </div>
 
-                    {/* ── Section: Backups (admin only) ── */}
+                    {/* ── Section: Backups (admin only) — collapsed by default ── */}
                     {canAdmin && (
-                        <>
-                            <div className="system-section-header" style={{ marginTop: 8 }}>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
-                                    <ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-                                </svg>
-                                <h3>Backups</h3>
-                            </div>
-                            <div className="system-card" style={{ marginBottom: 24 }}>
-                                <div className="system-card-body">
-                                    <BackupSection />
-                                </div>
-                            </div>
-                        </>
+                        <div style={{ marginTop: 8, marginBottom: 24 }}>
+                            <CollapsibleCard title="Backups">
+                                <BackupSection />
+                            </CollapsibleCard>
+                        </div>
                     )}
 
                     {/* ── Section: User Management (admin only) ── */}
