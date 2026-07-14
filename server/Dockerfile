@@ -31,9 +31,20 @@ WORKDIR /app
 
 # Install Python dependencies (includes audible + audible-cli for the
 # Audible import source).
-COPY requirements.txt .
+COPY requirements.txt requirements-local.txt ./
 RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt
+
+# Local (server-side) Whisper — torch + openai-whisper — is opt-in because torch
+# pulls multi-GB nvidia-cu* CUDA wheels that are pure build cost when
+# transcription is offloaded to a remote/Jetson worker. Default build skips them.
+# Enable with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+ARG INSTALL_LOCAL_WHISPER=false
+RUN if [ "$INSTALL_LOCAL_WHISPER" = "true" ] || [ "$INSTALL_LOCAL_WHISPER" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-local.txt ; \
+    else \
+        echo "Skipping local Whisper (torch/openai-whisper) — remote-transcription-only image." ; \
+    fi
 
 # Install the acsm-calibre-plugin (DeACSM) so Calibre can convert .acsm
 # files (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.
