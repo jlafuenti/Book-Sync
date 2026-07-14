@@ -1,0 +1,13 @@
+# Optional: local (server-side) Whisper transcription.
+#
+# These power the LocalWhisperProvider — running OpenAI Whisper on the Book Sync
+# server itself. torch pulls the large nvidia-cu* CUDA wheels, which is slow to
+# build and unnecessary when transcription is offloaded to a remote/Jetson
+# worker (TRANSCRIPTION_PROVIDER=remote or remote_with_fallback with a reachable
+# remote).
+#
+# The default server image does NOT install these. To include local Whisper,
+# build with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
+# (see server/Dockerfile).
+torch>=2.0.0
+openai-whisper==20240930

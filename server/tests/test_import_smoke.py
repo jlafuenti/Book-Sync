@@ -43,6 +43,55 @@ def test_router_module_imports(module_name):
     assert hasattr(module, "router"), f"{module_name} has no `router` attribute"
 
 
+def test_transcription_stack_imports_without_ml_deps():
+    """
+    The default server image is remote-transcription-only: it ships without
+    torch/openai-whisper (they're an opt-in build). The transcription provider
+    chain must therefore import cleanly without the ML stack — anything that
+    needs torch/whisper is lazy-imported inside a function. This guards against a
+    top-level `import torch`/`import whisper` creeping back in and breaking the
+    remote build. (numpy/tqdm are base deps for alignment/transcription.)
+    """
+    from services.transcription import TranscribedSentence, transcribe_audiobook  # noqa: F401
+    from services.transcription_providers import (  # noqa: F401
+        get_transcription_provider,
+        LocalWhisperProvider,
+        RemoteWhisperProvider,
+    )
+
+
+async def test_local_provider_unavailable_without_whisper(monkeypatch):
+    """LocalWhisperProvider reports unavailable when whisper can't be imported."""
+    import builtins
+
+    from services.transcription_providers import LocalWhisperProvider
+
+    real_import = builtins.__import__
+
+    def _no_whisper(name, *args, **kwargs):
+        if name in ("whisper", "torch"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_whisper)
+    assert await LocalWhisperProvider().is_available() is False
+
+
+async def test_local_transcribe_reports_missing_ml_deps(monkeypatch):
+    """A local transcribe on a remote-only image gives an actionable error."""
+    import services.transcription as tx
+    from services.transcription_providers import LocalWhisperProvider
+    from services.transcription_providers.base import TranscriptionError
+
+    def _boom(*args, **kwargs):
+        raise ImportError("No module named 'whisper'")
+
+    monkeypatch.setattr(tx, "transcribe_audiobook", _boom)
+
+    with pytest.raises(TranscriptionError, match="INSTALL_LOCAL_WHISPER"):
+        await LocalWhisperProvider().transcribe("nonexistent.mp3")
+
+
 def test_every_router_is_registered_in_main():
     """
     Guard against a router existing but never being wired into the app. Every

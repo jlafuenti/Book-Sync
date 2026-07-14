@@ -104,6 +104,103 @@ describe('generateTranscriptionRemoteKey()', () => {
     })
 })
 
+describe('backups', () => {
+    it('getBackupStatus() fetches the status endpoint', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ configured: true, stale: false }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getBackupStatus } = await import('./api')
+        const result = await getBackupStatus()
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/stats/backup', expect.anything())
+        expect(result).toEqual({ configured: true, stale: false })
+    })
+
+    it('listBackups() fetches the list endpoint', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ location: '/backups', items: [] }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { listBackups } = await import('./api')
+        const result = await listBackups()
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/stats/backups', expect.anything())
+        expect(result).toEqual({ location: '/backups', items: [] })
+    })
+
+    it('restoreBackup() POSTs the id with confirm:true', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ restored: true, backup_id: '2026-07-13', covers_restored: true }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { restoreBackup } = await import('./api')
+        const result = await restoreBackup('2026-07-13')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/stats/restore',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ backup_id: '2026-07-13', confirm: true }),
+            }),
+        )
+        expect(result.restored).toBe(true)
+    })
+
+    it('restoreBackup() throws the server detail on failure', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 500, json: async () => ({ detail: 'Restore failed: pg_restore exited 1' }),
+        }))
+
+        const { restoreBackup } = await import('./api')
+        await expect(restoreBackup('2026-07-13')).rejects.toThrow('Restore failed: pg_restore exited 1')
+    })
+
+    it('createBackup() POSTs the label', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: '2026-07-13_120000-manual', is_manual: true }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { createBackup } = await import('./api')
+        const result = await createBackup('before reorg')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/stats/backups',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ label: 'before reorg' }),
+            }),
+        )
+        expect(result.is_manual).toBe(true)
+    })
+
+    it('deleteBackup() DELETEs the id', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ deleted: true, backup_id: '2026-07-13' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { deleteBackup } = await import('./api')
+        const result = await deleteBackup('2026-07-13')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/stats/backups/2026-07-13',
+            expect.objectContaining({ method: 'DELETE' }),
+        )
+        expect(result.deleted).toBe(true)
+    })
+})
+
 describe('coverSrc()', () => {
     it('mints a media token for the cover filename and appends it as ?token=', async () => {
         localStorage.setItem('tandem_token', 'access-1')
