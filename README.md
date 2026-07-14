@@ -44,13 +44,13 @@ The Jetson Orin Nano remote transcription worker deploys separately, on its own 
 
 ### Backups
 
-The compose stack includes a `backup` sidecar that dumps Postgres and archives covers to
-`/backups` nightly (point it at a NAS path off the host disk). Set your NAS path in both the
-`backup` and `server` `/backups` mounts, then manage/restore backups from **System → Backups**
-in the web UI. **Store `CREDENTIAL_ENC_KEYS`, `JWT_SECRET_KEY`, and `POSTGRES_PASSWORD` in your
-password manager** — without the Fernet keys, the encrypted import-source credentials in a
-restored dump can't be decrypted. Full details, monitoring, and the restore/test-drill
-procedure: **[docs/backup-restore.md](docs/backup-restore.md)**.
+The server dumps Postgres and snapshots covers to `/backups` on a nightly schedule (point the
+`server` `/backups` mount at a NAS path off the host disk). Create manual backups, restore,
+download, delete, and configure the schedule/retention from **System → Backups** in the web UI.
+**Store `CREDENTIAL_ENC_KEYS`, `JWT_SECRET_KEY`, and `POSTGRES_PASSWORD` in your password
+manager** — without the Fernet keys, the encrypted import-source credentials in a restored dump
+can't be decrypted. Full details, monitoring, and the restore/test-drill procedure:
+**[docs/backup-restore.md](docs/backup-restore.md)**.
 
 ## Development & tests
 

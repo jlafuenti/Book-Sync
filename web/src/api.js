@@ -485,6 +485,48 @@ export async function restoreBackup(backupId) {
     return resp.json();
 }
 
+export async function createBackup(label) {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/backups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: label || null }),
+    });
+    if (!resp.ok) {
+        let detail = 'Failed to create backup';
+        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
+        throw new Error(detail);
+    }
+    return resp.json();
+}
+
+export async function deleteBackup(backupId) {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/backups/${encodeURIComponent(backupId)}`, {
+        method: 'DELETE',
+    });
+    if (!resp.ok) {
+        let detail = 'Failed to delete backup';
+        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
+        throw new Error(detail);
+    }
+    return resp.json();
+}
+
+// Fetch the .dump with the auth header, then trigger a browser download of the
+// blob (an <a href> can't carry the Authorization header).
+export async function downloadBackup(backupId) {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/backups/${encodeURIComponent(backupId)}/download`);
+    if (!resp.ok) throw new Error('Failed to download backup');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `booksync-db-${backupId}.dump`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
 // ============ Progress ============
 
 export async function getAllProgress() {

@@ -162,6 +162,43 @@ describe('backups', () => {
         const { restoreBackup } = await import('./api')
         await expect(restoreBackup('2026-07-13')).rejects.toThrow('Restore failed: pg_restore exited 1')
     })
+
+    it('createBackup() POSTs the label', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: '2026-07-13_120000-manual', is_manual: true }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { createBackup } = await import('./api')
+        const result = await createBackup('before reorg')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/stats/backups',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ label: 'before reorg' }),
+            }),
+        )
+        expect(result.is_manual).toBe(true)
+    })
+
+    it('deleteBackup() DELETEs the id', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ deleted: true, backup_id: '2026-07-13' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { deleteBackup } = await import('./api')
+        const result = await deleteBackup('2026-07-13')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/stats/backups/2026-07-13',
+            expect.objectContaining({ method: 'DELETE' }),
+        )
+        expect(result.deleted).toBe(true)
+    })
 })
 
 describe('coverSrc()', () => {

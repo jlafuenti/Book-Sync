@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
     unzip \
     gnupg \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # PostgreSQL 16 client (pg_restore) for the UI-triggered restore (issue #60).

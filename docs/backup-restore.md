@@ -6,8 +6,10 @@ unpair-exclusion decisions, user accounts, and the **encrypted import-source
 credentials** (Audible auth blob, Audiobookshelf token, Adobe/DeACSM device
 authorization). A dead disk or a stray `docker compose down -v` loses all of it.
 
-This document describes the nightly backup sidecar, how to monitor it, and how to
-restore — both from the web UI and by hand.
+The server itself runs backups: a nightly schedule, on-demand manual backups, retention
+pruning, and restore — all managed from **System → Backups** in the web UI. This document
+describes what's backed up, how to configure and monitor it, and how to restore (from the
+UI and by hand).
 
 ## What is backed up
 
@@ -39,20 +41,29 @@ Store these in your password manager — they are **not** in the database dump:
 - [ ] `JWT_SECRET_KEY`
 - [ ] `POSTGRES_PASSWORD`
 
-## The backup sidecar
+## The backup engine
 
-`docker-compose.example.yml` defines a `backup` service (a `postgres:16-alpine`
-container running [`scripts/backup.sh`](../scripts/backup.sh)). It:
+Backups are owned by the **server** process (`services/backup_service.py`) — there is no
+separate backup container. A background scheduler task started at app lifespan:
 
-1. Sleeps until `BACKUP_HOUR` each day (a self-scheduling loop — no cron).
+1. Wakes periodically and, at the configured hour, takes the day's backup (idempotent —
+   it won't run twice for the same day, and survives restarts).
 2. Writes a custom-format dump `booksync-db-YYYY-MM-DD.dump` to `/backups`.
 3. Snapshots covers to `/backups/covers/YYYY-MM-DD/` (skips logs and imports — see
    *Cover snapshots* below).
-4. Prunes old backups: keeps the newest `BACKUP_KEEP_DAILY` daily plus 1st-of-month
-   up to `BACKUP_KEEP_MONTHLY`, for both DB dumps and cover snapshots.
+4. Prunes old **scheduled** backups: keeps the newest *keep-daily* plus 1st-of-month up to
+   *keep-monthly*, for both dumps and cover snapshots. **Manual backups are never pruned.**
 
-On a fresh deployment it also takes one backup immediately, so there's something to
-restore before the first scheduled run.
+On a fresh deployment it takes one backup immediately, so there's something to restore
+before the first scheduled run.
+
+### Manual backups
+
+From **System → Backups**, a superadmin can **Create backup** on demand (with an optional
+label like *"before big reorg"*). Manual backups get a timestamped id
+(`YYYY-MM-DD_HHMMSS-manual`) and are **kept indefinitely until you delete them** — retention
+pruning ignores them. Each backup row also offers **Download** (saves the `.dump` to your
+machine for off-site safekeeping) and **Delete**.
 
 ### Cover snapshots (hardlinked, space-efficient)
 
@@ -68,27 +79,28 @@ other snapshot references — there's no incremental chain to replay, and no bas
 delete.
 
 This needs a filesystem that supports hardlinks (local ext4/xfs — **not** most CIFS/SMB
-mounts) and `rsync` (the sidecar installs it at startup; without it, it falls back to full
-per-night copies). To eyeball the dedup: `du -sh /backups/covers/*` shows later snapshots
-as small deltas, and `ls -li` shows shared inode numbers for unchanged covers.
+mounts) and `rsync` (installed in the server image). To eyeball the dedup:
+`du -sh /backups/covers/*` shows later snapshots as small deltas, and `ls -li` shows
+shared inode numbers for unchanged covers.
 
 ### Configuration
 
-| Env var | Default | Meaning |
-|---------|---------|---------|
-| `BACKUP_HOUR` | `3` | Local hour (0–23) of the daily run |
-| `BACKUP_KEEP_DAILY` | `14` | Recent daily dumps to keep |
-| `BACKUP_KEEP_MONTHLY` | `6` | 1st-of-month dumps to keep beyond the daily window |
+Schedule and retention are edited in **System → Backups** (stored in the database, so no
+redeploy needed):
 
-**Mount `/backups` at a NAS path OFF the docker host's disk** — a backup on the same
-disk that dies is worthless. The same path is mounted **read-only into the `server`
-service** so the web UI can list backups and restore. Both mounts must point at the
-same directory:
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| Nightly backups | on | Master on/off for the scheduled run |
+| Hour (UTC) | `3` | Hour (0–23) of the daily run |
+| Keep daily | `14` | Recent daily backups to keep |
+| Keep monthly | `6` | 1st-of-month backups to keep beyond the daily window |
+
+**Mount `/backups` at a NAS path OFF the docker host's disk** — a backup on the same disk
+that dies is worthless. It is mounted **read-write into the `server` service** (the server
+writes, lists, restores, and prunes):
 
 ```yaml
 # server service
-  - /path/to/nas/booksync-backups:/backups:ro
-# backup service
   - /path/to/nas/booksync-backups:/backups
 ```
 
@@ -119,29 +131,29 @@ Restoring **overwrites the live database and covers** and briefly disrupts the a
 
 ### From the web UI (superadmin)
 
-1. Open **System → Backups**. Admins see the location, last run, and the list of
-   available backups.
-2. **Superadmins** additionally get a **Restore…** control. Select a backup, click
-   **Restore…**, type `RESTORE` to confirm, and confirm.
+1. Open **System → Backups**. Admins see the location, last run, retention/schedule
+   controls, and the list of available backups.
+2. **Superadmins** get per-row **Restore / Download / Delete** and a **Create backup**
+   button. To restore: click **Restore** on a row, type `RESTORE` to confirm, and confirm.
 3. The server terminates other DB sessions, runs `pg_restore --clean --if-exists` over
-   the live database, and copies that date's covers snapshot into the live covers dir if
+   the live database, and copies that backup's covers snapshot into the live covers dir if
    present.
 4. Reload the app afterward.
 
 ### By hand (host fallback)
 
-If the UI is unavailable, restore directly against the stack. `<DATE>` is the backup id
-(`YYYY-MM-DD`).
+If the UI is unavailable, restore directly against the stack. `<ID>` is the backup id — a
+date (`YYYY-MM-DD`) for scheduled backups or `YYYY-MM-DD_HHMMSS-manual` for manual ones.
 
 ```bash
 # 1. Database (custom-format dump → pg_restore). --clean --if-exists drops and
 #    recreates objects, so this replaces the current schema and data wholesale.
-docker compose cp /path/to/nas/booksync-backups/booksync-db-<DATE>.dump db:/tmp/restore.dump
+docker compose cp /path/to/nas/booksync-backups/booksync-db-<ID>.dump db:/tmp/restore.dump
 docker compose exec db pg_restore --clean --if-exists --no-owner --no-privileges \
   -U booksync -d booksync /tmp/restore.dump
 
-# 2. Covers — copy that date's snapshot into the app-data covers dir.
-cp -a /path/to/nas/booksync-backups/covers/<DATE>/. ./data/covers/
+# 2. Covers — copy that backup's snapshot into the app-data covers dir.
+cp -a /path/to/nas/booksync-backups/covers/<ID>/. ./data/covers/
 
 # 3. Restart the app so it reconnects with a clean pool.
 docker compose restart server
@@ -164,5 +176,5 @@ copy of `docker-compose.yml` with different ports/volume names and the **same**
 - [ ] Covers render.
 - [ ] Audible / ABS / ACSM import sources still show **authorized** (proves the Fernet
       keys decrypt the restored credential rows).
-- [ ] A fresh dump appears on the NAS nightly and is a valid archive
-      (`pg_restore -l booksync-db-<DATE>.dump` lists its contents).
+- [ ] A fresh dump appears on the NAS nightly (and on a **Create backup** click) and is a
+      valid archive (`pg_restore -l booksync-db-<ID>.dump` lists its contents).
