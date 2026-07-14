@@ -10,8 +10,14 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.9
 aiofiles==24.1.0
-openai-whisper==20240930
-torch>=2.0.0
+# numpy + tqdm are needed by services/alignment.py and services/transcription.py
+# (imported at module load even on the remote-transcription path). Local Whisper
+# itself — torch + openai-whisper, which pull the multi-GB CUDA wheels — is an
+# opt-in build: see requirements-local.txt and the INSTALL_LOCAL_WHISPER build
+# arg in the Dockerfile. Not needed when transcription is offloaded to a remote
+# (Jetson) worker.
+numpy>=1.26,<2
+tqdm>=4.66
 ebooklib==0.18
 mobi==0.3.3
 beautifulsoup4==4.12.3
