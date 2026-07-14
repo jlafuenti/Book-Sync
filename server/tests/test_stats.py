@@ -9,6 +9,7 @@ import pytest
 
 from config import settings
 from routers import stats
+from services import backup_service
 
 
 async def test_disk_usage_returns_shape(make_client, make_user, auth_header, monkeypatch, tmp_path):
@@ -153,8 +154,8 @@ def restore_spies(monkeypatch):
     def fake_restore_covers(path):
         calls["covers"] = path
 
-    monkeypatch.setattr(stats, "_run_pg_restore", fake_run_pg_restore)
-    monkeypatch.setattr(stats, "_restore_covers", fake_restore_covers)
+    monkeypatch.setattr(backup_service, "_run_pg_restore", fake_run_pg_restore)
+    monkeypatch.setattr(backup_service, "_restore_covers", fake_restore_covers)
     return calls
 
 
@@ -264,7 +265,7 @@ async def test_restore_surfaces_helper_failure(make_client, make_user, auth_head
     async def boom(path):
         raise RuntimeError("pg_restore exploded")
 
-    monkeypatch.setattr(stats, "_run_pg_restore", boom)
+    monkeypatch.setattr(backup_service, "_run_pg_restore", boom)
 
     user = await make_user(username="s", role="superadmin")
     async with make_client(stats.router) as c:
@@ -275,3 +276,141 @@ async def test_restore_surfaces_helper_failure(make_client, make_user, auth_head
         )
 
     assert r.status_code == 500
+
+
+# ── manual create / delete / download ──────────────────────────────────────
+
+@pytest.fixture
+def create_seams(monkeypatch, tmp_path):
+    """Stub the pg_dump/covers shell-outs so a manual backup can be created."""
+    async def fake_pg_dump(dump_path):
+        with open(dump_path, "wb") as f:
+            f.write(b"PGDMP-fake")
+
+    async def fake_snapshot(snapshot_dir):
+        os.makedirs(snapshot_dir, exist_ok=True)
+        with open(os.path.join(snapshot_dir, "c.jpg"), "wb") as f:
+            f.write(b"cover")
+
+    monkeypatch.setattr(backup_service, "_run_pg_dump", fake_pg_dump)
+    monkeypatch.setattr(backup_service, "_snapshot_covers", fake_snapshot)
+
+
+async def test_create_manual_backup(make_client, make_user, auth_header, monkeypatch, tmp_path, create_seams):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "covers_dir", str(tmp_path / "src-covers"))
+    (tmp_path / "src-covers").mkdir()
+
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.post("/api/stats/backups", json={"label": "before reorg"}, headers=auth_header(user))
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_manual"] is True and body["label"] == "before reorg"
+    assert body["id"].endswith("-manual")
+    assert (tmp_path / f"booksync-db-{body['id']}.dump").exists()
+
+
+async def test_create_manual_backup_requires_superadmin(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    user = await make_user(username="a", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.post("/api/stats/backups", json={}, headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_delete_backup(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    _make_backup(tmp_path, "2026-07-12", covers=True)
+
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.delete("/api/stats/backups/2026-07-12", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+    assert not (tmp_path / "booksync-db-2026-07-12.dump").exists()
+    assert not (tmp_path / "covers" / "2026-07-12").exists()
+
+
+async def test_delete_backup_requires_superadmin(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    _make_backup(tmp_path, "2026-07-12")
+    user = await make_user(username="a", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.delete("/api/stats/backups/2026-07-12", headers=auth_header(user))
+    assert r.status_code == 403
+    assert (tmp_path / "booksync-db-2026-07-12.dump").exists()
+
+
+async def test_delete_backup_unknown(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.delete("/api/stats/backups/2020-01-01", headers=auth_header(user))
+    assert r.status_code == 404
+
+
+async def test_delete_backup_bad_id(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        # A malformed-but-routable id reaches the handler and fails validation.
+        r = await c.delete("/api/stats/backups/not-a-date", headers=auth_header(user))
+    assert r.status_code == 400
+
+
+async def test_download_backup(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    dump = _make_backup(tmp_path, "2026-07-12")
+    dump.write_bytes(b"PGDMP-bytes")
+
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backups/2026-07-12/download", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert r.content == b"PGDMP-bytes"
+
+
+async def test_download_backup_requires_superadmin(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    _make_backup(tmp_path, "2026-07-12")
+    user = await make_user(username="a", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backups/2026-07-12/download", headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_download_backup_unknown(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backups/2020-01-01/download", headers=auth_header(user))
+    assert r.status_code == 404
+
+
+async def test_download_backup_bad_id(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    user = await make_user(username="s", role="superadmin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backups/not-a-date/download", headers=auth_header(user))
+    assert r.status_code == 400
+
+
+async def test_backups_list_includes_manual_and_label(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
+    _make_backup(tmp_path, "2026-07-11")
+    _make_backup(tmp_path, "2026-07-13_090000-manual", covers=False)
+    (tmp_path / "booksync-db-2026-07-13_090000-manual.label").write_text("pre-upgrade")
+
+    user = await make_user(username="a", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backups", headers=auth_header(user))
+
+    assert r.status_code == 200
+    items = {i["id"]: i for i in r.json()["items"]}
+    assert items["2026-07-13_090000-manual"]["is_manual"] is True
+    assert items["2026-07-13_090000-manual"]["label"] == "pre-upgrade"
+    assert items["2026-07-11"]["is_manual"] is False

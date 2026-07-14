@@ -79,6 +79,27 @@ async def test_update_persists_and_casts_typed_value(make_client, make_user, aut
     assert val == 500 and isinstance(val, int)
 
 
+async def test_backup_settings_round_trip_with_types(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        # Defaults exposed before anything is stored.
+        get0 = await c.get("/api/settings/", headers=auth_header(admin))
+        b0 = get0.json()
+        assert b0["backup_enabled"] is True and b0["backup_hour"] == 3
+        assert b0["backup_keep_daily"] == 14 and b0["backup_keep_monthly"] == 6
+
+        put = await c.put("/api/settings/", headers=auth_header(admin), json={
+            "backup_enabled": False, "backup_hour": 1,
+            "backup_keep_daily": 7, "backup_keep_monthly": 2,
+        })
+        assert put.status_code == 200
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    assert body["backup_enabled"] is False
+    assert body["backup_hour"] == 1 and isinstance(body["backup_hour"], int)
+    assert body["backup_keep_daily"] == 7 and body["backup_keep_monthly"] == 2
+
+
 async def test_update_serializes_list_patterns(make_client, make_user, auth_header):
     admin = await make_user(username="admin1", role="admin")
     patterns = ["<Title>", "<Author>/<Title>"]

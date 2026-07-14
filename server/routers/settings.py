@@ -43,6 +43,12 @@ DEFAULT_SETTINGS = {
     "abs_url": "",
     "abs_api_token": "",
     "abs_audiobooks_prefix": "",
+    # Backups (issue #60) — owned by services/backup_service.py. Defaults must
+    # match backup_service._DEFAULTS.
+    "backup_enabled": True,
+    "backup_hour": 3,
+    "backup_keep_daily": 14,
+    "backup_keep_monthly": 6,
 }
 
 @router.get("/", response_model=Dict[str, Any])
