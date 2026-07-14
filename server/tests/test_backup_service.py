@@ -146,7 +146,17 @@ def test_delete_backup_missing(monkeypatch, tmp_path):
 
 @pytest.fixture
 def create_seams(monkeypatch, tmp_path):
-    """Replace the shell-outs with fakes that write plausible artifacts."""
+    """Replace the shell-outs with fakes that write plausible artifacts.
+
+    Also point covers_dir at a real dir so create_backup's
+    ``if Path(settings.covers_dir).is_dir()`` gate is satisfied and the
+    (faked) covers snapshot runs — otherwise on a clean runner the default
+    /data/app/covers doesn't exist and no snapshot is written.
+    """
+    live_covers = tmp_path / "live-covers"
+    live_covers.mkdir()
+    monkeypatch.setattr(settings, "covers_dir", str(live_covers))
+
     async def fake_pg_dump(dump_path):
         with open(dump_path, "wb") as f:
             f.write(b"PGDMP-fake")
