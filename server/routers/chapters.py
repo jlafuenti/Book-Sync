@@ -19,6 +19,7 @@ from models.user import User
 from models.book import AudioBook
 from routers.auth import get_current_user, get_editor_user
 from schemas import Chapter
+from services import chapter_repair
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +126,13 @@ async def update_audiobook_chapters(
         if proc.returncode != 0:
             raise Exception("Failed to export metadata from file")
 
-        # 2. Parse metadata text to remove existing [CHAPTER] blocks but keep everything else
-        with open(temp_meta_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        # 2. Parse metadata text to remove existing [CHAPTER] blocks but keep everything else.
+        # ffmpeg copies chapter title bytes through opaquely without validating
+        # encoding, so a title written in Windows-1252/Latin-1 by another tool
+        # would crash a hard-coded utf-8 text read here — decode leniently instead.
+        with open(temp_meta_path, 'rb') as f:
+            raw = f.read()
+        lines = chapter_repair.fix_ffmetadata_bytes(raw).splitlines(keepends=True)
             
         new_lines = []
         in_chapter_block = False

@@ -13,6 +13,7 @@ lifespan) moves any token that still lives plaintext in system_settings.
 """
 
 import os
+import re
 import logging
 from typing import Optional
 
@@ -21,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.settings import SystemSetting
-from services import credentials
+from services import chapter_repair, credentials
 from services.metadata_utils import extract_series_and_index
 from services.url_safety import assert_safe_url
 
@@ -231,70 +232,96 @@ def enrich_from_abs(
     return file_meta, changed, True
 
 
-def write_metadata_to_file(filepath: str, file_meta: dict) -> bool:
+_CHAPTER_TITLE_ERROR_RE = re.compile(r"chapter \d+ title:")
+
+
+def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
     """
     Write enriched metadata back into the audio file's embedded tags.
     Currently handles M4B/MP4 only (MP3/FLAC support can be added later).
-    Returns True on success, False on failure.
+    Returns (True, None) on success, (False, error_message) on failure.
+    error_message is None when the file was simply skipped (unsupported format).
+
+    If the file has a legacy Nero-style chapter list whose titles aren't
+    valid UTF-8 (mutagen raises "chapter N title: ..." while just opening
+    the file), attempt a one-shot repair via services.chapter_repair and
+    retry before giving up.
     """
     ext = os.path.splitext(filepath)[1].lower()
     if ext not in (".m4b", ".m4a", ".mp4"):
         logger.debug(f"[abs_metadata] Skipping write-back for non-M4B file: {filepath}")
-        return False
+        return False, None
 
     try:
-        import mutagen.mp4
-
-        audio = mutagen.mp4.MP4(filepath)
-
-        def _set(tag: str, val) -> None:
-            if val:
-                audio[tag] = [str(val)]
-            elif tag in audio:
-                del audio[tag]
-
-        _set("\xa9nam", file_meta.get("title"))
-        _set("\xa9ART", file_meta.get("author"))
-        _set("\xa9des", file_meta.get("description"))
-        _set(
-            "\xa9day",
-            str(file_meta["publish_year"]) if file_meta.get("publish_year") else None,
-        )
-        _set("\xa9gen", file_meta.get("genres"))
-        _set("\xa9pub", file_meta.get("publisher"))
-        _set("\xa9wrt", file_meta.get("narrators"))
-
-        # Series → ©grp as "Name #N" (the format extract_series_and_index reads)
-        series = file_meta.get("series")
-        series_index = file_meta.get("series_index")
-        if series:
-            grp = (
-                f"{series} #{int(series_index)}"
-                if series_index is not None
-                else series
-            )
-            audio["\xa9grp"] = [grp]
-        elif "\xa9grp" in audio:
-            del audio["\xa9grp"]
-
-        # Also write custom iTunes freeform atoms for compatibility with other players
-        def _set_freeform(atom: str, val: Optional[str]) -> None:
-            key = f"----:com.apple.iTunes:{atom}"
-            if val:
-                audio[key] = [val.encode("utf-8")]
-            elif key in audio:
-                del audio[key]
-
-        _set_freeform("SERIES", series)
-        if series and series_index is not None:
-            _set_freeform("SERIES-PART", str(series_index))
-        elif series is None:
-            _set_freeform("SERIES-PART", None)
-        _set_freeform("NARRATOR", file_meta.get("narrators"))
-
-        audio.save()
-        logger.debug(f"[abs_metadata] Wrote tags back to {filepath}")
-        return True
+        return _write_tags(filepath, file_meta)
     except Exception as e:
+        if _CHAPTER_TITLE_ERROR_RE.search(str(e)):
+            logger.info(
+                f"[abs_metadata] Non-UTF-8 chapter title detected in {filepath}, "
+                "attempting repair"
+            )
+            repaired, repair_error = chapter_repair.repair_chapter_encoding(filepath)
+            if repaired:
+                try:
+                    return _write_tags(filepath, file_meta)
+                except Exception as e2:
+                    logger.warning(f"[abs_metadata] Failed to write tags to {filepath} after chapter repair: {e2}")
+                    return False, str(e2)
+            logger.warning(f"[abs_metadata] Chapter repair failed for {filepath}: {repair_error}")
         logger.warning(f"[abs_metadata] Failed to write tags to {filepath}: {e}")
-        return False
+        return False, str(e)
+
+
+def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
+    import mutagen.mp4
+
+    audio = mutagen.mp4.MP4(filepath)
+
+    def _set(tag: str, val) -> None:
+        if val:
+            audio[tag] = [str(val)]
+        elif tag in audio:
+            del audio[tag]
+
+    _set("\xa9nam", file_meta.get("title"))
+    _set("\xa9ART", file_meta.get("author"))
+    _set("\xa9des", file_meta.get("description"))
+    _set(
+        "\xa9day",
+        str(file_meta["publish_year"]) if file_meta.get("publish_year") else None,
+    )
+    _set("\xa9gen", file_meta.get("genres"))
+    _set("\xa9pub", file_meta.get("publisher"))
+    _set("\xa9wrt", file_meta.get("narrators"))
+
+    # Series → ©grp as "Name #N" (the format extract_series_and_index reads)
+    series = file_meta.get("series")
+    series_index = file_meta.get("series_index")
+    if series:
+        grp = (
+            f"{series} #{int(series_index)}"
+            if series_index is not None
+            else series
+        )
+        audio["\xa9grp"] = [grp]
+    elif "\xa9grp" in audio:
+        del audio["\xa9grp"]
+
+    # Also write custom iTunes freeform atoms for compatibility with other players
+    def _set_freeform(atom: str, val: Optional[str]) -> None:
+        key = f"----:com.apple.iTunes:{atom}"
+        if val:
+            audio[key] = [val.encode("utf-8")]
+        elif key in audio:
+            del audio[key]
+
+    _set_freeform("SERIES", series)
+    if series and series_index is not None:
+        _set_freeform("SERIES-PART", str(series_index))
+    elif series is None:
+        _set_freeform("SERIES-PART", None)
+    _set_freeform("NARRATOR", file_meta.get("narrators"))
+
+    audio.save()
+    logger.debug(f"[abs_metadata] Wrote tags back to {filepath}")
+    return True, None
