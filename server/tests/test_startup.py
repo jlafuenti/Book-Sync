@@ -76,3 +76,69 @@ async def test_bootstrap_superadmin_password_is_not_admin(db):
     user = result.scalar_one()
     assert verify_password("admin", user.hashed_password) is False
     assert user.must_reset_password is True
+
+
+# --- main.py's lifespan actually calls the three check_* functions (issue #81) ----
+#
+# main.py has never been imported by the test suite: conftest's `client` fixture
+# deliberately builds an ad-hoc FastAPI() app instead of importing main.app, to
+# avoid its lifespan side effects and heavy router imports. Importing main for
+# real also runs, at module scope, `os.makedirs(settings.app_data_dir + "/logs")`
+# — app_data_dir defaults to "/data/app", not writable in a test environment — so
+# app_data_dir must be patched to a tmp dir before the first import happens.
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _app_data_dir_for_main_import(tmp_path_factory):
+    original = settings.app_data_dir
+    settings.app_data_dir = str(tmp_path_factory.mktemp("app_data"))
+    yield
+    settings.app_data_dir = original
+
+
+async def test_lifespan_raises_when_jwt_secret_is_default(monkeypatch):
+    pytest.importorskip("audible")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    monkeypatch.setattr(settings, "jwt_secret_key", "dev-secret-change-me")
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://u:realpass@db:5432/booksync")
+    monkeypatch.setattr(settings, "cors_origins", "https://example.com")
+
+    import main
+    from fastapi import FastAPI
+
+    app = FastAPI(lifespan=main.lifespan)
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        async with main.lifespan(app):
+            pass
+
+
+async def test_lifespan_raises_when_db_credentials_are_default(monkeypatch):
+    pytest.importorskip("audible")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    monkeypatch.setattr(settings, "jwt_secret_key", "a-real-randomly-generated-secret")
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://booksync:booksync@db:5432/booksync")
+    monkeypatch.setattr(settings, "cors_origins", "https://example.com")
+
+    import main
+    from fastapi import FastAPI
+
+    app = FastAPI(lifespan=main.lifespan)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        async with main.lifespan(app):
+            pass
+
+
+async def test_lifespan_raises_when_cors_is_wildcard(monkeypatch):
+    pytest.importorskip("audible")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    monkeypatch.setattr(settings, "jwt_secret_key", "a-real-randomly-generated-secret")
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://u:realpass@db:5432/booksync")
+    monkeypatch.setattr(settings, "cors_origins", "*")
+
+    import main
+    from fastapi import FastAPI
+
+    app = FastAPI(lifespan=main.lifespan)
+    with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
+        async with main.lifespan(app):
+            pass
