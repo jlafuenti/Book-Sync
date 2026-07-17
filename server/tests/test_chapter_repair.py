@@ -11,6 +11,8 @@ lenient decode can fix the bad title bytes before ffmpeg re-injects them.
 
 import subprocess as subprocess_module
 
+import mutagen.mp4
+
 from services import chapter_repair
 
 
@@ -46,6 +48,68 @@ class TestFixFfmetadataBytes:
         assert fixed.encode("utf-8")  # must not raise
         assert "title=Chapter Äne" in fixed
         assert "major_brand=M4B" in fixed
+
+
+class TestCheckChapterEncoding:
+    """Regression coverage for surfacing this issue in Troubleshoot Library:
+    a live, cheap detector (no full decode) that flags m4b files mutagen
+    can't open because of a non-UTF-8 chapter title."""
+
+    def test_flags_chapter_title_decode_failure(self, monkeypatch, tmp_path):
+        fake_file = tmp_path / "book.m4b"
+        fake_file.write_bytes(b"")
+
+        def fake_mp4_ctor(path):
+            raise mutagen.mp4.MP4MetadataError(
+                "chapter 0 title: 'utf-8' codec can't decode byte 0xc4 "
+                "in position 27: invalid continuation byte"
+            )
+
+        monkeypatch.setattr(mutagen.mp4, "MP4", fake_mp4_ctor)
+
+        ok, detail = chapter_repair.check_chapter_encoding(str(fake_file))
+
+        assert ok is False
+        assert "chapter 0 title" in detail
+
+    def test_clean_file_is_ok(self, monkeypatch, tmp_path):
+        fake_file = tmp_path / "book.m4b"
+        fake_file.write_bytes(b"")
+
+        monkeypatch.setattr(mutagen.mp4, "MP4", lambda path: {})
+
+        ok, detail = chapter_repair.check_chapter_encoding(str(fake_file))
+
+        assert ok is True
+        assert detail is None
+
+    def test_unrelated_error_is_out_of_scope_for_this_check(self, monkeypatch, tmp_path):
+        fake_file = tmp_path / "book.m4b"
+        fake_file.write_bytes(b"")
+
+        def fake_mp4_ctor(path):
+            raise mutagen.mp4.MP4StreamInfoError("not an MP4 file")
+
+        monkeypatch.setattr(mutagen.mp4, "MP4", fake_mp4_ctor)
+
+        ok, detail = chapter_repair.check_chapter_encoding(str(fake_file))
+
+        assert ok is True
+        assert detail is None
+
+    def test_non_m4b_extension_is_skipped_without_opening_file(self, monkeypatch, tmp_path):
+        fake_file = tmp_path / "book.mp3"
+        fake_file.write_bytes(b"")
+
+        def fail_if_called(path):
+            raise AssertionError("should not attempt to open a non-m4b file")
+
+        monkeypatch.setattr(mutagen.mp4, "MP4", fail_if_called)
+
+        ok, detail = chapter_repair.check_chapter_encoding(str(fake_file))
+
+        assert ok is True
+        assert detail is None
 
 
 class _FakeCompletedProcess:

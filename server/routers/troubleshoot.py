@@ -32,7 +32,7 @@ from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
-from services import library_verify
+from services import chapter_repair, library_verify
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/troubleshoot", tags=["troubleshoot"])
@@ -87,6 +87,7 @@ async def get_issues(
             if not converted:
                 unsupported.append(_item_dict(eb, "ebook", f"{(eb.format or '').upper()} needs conversion to EPUB"))
 
+    chapter_encoding_bad = []
     for ab in audiobooks:
         if not ab.file_path or not os.path.isfile(ab.file_path):
             missing.append(_item_dict(ab, "audiobook", "File not found on storage"))
@@ -94,6 +95,9 @@ async def get_issues(
             sz = os.path.getsize(ab.file_path)
             if sz < _TINY_AUDIO_BYTES:
                 zero_byte.append(_item_dict(ab, "audiobook", f"File is only {sz} bytes — likely truncated"))
+            ok, detail = chapter_repair.check_chapter_encoding(ab.file_path)
+            if not ok:
+                chapter_encoding_bad.append(_item_dict(ab, "audiobook", detail or "Non-UTF-8 chapter title"))
 
     # Expensive integrity results from the last scan.
     audio_corrupt, ebook_drm, ebook_unreadable = [], [], []
@@ -216,6 +220,7 @@ async def get_issues(
     categories = {
         "missing": missing,
         "zero_byte": zero_byte,
+        "chapter_encoding_bad": chapter_encoding_bad,
         "audio_corrupt": audio_corrupt,
         "ebook_drm": ebook_drm,
         "ebook_unreadable": ebook_unreadable,
@@ -415,6 +420,53 @@ async def replace_file(
 
     await db.commit()
     return {"status": "replaced", "integrity_ok": ok, "detail": det, "item_id": item_id}
+
+
+@router.post("/repair-chapter-encoding/{item_id}")
+async def repair_chapter_encoding_endpoint(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Repair a single audiobook's non-UTF-8 chapter titles in place."""
+    ab = (await db.execute(select(AudioBook).where(AudioBook.id == item_id))).scalar_one_or_none()
+    if not ab:
+        raise HTTPException(status_code=404, detail="Audiobook not found")
+    if not ab.file_path or not os.path.isfile(ab.file_path):
+        raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
+
+    import asyncio
+    ok, error = await asyncio.to_thread(chapter_repair.repair_chapter_encoding, ab.file_path)
+    if ok:
+        return {"status": "repaired", "detail": None, "item_id": item_id}
+    _, recheck_detail = await asyncio.to_thread(chapter_repair.check_chapter_encoding, ab.file_path)
+    return {"status": "failed", "detail": error or recheck_detail, "item_id": item_id}
+
+
+class BulkRepairChapterEncodingRequest(BaseModel):
+    item_ids: List[int]
+
+
+@router.post("/bulk-repair-chapter-encoding")
+async def bulk_repair_chapter_encoding(
+    req: BulkRepairChapterEncodingRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    import asyncio
+    repaired = 0
+    failures = []
+    for item_id in req.item_ids:
+        ab = (await db.execute(select(AudioBook).where(AudioBook.id == item_id))).scalar_one_or_none()
+        if not ab or not ab.file_path or not os.path.isfile(ab.file_path):
+            failures.append({"item_id": item_id, "title": ab.title if ab else None, "error": "File not found on disk"})
+            continue
+        ok, error = await asyncio.to_thread(chapter_repair.repair_chapter_encoding, ab.file_path)
+        if ok:
+            repaired += 1
+        else:
+            failures.append({"item_id": item_id, "title": ab.title, "error": error})
+    return {"repaired": repaired, "failures": failures}
 
 
 @router.post("/requeue/{pair_id}")

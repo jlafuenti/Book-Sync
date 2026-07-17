@@ -1093,6 +1093,19 @@ export async function requeuePair(pairId) {
     return _jsonOrThrow(resp, 'Requeue failed');
 }
 
+export async function repairChapterEncoding(itemId) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/repair-chapter-encoding/${itemId}`, { method: 'POST' });
+    return _jsonOrThrow(resp, 'Repair failed');
+}
+
+export async function bulkRepairChapterEncoding(itemIds) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/bulk-repair-chapter-encoding`, {
+        method: 'POST',
+        body: JSON.stringify({ item_ids: itemIds }),
+    });
+    return _jsonOrThrow(resp, 'Bulk repair failed');
+}
+
 export async function dismissFailedAcsm(filename) {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/acsm-dismiss`, {
         method: 'POST',

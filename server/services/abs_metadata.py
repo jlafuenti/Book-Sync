@@ -13,7 +13,6 @@ lifespan) moves any token that still lives plaintext in system_settings.
 """
 
 import os
-import re
 import logging
 from typing import Optional
 
@@ -232,7 +231,7 @@ def enrich_from_abs(
     return file_meta, changed, True
 
 
-_CHAPTER_TITLE_ERROR_RE = re.compile(r"chapter \d+ title:")
+_CHAPTER_TITLE_ERROR_RE = chapter_repair.CHAPTER_TITLE_ERROR_RE
 
 
 def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
