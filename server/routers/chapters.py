@@ -167,11 +167,15 @@ async def update_audiobook_chapters(
         os.close(fd_out)
         
         cmd_inject = [
-            "ffmpeg", "-y", 
-            "-i", filepath, 
-            "-i", temp_meta_path, 
-            "-map_metadata", "1", 
-            "-codec", "copy", 
+            "ffmpeg", "-y",
+            "-i", filepath,
+            "-i", temp_meta_path,
+            "-map_metadata", "1",
+            # -map_metadata alone does NOT map chapters; without
+            # -map_chapters ffmpeg defaults to input 0 (the original file),
+            # silently discarding the edited chapters below.
+            "-map_chapters", "1",
+            "-codec", "copy",
             temp_out_path
         ]
         proc = await asyncio.create_subprocess_exec(

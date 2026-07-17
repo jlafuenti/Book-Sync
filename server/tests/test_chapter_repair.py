@@ -133,6 +133,16 @@ class TestRepairChapterEncoding:
                     )
                 return _FakeCompletedProcess(returncode=0)
             elif "-map_metadata" in cmd:
+                # Regression guard: ffmpeg's -map_metadata does NOT map
+                # chapters — that's controlled by the separate -map_chapters
+                # flag, which defaults to input 0 (the still-corrupted
+                # original file) if not given explicitly. Without this flag
+                # the reinject silently discards our corrected chapter
+                # titles and re-copies the original broken ones, so every
+                # "repair" reports success while never actually fixing
+                # anything (confirmed against a real corrupted file).
+                assert "-map_chapters" in cmd
+                assert cmd[cmd.index("-map_chapters") + 1] == "1"
                 meta_path = cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]
                 with open(meta_path, "rb") as f:
                     content = f.read()
@@ -145,6 +155,7 @@ class TestRepairChapterEncoding:
             raise AssertionError(f"unexpected command: {cmd}")
 
         monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", lambda p: (True, None))
 
         ok, error = chapter_repair.repair_chapter_encoding(filepath)
 
@@ -152,6 +163,36 @@ class TestRepairChapterEncoding:
         assert error is None
         with open(filepath, "rb") as f:
             assert f.read() == b"fake m4b bytes"
+
+    def test_reports_failure_when_ffmpeg_succeeds_but_file_still_broken(self, monkeypatch, tmp_path):
+        """Regression guard for the false-success bug found on Gathering
+        Storm/Antiagon Fire/18 other real files: ffmpeg exiting 0 does not
+        guarantee the underlying chapter-title issue was actually fixed
+        (e.g. the missing -map_chapters bug above). Must re-verify with
+        check_chapter_encoding before reporting success."""
+        filepath = str(tmp_path / "book.m4b")
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if "-f" in cmd and "ffmetadata" in cmd:
+                export_path = cmd[-1]
+                with open(export_path, "wb") as f:
+                    f.write(b";FFMETADATA1\n[CHAPTER]\ntitle=Fine\n")
+                return _FakeCompletedProcess(returncode=0)
+            out_path = cmd[-1]
+            with open(out_path, "wb") as f:
+                f.write(b"fake m4b bytes, still broken underneath")
+            return _FakeCompletedProcess(returncode=0)
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(
+            chapter_repair, "check_chapter_encoding",
+            lambda p: (False, "chapter 0 title: still broken after repair"),
+        )
+
+        ok, error = chapter_repair.repair_chapter_encoding(filepath)
+
+        assert ok is False
+        assert "still broken after repair" in error
 
     def test_export_failure_truncates_to_last_lines(self, monkeypatch, tmp_path):
         filepath = str(tmp_path / "book.m4b")
