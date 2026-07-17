@@ -153,22 +153,68 @@ class TestRepairChapterEncoding:
         with open(filepath, "rb") as f:
             assert f.read() == b"fake m4b bytes"
 
-    def test_export_failure_returns_error(self, monkeypatch, tmp_path):
+    def test_export_failure_truncates_to_last_lines(self, monkeypatch, tmp_path):
         filepath = str(tmp_path / "book.m4b")
+        banner = "\n".join(f"banner line {i}" for i in range(20))
+        # Mirrors the real Winter's Heart ffmpeg output shape (multiple
+        # tagged error lines), not an artificially short 1-2 line error.
+        real_error = (
+            "[mov,mp4,m4a,3gp,3g2,mj2] error reading header\n"
+            "Error opening input: Invalid data found when processing input\n"
+            "Error opening input files: Invalid data found when processing input"
+        )
 
         def fake_run(cmd, capture_output=True, timeout=None):
-            return _FakeCompletedProcess(returncode=1, stderr=b"ffmpeg export exploded")
+            return _FakeCompletedProcess(
+                returncode=1, stderr=f"{banner}\n{real_error}".encode()
+            )
 
         monkeypatch.setattr(subprocess_module, "run", fake_run)
 
         ok, error = chapter_repair.repair_chapter_encoding(filepath)
 
         assert ok is False
-        assert error is not None
-        assert "export exploded" in error
+        assert "banner line" not in error
+        assert "error reading header" in error
+        assert "Invalid data found when processing input" in error
 
-    def test_reinject_failure_returns_error(self, monkeypatch, tmp_path):
+    def test_export_failure_with_corruption_signature_adds_guidance(self, monkeypatch, tmp_path):
         filepath = str(tmp_path / "book.m4b")
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            return _FakeCompletedProcess(
+                returncode=1,
+                stderr=b"Invalid data found when processing input",
+            )
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+
+        ok, error = chapter_repair.repair_chapter_encoding(filepath)
+
+        assert ok is False
+        assert "Corrupt audiobooks" in error
+
+    def test_export_failure_without_corruption_signature_has_no_guidance(self, monkeypatch, tmp_path):
+        filepath = str(tmp_path / "book.m4b")
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            return _FakeCompletedProcess(returncode=1, stderr=b"Permission denied")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+
+        ok, error = chapter_repair.repair_chapter_encoding(filepath)
+
+        assert ok is False
+        assert "Corrupt audiobooks" not in error
+
+    def test_reinject_failure_truncates_and_adds_guidance(self, monkeypatch, tmp_path):
+        filepath = str(tmp_path / "book.m4b")
+        banner = "\n".join(f"banner line {i}" for i in range(20))
+        real_error = (
+            "[mov,mp4,m4a] error reading trailer\n"
+            "moov atom not found\n"
+            "Error opening output file"
+        )
 
         def fake_run(cmd, capture_output=True, timeout=None):
             if "-f" in cmd and "ffmetadata" in cmd:
@@ -176,12 +222,16 @@ class TestRepairChapterEncoding:
                 with open(export_path, "wb") as f:
                     f.write(b";FFMETADATA1\n[CHAPTER]\ntitle=Fine\n")
                 return _FakeCompletedProcess(returncode=0)
-            return _FakeCompletedProcess(returncode=1, stderr=b"ffmpeg reinject exploded")
+            return _FakeCompletedProcess(
+                returncode=1,
+                stderr=f"{banner}\n{real_error}".encode(),
+            )
 
         monkeypatch.setattr(subprocess_module, "run", fake_run)
 
         ok, error = chapter_repair.repair_chapter_encoding(filepath)
 
         assert ok is False
-        assert error is not None
-        assert "reinject exploded" in error
+        assert "banner line" not in error
+        assert "moov atom not found" in error
+        assert "Corrupt audiobooks" in error

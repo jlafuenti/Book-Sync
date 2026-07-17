@@ -22,11 +22,34 @@ import subprocess
 import tempfile
 from typing import Optional, Tuple
 
+from services.audio_integrity import stderr_indicates_corruption
+
 logger = logging.getLogger(__name__)
 
 # Shared with services.abs_metadata, which imports this to detect the same
 # failure mode while writing tags.
 CHAPTER_TITLE_ERROR_RE = re.compile(r"chapter \d+ title:")
+
+_CORRUPTION_GUIDANCE = (
+    " — this looks like deeper file corruption, not just a chapter-title "
+    "issue. Check 'Corrupt audiobooks' in Troubleshoot Library or replace "
+    "the file."
+)
+
+
+def _format_ffmpeg_error(prefix: str, stderr_bytes: bytes, n: int = 3) -> str:
+    """Build a short error message from ffmpeg stderr: the last `n` non-empty
+    lines (ffmpeg's real error is always at the end; everything before it is
+    the version/build banner, which is useless noise to show the user), plus
+    guidance when the failure looks like genuine media corruption rather than
+    the narrower chapter-title-encoding issue this module fixes."""
+    text = stderr_bytes.decode(errors="replace")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    tail = "\n".join(lines[-n:])
+    message = f"{prefix}: {tail}"
+    if stderr_indicates_corruption(text):
+        message += _CORRUPTION_GUIDANCE
+    return message
 
 
 def decode_lenient(raw: bytes) -> str:
@@ -102,7 +125,7 @@ def repair_chapter_encoding(filepath: str, timeout: int = 60) -> Tuple[bool, Opt
             capture_output=True, timeout=timeout,
         )
         if export.returncode != 0:
-            return False, f"Failed to export metadata: {export.stderr.decode(errors='replace')}"
+            return False, _format_ffmpeg_error("Failed to export metadata", export.stderr)
 
         with open(temp_meta_path, "rb") as f:
             raw = f.read()
@@ -116,7 +139,7 @@ def repair_chapter_encoding(filepath: str, timeout: int = 60) -> Tuple[bool, Opt
             capture_output=True, timeout=timeout,
         )
         if reinject.returncode != 0:
-            return False, f"Failed to reinject metadata: {reinject.stderr.decode(errors='replace')}"
+            return False, _format_ffmpeg_error("Failed to reinject metadata", reinject.stderr)
 
         shutil.move(temp_out_path, filepath)
         logger.info(f"[chapter_repair] Repaired chapter title encoding in {filepath}")
