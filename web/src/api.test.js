@@ -104,6 +104,59 @@ describe('generateTranscriptionRemoteKey()', () => {
     })
 })
 
+describe('repairChapterEncoding()', () => {
+    it('POSTs to the repair endpoint for the given item and returns the result', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ status: 'repaired', detail: null, item_id: 1538 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { repairChapterEncoding } = await import('./api')
+        const result = await repairChapterEncoding(1538)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/troubleshoot/repair-chapter-encoding/1538',
+            expect.objectContaining({ method: 'POST' }),
+        )
+        expect(result).toEqual({ status: 'repaired', detail: null, item_id: 1538 })
+    })
+
+    it('throws with the server-provided detail message on failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 404, json: async () => ({ detail: 'Audiobook not found' }),
+        }))
+
+        const { repairChapterEncoding } = await import('./api')
+        await expect(repairChapterEncoding(999)).rejects.toThrow('Audiobook not found')
+    })
+})
+
+describe('bulkRepairChapterEncoding()', () => {
+    it('POSTs the item_ids list and returns repaired/failures', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ repaired: 1, failures: [{ item_id: 2, title: 'Book Two', error: 'ffmpeg not found' }] }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { bulkRepairChapterEncoding } = await import('./api')
+        const result = await bulkRepairChapterEncoding([1, 2])
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/troubleshoot/bulk-repair-chapter-encoding',
+            expect.objectContaining({ method: 'POST', body: JSON.stringify({ item_ids: [1, 2] }) }),
+        )
+        expect(result).toEqual({ repaired: 1, failures: [{ item_id: 2, title: 'Book Two', error: 'ffmpeg not found' }] })
+    })
+
+    it('throws when the server rejects the request', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { bulkRepairChapterEncoding } = await import('./api')
+        await expect(bulkRepairChapterEncoding([1])).rejects.toThrow('Bulk repair failed')
+    })
+})
+
 describe('backups', () => {
     it('getBackupStatus() fetches the status endpoint', async () => {
         localStorage.setItem('tandem_token', 'access-1')

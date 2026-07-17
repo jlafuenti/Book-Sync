@@ -38,13 +38,14 @@ vi.mock('../api', () => ({
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
 vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
 
-function issuesWithChapterEncodingBad(rows) {
+function issuesWithChapterEncodingBad(rows, extra = {}) {
     const categories = {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
         ebook_drm: [], ebook_unreadable: [], unsupported_format: [], sync_map_missing: [],
         duplicate: [], missing_cover: [], orphaned_cover: [], failed_transcription: [], failed_acsm: [],
+        ...extra,
     }
-    return { categories, counts: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, v.length])), total: rows.length }
+    return { categories, counts: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, v.length])), total: rows.length + Object.values(extra).reduce((n, v) => n + v.length, 0) }
 }
 
 function renderPage() {
@@ -97,5 +98,37 @@ describe('TroubleshootPage chapter encoding repair', () => {
         const warning = await screen.findByText(/ffmpeg not found/)
         expect(warning.textContent).toContain('Book Two')
         expect(warning.closest('.alert')).toHaveClass('alert-warning')
+    })
+
+    it('shows a plain success message when bulk repair has no failures', async () => {
+        const rows = [
+            { item_type: 'audiobook', item_id: 1, title: 'Book One', detail: 'bad', file_size: 100 },
+        ]
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad(rows))
+        bulkRepairChapterEncodingMock.mockResolvedValue({ repaired: 1, failures: [] })
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Audiobooks with corrupt chapter titles/))
+        const checkboxes = await screen.findAllByRole('checkbox')
+        fireEvent.click(checkboxes[1])
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Repair Selected' }))
+
+        await waitFor(() => expect(bulkRepairChapterEncodingMock).toHaveBeenCalledWith([1]))
+        const success = await screen.findByText('Repaired 1')
+        expect(success.closest('.alert')).toHaveClass('alert-success')
+    })
+
+    it('shows "Delete Selected" (not "Repair Selected") for a non-repair selectable category', async () => {
+        const orphanRow = { filename: 'orphan.jpg', file_path: '/covers/orphan.jpg', file_size: 100, detail: 'Cover file not referenced by any book' }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { orphaned_cover: [orphanRow] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Orphaned cover files/))
+        const checkboxes = await screen.findAllByRole('checkbox')
+        fireEvent.click(checkboxes[1])
+
+        expect(await screen.findByRole('button', { name: 'Delete Selected' })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Repair Selected' })).not.toBeInTheDocument()
     })
 })
