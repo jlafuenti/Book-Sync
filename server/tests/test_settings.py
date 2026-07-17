@@ -404,6 +404,116 @@ async def test_test_abs_falls_back_to_saved_token_when_no_token_passed(
     assert r.json()["success"] is True
 
 
+# ---------------------------------------------------------------------------
+# Hardcover integration (metadata match provider)
+# ---------------------------------------------------------------------------
+
+async def test_hardcover_api_token_routed_to_credential_store(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        # Set a real token -> stored (encrypted) in the credential store.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"hardcover_api_token": "secret-hc-token"})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "hardcover") == "secret-hc-token"
+
+        # Placeholder -> leave unchanged.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"hardcover_api_token": _SECRET_PLACEHOLDER})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "hardcover") == "secret-hc-token"
+
+        # Empty string -> clear it.
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"hardcover_api_token": ""})
+        async with async_session() as s:
+            assert await credentials.get_credential(s, "hardcover") is None
+
+
+async def test_get_masks_stored_hardcover_token(make_client, make_user, auth_header, enc_key):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        get0 = await c.get("/api/settings/", headers=auth_header(admin))
+        assert get0.json()["hardcover_api_token"] == ""  # nothing stored yet
+
+        await c.put("/api/settings/", headers=auth_header(admin),
+                    json={"hardcover_api_token": "secret-hc-token"})
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+    assert get.json()["hardcover_api_token"] == _SECRET_PLACEHOLDER
+
+
+def _hardcover_me_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.host == "api.hardcover.app"
+    if request.headers.get("authorization") == "Bearer correct-token":
+        return httpx.Response(200, json={"data": {"me": [{"username": "jesse"}]}})
+    return httpx.Response(200, json={"errors": [{"message": "unauthorized"}]})
+
+
+async def test_test_hardcover_reports_success_with_valid_token(
+    make_client, make_user, auth_header, enc_key, monkeypatch
+):
+    admin = await make_user(username="admin1", role="admin")
+    _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/test-hardcover",
+                        params={"token": "correct-token"},
+                        headers=auth_header(admin))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is True
+    assert body["username"] == "jesse"
+
+
+async def test_test_hardcover_reports_auth_failure_with_bad_token(
+    make_client, make_user, auth_header, enc_key, monkeypatch
+):
+    admin = await make_user(username="admin1", role="admin")
+    _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/test-hardcover",
+                        params={"token": "wrong-token"},
+                        headers=auth_header(admin))
+    assert r.status_code == 400
+    assert "authentication failed" in r.json()["detail"].lower()
+
+
+async def test_test_hardcover_falls_back_to_saved_token_when_placeholder_sent(
+    make_client, make_user, auth_header, enc_key, monkeypatch
+):
+    admin = await make_user(username="admin1", role="admin")
+    async with async_session() as s:
+        await credentials.set_credential(s, "hardcover", "correct-token")
+        await s.commit()
+    _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/test-hardcover",
+                        params={"token": _SECRET_PLACEHOLDER},
+                        headers=auth_header(admin))
+    assert r.status_code == 200
+    assert r.json()["success"] is True
+
+
+async def test_test_hardcover_requires_a_token(make_client, make_user, auth_header, enc_key):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/test-hardcover", headers=auth_header(admin))
+    assert r.status_code == 400
+    assert "token" in r.json()["detail"].lower()
+
+
+async def test_test_hardcover_requires_admin(make_client, make_user, auth_header):
+    user = await make_user(username="u", role="user")
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/test-hardcover",
+                        params={"token": "x"}, headers=auth_header(user))
+    assert r.status_code == 403
+
+
 async def test_test_abs_requires_a_token(make_client, make_user, auth_header, enc_key):
     """No token passed and none saved -> a clear 400, not an unauthenticated
     request sent to ABS."""

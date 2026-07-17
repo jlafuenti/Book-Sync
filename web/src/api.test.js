@@ -46,6 +46,33 @@ describe('logout()', () => {
     })
 })
 
+describe('testHardcoverConnection()', () => {
+    it('sends the token as a query param and returns the parsed result', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ success: true, username: 'jesse' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { testHardcoverConnection } = await import('./api')
+        const result = await testHardcoverConnection('my-token')
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/settings/test-hardcover?token=my-token',
+            expect.anything(),
+        )
+        expect(result).toEqual({ success: true, username: 'jesse' })
+    })
+
+    it('throws with the server-provided detail message on failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400, json: async () => ({ detail: 'Authentication failed — check your API token' }),
+        }))
+
+        const { testHardcoverConnection } = await import('./api')
+        await expect(testHardcoverConnection('bad')).rejects.toThrow('Authentication failed')
+    })
+})
+
 describe('testRemoteConnection()', () => {
     it('sends both the url and key as query params and returns the parsed result', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
