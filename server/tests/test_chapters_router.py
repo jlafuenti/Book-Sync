@@ -68,3 +68,49 @@ async def test_update_chapters_survives_non_utf8_exported_metadata(
         )
 
     assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_update_chapters_reinject_maps_chapters_not_just_metadata(
+    db, make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    """Regression guard: ffmpeg's -map_metadata does NOT map chapters — that
+    needs the separate -map_chapters flag, which defaults to input 0 (the
+    original file) if omitted. Without it, the reinject silently discards
+    the user's edited chapters and re-copies the original ones, so editing
+    chapters via this endpoint would report success while saving nothing
+    (confirmed against a real corrupted file in production)."""
+    user = await make_user(role="editor")
+    filepath = str(tmp_path / "book.m4b")
+    with open(filepath, "wb") as f:
+        f.write(b"fake m4b")
+    ab = AudioBook(title="Some Book", filename="book.m4b", file_path=filepath)
+    db.add(ab)
+    await db.commit()
+    await db.refresh(ab)
+
+    async def fake_exec(*cmd, **kwargs):
+        if "-f" in cmd and "ffmetadata" in cmd:
+            export_path = cmd[-1]
+            with open(export_path, "wb") as f:
+                f.write(b";FFMETADATA1\n")
+            return _FakeProcess(returncode=0)
+        elif "-map_metadata" in cmd:
+            assert "-map_chapters" in cmd
+            assert cmd[cmd.index("-map_chapters") + 1] == "1"
+            out_path = cmd[-1]
+            with open(out_path, "wb") as f:
+                f.write(b"fake m4b bytes")
+            return _FakeProcess(returncode=0)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            f"/audiobooks/{ab.id}/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "New Chapter"}],
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 200

@@ -134,14 +134,28 @@ def repair_chapter_encoding(filepath: str, timeout: int = 60) -> Tuple[bool, Opt
             f.write(fixed_text)
 
         reinject = subprocess.run(
+            # -map_metadata only maps global/stream tags, NOT chapters —
+            # those are controlled separately by -map_chapters, which
+            # defaults to input 0 (the still-corrupted original file) if
+            # omitted. Without this flag the corrected chapter titles are
+            # silently discarded and the original broken ones copied
+            # through instead, even though ffmpeg exits 0.
             ["ffmpeg", "-y", "-i", filepath, "-i", temp_meta_path,
-             "-map_metadata", "1", "-codec", "copy", temp_out_path],
+             "-map_metadata", "1", "-map_chapters", "1", "-codec", "copy", temp_out_path],
             capture_output=True, timeout=timeout,
         )
         if reinject.returncode != 0:
             return False, _format_ffmpeg_error("Failed to reinject metadata", reinject.stderr)
 
         shutil.move(temp_out_path, filepath)
+
+        # ffmpeg exiting 0 doesn't guarantee the underlying issue was
+        # actually fixed (see the -map_chapters comment above) — verify
+        # before reporting success.
+        fixed_ok, detail = check_chapter_encoding(filepath)
+        if not fixed_ok:
+            return False, detail or "Repair completed but the chapter title is still unreadable"
+
         logger.info(f"[chapter_repair] Repaired chapter title encoding in {filepath}")
         return True, None
     except Exception as e:
