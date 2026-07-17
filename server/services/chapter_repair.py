@@ -16,12 +16,17 @@ pattern already used by routers.chapters.update_audiobook_chapters.
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Shared with services.abs_metadata, which imports this to detect the same
+# failure mode while writing tags.
+CHAPTER_TITLE_ERROR_RE = re.compile(r"chapter \d+ title:")
 
 
 def decode_lenient(raw: bytes) -> str:
@@ -53,6 +58,31 @@ def fix_ffmetadata_bytes(raw: bytes) -> str:
         else:
             fixed_lines.append(decode_lenient(line))
     return "\n".join(fixed_lines)
+
+
+def check_chapter_encoding(filepath: str) -> Tuple[bool, Optional[str]]:
+    """
+    Cheap, live detector for Troubleshoot Library: does mutagen fail to open
+    this m4b because of a non-UTF-8 chapter title? No full decode — just
+    parses atom headers.
+    Returns (True, None) when the file is fine or this check doesn't apply
+    (wrong extension, or an unrelated error that's another check's concern).
+    Returns (False, detail) when the file has this specific, repairable
+    corruption (see repair_chapter_encoding).
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in (".m4b", ".m4a", ".mp4"):
+        return True, None
+
+    import mutagen.mp4
+
+    try:
+        mutagen.mp4.MP4(filepath)
+    except Exception as e:
+        if CHAPTER_TITLE_ERROR_RE.search(str(e)):
+            return False, str(e)
+        return True, None
+    return True, None
 
 
 def repair_chapter_encoding(filepath: str, timeout: int = 60) -> Tuple[bool, Optional[str]]:
