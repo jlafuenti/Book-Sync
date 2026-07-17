@@ -695,6 +695,21 @@ export async function testAbsConnection(url, token = '') {
     return resp.json();
 }
 
+export async function testHardcoverConnection(token = '') {
+    const resp = await fetchWithAuth(
+        `${API_BASE}/settings/test-hardcover?token=${encodeURIComponent(token)}`
+    );
+    if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+            const errBody = await resp.json();
+            if (errBody.detail) msg = errBody.detail;
+        } catch(e) {}
+        throw new Error(msg);
+    }
+    return resp.json();
+}
+
 export async function enrichLibraryFromAbs() {
     const resp = await fetchWithAuth(`${API_BASE}/library/enrich-abs`, { method: 'POST' });
     if (!resp.ok) {
