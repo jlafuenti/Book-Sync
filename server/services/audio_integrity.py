@@ -26,7 +26,10 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 # Substrings in ffmpeg/ffprobe stderr that indicate genuine media corruption.
-_CORRUPTION_MARKERS = (
+# Public: also used by services.chapter_repair to distinguish "ffmpeg can't
+# open this file at all" (deeper corruption) from other repair failures
+# (missing binary, disk full, permissions) when a chapter-title repair fails.
+CORRUPTION_MARKERS = (
     "invalid data found",
     "error submitting packet",
     "error reading header",
@@ -48,9 +51,9 @@ _PROBE_TIMEOUT_SEC = 120
 _DECODE_TIMEOUT_SEC = 1800
 
 
-def _stderr_has_corruption(stderr: str) -> bool:
+def stderr_indicates_corruption(stderr: str) -> bool:
     low = stderr.lower()
-    return any(marker in low for marker in _CORRUPTION_MARKERS)
+    return any(marker in low for marker in CORRUPTION_MARKERS)
 
 
 def check_audio_integrity(path: str) -> Tuple[bool, str]:
@@ -116,7 +119,7 @@ def check_audio_integrity(path: str) -> Tuple[bool, str]:
         last = error_lines[-1] if error_lines else "decode failed"
         return False, f"decode failed (exit {decode.returncode}): {last}"
 
-    if _stderr_has_corruption(stderr) and len(error_lines) >= _MAX_DECODE_ERRORS:
+    if stderr_indicates_corruption(stderr) and len(error_lines) >= _MAX_DECODE_ERRORS:
         return False, (
             f"{len(error_lines)} decode errors during full decode "
             f"(e.g. {error_lines[0][:160]})"
