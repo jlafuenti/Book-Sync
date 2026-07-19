@@ -19,6 +19,7 @@ from models.user import User
 from models.book import AudioBook
 from routers.auth import get_current_user, get_editor_user
 from schemas import Chapter
+from services import chapter_repair
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +126,13 @@ async def update_audiobook_chapters(
         if proc.returncode != 0:
             raise Exception("Failed to export metadata from file")
 
-        # 2. Parse metadata text to remove existing [CHAPTER] blocks but keep everything else
-        with open(temp_meta_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        # 2. Parse metadata text to remove existing [CHAPTER] blocks but keep everything else.
+        # ffmpeg copies chapter title bytes through opaquely without validating
+        # encoding, so a title written in Windows-1252/Latin-1 by another tool
+        # would crash a hard-coded utf-8 text read here — decode leniently instead.
+        with open(temp_meta_path, 'rb') as f:
+            raw = f.read()
+        lines = chapter_repair.decode_lenient(raw).splitlines(keepends=True)
             
         new_lines = []
         in_chapter_block = False
@@ -152,7 +157,7 @@ async def update_audiobook_chapters(
             new_lines.append(f"TIMEBASE=1/{timebase}\n")
             new_lines.append(f"START={start_pts}\n")
             new_lines.append(f"END={end_pts}\n")
-            new_lines.append(f"title={ch.title}\n")
+            new_lines.append(f"title={chapter_repair.ffmetadata_escape(ch.title)}\n")
             
         with open(temp_meta_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
@@ -162,11 +167,15 @@ async def update_audiobook_chapters(
         os.close(fd_out)
         
         cmd_inject = [
-            "ffmpeg", "-y", 
-            "-i", filepath, 
-            "-i", temp_meta_path, 
-            "-map_metadata", "1", 
-            "-codec", "copy", 
+            "ffmpeg", "-y",
+            "-i", filepath,
+            "-i", temp_meta_path,
+            "-map_metadata", "1",
+            # -map_metadata alone does NOT map chapters; without
+            # -map_chapters ffmpeg defaults to input 0 (the original file),
+            # silently discarding the edited chapters below.
+            "-map_chapters", "1",
+            "-codec", "copy",
             temp_out_path
         ]
         proc = await asyncio.create_subprocess_exec(

@@ -7,7 +7,7 @@ import { TranscriptionSettingsSection, ABSSettingsSection, HardcoverSettingsSect
 // whole page/router.
 const {
     getSettingsMock, updateSettingsMock, testRemoteConnectionMock, generateKeyMock,
-    testAbsConnectionMock, testHardcoverConnectionMock,
+    testAbsConnectionMock, testHardcoverConnectionMock, enrichLibraryFromAbsMock,
     getBackupStatusMock, listBackupsMock, restoreBackupMock,
     createBackupMock, deleteBackupMock, downloadBackupMock,
     authRef,
@@ -18,6 +18,7 @@ const {
     generateKeyMock: vi.fn(),
     testAbsConnectionMock: vi.fn(),
     testHardcoverConnectionMock: vi.fn(),
+    enrichLibraryFromAbsMock: vi.fn(),
     getBackupStatusMock: vi.fn(),
     listBackupsMock: vi.fn(),
     restoreBackupMock: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('../api', async (importOriginal) => {
         generateTranscriptionRemoteKey: generateKeyMock,
         testAbsConnection: testAbsConnectionMock,
         testHardcoverConnection: testHardcoverConnectionMock,
+        enrichLibraryFromAbs: enrichLibraryFromAbsMock,
         getBackupStatus: getBackupStatusMock,
         listBackups: listBackupsMock,
         restoreBackup: restoreBackupMock,
@@ -81,6 +83,7 @@ beforeEach(() => {
     generateKeyMock.mockReset()
     testAbsConnectionMock.mockReset()
     testHardcoverConnectionMock.mockReset()
+    enrichLibraryFromAbsMock.mockReset()
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 
@@ -251,6 +254,41 @@ describe('ABSSettingsSection', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
 
         expect(await screen.findByText(/Connection failed: timeout/)).toBeInTheDocument()
+    })
+
+    it('warns when re-enrich succeeds but some files could not be tagged', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ abs_enabled: true, abs_url: 'http://192.168.1.60:13378' }))
+        enrichLibraryFromAbsMock.mockResolvedValue({
+            message: 'Enriched 2 audiobook(s) from Audiobookshelf, but 1 file(s) could not be tagged',
+            updated: 2,
+            tag_write_failures: [
+                { id: 1538, title: 'Antiagon Fire', error: "'utf-8' codec can't decode byte 0xc4 in position 27: invalid continuation byte" },
+            ],
+        })
+        render(<ABSSettingsSection />)
+        await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Re-enrich All from ABS' }))
+
+        const alert = await screen.findByText(/could not be tagged/)
+        expect(alert.closest('.alert')).toHaveClass('alert-warning')
+        expect(alert.textContent).toContain('Antiagon Fire')
+    })
+
+    it('shows a plain success message when re-enrich has no tag-write failures', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ abs_enabled: true, abs_url: 'http://192.168.1.60:13378' }))
+        enrichLibraryFromAbsMock.mockResolvedValue({
+            message: 'Enriched 2 audiobook(s) from Audiobookshelf',
+            updated: 2,
+            tag_write_failures: [],
+        })
+        render(<ABSSettingsSection />)
+        await screen.findByPlaceholderText(ABS_TOKEN_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Re-enrich All from ABS' }))
+
+        const alert = await screen.findByText('Enriched 2 audiobook(s) from Audiobookshelf')
+        expect(alert.closest('.alert')).toHaveClass('alert-success')
     })
 })
 

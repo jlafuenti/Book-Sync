@@ -92,6 +92,7 @@ function BookDetailPage() {
             const result = await enrichAudiobookFromAbs(id)
             if (result.book) setBook(result.book)
             const type = result.status === 'enriched' ? 'success'
+                       : result.status === 'tag_write_failed' ? 'error'
                        : result.status === 'no_match' ? 'warning' : 'info'
             showToast(result.message, type)
         } catch (err) {
