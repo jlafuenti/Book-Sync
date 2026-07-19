@@ -2613,6 +2613,7 @@ async def enrich_library_from_abs(
     result = await db.execute(select(AudioBook))
     audiobooks = result.scalars().all()
     updated_count = 0
+    tag_write_failures: list[dict] = []
 
     for ab in audiobooks:
         file_meta = {
@@ -2642,11 +2643,24 @@ async def enrich_library_from_abs(
                 if enriched.get(field) is not None:
                     setattr(ab, field, enriched[field])
             db.add(ab)
-            await asyncio.to_thread(write_metadata_to_file, ab.file_path, enriched)
+            tag_write_ok, tag_write_error = await asyncio.to_thread(
+                write_metadata_to_file, ab.file_path, enriched
+            )
+            if not tag_write_ok and tag_write_error:
+                tag_write_failures.append(
+                    {"id": ab.id, "title": ab.title, "error": tag_write_error}
+                )
             updated_count += 1
 
     await db.commit()
-    return {"message": f"Enriched {updated_count} audiobook(s) from Audiobookshelf", "updated": updated_count}
+    message = f"Enriched {updated_count} audiobook(s) from Audiobookshelf"
+    if tag_write_failures:
+        message += f", but {len(tag_write_failures)} file(s) could not be tagged"
+    return {
+        "message": message,
+        "updated": updated_count,
+        "tag_write_failures": tag_write_failures,
+    }
 
 
 @router.post("/audiobooks/{audiobook_id}/enrich-abs")
@@ -2699,6 +2713,7 @@ async def enrich_audiobook_from_abs(
         file_meta, ab.file_path, abs_index, abs_prefix, force=True
     )
 
+    tag_write_error = None
     if not matched:
         status_key = "no_match"
         message = "No matching entry found in Audiobookshelf for this book."
@@ -2709,17 +2724,33 @@ async def enrich_audiobook_from_abs(
             if enriched.get(field) is not None:
                 setattr(ab, field, enriched[field])
         db.add(ab)
-        await asyncio.to_thread(write_metadata_to_file, ab.file_path, enriched)
+        tag_write_ok, tag_write_error = await asyncio.to_thread(
+            write_metadata_to_file, ab.file_path, enriched
+        )
         await db.commit()
-        status_key = "enriched"
-        message = "Metadata enriched from Audiobookshelf and written back to file."
+        if tag_write_ok:
+            status_key = "enriched"
+            message = "Metadata enriched from Audiobookshelf and written back to file."
+        else:
+            status_key = "tag_write_failed"
+            message = (
+                "Metadata updated in the library, but writing tags to the file "
+                f"failed: {tag_write_error}"
+                if tag_write_error
+                else "Metadata updated in the library, but the file's tags could not be updated."
+            )
     else:
         status_key = "already_current"
         message = "Metadata is already up to date — no changes needed."
 
     await db.refresh(ab)
     from schemas import AudioBookResponse
-    return {"status": status_key, "message": message, "book": AudioBookResponse.model_validate(ab)}
+    return {
+        "status": status_key,
+        "message": message,
+        "book": AudioBookResponse.model_validate(ab),
+        "tag_write_error": tag_write_error,
+    }
 
 
 # ---------------------------------------------------------------------------

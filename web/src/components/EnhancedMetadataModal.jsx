@@ -103,10 +103,13 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
         try {
             const result = await enrichAudiobookFromAbs(book.id);
             const msg = result.status === 'enriched' ? 'Enriched from Audiobookshelf'
+                : result.status === 'tag_write_failed' ? result.message
                 : result.status === 'not_found' ? 'Not found in Audiobookshelf'
                 : 'Already up to date';
             alert(msg);
-            if (result.status === 'enriched') onClose(); // parent will reload
+            // DB metadata was updated for both 'enriched' and 'tag_write_failed' —
+            // only the embedded file tags failed to write in the latter case.
+            if (result.status === 'enriched' || result.status === 'tag_write_failed') onClose(); // parent will reload
         } catch (err) {
             alert(err.message || 'Failed to enrich from Audiobookshelf');
         } finally {
