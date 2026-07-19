@@ -458,7 +458,15 @@ export function ABSSettingsSection() {
 
     const handleEnrichAll = async () => {
         setIsEnriching(true); setMsg(null)
-        try { const r = await enrichLibraryFromAbs(); setMsg({ type: 'success', text: r.message }) }
+        try {
+            const r = await enrichLibraryFromAbs()
+            if (r.tag_write_failures?.length) {
+                const titles = r.tag_write_failures.map(f => f.title).join(', ')
+                setMsg({ type: 'warning', text: `${r.message}: ${titles}` })
+            } else {
+                setMsg({ type: 'success', text: r.message })
+            }
+        }
         catch (err) { setMsg({ type: 'error', text: `Enrichment failed: ${err.message}` }) }
         finally { setIsEnriching(false) }
     }

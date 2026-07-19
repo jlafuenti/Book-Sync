@@ -6,6 +6,7 @@ import {
     deleteEbook, deleteAudiobook, convertUnsupportedFile,
     rescanBook, deleteOrphanCovers,
     getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
+    repairChapterEncoding, bulkRepairChapterEncoding,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -19,6 +20,7 @@ const CATEGORIES = [
     { key: 'ebook_unreadable', label: 'Unreadable ebooks', kind: 'item', tone: 'error' },
     { key: 'missing', label: 'Missing files (not on storage)', kind: 'item', tone: 'error' },
     { key: 'zero_byte', label: 'Zero-byte / tiny files', kind: 'item', tone: 'warning' },
+    { key: 'chapter_encoding_bad', label: 'Audiobooks with corrupt chapter titles', kind: 'chapter_repair', tone: 'warning' },
     { key: 'unsupported_format', label: 'Unsupported formats (MOBI/AZW3)', kind: 'unsupported', tone: 'warning' },
     { key: 'sync_map_missing', label: 'Synced pairs missing a sync map', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
@@ -59,7 +61,7 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     // Reset selection whenever the underlying rows change.
     useEffect(() => { setSelected(new Set()); lastIdxRef.current = null }, [rows])
 
-    const selectable = ['item', 'unsupported', 'dup', 'orphan'].includes(cat.kind)
+    const selectable = ['item', 'unsupported', 'dup', 'orphan', 'chapter_repair'].includes(cat.kind)
     const rowKey = (r, i) => `${r.item_type || cat.key}-${r.item_id ?? r.pair_id ?? r.filename ?? i}`
 
     const toggleRow = (i, shiftKey) => {
@@ -91,6 +93,33 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                 await deleteOrphanCovers(selectedItems.map(r => r.filename))
             } else {
                 await bulkDeleteIssues(selectedItems.map(r => ({ item_type: r.item_type, item_id: r.item_id })))
+            }
+            onChanged()
+        } catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doRepair = async (r) => {
+        setBusy(true); setMsg(null)
+        try {
+            const res = await repairChapterEncoding(r.item_id)
+            setMsg(res.status === 'repaired'
+                ? { type: 'success', text: 'Repaired' }
+                : { type: 'error', text: res.detail || 'Repair failed' })
+            onChanged()
+        } catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doBulkRepair = async () => {
+        setBusy(true); setMsg(null)
+        try {
+            const res = await bulkRepairChapterEncoding(selectedItems.map(r => r.item_id))
+            if (res.failures?.length) {
+                const details = res.failures.map(f => `${f.title}: ${f.error}`).join('; ')
+                setMsg({ type: 'warning', text: `Repaired ${res.repaired}, ${res.failures.length} failed — ${details}` })
+            } else {
+                setMsg({ type: 'success', text: `Repaired ${res.repaired}` })
             }
             onChanged()
         } catch (e) { setMsg({ type: 'error', text: e.message }) }
@@ -174,8 +203,13 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                     {canEdit && selectable && selected.size > 0 && (
                         <div className="ts-bulk-bar">
                             <span>{selected.size} selected</span>
-                            <button className="btn btn-sm btn-danger" disabled={busy}
-                                onClick={() => setConfirmDelete(true)}>Delete Selected</button>
+                            {cat.kind === 'chapter_repair' ? (
+                                <button className="btn btn-sm btn-primary" disabled={busy}
+                                    onClick={doBulkRepair}>Repair Selected</button>
+                            ) : (
+                                <button className="btn btn-sm btn-danger" disabled={busy}
+                                    onClick={() => setConfirmDelete(true)}>Delete Selected</button>
+                            )}
                             <button className="btn btn-sm btn-secondary" disabled={busy}
                                 onClick={() => { setSelected(new Set()); lastIdxRef.current = null }}>Clear</button>
                         </div>
@@ -239,6 +273,10 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                                         <button className="btn btn-sm btn-danger" disabled={busy}
                                                             onClick={() => doDeleteOne(r)}>Delete</button>
                                                     </>
+                                                )}
+                                                {cat.kind === 'chapter_repair' && (
+                                                    <button className="btn btn-sm btn-primary" disabled={busy}
+                                                        onClick={() => doRepair(r)}>Repair</button>
                                                 )}
                                                 {cat.kind === 'dup' && (
                                                     <button className="btn btn-sm btn-danger" disabled={busy}

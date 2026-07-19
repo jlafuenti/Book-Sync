@@ -804,6 +804,12 @@ tr:hover td {
     border: 1px solid rgba(59, 130, 246, 0.2);
 }
 
+.alert-warning {
+    background: var(--warning-bg);
+    color: var(--warning);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
 /* ============ Login ============ */
 
 .login-page {
