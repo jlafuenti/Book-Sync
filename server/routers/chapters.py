@@ -132,7 +132,7 @@ async def update_audiobook_chapters(
         # would crash a hard-coded utf-8 text read here — decode leniently instead.
         with open(temp_meta_path, 'rb') as f:
             raw = f.read()
-        lines = chapter_repair.fix_ffmetadata_bytes(raw).splitlines(keepends=True)
+        lines = chapter_repair.decode_lenient(raw).splitlines(keepends=True)
             
         new_lines = []
         in_chapter_block = False
@@ -157,7 +157,7 @@ async def update_audiobook_chapters(
             new_lines.append(f"TIMEBASE=1/{timebase}\n")
             new_lines.append(f"START={start_pts}\n")
             new_lines.append(f"END={end_pts}\n")
-            new_lines.append(f"title={ch.title}\n")
+            new_lines.append(f"title={chapter_repair.ffmetadata_escape(ch.title)}\n")
             
         with open(temp_meta_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)

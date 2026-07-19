@@ -71,6 +71,54 @@ async def test_update_chapters_survives_non_utf8_exported_metadata(
 
 
 @pytest.mark.asyncio
+async def test_update_chapters_escapes_ffmetadata_special_chars_in_titles(
+    db, make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    """ffmpeg's FFMETADATA1 format treats '=', ';', '#', '\\' and newlines as
+    special inside values — an unescaped title like "Part 1 = Intro" would be
+    silently truncated or misparsed on reinject."""
+    user = await make_user(role="editor")
+    filepath = str(tmp_path / "book.m4b")
+    with open(filepath, "wb") as f:
+        f.write(b"fake m4b")
+    ab = AudioBook(title="Some Book", filename="book.m4b", file_path=filepath)
+    db.add(ab)
+    await db.commit()
+    await db.refresh(ab)
+
+    meta_contents = []
+
+    async def fake_exec(*cmd, **kwargs):
+        if "-f" in cmd and "ffmetadata" in cmd:
+            export_path = cmd[-1]
+            with open(export_path, "wb") as f:
+                f.write(b";FFMETADATA1\n")
+            return _FakeProcess(returncode=0)
+        elif "-map_metadata" in cmd:
+            meta_path = cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]
+            with open(meta_path, "rb") as f:
+                meta_contents.append(f.read())
+            out_path = cmd[-1]
+            with open(out_path, "wb") as f:
+                f.write(b"fake m4b bytes")
+            return _FakeProcess(returncode=0)
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            f"/audiobooks/{ab.id}/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "Part 1 = Intro; #5"}],
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 200
+    meta_text = meta_contents[0].decode("utf-8")
+    assert "title=Part 1 \\= Intro\\; \\#5" in meta_text
+
+
+@pytest.mark.asyncio
 async def test_update_chapters_reinject_maps_chapters_not_just_metadata(
     db, make_client, make_user, auth_header, monkeypatch, tmp_path
 ):
