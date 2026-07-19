@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import MatchTab from './MatchTab'
 
-const { searchMetadataMock } = vi.hoisted(() => ({ searchMetadataMock: vi.fn() }))
+const { searchMetadataMock, getSettingsMock } = vi.hoisted(() => ({
+    searchMetadataMock: vi.fn(),
+    getSettingsMock: vi.fn(),
+}))
 
 vi.mock('../api', async (importOriginal) => {
     const actual = await importOriginal()
-    return { ...actual, searchMetadata: searchMetadataMock }
+    return { ...actual, searchMetadata: searchMetadataMock, getSettings: getSettingsMock }
 })
 
 function fullResult(overrides = {}) {
@@ -32,6 +35,7 @@ function fullResult(overrides = {}) {
 
 beforeEach(() => {
     searchMetadataMock.mockReset().mockResolvedValue([fullResult()])
+    getSettingsMock.mockReset().mockResolvedValue({ hardcover_api_token: '' })
 })
 
 describe('MatchTab provider selection', () => {
@@ -47,9 +51,34 @@ describe('MatchTab provider selection', () => {
         expect(screen.getByRole('combobox')).toHaveValue('audible')
     })
 
-    it('keeps the Open Library default for ebooks', () => {
+    it('defaults ebooks to Google Books when Hardcover is not configured', async () => {
         render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
+        await waitFor(() => expect(getSettingsMock).toHaveBeenCalled())
+        expect(screen.getByRole('combobox')).toHaveValue('google')
+    })
+
+    it('defaults ebooks to Hardcover when a token is configured', async () => {
+        getSettingsMock.mockResolvedValue({ hardcover_api_token: '********' })
+        render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
+        await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('hardcover'))
+    })
+
+    it('does not clobber a manual provider choice when settings load late', async () => {
+        let resolveSettings
+        getSettingsMock.mockReturnValue(new Promise(res => { resolveSettings = res }))
+        render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
+
+        fireEvent.change(screen.getByRole('combobox'), { target: { value: 'openlibrary' } })
+        resolveSettings({ hardcover_api_token: '********' })
+
+        await waitFor(() => expect(getSettingsMock).toHaveBeenCalled())
         expect(screen.getByRole('combobox')).toHaveValue('openlibrary')
+    })
+
+    it('does not fetch settings for audiobooks', async () => {
+        render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="audiobook" />)
+        await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('audible'))
+        expect(getSettingsMock).not.toHaveBeenCalled()
     })
 })
 

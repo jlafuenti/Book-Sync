@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { searchMetadata } from '../api';
+import React, { useState, useEffect, useRef } from 'react';
+import { searchMetadata, getSettings } from '../api';
 
 // Text/number fields shared between MatchResult and the local book form.
 // cover_url and description get dedicated rows in the compare table.
@@ -15,7 +15,25 @@ const emptyFieldSelection = () => Object.fromEntries(
 const hasValue = (v) => v !== null && v !== undefined && v !== '';
 
 export default function MatchTab({ currentData, onApply, bookType }) {
-    const [provider, setProvider] = useState(bookType === 'audiobook' ? 'audible' : 'openlibrary');
+    const [provider, setProvider] = useState(bookType === 'audiobook' ? 'audible' : 'google');
+    const providerTouched = useRef(false);
+
+    // Ebooks prefer Hardcover, but only when a token is configured — the
+    // settings GET masks a stored token as "********", so any non-empty
+    // value means "configured". Never override a manual selection.
+    useEffect(() => {
+        if (bookType === 'audiobook') return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const s = await getSettings();
+                if (!cancelled && !providerTouched.current && s.hardcover_api_token) {
+                    setProvider('hardcover');
+                }
+            } catch { /* keep the Google default */ }
+        })();
+        return () => { cancelled = true; };
+    }, [bookType]);
     const [query, setQuery] = useState(currentData.title || currentData.isbn || '');
     const [author, setAuthor] = useState(currentData.author || '');
     const [loading, setLoading] = useState(false);
@@ -81,7 +99,7 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                             <select
                                 className="form-input"
                                 value={provider}
-                                onChange={e => setProvider(e.target.value)}
+                                onChange={e => { providerTouched.current = true; setProvider(e.target.value); }}
                             >
                                 <option value="google">Google Books</option>
                                 <option value="openlibrary">Open Library</option>
