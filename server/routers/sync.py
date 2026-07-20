@@ -242,7 +242,17 @@ async def update_bookmark(
             or bookmark.epub_sentence_index != epub_si
             or bookmark.audio_position_ms != audio_ms
         )
+        # Conflict-resolution contract (issue #54): only overwrite device_id/
+        # device_name when the client actually sent a value — matching
+        # progress's pattern. A write that omits these fields must preserve
+        # whatever was previously stored, not wipe it to null.
+        resolved_device_id = update.device_id if update.device_id is not None else bookmark.device_id
+        resolved_device_name = update.device_name if update.device_name is not None else bookmark.device_name
+
         if position_changed and update.append_to_log:
+            # The log row reflects what will actually be applied to the
+            # bookmark (the resolved/preserved values), not the raw incoming
+            # request which may have omitted device_id/device_name.
             log = BookmarkLog(
                 bookmark_id=bookmark.id,
                 source=update.source,
@@ -252,8 +262,8 @@ async def update_bookmark(
                 new_epub_chapter=epub_ch,
                 new_epub_sentence_index=epub_si,
                 new_audio_position_ms=audio_ms,
-                device_id=update.device_id,
-                device_name=update.device_name,
+                device_id=resolved_device_id,
+                device_name=resolved_device_name,
                 captured_at=stamped_captured_at,
             )
             db.add(log)
@@ -268,8 +278,8 @@ async def update_bookmark(
         if update.epub_locator is not None:
             bookmark.epub_locator = update.epub_locator
         bookmark.captured_at = stamped_captured_at
-        bookmark.device_id = update.device_id
-        bookmark.device_name = update.device_name
+        bookmark.device_id = resolved_device_id
+        bookmark.device_name = resolved_device_name
         bookmark.updated_at = datetime.utcnow()
         bookmark.synced_at = datetime.utcnow()
 

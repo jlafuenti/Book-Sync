@@ -277,3 +277,163 @@ async def test_legacy_progress_put_without_captured_at_applies_lww(client, db, m
     )
     assert resp.status_code == 200
     assert resp.json()["epub_chapter"] == 9
+
+
+# ---------------------------------------------------------------------------
+# Fix pass — Finding 1: timezone-aware `captured_at` (Z-suffixed) must not crash
+# ---------------------------------------------------------------------------
+
+async def test_bookmark_put_with_tz_aware_captured_at_across_two_writes_no_crash(client, db, make_user, auth_header):
+    """Regression test for Finding 1: Pydantic parses a 'Z'-suffixed captured_at
+    into a timezone-aware datetime, while the value read back from the DB is
+    naive. Before the fix, the second PUT's `_is_stale` comparison raised
+    TypeError: can't compare offset-naive and offset-aware datetimes (500).
+    """
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+
+    # First write: establishes a stored (naive, per DB column) captured_at.
+    resp = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        json={
+            "source": "ebook",
+            "epub_chapter": 1,
+            "epub_sentence_index": 1,
+            "captured_at": "2026-07-20T12:00:00Z",
+            "device_id": "device-a",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    # Second write: a newer, tz-aware, Z-suffixed captured_at — must not crash.
+    resp = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        json={
+            "source": "ebook",
+            "epub_chapter": 2,
+            "epub_sentence_index": 2,
+            "captured_at": "2026-07-20T13:00:00Z",
+            "device_id": "device-b",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["epub_chapter"] == 2
+
+    # Third write: an older, tz-aware, Z-suffixed captured_at — must be
+    # rejected as stale (409), not crash.
+    resp = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        json={
+            "source": "ebook",
+            "epub_chapter": 0,
+            "epub_sentence_index": 0,
+            "captured_at": "2026-07-20T11:00:00Z",
+            "device_id": "device-c",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["epub_chapter"] == 2
+
+
+async def test_progress_put_with_tz_aware_captured_at_across_two_writes_no_crash(client, db, make_user, auth_header):
+    """Regression test for Finding 1, progress endpoint variant."""
+    user = await make_user()
+    eb = EBook(title="Book", filename="b.epub", file_path="/x/b.epub")
+    db.add(eb)
+    await db.commit()
+    await db.refresh(eb)
+    headers = auth_header(user)
+
+    resp = await client.put(
+        f"/api/sync/progress/{ProgressType.EBOOK.value}/{eb.id}",
+        json={
+            "epub_chapter": 1,
+            "captured_at": "2026-07-20T12:00:00Z",
+            "device_id": "device-a",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    resp = await client.put(
+        f"/api/sync/progress/{ProgressType.EBOOK.value}/{eb.id}",
+        json={
+            "epub_chapter": 2,
+            "captured_at": "2026-07-20T13:00:00Z",
+            "device_id": "device-b",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["epub_chapter"] == 2
+
+    resp = await client.put(
+        f"/api/sync/progress/{ProgressType.EBOOK.value}/{eb.id}",
+        json={
+            "epub_chapter": 0,
+            "captured_at": "2026-07-20T11:00:00Z",
+            "device_id": "device-c",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 409
+    assert resp.json()["epub_chapter"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Fix pass — Finding 2: bookmark device_id/device_name overwrite must be
+# conditional (matching progress), not unconditional-null-on-omit.
+# ---------------------------------------------------------------------------
+
+async def test_bookmark_put_omitting_device_fields_preserves_prior_values(client, db, make_user, auth_header):
+    """Regression test for Finding 2: a bookmark write that omits device_id/
+    device_name must preserve whatever was previously stored, not null it out."""
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+
+    resp = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        json={
+            "source": "ebook",
+            "epub_chapter": 1,
+            "epub_sentence_index": 1,
+            "device_id": "device-a",
+            "device_name": "Pixel 8",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["device_id"] == "device-a"
+    assert resp.json()["device_name"] == "Pixel 8"
+
+    # Second write omits device_id/device_name entirely.
+    resp = await client.put(
+        f"/api/sync/bookmark/{pair.id}",
+        json={
+            "source": "ebook",
+            "epub_chapter": 2,
+            "epub_sentence_index": 2,
+            "append_to_log": True,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["epub_chapter"] == 2
+    # Must preserve the prior device_id/device_name, not null them out.
+    assert body["device_id"] == "device-a"
+    assert body["device_name"] == "Pixel 8"
+
+    # The appended BookmarkLog row should reflect what was actually applied
+    # (the preserved device_id/device_name), not the raw incoming None values.
+    resp = await client.get(f"/api/sync/bookmark/{pair.id}/log", headers=headers)
+    assert resp.status_code == 200
+    logs = resp.json()
+    assert len(logs) == 1
+    assert logs[0]["device_id"] == "device-a"
+    assert logs[0]["device_name"] == "Pixel 8"
