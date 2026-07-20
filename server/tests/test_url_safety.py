@@ -48,6 +48,20 @@ def test_rejects_unresolvable_host(monkeypatch):
         assert_safe_url("http://does-not-resolve.invalid/")
 
 
+def test_allow_private_permits_unresolvable_host(monkeypatch):
+    """An admin-configured LAN hostname (e.g. a docker-internal or
+    mDNS-only name) may not be resolvable from wherever validation runs.
+    With nothing to classify, allow_private=True lets it through rather
+    than hard-failing -- the actual connection attempt still has to
+    resolve it, and a hostname that never resolves to a blocked address
+    at connect time was never reachable anyway."""
+    def fake_getaddrinfo(*args, **kwargs):
+        raise socket.gaierror("nope")
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+    assert_safe_url("http://fake-jetson:9000/", allow_private=True)  # does not raise
+
+
 def test_rejects_loopback(monkeypatch):
     _stub_resolve(monkeypatch, "127.0.0.1")
     with pytest.raises(UnsafeUrlError):
@@ -87,6 +101,35 @@ def test_allows_public_ip(monkeypatch):
     assert_safe_url("http://public.example/")  # does not raise
 
 
-def test_allow_private_skips_range_check(monkeypatch):
+def test_allow_private_allows_rfc1918_range(monkeypatch):
     _stub_resolve(monkeypatch, "192.168.1.50")
     assert_safe_url("http://lan-box.example/", allow_private=True)  # does not raise
+
+
+def test_allow_private_allows_ipv6_ula_lan_range():
+    assert_safe_url("http://[fc00::1]/", allow_private=True)  # does not raise -- LAN ULA, not fd00::/8 metadata-style
+
+
+def test_allow_private_still_blocks_link_local_and_metadata():
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://169.254.169.254/", allow_private=True)
+
+
+def test_allow_private_still_blocks_ipv6_metadata_style():
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://[fd00::1]/", allow_private=True)
+
+
+def test_allow_private_still_blocks_loopback():
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://127.0.0.1/", allow_private=True)
+
+
+def test_allow_private_still_blocks_ipv6_loopback():
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://[::1]/", allow_private=True)
+
+
+def test_allow_private_still_blocks_ipv6_link_local():
+    with pytest.raises(UnsafeUrlError):
+        assert_safe_url("http://[fe80::1]/", allow_private=True)

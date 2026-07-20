@@ -374,7 +374,9 @@ async def _fetch_cover_safely(url: str) -> tuple[bytes, str]:
     """Fetch a remote cover image with an SSRF guard re-checked on every
     redirect hop (follow_redirects=True would connect to the redirect
     target before any hook could inspect it, so redirects are followed
-    manually here instead), a content-type check, and a size cap."""
+    manually here instead), a content-type check, and a size cap enforced
+    incrementally on the stream so an oversized response is aborted as
+    soon as the cap is crossed rather than after being fully buffered."""
     current_url = url
     async with httpx.AsyncClient(follow_redirects=False, timeout=60.0) as client:
         for _ in range(MAX_COVER_REDIRECTS + 1):
@@ -385,33 +387,31 @@ async def _fetch_cover_safely(url: str) -> tuple[bytes, str]:
                 raise HTTPException(status_code=400, detail="Cover URL is not allowed")
 
             try:
-                resp = await client.get(current_url)
+                async with client.stream("GET", current_url) as resp:
+                    if resp.is_redirect:
+                        next_url = str(resp.next_request.url) if resp.next_request else resp.headers.get("location")
+                        if not next_url:
+                            raise HTTPException(status_code=502, detail="Invalid redirect from remote URL")
+                        current_url = next_url
+                        continue
+
+                    resp.raise_for_status()
+
+                    content_type = resp.headers.get("content-type", "")
+                    if not content_type.split(";")[0].strip().lower().startswith("image/"):
+                        raise HTTPException(status_code=400, detail="Remote URL did not return an image")
+
+                    chunks = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        chunks.extend(chunk)
+                        if len(chunks) > MAX_COVER_BYTES:
+                            raise HTTPException(status_code=413, detail="Remote cover image too large")
+                    return bytes(chunks), content_type
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Failed to download remote cover: {repr(e)}")
                 raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
-
-            if resp.is_redirect:
-                next_url = str(resp.next_request.url) if resp.next_request else resp.headers.get("location")
-                if not next_url:
-                    raise HTTPException(status_code=502, detail="Invalid redirect from remote URL")
-                current_url = next_url
-                continue
-
-            try:
-                resp.raise_for_status()
-            except Exception as e:
-                logger.error(f"Failed to download remote cover: {repr(e)}")
-                raise HTTPException(status_code=502, detail="Failed to fetch cover from remote URL")
-
-            content_type = resp.headers.get("content-type", "")
-            if not content_type.split(";")[0].strip().lower().startswith("image/"):
-                raise HTTPException(status_code=400, detail="Remote URL did not return an image")
-
-            content = resp.content
-            if len(content) > MAX_COVER_BYTES:
-                raise HTTPException(status_code=413, detail="Remote cover image too large")
-
-            return content, content_type
 
     raise HTTPException(status_code=400, detail="Too many redirects fetching cover")
 
