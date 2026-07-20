@@ -357,6 +357,7 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                         <MatchTab
                             currentData={formData}
                             onApply={handleMatchApply}
+                            bookType={type}
                         />
                     )}
 

@@ -230,6 +230,14 @@ class MatchResult(BaseModel):
     description: Optional[str] = None
     isbn: Optional[str] = None
     cover_url: Optional[str] = None
+    series: Optional[str] = None
+    series_index: Optional[float] = None
+    genres: Optional[str] = None      # comma-separated, mirrors EBook/AudioBook columns
+    tags: Optional[str] = None        # comma-separated
+    language: Optional[str] = None
+    narrators: Optional[str] = None
+    asin: Optional[str] = None
+    duration_seconds: Optional[int] = None
 
 # ============================================================
 # Sync Map Schemas

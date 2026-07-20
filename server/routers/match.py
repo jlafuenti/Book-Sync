@@ -1,5 +1,7 @@
+import html
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 import httpx
@@ -14,6 +16,7 @@ from models.book import EBook, AudioBook
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from routers.library import sanitize_filename
+from services import credentials as credential_store
 from services.url_safety import assert_safe_url, UnsafeUrlError
 from utils import resolve_cover_url
 
@@ -33,6 +36,25 @@ router = APIRouter(
     prefix="/match",
     tags=["match"],
 )
+
+def _strip_html(text: Optional[str]) -> Optional[str]:
+    """Collapse an HTML blurb (Audible summaries are HTML) into plain text."""
+    if not text:
+        return None
+    text = re.sub(r"(?i)</p>|<br\s*/?>", " ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
+def _join_unique(names) -> Optional[str]:
+    """Comma-join strings, dropping blanks and duplicates but keeping order."""
+    seen = []
+    for n in names:
+        if n and n not in seen:
+            seen.append(n)
+    return ", ".join(seen) if seen else None
+
 
 async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchResult]:
     """Search Google Books API."""
@@ -100,9 +122,10 @@ async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchRes
             publisher=vol.get("publisher"),
             description=vol.get("description"),
             isbn=isbn,
-            cover_url=cover_url
+            cover_url=cover_url,
+            genres=_join_unique(vol.get("categories", [])),
         ))
-        
+
     return results
 
 async def fetch_open_library(query: str, author: Optional[str]) -> List[MatchResult]:
@@ -153,15 +176,178 @@ async def fetch_open_library(query: str, author: Optional[str]) -> List[MatchRes
             publisher=publisher,
             description=None, # OpenLibrary search doesn't return description easily
             isbn=isbn,
-            cover_url=cover_url
+            cover_url=cover_url,
+            tags=_join_unique(doc.get("subject", [])[:10]),
         ))
-        
+
+    return results
+
+
+async def fetch_audible(query: str, author: Optional[str]) -> List[MatchResult]:
+    """Search Audible's catalog API — the same source Audiobookshelf's Audible
+    provider uses. Unauthenticated; reliably carries series name + sequence."""
+    params = {
+        "keywords": query,
+        "num_results": 10,
+        "products_sort_by": "Relevance",
+        "response_groups": "contributors,product_desc,product_extended_attrs,"
+                           "product_attrs,media,series,category_ladders",
+        "image_sizes": "500,1024",
+    }
+    if author:
+        params["author"] = author
+
+    url = "https://api.audible.com/1.0/catalog/products"
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, params=params, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"Audible API error: {e}")
+            raise HTTPException(status_code=502, detail="External provider error")
+
+    results = []
+    for product in data.get("products", []):
+        series_name = None
+        series_index = None
+        for s in product.get("series", []) or []:
+            if s.get("title"):
+                series_name = s["title"]
+                try:
+                    series_index = float(s.get("sequence"))
+                except (TypeError, ValueError):
+                    series_index = None
+                break
+
+        pub_year = None
+        release_date = product.get("release_date") or ""
+        if release_date[:4].isdigit():
+            pub_year = int(release_date[:4])
+
+        genre_names = []
+        for ladder in product.get("category_ladders", []) or []:
+            for entry in ladder.get("ladder", []) or []:
+                genre_names.append(entry.get("name"))
+
+        images = product.get("product_images") or {}
+        cover_url = images.get("1024") or images.get("500")
+
+        runtime_min = product.get("runtime_length_min")
+        language = product.get("language")
+
+        results.append(MatchResult(
+            id=product.get("asin", ""),
+            title=product.get("title", "Unknown Title"),
+            author=_join_unique(a.get("name") for a in product.get("authors", []) or []),
+            narrators=_join_unique(n.get("name") for n in product.get("narrators", []) or []),
+            series=series_name,
+            series_index=series_index,
+            publish_year=pub_year,
+            publisher=product.get("publisher_name"),
+            description=_strip_html(product.get("publisher_summary")
+                                    or product.get("merchandising_summary")),
+            genres=_join_unique(genre_names),
+            language=language.capitalize() if language else None,
+            duration_seconds=runtime_min * 60 if runtime_min else None,
+            asin=product.get("asin"),
+            cover_url=cover_url,
+        ))
+
+    return results
+
+
+_HARDCOVER_URL = "https://api.hardcover.app/v1/graphql"
+
+_HARDCOVER_SEARCH_QUERY = """
+query SearchBooks($q: String!) {
+  search(query: $q, query_type: "Book", per_page: 10, page: 1) {
+    results
+  }
+}
+"""
+
+
+async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchResult]:
+    """Search Hardcover's GraphQL API. The Typesense search document already
+    carries series, genres, tags, description, year, ISBNs and cover in one
+    call. Requires the user-supplied API token (System settings)."""
+    token = await credential_store.get_credential(db, "hardcover")
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="Hardcover API token not configured — add it under System → Hardcover Integration.",
+        )
+
+    q = f"{query} {author}" if author else query
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                _HARDCOVER_URL,
+                json={"query": _HARDCOVER_SEARCH_QUERY, "variables": {"q": q}},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"Hardcover API error: {e}")
+            raise HTTPException(status_code=502, detail="External provider error")
+
+    if data.get("errors"):
+        logger.error(f"Hardcover GraphQL errors: {data['errors']}")
+        raise HTTPException(status_code=502, detail="External provider error")
+
+    search_results = (data.get("data") or {}).get("search", {}).get("results") or {}
+    hits = search_results.get("hits", []) if isinstance(search_results, dict) else []
+
+    results = []
+    for hit in hits:
+        doc = hit.get("document") or {}
+
+        featured = doc.get("featured_series")
+        series_name = None
+        if isinstance(featured, dict):
+            series_name = featured.get("series_name") or featured.get("name")
+        if not series_name:
+            names = doc.get("series_names") or []
+            series_name = names[0] if names else None
+
+        series_index = None
+        raw_position = doc.get("featured_series_position")
+        if raw_position is None and isinstance(featured, dict):
+            raw_position = featured.get("position")
+        try:
+            series_index = float(raw_position)
+        except (TypeError, ValueError):
+            series_index = None
+
+        image = doc.get("image")
+        cover_url = image.get("url") if isinstance(image, dict) else image or None
+
+        isbns = doc.get("isbns") or []
+
+        results.append(MatchResult(
+            id=str(doc.get("id", "")),
+            title=doc.get("title", "Unknown Title"),
+            author=_join_unique(doc.get("author_names") or []),
+            series=series_name,
+            series_index=series_index,
+            publish_year=doc.get("release_year"),
+            description=doc.get("description"),
+            genres=_join_unique(doc.get("genres") or []),
+            tags=_join_unique(doc.get("tags") or []),
+            isbn=isbns[0] if isbns else None,
+            cover_url=cover_url,
+        ))
+
     return results
 
 
 @router.post("/search", response_model=List[MatchResult])
 async def search_metadata(
     req: MatchRequest,
+    db: Session = Depends(get_db),
     _: User = Depends(get_current_user)
 ):
     """Search external providers for book metadata."""
@@ -169,6 +355,10 @@ async def search_metadata(
         return await fetch_google_books(req.query, req.author)
     elif req.provider == "openlibrary":
         return await fetch_open_library(req.query, req.author)
+    elif req.provider == "audible":
+        return await fetch_audible(req.query, req.author)
+    elif req.provider == "hardcover":
+        return await fetch_hardcover(req.query, req.author, db)
     else:
         raise HTTPException(status_code=400, detail="Invalid provider")
 

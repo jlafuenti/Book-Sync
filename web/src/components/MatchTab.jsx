@@ -1,8 +1,39 @@
-import React, { useState } from 'react';
-import { searchMetadata } from '../api';
+import React, { useState, useEffect, useRef } from 'react';
+import { searchMetadata, getSettings } from '../api';
 
-export default function MatchTab({ currentData, onApply }) {
-    const [provider, setProvider] = useState('openlibrary');
+// Text/number fields shared between MatchResult and the local book form.
+// cover_url and description get dedicated rows in the compare table.
+const MATCH_FIELDS = [
+    'title', 'author', 'series', 'series_index', 'publisher', 'publish_year',
+    'genres', 'tags', 'language', 'narrators', 'isbn', 'asin',
+];
+
+const emptyFieldSelection = () => Object.fromEntries(
+    [...MATCH_FIELDS, 'description', 'cover_url'].map(f => [f, false])
+);
+
+const hasValue = (v) => v !== null && v !== undefined && v !== '';
+
+export default function MatchTab({ currentData, onApply, bookType }) {
+    const [provider, setProvider] = useState(bookType === 'audiobook' ? 'audible' : 'google');
+    const providerTouched = useRef(false);
+
+    // Ebooks prefer Hardcover, but only when a token is configured — the
+    // settings GET masks a stored token as "********", so any non-empty
+    // value means "configured". Never override a manual selection.
+    useEffect(() => {
+        if (bookType === 'audiobook') return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const s = await getSettings();
+                if (!cancelled && !providerTouched.current && s.hardcover_api_token) {
+                    setProvider('hardcover');
+                }
+            } catch { /* keep the Google default */ }
+        })();
+        return () => { cancelled = true; };
+    }, [bookType]);
     const [query, setQuery] = useState(currentData.title || currentData.isbn || '');
     const [author, setAuthor] = useState(currentData.author || '');
     const [loading, setLoading] = useState(false);
@@ -14,15 +45,7 @@ export default function MatchTab({ currentData, onApply }) {
     const [selectedResult, setSelectedResult] = useState(null);
 
     // Checkbox state for comparison view
-    const [selectedFields, setSelectedFields] = useState({
-        title: false,
-        author: false,
-        publisher: false,
-        publish_year: false,
-        description: false,
-        isbn: false,
-        cover_url: false
-    });
+    const [selectedFields, setSelectedFields] = useState(emptyFieldSelection());
 
     const handleSearch = async (e) => {
         e.preventDefault();
@@ -42,15 +65,12 @@ export default function MatchTab({ currentData, onApply }) {
         setSelectedResult(result);
 
         // Smart defaults: Check fields that are missing locally but present remotely
-        setSelectedFields({
-            title: !currentData.title && !!result.title,
-            author: !currentData.author && !!result.author,
-            publisher: !currentData.publisher && !!result.publisher,
-            publish_year: !currentData.publish_year && !!result.publish_year,
-            description: !currentData.description && !!result.description,
-            isbn: !currentData.isbn && !!result.isbn,
-            cover_url: !currentData.cover_path && !!result.cover_url
-        });
+        const defaults = {};
+        for (const field of [...MATCH_FIELDS, 'description']) {
+            defaults[field] = !hasValue(currentData[field]) && hasValue(result[field]);
+        }
+        defaults.cover_url = !currentData.cover_path && !!result.cover_url;
+        setSelectedFields(defaults);
 
         setView('compare');
     };
@@ -61,12 +81,9 @@ export default function MatchTab({ currentData, onApply }) {
 
     const handleApplySelected = () => {
         const payload = {};
-        if (selectedFields.title) payload.title = selectedResult.title;
-        if (selectedFields.author) payload.author = selectedResult.author;
-        if (selectedFields.publisher) payload.publisher = selectedResult.publisher;
-        if (selectedFields.publish_year) payload.publish_year = selectedResult.publish_year;
-        if (selectedFields.description) payload.description = selectedResult.description;
-        if (selectedFields.isbn) payload.isbn = selectedResult.isbn;
+        for (const field of [...MATCH_FIELDS, 'description']) {
+            if (selectedFields[field]) payload[field] = selectedResult[field];
+        }
         if (selectedFields.cover_url) payload.coverUrl = selectedResult.cover_url;
 
         onApply(payload);
@@ -82,10 +99,12 @@ export default function MatchTab({ currentData, onApply }) {
                             <select
                                 className="form-input"
                                 value={provider}
-                                onChange={e => setProvider(e.target.value)}
+                                onChange={e => { providerTouched.current = true; setProvider(e.target.value); }}
                             >
                                 <option value="google">Google Books</option>
                                 <option value="openlibrary">Open Library</option>
+                                <option value="audible">Audible</option>
+                                <option value="hardcover">Hardcover</option>
                             </select>
                         </div>
                         <div className="col-md-5">
@@ -131,6 +150,11 @@ export default function MatchTab({ currentData, onApply }) {
                                 <div className="match-card-info">
                                     <h4>{res.title}</h4>
                                     <p className="text-muted">{res.author || 'Unknown Author'}</p>
+                                    {res.series && (
+                                        <p className="text-small">
+                                            {res.series}{res.series_index != null ? ` #${res.series_index}` : ''}
+                                        </p>
+                                    )}
                                     <p className="text-small">
                                         {res.publish_year || 'Unknown Year'}
                                         {res.publisher ? ` · ${res.publisher}` : ''}
@@ -255,19 +279,19 @@ export default function MatchTab({ currentData, onApply }) {
                         </tr>
 
                         {/* Text fields */}
-                        {['title', 'author', 'publisher', 'publish_year', 'isbn'].map(field => (
+                        {MATCH_FIELDS.map(field => (
                             <tr key={field}>
                                 <td style={{ textAlign: 'center' }}>
                                     <input
                                         type="checkbox"
                                         checked={selectedFields[field]}
                                         onChange={() => handleFieldToggle(field)}
-                                        disabled={!selectedResult[field]}
+                                        disabled={!hasValue(selectedResult[field])}
                                     />
                                 </td>
                                 <td style={{ textTransform: 'capitalize' }}><strong>{field.replace('_', ' ')}</strong></td>
-                                <td>{currentData[field] || <span className="text-muted">Empty</span>}</td>
-                                <td>{selectedResult[field] || <span className="text-muted">Empty</span>}</td>
+                                <td>{hasValue(currentData[field]) ? currentData[field] : <span className="text-muted">Empty</span>}</td>
+                                <td>{hasValue(selectedResult[field]) ? selectedResult[field] : <span className="text-muted">Empty</span>}</td>
                             </tr>
                         ))}
 

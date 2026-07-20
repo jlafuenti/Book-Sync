@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TranscriptionSettingsSection, ABSSettingsSection, BackupSection } from './SystemPage'
+import { TranscriptionSettingsSection, ABSSettingsSection, HardcoverSettingsSection, BackupSection } from './SystemPage'
 
 // TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
 // (no props), so mock the module they import from rather than mounting the
 // whole page/router.
 const {
     getSettingsMock, updateSettingsMock, testRemoteConnectionMock, generateKeyMock,
-    testAbsConnectionMock, enrichLibraryFromAbsMock, getBackupStatusMock, listBackupsMock, restoreBackupMock,
+    testAbsConnectionMock, testHardcoverConnectionMock, enrichLibraryFromAbsMock,
+    getBackupStatusMock, listBackupsMock, restoreBackupMock,
     createBackupMock, deleteBackupMock, downloadBackupMock,
     authRef,
 } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const {
     testRemoteConnectionMock: vi.fn(),
     generateKeyMock: vi.fn(),
     testAbsConnectionMock: vi.fn(),
+    testHardcoverConnectionMock: vi.fn(),
     enrichLibraryFromAbsMock: vi.fn(),
     getBackupStatusMock: vi.fn(),
     listBackupsMock: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock('../api', async (importOriginal) => {
         testRemoteConnection: testRemoteConnectionMock,
         generateTranscriptionRemoteKey: generateKeyMock,
         testAbsConnection: testAbsConnectionMock,
+        testHardcoverConnection: testHardcoverConnectionMock,
         enrichLibraryFromAbs: enrichLibraryFromAbsMock,
         getBackupStatus: getBackupStatusMock,
         listBackups: listBackupsMock,
@@ -64,12 +67,14 @@ function baseSettings(overrides = {}) {
         abs_url: '',
         abs_api_token: '',
         abs_audiobooks_prefix: '',
+        hardcover_api_token: '',
         ...overrides,
     }
 }
 
 const KEY_PLACEHOLDER_TEXT = 'Shared secret for the Jetson server'
 const ABS_TOKEN_PLACEHOLDER_TEXT = 'Paste your ABS API token'
+const HC_TOKEN_PLACEHOLDER_TEXT = 'Paste your Hardcover API token'
 
 beforeEach(() => {
     getSettingsMock.mockReset().mockResolvedValue(baseSettings())
@@ -77,6 +82,7 @@ beforeEach(() => {
     testRemoteConnectionMock.mockReset()
     generateKeyMock.mockReset()
     testAbsConnectionMock.mockReset()
+    testHardcoverConnectionMock.mockReset()
     enrichLibraryFromAbsMock.mockReset()
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
@@ -283,6 +289,64 @@ describe('ABSSettingsSection', () => {
 
         const alert = await screen.findByText('Enriched 2 audiobook(s) from Audiobookshelf')
         expect(alert.closest('.alert')).toHaveClass('alert-success')
+    })
+})
+
+describe('HardcoverSettingsSection', () => {
+    it('loads a previously-saved (masked) token as a password field', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ hardcover_api_token: '********' }))
+        render(<HardcoverSettingsSection />)
+
+        const tokenInput = await screen.findByPlaceholderText(HC_TOKEN_PLACEHOLDER_TEXT)
+        await waitFor(() => expect(tokenInput).toHaveValue('********'))
+        expect(tokenInput).toHaveAttribute('type', 'password')
+    })
+
+    it('saves the token via updateSettings', async () => {
+        render(<HardcoverSettingsSection />)
+        const tokenInput = await screen.findByPlaceholderText(HC_TOKEN_PLACEHOLDER_TEXT)
+        fireEvent.change(tokenInput, { target: { value: 'my-new-token' } })
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            { hardcover_api_token: 'my-new-token' }
+        ))
+        expect(await screen.findByText('Saved')).toBeInTheDocument()
+    })
+
+    it('sends an empty token to Test Connection when the field still shows the masked placeholder', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ hardcover_api_token: '********' }))
+        testHardcoverConnectionMock.mockResolvedValue({ success: true, username: 'jesse' })
+        render(<HardcoverSettingsSection />)
+        const tokenInput = await screen.findByPlaceholderText(HC_TOKEN_PLACEHOLDER_TEXT)
+        await waitFor(() => expect(tokenInput).toHaveValue('********'))
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        await waitFor(() => expect(testHardcoverConnectionMock).toHaveBeenCalledWith(''))
+        expect(await screen.findByText(/Connected as jesse/)).toBeInTheDocument()
+    })
+
+    it('sends the real token to Test Connection when freshly typed', async () => {
+        testHardcoverConnectionMock.mockResolvedValue({ success: true, username: 'jesse' })
+        render(<HardcoverSettingsSection />)
+        const tokenInput = await screen.findByPlaceholderText(HC_TOKEN_PLACEHOLDER_TEXT)
+        fireEvent.change(tokenInput, { target: { value: 'freshly-typed' } })
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        await waitFor(() => expect(testHardcoverConnectionMock).toHaveBeenCalledWith('freshly-typed'))
+    })
+
+    it('reports an auth failure from Test Connection', async () => {
+        testHardcoverConnectionMock.mockRejectedValue(new Error('Authentication failed — check your API token'))
+        render(<HardcoverSettingsSection />)
+        await screen.findByPlaceholderText(HC_TOKEN_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        expect(await screen.findByText(/Authentication failed/)).toBeInTheDocument()
     })
 })
 
