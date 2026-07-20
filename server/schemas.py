@@ -309,6 +309,12 @@ class BookmarkUpdate(BaseModel):
     # pause, stop (track ended, player closed, cast session ends), or every
     # 30 minutes of continuous playback. Keeps the history tab scannable.
     append_to_log: bool = False
+    # Conflict-resolution contract (issue #54): wall-clock time the client
+    # captured this position. Omitted by legacy clients, which preserves the
+    # old last-write-wins behavior (no staleness check is possible without it).
+    captured_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
 
 
 class TextMatchRequest(BaseModel):
@@ -335,6 +341,9 @@ class BookmarkResponse(BaseModel):
     epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
+    captured_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -350,6 +359,9 @@ class BookmarkLogResponse(BaseModel):
     new_epub_sentence_index: Optional[int]
     new_audio_position_ms: Optional[int]
     changed_at: datetime
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    captured_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -369,6 +381,11 @@ class ProgressUpdate(BaseModel):
     audio_position_ms: Optional[int] = None
     is_completed: Optional[bool] = None
     device_id: Optional[str] = None
+    # Conflict-resolution contract (issue #54): wall-clock time the client
+    # captured this position. Omitted by legacy clients, which preserves the
+    # old last-write-wins behavior (no staleness check is possible without it).
+    captured_at: Optional[datetime] = None
+    device_name: Optional[str] = None
 
 class ProgressResponse(BaseModel):
     id: int
@@ -384,6 +401,8 @@ class ProgressResponse(BaseModel):
     is_completed: bool
     updated_at: datetime
     device_id: Optional[str]
+    captured_at: Optional[datetime] = None
+    device_name: Optional[str] = None
 
     class Config:
         from_attributes = True
