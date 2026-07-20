@@ -84,7 +84,7 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
 
                         {/* MatchTab — key forces reset when book changes */}
                         <div style={{ opacity: applying ? 0.5 : 1, pointerEvents: applying ? 'none' : 'auto' }}>
-                            <MatchTab key={current.id} currentData={current} onApply={handleApply} />
+                            <MatchTab key={current.id} currentData={current} onApply={handleApply} bookType={bookType} />
                         </div>
 
                         {/* Footer */}

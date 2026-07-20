@@ -43,6 +43,7 @@ DEFAULT_SETTINGS = {
     "abs_url": "",
     "abs_api_token": "",
     "abs_audiobooks_prefix": "",
+    "hardcover_api_token": "",
     # Backups (issue #60) — owned by services/backup_service.py. Defaults must
     # match backup_service._DEFAULTS.
     "backup_enabled": True,
@@ -91,6 +92,10 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
     remote_key = await credential_store.get_credential(db, "transcription_remote")
     settings_dict["transcription_remote_key"] = _SECRET_PLACEHOLDER if remote_key else ""
 
+    # And for the Hardcover metadata-provider token.
+    hardcover_token = await credential_store.get_credential(db, "hardcover")
+    settings_dict["hardcover_api_token"] = _SECRET_PLACEHOLDER if hardcover_token else ""
+
     return settings_dict
 
 @router.put("/", response_model=Dict[str, Any])
@@ -120,6 +125,15 @@ async def update_settings(
                 await credential_store.delete_credential(db, "transcription_remote")
             else:
                 await credential_store.set_credential(db, "transcription_remote", str(value))
+            continue
+
+        if key == "hardcover_api_token":
+            if value is None or value == _SECRET_PLACEHOLDER:
+                continue
+            if value == "":
+                await credential_store.delete_credential(db, "hardcover")
+            else:
+                await credential_store.set_credential(db, "hardcover", str(value))
             continue
 
         # Serialize before saving
@@ -188,6 +202,46 @@ async def test_abs_connection(
         raise HTTPException(status_code=400, detail=f"Server returned HTTP {e.response.status_code}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@router.get("/test-hardcover")
+async def test_hardcover_connection(
+    token: str = "",
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Validate a Hardcover API token by running the trivial `me` query.
+    Same placeholder/stored-credential fallback semantics as test-abs."""
+    import httpx
+
+    api_token = token if (token and token != _SECRET_PLACEHOLDER) else await credential_store.get_credential(db, "hardcover")
+    if not api_token:
+        raise HTTPException(status_code=400, detail="API token is required")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(
+                "https://api.hardcover.app/v1/graphql",
+                json={"query": "query { me { username } }"},
+                headers={"Authorization": f"Bearer {api_token}"},
+            )
+            r.raise_for_status()
+            body = r.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Connection failed: {str(e)}")
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (401, 403):
+            raise HTTPException(status_code=400, detail="Authentication failed — check your API token")
+        raise HTTPException(status_code=400, detail=f"Server returned HTTP {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+    # Hasura reports a bad token as a 200 with an errors array.
+    me = (body.get("data") or {}).get("me") or []
+    if body.get("errors") or not me:
+        raise HTTPException(status_code=400, detail="Authentication failed — check your API token")
+
+    return {"success": True, "username": me[0].get("username")}
 
 
 @router.post("/transcription-remote-key/generate")

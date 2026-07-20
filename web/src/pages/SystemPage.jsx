@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
     generateTranscriptionRemoteKey,
-    testAbsConnection, enrichLibraryFromAbs, getUnsupportedFiles,
+    testAbsConnection, testHardcoverConnection, enrichLibraryFromAbs, getUnsupportedFiles,
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
     getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
@@ -517,6 +517,67 @@ export function ABSSettingsSection() {
                     </button>
                 )}
             </div>
+        </>
+    )
+}
+
+/* ── HardcoverSettingsSection ──────────────────────────────────────── */
+export function HardcoverSettingsSection() {
+    const [token, setToken] = useState('')
+    const [loading, setLoading] = useState(false)
+    const [msg, setMsg] = useState(null)
+    const [testResult, setTestResult] = useState(null)
+    const [isTesting, setIsTesting] = useState(false)
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const s = await getSettings()
+                if (s.hardcover_api_token !== undefined) setToken(s.hardcover_api_token || '')
+            } catch (err) { console.error(err) }
+        })()
+    }, [])
+
+    const handleSave = async () => {
+        setLoading(true); setMsg(null)
+        try {
+            await updateSettings({ hardcover_api_token: token })
+            setMsg({ type: 'success', text: 'Saved' })
+        } catch { setMsg({ type: 'error', text: 'Failed to save' }) }
+        finally { setLoading(false) }
+    }
+
+    const handleTest = async () => {
+        setIsTesting(true); setTestResult(null)
+        try {
+            // The masked placeholder isn't a real token -- let the backend
+            // fall back to whatever's already saved instead of sending it literally.
+            const tokenToSend = token === SECRET_PLACEHOLDER ? '' : token
+            const r = await testHardcoverConnection(tokenToSend)
+            setTestResult({ success: true, text: `✅ Connected as ${r.username}` })
+        } catch (err) { setTestResult({ success: false, text: `❌ ${err.message}` }) }
+        finally { setIsTesting(false) }
+    }
+
+    return (
+        <>
+            <p className="system-card-desc">
+                Enables the Hardcover provider in metadata Match (series, genres, tags and more for ebooks).
+                Get a free token from your <a href="https://hardcover.app/account/api" target="_blank" rel="noreferrer">Hardcover account settings</a>.
+            </p>
+            <div className="system-form-row">
+                <label className="system-form-label">API Token</label>
+                <div className="system-form-inline">
+                    <input type="password" className="input" value={token} onChange={e => setToken(e.target.value)}
+                        placeholder="Paste your Hardcover API token" style={{ flex: '1 1 240px' }} />
+                    <button className="btn btn-secondary" onClick={handleTest} disabled={isTesting} style={{ whiteSpace: 'nowrap' }}>
+                        {isTesting ? 'Testing…' : 'Test Connection'}
+                    </button>
+                </div>
+                {testResult && <p className="system-form-hint" style={{ marginTop: 6 }}>{testResult.text}</p>}
+            </div>
+            {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
+            <button className="btn btn-primary" onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save'}</button>
         </>
     )
 }
@@ -1295,6 +1356,13 @@ function SystemPage({ tab }) {
                                 </CollapsibleCard>
                             </>
                         )}
+                    </div>
+
+                    {/* ── Section: Hardcover Integration (metadata match provider) ── */}
+                    <div style={{ marginBottom: 24 }}>
+                        <CollapsibleCard title="Hardcover Integration">
+                            <HardcoverSettingsSection />
+                        </CollapsibleCard>
                     </div>
 
                     {/* ── Section: Backups (admin only) — collapsed by default ── */}
