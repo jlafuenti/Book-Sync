@@ -2,11 +2,29 @@
 Pydantic schemas for API request/response validation.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from models.book import PairStatus
 from models.bookmark import BookmarkSource
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Conflict-resolution contract (issue #54): normalize an incoming
+    `captured_at` to a naive UTC datetime.
+
+    Pydantic parses a 'Z'/offset-suffixed timestamp (e.g. JS
+    `Date.toISOString()` or Kotlin `Instant.toString()`) into a
+    timezone-aware datetime, but the DB columns are naive `DateTime` and
+    SQLAlchemy always reads them back naive. Comparing an aware value
+    against a naive one in `_is_stale` raises `TypeError`. Normalizing here
+    guarantees whatever is stored and compared is always naive UTC, leaving
+    already-naive inputs (legacy clients) untouched.
+    """
+    if value is not None and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 # ============================================================
@@ -316,6 +334,11 @@ class BookmarkUpdate(BaseModel):
     device_id: Optional[str] = None
     device_name: Optional[str] = None
 
+    @field_validator("captured_at")
+    @classmethod
+    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+        return _naive_utc(value)
+
 
 class TextMatchRequest(BaseModel):
     epub_text: str
@@ -386,6 +409,11 @@ class ProgressUpdate(BaseModel):
     # old last-write-wins behavior (no staleness check is possible without it).
     captured_at: Optional[datetime] = None
     device_name: Optional[str] = None
+
+    @field_validator("captured_at")
+    @classmethod
+    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+        return _naive_utc(value)
 
 class ProgressResponse(BaseModel):
     id: int
