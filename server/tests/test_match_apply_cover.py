@@ -183,6 +183,39 @@ async def test_apply_cover_rejects_oversized_response(
     assert r.status_code == 413
 
 
+async def test_apply_cover_aborts_stream_before_reading_entire_oversized_body(
+    make_user, auth_header, make_client, db, temp_covers_dir, monkeypatch,
+):
+    """The size cap must be enforced incrementally during the stream, not
+    only after the full body is buffered in memory -- otherwise a
+    malicious server can force an effectively unbounded read before the
+    413 is returned."""
+    chunk_size = 1024 * 1024  # 1 MiB
+    max_chunks = 200  # 200 MiB -- far more than MAX_COVER_BYTES (25 MiB); bounds the test if the fix regresses
+    produced = 0
+
+    async def body():
+        nonlocal produced
+        for _ in range(max_chunks):
+            produced += 1
+            yield b"x" * chunk_size
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=body())
+
+    _patch_match_transport(monkeypatch, handler)
+    editor = await make_user(username="ed", role="editor")
+    book = await _make_ebook(db)
+
+    async with make_client(match.router) as client:
+        r = await _apply_cover(client, auth_header(editor), book.id, "http://public.example/cover.jpg")
+
+    assert r.status_code == 413
+    # Must abort shortly after crossing MAX_COVER_BYTES, not after draining
+    # the full (far larger) body.
+    assert produced * chunk_size <= match.MAX_COVER_BYTES + chunk_size
+
+
 async def test_apply_cover_accepts_public_image_and_saves(
     make_user, auth_header, make_client, db, temp_covers_dir, monkeypatch,
 ):
