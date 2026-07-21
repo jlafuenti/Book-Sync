@@ -274,4 +274,56 @@ describe('EbookReader stale-conflict affordance (issue #54)', () => {
 
         expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
     })
+
+    // Bookmark rejections (review finding on Task 3): BookmarkResponse carries
+    // no navigable epub_cfi, so a rejected updateBookmark(...) can only ever
+    // surface a passive notice (no Jump button), never a jump target.
+    it('shows a passive notice (no Jump button) when a bookmark write is rejected by a different device', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateBookmarkMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        await waitFor(() => expect(screen.getByText(/Newer position available from Phone/)).toBeInTheDocument())
+        expect(screen.queryByText('Jump')).not.toBeInTheDocument()
+    })
+
+    it("does not show a bookmark notice when the rejection echoes this device's own id (a retried write)", async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateBookmarkMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-abc', // matches getDeviceIdMock's own id
+            device_name: 'Web · Chrome',
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updateBookmarkMock).toHaveBeenCalled())
+
+        expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
+    })
+
+    it('Dismiss clears the bookmark notice without navigating (there is no cfi to jump to)', async () => {
+        const { rendition } = await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateBookmarkMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+        })
+
+        const callsBeforeSave = rendition.display.mock.calls.length
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(screen.getByText('Dismiss')).toBeInTheDocument())
+
+        fireEvent.click(screen.getByText('Dismiss'))
+
+        expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
+        expect(rendition.display.mock.calls.length).toBe(callsBeforeSave)
+    })
 })

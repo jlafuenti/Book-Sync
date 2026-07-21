@@ -23,6 +23,12 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     // doSave() comes back `rejected: true` with a newer position from a
     // genuinely different device. { cfi, deviceName }. Only cleared via the
     // explicit "Jump" click below -- never auto-navigated.
+    //
+    // A rejected updateBookmark(...) call (fix for a review finding on Task
+    // 3) sets this same state with `cfi: null` -- BookmarkResponse has no
+    // navigable epub_cfi field, so there's no jump target, only a passive
+    // "Dismiss"-only notice. Never overwrites an already-showing jump-capable
+    // (cfi-bearing) conflict with a lesser message-only one.
     const [staleConflict, setStaleConflict] = useState(null)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
     // Tracks progression (0-1) within the current chapter, updated on each page turn
@@ -87,6 +93,25 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         return text.substring(0, 220)
     }, [bookTitle])
 
+    // A bookmark write (not progress) was rejected by a genuinely different
+    // device. BookmarkResponse carries no navigable epub_cfi, so there's no
+    // jump target here -- just a visibility signal so the rejection isn't
+    // silent. Never clobbers an already-showing jump-capable (cfi-bearing)
+    // conflict from the progress write in the same doSave() call.
+    const handleBookmarkConflict = useCallback((result) => {
+        if (
+            result?.rejected &&
+            result.device_id &&
+            result.device_id !== getDeviceId()
+        ) {
+            setStaleConflict(prev => (prev && prev.cfi) ? prev : {
+                cfi: null,
+                deviceName: result.device_name || result.device_id,
+            })
+        }
+        return result
+    }, [])
+
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         // Don't save while text nav is hopping between chapters looking for text
@@ -140,7 +165,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                             device_id: getDeviceId(),
                             device_name: getDeviceName(),
                             captured_at: capturedAt,
-                        }).catch(() => {})
+                        }).then(handleBookmarkConflict).catch(() => {})
                     } else {
                         console.warn(`[EbookReader] No match found — saving epub position only`)
                         // No match — save epub position only, don't corrupt audio position
@@ -150,7 +175,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                             device_id: getDeviceId(),
                             device_name: getDeviceName(),
                             captured_at: capturedAt,
-                        }).catch(() => {})
+                        }).then(handleBookmarkConflict).catch(() => {})
                     }
                 } else {
                     console.warn(`[EbookReader] Text too short for matching (${textPreview?.length} chars), saving chapter only`)
@@ -160,7 +185,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                         device_id: getDeviceId(),
                         device_name: getDeviceName(),
                         captured_at: capturedAt,
-                    }).catch(() => {})
+                    }).then(handleBookmarkConflict).catch(() => {})
                 }
             } else {
                 console.log(`[EbookReader] No pairId, skipping bookmark sync`)
@@ -168,7 +193,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
         }
-    }, [ebookId, pairId, extractVisibleText])
+    }, [ebookId, pairId, extractVisibleText, handleBookmarkConflict])
 
     // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
@@ -541,16 +566,28 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                 explicit click. */}
             {staleConflict && (
                 <div className="alert alert-warning" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ flex: 1 }}>Newer position available from {staleConflict.deviceName}</span>
-                    <button
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => {
-                            renditionRef.current?.display(staleConflict.cfi)
-                            setStaleConflict(null)
-                        }}
-                    >
-                        Jump
-                    </button>
+                    <span style={{ flex: 1 }}>
+                        Newer position available from {staleConflict.deviceName}
+                        {staleConflict.cfi ? '' : ' on this book'}
+                    </span>
+                    {staleConflict.cfi ? (
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => {
+                                renditionRef.current?.display(staleConflict.cfi)
+                                setStaleConflict(null)
+                            }}
+                        >
+                            Jump
+                        </button>
+                    ) : (
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => setStaleConflict(null)}
+                        >
+                            Dismiss
+                        </button>
+                    )}
                 </div>
             )}
 
