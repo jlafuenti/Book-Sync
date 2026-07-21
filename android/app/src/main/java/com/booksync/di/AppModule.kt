@@ -164,6 +164,9 @@ object AppModule {
     @Provides
     fun provideBookmarkLogDao(db: BookSyncDatabase): BookmarkLogDao = db.bookmarkLogDao()
 
+    // Backs both ServerUrlManager and DeviceIdManager, which are each provided via their
+    // own @Singleton @Inject constructor (no explicit @Provides needed) — Hilt resolves
+    // them automatically once this DataStore binding is available.
     @Provides
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
