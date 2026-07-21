@@ -172,7 +172,13 @@ data class BookmarkUpdateRequest(
     // When false (default), server updates the bookmark but does NOT append
     // a BookmarkLog row. Clients set true only on pause / stop / 30-min
     // boundaries. Mirrors server BookmarkUpdate.append_to_log.
-    val append_to_log: Boolean = false
+    val append_to_log: Boolean = false,
+    // Multi-device conflict resolution (issue #54). When captured_at is provided
+    // and older than what's stored, the server rejects the write with HTTP 409
+    // instead of applying it. Omitting captured_at preserves legacy last-write-wins.
+    val captured_at: String? = null,
+    val device_id: String? = null,
+    val device_name: String? = null
 )
 
 @Serializable
@@ -186,7 +192,10 @@ data class BookmarkResponse(
     val audio_position_ms: Int? = null,
     val epub_locator: String? = null,
     val updated_at: String,
-    val synced_at: String? = null
+    val synced_at: String? = null,
+    val device_id: String? = null,
+    val device_name: String? = null,
+    val captured_at: String? = null
 )
 
 @Serializable
@@ -199,7 +208,10 @@ data class BookmarkLogResponse(
     val new_epub_chapter: Int? = null,
     val new_epub_sentence_index: Int? = null,
     val new_audio_position_ms: Int? = null,
-    val changed_at: String
+    val changed_at: String,
+    val device_id: String? = null,
+    val device_name: String? = null,
+    val captured_at: String? = null
 )
 
 // ============ User Progress ============
@@ -212,7 +224,10 @@ data class ProgressUpdateRequest(
     val epub_progress_percent: Float? = null,
     val audio_position_ms: Int? = null,
     val is_completed: Boolean? = null,
-    val device_id: String? = null
+    val device_id: String? = null,
+    val device_name: String? = null,
+    // See BookmarkUpdateRequest.captured_at — same multi-device conflict contract.
+    val captured_at: String? = null
 )
 
 @Serializable
@@ -229,5 +244,7 @@ data class ProgressResponse(
     val audio_position_ms: Int? = null,
     val is_completed: Boolean,
     val updated_at: String,
-    val device_id: String? = null
+    val device_id: String? = null,
+    val device_name: String? = null,
+    val captured_at: String? = null
 )
