@@ -1,26 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import HomePage, { BookCard } from './HomePage'
+import ContinuePage from './ContinuePage'
 
 const {
-    getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock, getTranscriptionQueueMock,
-    updateProgressMock, resetPairProgressMock, getProgressMock, getBookmarkMock, updateBookmarkMock,
-    getDeviceIdMock, getDeviceNameMock, coverSrcMock,
+    getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock,
+    updateProgressMock, getProgressMock, getBookmarkMock, updateBookmarkMock,
+    getAccessTokenMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAllProgressMock: vi.fn(),
     getEbooksMock: vi.fn(),
     getAudiobooksMock: vi.fn(),
     getPairsMock: vi.fn(),
-    getTranscriptionQueueMock: vi.fn(),
     updateProgressMock: vi.fn(),
-    resetPairProgressMock: vi.fn(),
     getProgressMock: vi.fn(),
     getBookmarkMock: vi.fn(),
     updateBookmarkMock: vi.fn(),
+    getAccessTokenMock: vi.fn(() => 'token'),
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
-    coverSrcMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -28,19 +26,17 @@ vi.mock('../api', () => ({
     getEbooks: getEbooksMock,
     getAudiobooks: getAudiobooksMock,
     getPairs: getPairsMock,
-    getTranscriptionQueue: getTranscriptionQueueMock,
     updateProgress: updateProgressMock,
-    resetPairProgress: resetPairProgressMock,
     getProgress: getProgressMock,
     getBookmark: getBookmarkMock,
     updateBookmark: updateBookmarkMock,
+    getAccessToken: getAccessTokenMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
-    coverSrc: coverSrcMock,
 }))
 
-// Isolate HomePage from its heavier children -- EbookReader pulls in epubjs,
-// AudioPlayer/CoverImg aren't relevant to the device-attribution logic under test.
+// Isolate ContinuePage from its heavier children -- EbookReader pulls in
+// epubjs and isn't relevant to the device-attribution logic under test.
 vi.mock('../contexts/AudioPlayerContext', () => ({
     useAudioPlayer: () => ({
         play: vi.fn(),
@@ -52,54 +48,24 @@ vi.mock('../contexts/AudioPlayerContext', () => ({
 }))
 vi.mock('../components/EbookReader', () => ({ default: () => null }))
 vi.mock('../components/AudioPlayer', () => ({ AudioPlayerView: () => null }))
-vi.mock('../components/CoverImg', () => ({ default: () => null }))
 
 beforeEach(() => {
-    coverSrcMock.mockReset()
     getAllProgressMock.mockReset().mockResolvedValue([])
     getEbooksMock.mockReset().mockResolvedValue([])
     getAudiobooksMock.mockReset().mockResolvedValue([])
     getPairsMock.mockReset().mockResolvedValue([])
-    getTranscriptionQueueMock.mockReset().mockResolvedValue([])
     updateProgressMock.mockReset().mockResolvedValue({})
-    resetPairProgressMock.mockReset().mockResolvedValue({})
     getProgressMock.mockReset().mockResolvedValue(null)
     getBookmarkMock.mockReset().mockResolvedValue(null)
     updateBookmarkMock.mockReset().mockResolvedValue({})
+    getAccessTokenMock.mockReset().mockReturnValue('token')
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
-
-    // jsdom has no ResizeObserver; HomePage's Carousel observes its scroll
-    // container to toggle arrow visibility.
-    global.ResizeObserver = class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-    }
 })
 
-describe('HomePage BookCard', () => {
-    it('renders the resolved cover image once coverSrc() resolves', async () => {
-        coverSrcMock.mockResolvedValue('/api/files/covers/a.jpg?token=tok')
-        render(<BookCard book={{ title: 'A Book', cover_path: '/api/files/covers/a.jpg' }} onPrimary={() => {}} />)
-
-        const img = await screen.findByAltText('A Book')
-        expect(img).toHaveAttribute('src', '/api/files/covers/a.jpg?token=tok')
-    })
-
-    it('shows a placeholder when there is no cover_path', () => {
-        render(<BookCard book={{ title: 'A Book', cover_path: null }} onPrimary={() => {}} />)
-        expect(screen.queryByRole('img')).not.toBeInTheDocument()
-        expect(coverSrcMock).not.toHaveBeenCalled()
-    })
-})
-
-describe('HomePage Continue Reading device attribution (issue #54)', () => {
+describe('ContinuePage device attribution (issue #54)', () => {
     // Library fixture: one paired item (ebook 10 + audiobook 20, pair 100),
-    // one standalone ebook (11), one standalone audiobook (21). All three
-    // books also appear (unpaired) in "Recently Added", which renders the
-    // same titles without a menu -- tests disambiguate via the `.continue-size`
-    // class that only the Continue Reading BookCard instances carry.
+    // one standalone ebook (11), one standalone audiobook (21).
     function setupLibrary() {
         getEbooksMock.mockResolvedValue([
             { id: 10, title: 'Pair Ebook', cover_path: null },
@@ -119,20 +85,20 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
         ])
     }
 
-    function renderHome() {
-        return render(<MemoryRouter><HomePage /></MemoryRouter>)
+    function renderPage() {
+        return render(<MemoryRouter><ContinuePage /></MemoryRouter>)
     }
 
     async function openMenu(cardTitle) {
-        const matches = await screen.findAllByText(cardTitle)
-        const card = matches.map((el) => el.closest('.continue-size')).find(Boolean)
-        fireEvent.click(within(card).getByTitle('More options'))
+        const titleEl = await screen.findByText(cardTitle)
+        const card = titleEl.closest('.continue-card')
+        fireEvent.click(card.querySelector('.continue-card-menu'))
         return card
     }
 
     it('sends device_id/device_name/captured_at for both legs of a paired Mark Complete', async () => {
         setupLibrary()
-        renderHome()
+        renderPage()
 
         const card = await openMenu('Pair Ebook')
         fireEvent.click(within(card).getByText('Mark Complete'))
@@ -147,7 +113,7 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
 
     it('sends device fields for a standalone (non-pair) Mark Complete', async () => {
         setupLibrary()
-        renderHome()
+        renderPage()
 
         const card = await openMenu('Ebook A')
         fireEvent.click(within(card).getByText('Mark Complete'))
@@ -157,9 +123,26 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
         })))
     })
 
+    it('sends device fields for both legs of a paired Reset Progress', async () => {
+        setupLibrary()
+        renderPage()
+
+        const card = await openMenu('Pair Ebook')
+        fireEvent.click(within(card).getByText('Reset Progress'))
+
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalledWith('ebook', 10, expect.objectContaining({
+            is_completed: false, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
+            epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
+        })))
+        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 20, expect.objectContaining({
+            is_completed: false, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
+            audio_position_ms: 0,
+        }))
+    })
+
     it('sends device fields for a standalone ebook Reset Progress', async () => {
         setupLibrary()
-        renderHome()
+        renderPage()
 
         const card = await openMenu('Ebook A')
         fireEvent.click(within(card).getByText('Reset Progress'))
@@ -172,7 +155,7 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
 
     it('sends device fields for a standalone audiobook Reset Progress', async () => {
         setupLibrary()
-        renderHome()
+        renderPage()
 
         const card = await openMenu('Audiobook A')
         fireEvent.click(within(card).getByText('Reset Progress'))

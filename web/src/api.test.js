@@ -411,6 +411,18 @@ describe('getDeviceId()', () => {
         const { getDeviceId } = await import('./api')
         expect(getDeviceId()).toBe('preexisting-device-id')
     })
+
+    it('falls back to the hand-rolled v4 generator when crypto.randomUUID is unavailable', async () => {
+        // Non-HTTPS contexts (and some older browsers) expose `crypto` without
+        // `randomUUID` -- getDeviceId() must still produce a valid v4 UUID.
+        vi.stubGlobal('crypto', {})
+
+        const { getDeviceId } = await import('./api')
+        const id = getDeviceId()
+
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+        expect(localStorage.getItem('tandem_device_id')).toBe(id)
+    })
 })
 
 describe('getDeviceName()', () => {
@@ -432,6 +444,15 @@ describe('getDeviceName()', () => {
 
         const { getDeviceName } = await import('./api')
         expect(getDeviceName()).toBe('My Saved Name')
+    })
+
+    it('derives "Safari" for a Safari user agent (no Chrome token present)', async () => {
+        vi.stubGlobal('navigator', {
+            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        })
+
+        const { getDeviceName } = await import('./api')
+        expect(getDeviceName()).toBe('Web · Safari')
     })
 })
 
