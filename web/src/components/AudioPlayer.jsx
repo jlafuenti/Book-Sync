@@ -53,7 +53,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes } = player
+    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     const currentChapter = chapters.length > 0
@@ -100,6 +100,24 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                     </button>
                 )}
             </div>
+
+            {/* Stale-conflict banner (issue #54): a different device's write was
+                newer than ours and won. Never auto-seek -- only jump on an
+                explicit click. */}
+            {staleConflict && (
+                <div className="alert alert-warning" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1 }}>Newer position available from {staleConflict.deviceName}</span>
+                    <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                            player.seekTo(staleConflict.position)
+                            player.clearStaleConflict()
+                        }}
+                    >
+                        Jump
+                    </button>
+                </div>
+            )}
 
             <div className="audio-player-body">
                 <div className="audio-player-main">
@@ -218,18 +236,24 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                                 <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: 13, textAlign: 'center' }}>
                                     No history yet
                                 </div>
-                            ) : historyLog.map((entry, i) => (
-                                <button
-                                    key={i}
-                                    className="audio-chapter-item"
-                                    onClick={() => player.seekTo((entry.new_audio_position_ms || 0) / 1000)}
-                                >
-                                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {formatDate(entry.changed_at)}
-                                    </span>
-                                    <span className="audio-chapter-time">{formatTime((entry.new_audio_position_ms || 0) / 1000)}</span>
-                                </button>
-                            ))}
+                            ) : historyLog.map((entry, i) => {
+                                // Device attribution (issue #54): prefer the friendly
+                                // name, fall back to the raw device_id, and render
+                                // nothing at all when neither is present (legacy rows).
+                                const deviceLabel = entry.device_name || entry.device_id
+                                return (
+                                    <button
+                                        key={i}
+                                        className="audio-chapter-item"
+                                        onClick={() => player.seekTo((entry.new_audio_position_ms || 0) / 1000)}
+                                    >
+                                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {formatDate(entry.changed_at)}{deviceLabel ? ` · from ${deviceLabel}` : ''}
+                                        </span>
+                                        <span className="audio-chapter-time">{formatTime((entry.new_audio_position_ms || 0) / 1000)}</span>
+                                    </button>
+                                )
+                            })}
                         </div>
                     </div>
                 )}

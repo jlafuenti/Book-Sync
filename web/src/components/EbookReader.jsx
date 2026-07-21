@@ -19,6 +19,11 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     const [fontSize, setFontSize] = useState(100)
     const fontSizeRef = useRef(100)
     const [savedIndicator, setSavedIndicator] = useState(false)
+    // Stale-conflict affordance (issue #54): set when the progress write in
+    // doSave() comes back `rejected: true` with a newer position from a
+    // genuinely different device. { cfi, deviceName }. Only cleared via the
+    // explicit "Jump" click below -- never auto-navigated.
+    const [staleConflict, setStaleConflict] = useState(null)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
     // Tracks progression (0-1) within the current chapter, updated on each page turn
     const currentChapterProgressionRef = useRef(0)
@@ -92,7 +97,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         const capturedAt = new Date().toISOString()
         console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}, chapterProgression=${currentChapterProgressionRef.current?.toFixed(3)}`)
         try {
-            await updateProgress('ebook', ebookId, {
+            const progressResult = await updateProgress('ebook', ebookId, {
                 epub_cfi: cfi,
                 epub_chapter: chapter,
                 epub_progress_percent: Math.round(percent * 100) / 100,
@@ -101,6 +106,21 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                 device_name: getDeviceName(),
                 captured_at: capturedAt,
             })
+            // A different device's write is newer and won -- surface it so the
+            // reader isn't silently left showing a stale position. Only a
+            // rejection carrying a usable epub_cfi is actionable; skip an echo
+            // of this device's own id (a retried/out-of-order write).
+            if (
+                progressResult?.rejected &&
+                progressResult.device_id &&
+                progressResult.device_id !== getDeviceId() &&
+                progressResult.epub_cfi
+            ) {
+                setStaleConflict({
+                    cfi: progressResult.epub_cfi,
+                    deviceName: progressResult.device_name || progressResult.device_id,
+                })
+            }
             if (pairId) {
                 // Extract visible text and match against sync map for accurate audio position
                 const textPreview = extractVisibleText()
@@ -515,6 +535,24 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     </button>
                 </div>
             </div>
+
+            {/* Stale-conflict banner (issue #54): a different device's write was
+                newer than ours and won. Never auto-navigate -- only jump on an
+                explicit click. */}
+            {staleConflict && (
+                <div className="alert alert-warning" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1 }}>Newer position available from {staleConflict.deviceName}</span>
+                    <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                            renditionRef.current?.display(staleConflict.cfi)
+                            setStaleConflict(null)
+                        }}
+                    >
+                        Jump
+                    </button>
+                </div>
+            )}
 
             {/* Reader area */}
             <div className="ebook-reader-container">

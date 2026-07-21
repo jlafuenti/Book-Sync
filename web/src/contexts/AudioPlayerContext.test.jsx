@@ -57,6 +57,10 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
         <>
             <button onClick={() => player.play(7, audiobook)}>play</button>
             <button onClick={() => player.pause()}>pause</button>
+            <button onClick={() => player.clearStaleConflict()}>clear-conflict</button>
+            <div data-testid="stale-conflict">
+                {player.staleConflict ? `${player.staleConflict.deviceName}|${player.staleConflict.position}` : ''}
+            </div>
         </>
     )
 }
@@ -248,6 +252,92 @@ describe('AudioPlayerProvider pause()', () => {
             device_name: 'Web · Chrome',
             captured_at: expect.any(String),
         }))
+    })
+})
+
+describe('AudioPlayerProvider stale-conflict affordance (issue #54)', () => {
+    it('sets staleConflict when a write is rejected by a genuinely different device', async () => {
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+            audio_position_ms: 90000,
+        })
+
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 17
+
+        fireEvent.click(screen.getByText('pause'))
+
+        await waitFor(() => expect(screen.getByTestId('stale-conflict').textContent).toBe('Phone|90'))
+    })
+
+    it('does not surface staleConflict when the rejection echoes this device\'s own id (a retried write)', async () => {
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-123', // matches getDeviceIdMock's own id
+            device_name: 'Web · Chrome',
+            audio_position_ms: 90000,
+        })
+
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 17
+
+        fireEvent.click(screen.getByText('pause'))
+
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+        expect(screen.getByTestId('stale-conflict').textContent).toBe('')
+    })
+
+    it('clearStaleConflict resets the state (e.g. after the user clicks Jump)', async () => {
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+            audio_position_ms: 90000,
+        })
+
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 17
+
+        fireEvent.click(screen.getByText('pause'))
+        await waitFor(() => expect(screen.getByTestId('stale-conflict').textContent).toBe('Phone|90'))
+
+        fireEvent.click(screen.getByText('clear-conflict'))
+        expect(screen.getByTestId('stale-conflict').textContent).toBe('')
     })
 })
 

@@ -163,6 +163,23 @@ describe('EbookReader doSave device attribution (issue #54)', () => {
         expect(updateBookmarkMock.mock.calls[0][1]).not.toHaveProperty('audio_position_ms')
     })
 
+    it('matchTextToAudio rejecting falls through to the no-match branch (pre-existing .catch, exercised here since this task shifted its line numbers)', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockRejectedValue(new Error('network down'))
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        await waitFor(() => expect(updateBookmarkMock).toHaveBeenCalled())
+        expect(updateBookmarkMock).toHaveBeenCalledWith(42, expect.objectContaining({
+            source: 'ebook',
+            epub_chapter: 0,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+        expect(updateBookmarkMock.mock.calls[0][1]).not.toHaveProperty('audio_position_ms')
+    })
+
     it('text-too-short branch: skips matchTextToAudio and saves chapter only, with device fields', async () => {
         // Empty innerText -> extractVisibleText() returns '' (falsy), which is
         // < the >10-char threshold, so doSave must take the "too short" path
@@ -180,5 +197,81 @@ describe('EbookReader doSave device attribution (issue #54)', () => {
             device_name: 'Web · Chrome',
             captured_at: expect.any(String),
         }))
+    })
+})
+
+describe('EbookReader stale-conflict affordance (issue #54)', () => {
+    it('shows a banner with the device name when the progress write is rejected by a different device', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+            epub_cfi: 'cfi-newer',
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        await waitFor(() => expect(screen.getByText(/Newer position available from Phone/)).toBeInTheDocument())
+    })
+
+    it("Jump navigates to the rejected write's cfi and dismisses the banner -- never auto-navigates", async () => {
+        const { rendition } = await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+            epub_cfi: 'cfi-newer',
+        })
+
+        // rendition.display was already called once during initial load (with
+        // no args, since setupReader passes no initialCfi/initialChapter) --
+        // record that count so we can prove Jump is a distinct, later call.
+        const callsBeforeSave = rendition.display.mock.calls.length
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(screen.getByText('Jump')).toBeInTheDocument())
+
+        // The banner rendering alone must never navigate.
+        expect(rendition.display.mock.calls.length).toBe(callsBeforeSave)
+
+        fireEvent.click(screen.getByText('Jump'))
+
+        expect(rendition.display).toHaveBeenLastCalledWith('cfi-newer')
+        expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
+    })
+
+    it("does not show the banner when the rejection echoes this device's own id (a retried write)", async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-abc', // matches getDeviceIdMock's own id
+            device_name: 'Web · Chrome',
+            epub_cfi: 'cfi-newer',
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+
+        expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
+    })
+
+    it('does not show the banner when the rejection has no epub_cfi to jump to', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updateProgressMock.mockResolvedValue({
+            rejected: true,
+            device_id: 'device-999',
+            device_name: 'Phone',
+            epub_cfi: null,
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+
+        expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
     })
 })

@@ -34,6 +34,26 @@ export function AudioPlayerProvider({ children }) {
     const [duration, setDuration] = useState(0)
     const [speed, setSpeedState] = useState(1)
     const [sleepMinutes, setSleepMinutes] = useState(null)
+    // Set when a bookmark/progress write comes back `rejected: true` (issue
+    // #54 stale-write conflict) carrying a newer position from a genuinely
+    // *different* device. { position (seconds), deviceName }. Never set (and
+    // never auto-seeked) for a rejection that just echoes this device's own
+    // id -- e.g. this device's retried/out-of-order write bouncing off itself.
+    const [staleConflict, setStaleConflict] = useState(null)
+
+    // Attach to every updateProgress/updateBookmark call as `.then(handleConflict)`.
+    // Passes the result through unchanged so it stays chainable.
+    const handleConflict = useCallback((result) => {
+        if (result && result.rejected && result.device_id && result.device_id !== getDeviceId()) {
+            setStaleConflict({
+                position: (result.audio_position_ms || 0) / 1000,
+                deviceName: result.device_name || result.device_id,
+            })
+        }
+        return result
+    }, [])
+
+    const clearStaleConflict = useCallback(() => setStaleConflict(null), [])
 
     // Create audio element once
     useEffect(() => {
@@ -59,7 +79,7 @@ export function AudioPlayerProvider({ children }) {
                     device_id: getDeviceId(),
                     device_name: getDeviceName(),
                     captured_at: capturedAt,
-                }).catch(() => {})
+                }).then(handleConflict).catch(() => {})
                 // Log a "finished" history entry so the audiobook's last session
                 // is visible in Session History.
                 if (ab.pairId && audio) {
@@ -71,7 +91,7 @@ export function AudioPlayerProvider({ children }) {
                         device_id: getDeviceId(),
                         device_name: getDeviceName(),
                         captured_at: capturedAt,
-                    }).catch(() => {})
+                    }).then(handleConflict).catch(() => {})
                     lastLogTimeRef.current = Date.now()
                 }
             }
@@ -156,7 +176,7 @@ export function AudioPlayerProvider({ children }) {
                         device_id: getDeviceId(),
                         device_name: getDeviceName(),
                         captured_at: capturedAt,
-                    }).catch(() => {})
+                    }).then(handleConflict).catch(() => {})
                     if (currentAudiobook.pairId) {
                         // One heartbeat per tick; flip append_to_log only when the
                         // 30-min continuous-playback threshold has been crossed.
@@ -169,7 +189,7 @@ export function AudioPlayerProvider({ children }) {
                             device_id: getDeviceId(),
                             device_name: getDeviceName(),
                             captured_at: capturedAt,
-                        }).catch(() => {})
+                        }).then(handleConflict).catch(() => {})
                     }
                 }
             }, 5000)
@@ -178,7 +198,7 @@ export function AudioPlayerProvider({ children }) {
         return () => {
             if (saveIntervalRef.current) clearInterval(saveIntervalRef.current)
         }
-    }, [playing, currentAudiobook])
+    }, [playing, currentAudiobook, handleConflict])
 
     // Final history entry when the tab closes / reloads. Regular fetch is
     // aborted during unload, so we use the keepalive helper that sends the
@@ -261,7 +281,7 @@ export function AudioPlayerProvider({ children }) {
                 device_id: getDeviceId(),
                 device_name: getDeviceName(),
                 captured_at: capturedAt,
-            }).catch(() => {})
+            }).then(handleConflict).catch(() => {})
             if (currentAudiobook.pairId) {
                 updateBookmark(currentAudiobook.pairId, {
                     source: 'audiobook',
@@ -270,11 +290,11 @@ export function AudioPlayerProvider({ children }) {
                     device_id: getDeviceId(),
                     device_name: getDeviceName(),
                     captured_at: capturedAt,
-                }).catch(() => {})
+                }).then(handleConflict).catch(() => {})
                 lastLogTimeRef.current = Date.now()
             }
         }
-    }, [currentAudiobook])
+    }, [currentAudiobook, handleConflict])
 
     const togglePlayPause = useCallback(() => {
         if (playing) pause()
@@ -341,6 +361,8 @@ export function AudioPlayerProvider({ children }) {
         duration,
         speed,
         sleepMinutes,
+        staleConflict,
+        clearStaleConflict,
         play,
         pause,
         togglePlayPause,
