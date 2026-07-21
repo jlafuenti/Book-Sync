@@ -14,6 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,6 +44,8 @@ class BookSyncRepository @Inject constructor(
     private val bookmarkLogDao: BookmarkLogDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
+    private val deviceIdManager: DeviceIdManager,
+    private val json: Json,
 ) {
     private fun log(msg: String) = diagnosticLogger.i(LogChannel.APP, REPO_TAG, msg)
     private fun logW(msg: String) = diagnosticLogger.w(LogChannel.APP, REPO_TAG, msg)
@@ -546,23 +550,11 @@ class BookSyncRepository @Inject constructor(
             }
 
             // Only pull if server is newer or no local data exists
-            val remoteTs = parseTimestamp(remote.updated_at)
-            val localTs = parseTimestamp(existing?.updatedAt)
+            val remoteTs = parseSyncTimestamp(remote.updated_at)
+            val localTs = parseSyncTimestamp(existing?.updatedAt)
 
             if (existing == null || remoteTs >= localTs) {
-                bookmarkDao.upsertBookmark(
-                    BookmarkEntity(
-                        bookPairId = pairId,
-                        source = remote.source,
-                        epubChapter = remote.epub_chapter,
-                        epubSentenceIndex = remote.epub_sentence_index,
-                        audioPositionMs = remote.audio_position_ms,
-                        epubLocator = remote.epub_locator ?: existing?.epubLocator,
-                        locatorAudioMs = existing?.locatorAudioMs,
-                        updatedAt = remote.updated_at,
-                        syncedToServer = true,
-                    )
-                )
+                bookmarkDao.upsertBookmark(remote.toEntity(existing))
             } else {
                 log("refreshBookmark pair=$pairId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
             }
@@ -596,6 +588,112 @@ class BookSyncRepository @Inject constructor(
         return bookmarkLogDao.getForPair(pairId, limit).map { it.toResponse() }
     }
 
+    // ============ Multi-device conflict resolution (issue #54) ============
+    //
+    // Both `pushBookmark`/`pushProgress` centralize the same three-way outcome so every
+    // call site (interactive write, startup bidirectional sync, offline-queue replay)
+    // handles a 409 identically: the write was NOT applied server-side because a newer
+    // position (by `captured_at`) already exists there. We drop our write and adopt the
+    // server's authoritative state locally rather than retrying it.
+
+    /** Outcome of pushing a bookmark or progress write to the server. */
+    private enum class PushOutcome { SYNCED, CONFLICT_ADOPTED, FAILED }
+
+    /** Parses a 409 (or any) JSON error body into [T] using the app's shared [Json], or null
+     *  if the body is missing/unparseable. Errors are logged, never thrown — a conflict whose
+     *  body we can't parse still means "don't retry this write", just without local adoption. */
+    private inline fun <reified T> parseConflictBody(raw: String?): T? {
+        if (raw.isNullOrBlank()) return null
+        return try {
+            json.decodeFromString<T>(raw)
+        } catch (e: Exception) {
+            logE("Failed to parse conflict response body", e)
+            null
+        }
+    }
+
+    /**
+     * Sends [entity]'s current state to `PUT /api/sync/bookmark/{pairId}`, always attaching
+     * this device's identity and the position's true local capture time (never "now" — see
+     * [capturedAtIsoFromMillis]/[toCapturedAtIso]) so a stale offline replay is rejected by the
+     * server instead of clobbering a newer write from another device.
+     */
+    private suspend fun pushBookmark(pairId: Int, entity: BookmarkEntity, appendToLog: Boolean): PushOutcome {
+        val response = api.updateBookmark(
+            pairId,
+            BookmarkUpdateRequest(
+                source = entity.source,
+                epub_chapter = entity.epubChapter,
+                epub_sentence_index = entity.epubSentenceIndex,
+                audio_position_ms = entity.audioPositionMs,
+                epub_locator = entity.epubLocator,
+                append_to_log = appendToLog,
+                device_id = deviceIdManager.deviceId,
+                device_name = deviceIdManager.deviceName,
+                captured_at = toCapturedAtIso(entity.capturedAt ?: entity.updatedAt),
+            )
+        )
+        return when {
+            response.isSuccessful -> {
+                bookmarkDao.upsertBookmark(entity.copy(syncedToServer = true))
+                PushOutcome.SYNCED
+            }
+            response.code() == 409 -> {
+                val serverState = parseConflictBody<BookmarkResponse>(response.errorBody()?.string())
+                if (serverState != null) {
+                    bookmarkDao.upsertBookmark(serverState.toEntity(entity))
+                    logW("pushBookmark pair=$pairId: 409 — this write lost, adopted server state")
+                } else {
+                    logE("pushBookmark pair=$pairId: 409 but could not parse server state")
+                }
+                PushOutcome.CONFLICT_ADOPTED
+            }
+            else -> {
+                logW("pushBookmark pair=$pairId: failed — HTTP ${response.code()}")
+                PushOutcome.FAILED
+            }
+        }
+    }
+
+    /** Same contract as [pushBookmark] but for `PUT /api/sync/progress/{mediaType}/{mediaId}`. */
+    private suspend fun pushProgress(mediaType: String, mediaId: Int, entity: UserProgressEntity): PushOutcome {
+        val response = api.updateProgress(
+            mediaType,
+            mediaId,
+            ProgressUpdateRequest(
+                book_pair_id = entity.bookPairId,
+                epub_cfi = entity.epubCfi,
+                epub_chapter = entity.epubChapter,
+                epub_progress_percent = entity.epubProgressPercent,
+                audio_position_ms = entity.audioPositionMs,
+                is_completed = entity.isCompleted,
+                device_id = entity.deviceId ?: deviceIdManager.deviceId,
+                device_name = deviceIdManager.deviceName,
+                captured_at = entity.capturedAt ?: capturedAtIsoFromMillis(entity.updatedAt),
+            )
+        )
+        return when {
+            response.isSuccessful -> {
+                userProgressDao.upsertProgress(entity.copy(syncedToServer = true))
+                PushOutcome.SYNCED
+            }
+            response.code() == 409 -> {
+                val serverState = parseConflictBody<ProgressResponse>(response.errorBody()?.string())
+                if (serverState != null) {
+                    userProgressDao.upsertProgress(serverState.toEntity(mediaType, mediaId))
+                    logW("pushProgress $mediaType/$mediaId: 409 — this write lost, adopted server state")
+                } else {
+                    logE("pushProgress $mediaType/$mediaId: 409 but could not parse server state")
+                }
+                PushOutcome.CONFLICT_ADOPTED
+            }
+            else -> {
+                logW("pushProgress $mediaType/$mediaId: failed — HTTP ${response.code()}")
+                PushOutcome.FAILED
+            }
+        }
+    }
+
     /**
      * Update bookmark position.
      * Saves locally immediately and queues sync to server.
@@ -616,6 +714,7 @@ class BookSyncRepository @Inject constructor(
         appendToLog: Boolean = false,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
+        val nowMillis = System.currentTimeMillis()
 
         // Merge with existing
         val merged = BookmarkEntity(
@@ -628,7 +727,13 @@ class BookSyncRepository @Inject constructor(
             locatorAudioMs = locatorAudioMs
                 ?: (if (epubLocator != null) audioPositionMs ?: existing?.locatorAudioMs
                     else existing?.locatorAudioMs),
-            updatedAt = System.currentTimeMillis().toString(),
+            updatedAt = nowMillis.toString(),
+            // The moment this position was actually captured on-device — sent as
+            // `captured_at` on sync so a later stale replay of this same write can be
+            // told apart from a fresh one (issue #54).
+            capturedAt = capturedAtIsoFromMillis(nowMillis),
+            deviceId = deviceIdManager.deviceId,
+            deviceName = deviceIdManager.deviceName,
             syncedToServer = false,
         )
 
@@ -657,18 +762,27 @@ class BookSyncRepository @Inject constructor(
 
         // Try immediate sync
         try {
-            api.updateBookmark(
-                pairId,
-                BookmarkUpdateRequest(
-                    source = source,
-                    epub_chapter = merged.epubChapter,
-                    epub_sentence_index = merged.epubSentenceIndex,
-                    audio_position_ms = merged.audioPositionMs,
-                    epub_locator = merged.epubLocator,
-                    append_to_log = appendToLog,
+            val outcome = pushBookmark(pairId, merged, appendToLog)
+            if (outcome == PushOutcome.FAILED) {
+                logW("updateBookmark sync failed — queuing for later")
+                pendingSyncDao.insert(
+                    PendingSyncEntity(
+                        bookPairId = pairId,
+                        source = source,
+                        epubChapter = merged.epubChapter,
+                        epubSentenceIndex = merged.epubSentenceIndex,
+                        audioPositionMs = merged.audioPositionMs,
+                        epubLocator = merged.epubLocator,
+                        appendToLog = appendToLog,
+                        // Preserve the true capture moment (not whenever this queue
+                        // insert happens to run) so a later replay's captured_at is
+                        // still accurate — see processPendingSync.
+                        createdAt = nowMillis,
+                    )
                 )
-            )
-            bookmarkDao.upsertBookmark(merged.copy(syncedToServer = true))
+            }
+            // SYNCED and CONFLICT_ADOPTED both mean "don't queue" — pushBookmark already
+            // wrote the correct local state (ours, or the server's if we lost a 409) either way.
         } catch (e: Exception) {
             logW("updateBookmark sync failed — queuing for later (${e.message})")
             pendingSyncDao.insert(
@@ -680,6 +794,7 @@ class BookSyncRepository @Inject constructor(
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
                     appendToLog = appendToLog,
+                    createdAt = nowMillis,
                 )
             )
         }
@@ -948,6 +1063,8 @@ class BookSyncRepository @Inject constructor(
                     isCompleted = remote.is_completed,
                     updatedAt = System.currentTimeMillis(), // We ignore the remote string date for simpler local sorting
                     deviceId = remote.device_id,
+                    deviceName = remote.device_name,
+                    capturedAt = remote.captured_at,
                     syncedToServer = true
                 )
             )
@@ -966,10 +1083,11 @@ class BookSyncRepository @Inject constructor(
         epubProgressPercent: Float? = null,
         audioPositionMs: Int? = null,
         isCompleted: Boolean? = null,
-        deviceId: String? = "android-device" // Ideally fetched from actual settings
+        deviceId: String? = deviceIdManager.deviceId
     ) {
         val existing = userProgressDao.getProgress(mediaType, mediaId)
-        
+        val nowMillis = System.currentTimeMillis()
+
         // Merge with existing
         val merged = UserProgressEntity(
             mediaType = mediaType,
@@ -980,54 +1098,24 @@ class BookSyncRepository @Inject constructor(
             epubProgressPercent = epubProgressPercent ?: existing?.epubProgressPercent,
             audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
             isCompleted = isCompleted ?: existing?.isCompleted ?: false,
-            updatedAt = System.currentTimeMillis(),
+            updatedAt = nowMillis,
             deviceId = deviceId,
+            deviceName = deviceIdManager.deviceName,
+            // The moment this position was actually captured on-device — see
+            // BookmarkEntity.capturedAt / pushProgress for why this isn't "now" at sync time.
+            capturedAt = capturedAtIsoFromMillis(nowMillis),
             syncedToServer = false
         )
-        
+
         userProgressDao.upsertProgress(merged)
 
         try {
-            api.updateProgress(
-                mediaType,
-                mediaId,
-                ProgressUpdateRequest(
-                    book_pair_id = merged.bookPairId,
-                    epub_cfi = merged.epubCfi,
-                    epub_chapter = merged.epubChapter,
-                    epub_progress_percent = merged.epubProgressPercent,
-                    audio_position_ms = merged.audioPositionMs,
-                    is_completed = merged.isCompleted,
-                    device_id = merged.deviceId
-                )
-            )
-            userProgressDao.upsertProgress(merged.copy(syncedToServer = true))
+            pushProgress(mediaType, mediaId, merged)
+            // SYNCED and CONFLICT_ADOPTED both mean the local row is now settled (either
+            // marked synced, or overwritten with the server's authoritative state on a
+            // 409 loss) — pushProgress already wrote it either way.
         } catch (_: Exception) {
             // Keep syncedToServer = false, will be picked up by SyncWorker
-        }
-    }
-
-    // ============ Timestamp Helpers ============
-
-    /**
-     * Parse a timestamp string that may be either epoch millis (local format)
-     * or ISO 8601 datetime (server format) into epoch millis.
-     */
-    private fun parseTimestamp(ts: String?): Long {
-        if (ts.isNullOrBlank()) return 0L
-        // Try epoch millis first (local format, e.g. "1712880000000")
-        ts.toLongOrNull()?.let { return it }
-        // Try ISO 8601 with zone (e.g. "2026-04-12T15:30:00Z")
-        return try {
-            java.time.Instant.parse(ts).toEpochMilli()
-        } catch (_: Exception) {
-            // Try ISO 8601 without zone (e.g. "2026-04-12T15:30:00") — assume UTC
-            try {
-                java.time.LocalDateTime.parse(ts)
-                    .atZone(java.time.ZoneOffset.UTC)
-                    .toInstant()
-                    .toEpochMilli()
-            } catch (_: Exception) { 0L }
         }
     }
 
@@ -1048,44 +1136,26 @@ class BookSyncRepository @Inject constructor(
             try {
                 val remote = api.getBookmark(pair.id)
                 val local = bookmarkDao.getBookmark(pair.id)
-                val remoteTs = parseTimestamp(remote.updated_at)
-                val localTs  = parseTimestamp(local?.updatedAt)
+                // Prefer captured_at (the true on-device capture moment) over updated_at
+                // (a bookkeeping timestamp) whenever the server/local row provides one —
+                // now that the server never re-stamps a rejected stale write with "now",
+                // this comparison is reliable (issue #54).
+                val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+                val localTs  = if (local != null) parseSyncTimestamp(preferCapturedAt(local.capturedAt, local.updatedAt)) else 0L
 
                 when {
-                    // Unsynced local data always wins — push to server
+                    // Unsynced local data always wins — push to server. A 409 here means
+                    // another device's write is actually newer; pushBookmark adopts it.
                     local != null && !local.syncedToServer -> {
-                        api.updateBookmark(pair.id, BookmarkUpdateRequest(
-                            source              = local.source,
-                            epub_chapter        = local.epubChapter,
-                            epub_sentence_index = local.epubSentenceIndex,
-                            audio_position_ms   = local.audioPositionMs,
-                            epub_locator        = local.epubLocator,
-                        ))
-                        bookmarkDao.upsertBookmark(local.copy(syncedToServer = true))
+                        pushBookmark(pair.id, local, appendToLog = false)
                         log("syncBookmark pair=${pair.id}: pushed unsynced local")
                     }
                     local == null || remoteTs > localTs -> {
-                        bookmarkDao.upsertBookmark(BookmarkEntity(
-                            bookPairId          = pair.id,
-                            source              = remote.source,
-                            epubChapter         = remote.epub_chapter,
-                            epubSentenceIndex   = remote.epub_sentence_index,
-                            audioPositionMs     = remote.audio_position_ms,
-                            epubLocator         = remote.epub_locator ?: local?.epubLocator,
-                            updatedAt           = remote.updated_at,
-                            syncedToServer      = true,
-                        ))
+                        bookmarkDao.upsertBookmark(remote.toEntity(local))
                         log("syncBookmark pair=${pair.id}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
-                        api.updateBookmark(pair.id, BookmarkUpdateRequest(
-                            source              = local.source,
-                            epub_chapter        = local.epubChapter,
-                            epub_sentence_index = local.epubSentenceIndex,
-                            audio_position_ms   = local.audioPositionMs,
-                            epub_locator        = local.epubLocator,
-                        ))
-                        bookmarkDao.upsertBookmark(local.copy(syncedToServer = true))
+                        pushBookmark(pair.id, local, appendToLog = false)
                         log("syncBookmark pair=${pair.id}: pushed local ts=$localTs")
                     }
                 }
@@ -1095,45 +1165,23 @@ class BookSyncRepository @Inject constructor(
             try {
                 val remote = api.getProgress("audiobook", pair.audiobookId)
                 val local  = userProgressDao.getProgress("audiobook", pair.audiobookId)
-                val remoteTs = parseTimestamp(remote.updated_at)
-                val localTs  = local?.updatedAt ?: 0L
+                val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+                val localTs  = if (local != null) {
+                    local.capturedAt?.let { parseSyncTimestamp(it) } ?: local.updatedAt
+                } else 0L
 
                 when {
                     // Unsynced local data always wins — push to server
                     local != null && !local.syncedToServer -> {
-                        api.updateProgress("audiobook", pair.audiobookId, ProgressUpdateRequest(
-                            book_pair_id        = local.bookPairId,
-                            audio_position_ms   = local.audioPositionMs,
-                            is_completed        = local.isCompleted,
-                            device_id           = local.deviceId,
-                        ))
-                        userProgressDao.upsertProgress(local.copy(syncedToServer = true))
+                        pushProgress("audiobook", pair.audiobookId, local)
                         log("syncProgress audiobook=${pair.audiobookId}: pushed unsynced local")
                     }
                     local == null || remoteTs > localTs -> {
-                        userProgressDao.upsertProgress(UserProgressEntity(
-                            mediaType            = "audiobook",
-                            mediaId              = pair.audiobookId,
-                            bookPairId           = pair.id,
-                            epubCfi              = null,
-                            epubChapter          = null,
-                            epubProgressPercent  = null,
-                            audioPositionMs      = remote.audio_position_ms,
-                            isCompleted          = remote.is_completed,
-                            updatedAt            = remoteTs,
-                            deviceId             = remote.device_id,
-                            syncedToServer       = true,
-                        ))
+                        userProgressDao.upsertProgress(remote.toEntity("audiobook", pair.audiobookId))
                         log("syncProgress audiobook=${pair.audiobookId}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
-                        api.updateProgress("audiobook", pair.audiobookId, ProgressUpdateRequest(
-                            book_pair_id        = local.bookPairId,
-                            audio_position_ms   = local.audioPositionMs,
-                            is_completed        = local.isCompleted,
-                            device_id           = local.deviceId,
-                        ))
-                        userProgressDao.upsertProgress(local.copy(syncedToServer = true))
+                        pushProgress("audiobook", pair.audiobookId, local)
                         log("syncProgress audiobook=${pair.audiobookId}: pushed local ts=$localTs")
                     }
                 }
@@ -1143,13 +1191,23 @@ class BookSyncRepository @Inject constructor(
 
     // ============ Offline Sync ============
 
-    /** Process pending sync queue — called by WorkManager. */
+    /**
+     * Process pending sync queue — called by WorkManager.
+     *
+     * Critical fix for issue #54's plane-replay regression: each queued item sends its
+     * ORIGINAL local capture time as `captured_at` (never "now" — see
+     * [PendingSyncEntity.createdAt], set at the moment the write was first attempted, and
+     * [UserProgressEntity.updatedAt]). A device that was offline for days and replays a
+     * stale queue therefore gets rejected with 409 instead of the server treating the
+     * replay as a fresh, most-recent write. On 409 the item is dropped (it lost — no
+     * retry) and the server's authoritative state is adopted locally.
+     */
     suspend fun processPendingSync() {
         val pendingBookmarks = pendingSyncDao.getAllPending()
         if (pendingBookmarks.isNotEmpty()) log("processPendingSync — ${pendingBookmarks.size} pending bookmarks")
         for (sync in pendingBookmarks) {
             try {
-                api.updateBookmark(
+                val response = api.updateBookmark(
                     sync.bookPairId,
                     BookmarkUpdateRequest(
                         source = sync.source,
@@ -1158,10 +1216,29 @@ class BookSyncRepository @Inject constructor(
                         audio_position_ms = sync.audioPositionMs,
                         epub_locator = sync.epubLocator,
                         append_to_log = sync.appendToLog,
+                        device_id = deviceIdManager.deviceId,
+                        device_name = deviceIdManager.deviceName,
+                        captured_at = capturedAtIsoFromMillis(sync.createdAt),
                     )
                 )
-                pendingSyncDao.delete(sync)
-                log("processPendingSync — bookmark pairId=${sync.bookPairId} synced")
+                when {
+                    response.isSuccessful -> {
+                        pendingSyncDao.delete(sync)
+                        log("processPendingSync — bookmark pairId=${sync.bookPairId} synced")
+                    }
+                    response.code() == 409 -> {
+                        val serverState = parseConflictBody<BookmarkResponse>(response.errorBody()?.string())
+                        if (serverState != null) {
+                            bookmarkDao.upsertBookmark(serverState.toEntity(bookmarkDao.getBookmark(sync.bookPairId)))
+                        }
+                        pendingSyncDao.delete(sync)
+                        logW("processPendingSync — bookmark pairId=${sync.bookPairId} lost to a newer write (409) — dropped, adopted server state")
+                    }
+                    else -> {
+                        logW("processPendingSync — bookmark pairId=${sync.bookPairId} failed HTTP ${response.code()}, stopping")
+                        break
+                    }
+                }
             } catch (e: Exception) {
                 logW("processPendingSync — still offline, stopping (${e.message})")
                 break
@@ -1172,20 +1249,14 @@ class BookSyncRepository @Inject constructor(
         val unsyncedProgress = userProgressDao.getUnsyncedProgress()
         for (prog in unsyncedProgress) {
              try {
-                 api.updateProgress(
-                     prog.mediaType,
-                     prog.mediaId,
-                     ProgressUpdateRequest(
-                         book_pair_id = prog.bookPairId,
-                         epub_cfi = prog.epubCfi,
-                         epub_chapter = prog.epubChapter,
-                         epub_progress_percent = prog.epubProgressPercent,
-                         audio_position_ms = prog.audioPositionMs,
-                         is_completed = prog.isCompleted,
-                         device_id = prog.deviceId
-                     )
-                 )
-                 userProgressDao.upsertProgress(prog.copy(syncedToServer = true))
+                 val outcome = pushProgress(prog.mediaType, prog.mediaId, prog)
+                 if (outcome == PushOutcome.FAILED) {
+                     logW("processPendingSync — progress ${prog.mediaType}/${prog.mediaId} failed, stopping")
+                     break
+                 }
+                 // SYNCED and CONFLICT_ADOPTED both mean this row is settled — pushProgress
+                 // already wrote it (marked synced, or overwritten with the server's
+                 // authoritative state on a 409 loss).
              } catch (_: Exception) {
                  break
              }
@@ -1205,6 +1276,107 @@ class BookSyncRepository @Inject constructor(
         acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
     }
 }
+
+// ============ Timestamp helpers (issue #54 conflict resolution) ============
+//
+// Top-level (not private/member) so they're pure and unit-testable without constructing a
+// BookSyncRepository — see SyncConflictHelpersTest. `internal` visibility keeps them out of
+// the public API surface while still reachable from the test source set.
+
+/**
+ * Parses a timestamp that is either epoch-millis (local format, e.g. [BookmarkEntity.updatedAt]
+ * when set on-device) or ISO-8601 (server format) into epoch millis. Returns 0L when [ts] is
+ * null/blank/unparseable.
+ */
+internal fun parseSyncTimestamp(ts: String?): Long {
+    if (ts.isNullOrBlank()) return 0L
+    // Try epoch millis first (local format, e.g. "1712880000000")
+    ts.toLongOrNull()?.let { return it }
+    // Try ISO 8601 with zone (e.g. "2026-04-12T15:30:00Z")
+    return try {
+        java.time.Instant.parse(ts).toEpochMilli()
+    } catch (_: Exception) {
+        // Try ISO 8601 without zone (e.g. "2026-04-12T15:30:00") — assume UTC
+        try {
+            java.time.LocalDateTime.parse(ts)
+                .atZone(java.time.ZoneOffset.UTC)
+                .toInstant()
+                .toEpochMilli()
+        } catch (_: Exception) { 0L }
+    }
+}
+
+/** Epoch millis -> canonical ISO-8601 (`Instant.toString()`, always `Z`-suffixed UTC). */
+internal fun capturedAtIsoFromMillis(millis: Long): String =
+    java.time.Instant.ofEpochMilli(millis).toString()
+
+/**
+ * Converts a local capture timestamp — either the epoch-millis string a [BookmarkEntity]
+ * holds when set on-device, or an ISO-8601 string when it was last pulled from the server —
+ * into the ISO-8601 string the server's `captured_at` field expects. Returns null when [ts]
+ * is null/blank/unparseable so callers omit `captured_at` entirely rather than send a bogus
+ * instant (the server treats a missing `captured_at` as legacy last-write-wins and never
+ * rejects the write).
+ */
+internal fun toCapturedAtIso(ts: String?): String? {
+    val millis = parseSyncTimestamp(ts)
+    if (millis <= 0L) return null
+    return capturedAtIsoFromMillis(millis)
+}
+
+/**
+ * Picks the timestamp to use for last-write-wins comparisons: prefer `captured_at` (the true
+ * moment a position was recorded on the writing device) over `updated_at` (a row-modified
+ * bookkeeping timestamp) whenever one is present. Falls back to [updatedAt] otherwise —
+ * always the case for servers/rows predating issue #54's conflict-resolution contract.
+ */
+internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
+    if (!capturedAt.isNullOrBlank()) capturedAt else updatedAt
+
+// ============ Bookmark/Progress response -> entity mappers ============
+
+/**
+ * Maps a server [BookmarkResponse] — a normal 200 body, or the authoritative state returned
+ * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies the Readium
+ * EPUB locator and its audio-position anchor, which the server has no concept of and so
+ * never returns.
+ */
+internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEntity(
+    bookPairId = book_pair_id,
+    source = source,
+    epubChapter = epub_chapter,
+    epubSentenceIndex = epub_sentence_index,
+    audioPositionMs = audio_position_ms,
+    epubLocator = epub_locator ?: previous?.epubLocator,
+    locatorAudioMs = previous?.locatorAudioMs,
+    updatedAt = updated_at,
+    capturedAt = captured_at,
+    deviceId = device_id,
+    deviceName = device_name,
+    syncedToServer = true,
+)
+
+/**
+ * Maps a server [ProgressResponse] — a normal 200 body, or the authoritative state returned
+ * in a 409 conflict body — onto a local [UserProgressEntity]. [mediaType]/[mediaId] come from
+ * the request context since the response alone doesn't always disambiguate which media the
+ * progress belongs to (e.g. a standalone audiobook vs. one half of a pair).
+ */
+internal fun ProgressResponse.toEntity(mediaType: String, mediaId: Int) = UserProgressEntity(
+    mediaType = mediaType,
+    mediaId = mediaId,
+    bookPairId = book_pair_id,
+    epubCfi = epub_cfi,
+    epubChapter = epub_chapter,
+    epubProgressPercent = epub_progress_percent,
+    audioPositionMs = audio_position_ms,
+    isCompleted = is_completed,
+    updatedAt = parseSyncTimestamp(preferCapturedAt(captured_at, updated_at)),
+    deviceId = device_id,
+    deviceName = device_name,
+    capturedAt = captured_at,
+    syncedToServer = true,
+)
 
 // ============ BookmarkLog mappers ============
 

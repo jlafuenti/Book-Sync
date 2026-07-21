@@ -28,3 +28,15 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN locatorAudioMs INTEGER")
     }
 }
+
+/** v14 -> v15: multi-device conflict resolution (issue #54) — capturedAt/deviceId/deviceName
+ *  on bookmarks, capturedAt/deviceName on user_progress (deviceId already existed there). */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN capturedAt TEXT")
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN deviceId TEXT")
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN deviceName TEXT")
+        addColumnIfMissing(db, "ALTER TABLE user_progress ADD COLUMN capturedAt TEXT")
+        addColumnIfMissing(db, "ALTER TABLE user_progress ADD COLUMN deviceName TEXT")
+    }
+}
