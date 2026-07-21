@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
-import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio } from '../api'
+import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
 import './EbookReader.css'
 
 function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
@@ -87,6 +87,9 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         // Don't save while text nav is hopping between chapters looking for text
         if (textNavInProgressRef.current) return
         const chapter = spineIndex ?? currentSpineIndexRef.current
+        // Captured once so every write from this save (progress + whichever
+        // bookmark branch below fires) reports the same read-moment timestamp.
+        const capturedAt = new Date().toISOString()
         console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}, chapterProgression=${currentChapterProgressionRef.current?.toFixed(3)}`)
         try {
             await updateProgress('ebook', ebookId, {
@@ -94,7 +97,9 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                 epub_chapter: chapter,
                 epub_progress_percent: Math.round(percent * 100) / 100,
                 book_pair_id: pairId || undefined,
-                device_id: 'web',
+                device_id: getDeviceId(),
+                device_name: getDeviceName(),
+                captured_at: capturedAt,
             })
             if (pairId) {
                 // Extract visible text and match against sync map for accurate audio position
@@ -112,6 +117,9 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                             epub_chapter: match.epub_chapter,
                             epub_sentence_index: match.epub_sentence_index,
                             audio_position_ms: match.audio_position_ms,
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: capturedAt,
                         }).catch(() => {})
                     } else {
                         console.warn(`[EbookReader] No match found — saving epub position only`)
@@ -119,6 +127,9 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                         await updateBookmark(pairId, {
                             source: 'ebook',
                             epub_chapter: chapter,
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: capturedAt,
                         }).catch(() => {})
                     }
                 } else {
@@ -126,6 +137,9 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     await updateBookmark(pairId, {
                         source: 'ebook',
                         epub_chapter: chapter,
+                        device_id: getDeviceId(),
+                        device_name: getDeviceName(),
+                        captured_at: capturedAt,
                     }).catch(() => {})
                 }
             } else {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark, updateBookmark } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark, updateBookmark, getDeviceId, getDeviceName } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -286,7 +286,12 @@ function BookDetailPage() {
                         {/* Mark Complete / Reset Progress */}
                         {progress && !progress.is_completed && (
                             <button className="btn btn-secondary" onClick={async () => {
-                                await updateProgress(type, id, { is_completed: true, device_id: 'web' })
+                                await updateProgress(type, id, {
+                                    is_completed: true,
+                                    device_id: getDeviceId(),
+                                    device_name: getDeviceName(),
+                                    captured_at: new Date().toISOString(),
+                                })
                                 setProgress(p => ({ ...p, is_completed: true }))
                                 showToast('Marked as complete')
                             }}>
@@ -295,7 +300,12 @@ function BookDetailPage() {
                         )}
                         {progress && (progress.is_completed || progress.epub_progress_percent > 0 || progress.audio_position_ms > 0) && (
                             <button className="btn btn-secondary" onClick={async () => {
-                                const resetData = { is_completed: false, device_id: 'web' }
+                                const resetData = {
+                                    is_completed: false,
+                                    device_id: getDeviceId(),
+                                    device_name: getDeviceName(),
+                                    captured_at: new Date().toISOString(),
+                                }
                                 if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = ''; resetData.epub_chapter = 0 }
                                 else { resetData.audio_position_ms = 0 }
                                 await updateProgress(type, id, resetData)

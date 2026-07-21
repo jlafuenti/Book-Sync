@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendBookmarkKeepalive } from '../api'
+import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendBookmarkKeepalive, getDeviceId, getDeviceName } from '../api'
 
 const AudioPlayerContext = createContext(null)
 
@@ -47,20 +47,30 @@ export function AudioPlayerProvider({ children }) {
         const onDurationChange = () => setDuration(audio.duration || 0)
         const onEnded = () => {
             setPlaying(false)
-            // Mark complete on finish
-            if (currentAudiobook) {
-                updateProgress('audiobook', currentAudiobook.id, {
+            // Mark complete on finish. Reads currentAudiobookRef (not the
+            // `currentAudiobook` state closed over by this mount-only effect,
+            // which is permanently null) -- same fix as onError below, which
+            // already uses the ref for the same reason.
+            const ab = currentAudiobookRef.current
+            if (ab) {
+                const capturedAt = new Date().toISOString()
+                updateProgress('audiobook', ab.id, {
                     is_completed: true,
-                    device_id: 'web',
+                    device_id: getDeviceId(),
+                    device_name: getDeviceName(),
+                    captured_at: capturedAt,
                 }).catch(() => {})
                 // Log a "finished" history entry so the audiobook's last session
                 // is visible in Session History.
-                if (currentAudiobook.pairId && audio) {
+                if (ab.pairId && audio) {
                     const posMs = Math.floor(audio.currentTime * 1000)
-                    updateBookmark(currentAudiobook.pairId, {
+                    updateBookmark(ab.pairId, {
                         source: 'audiobook',
                         audio_position_ms: posMs,
                         append_to_log: true,
+                        device_id: getDeviceId(),
+                        device_name: getDeviceName(),
+                        captured_at: capturedAt,
                     }).catch(() => {})
                     lastLogTimeRef.current = Date.now()
                 }
@@ -138,11 +148,14 @@ export function AudioPlayerProvider({ children }) {
                 const audio = audioRef.current
                 if (audio && currentAudiobook) {
                     const posMs = Math.floor(audio.currentTime * 1000)
+                    const capturedAt = new Date().toISOString()
                     // UserProgress heartbeat — untouched, doesn't feed the history view.
                     updateProgress('audiobook', currentAudiobook.id, {
                         audio_position_ms: posMs,
                         book_pair_id: currentAudiobook.pairId || undefined,
-                        device_id: 'web',
+                        device_id: getDeviceId(),
+                        device_name: getDeviceName(),
+                        captured_at: capturedAt,
                     }).catch(() => {})
                     if (currentAudiobook.pairId) {
                         // One heartbeat per tick; flip append_to_log only when the
@@ -153,6 +166,9 @@ export function AudioPlayerProvider({ children }) {
                             source: 'audiobook',
                             audio_position_ms: posMs,
                             append_to_log: shouldLog,
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: capturedAt,
                         }).catch(() => {})
                     }
                 }
@@ -178,6 +194,9 @@ export function AudioPlayerProvider({ children }) {
                 source: 'audiobook',
                 audio_position_ms: posMs,
                 append_to_log: true,
+                device_id: getDeviceId(),
+                device_name: getDeviceName(),
+                captured_at: new Date().toISOString(),
             })
         }
         // pagehide fires more reliably than beforeunload on mobile Safari.
@@ -235,16 +254,22 @@ export function AudioPlayerProvider({ children }) {
         // log a history entry and reset the 30-min continuous-playback timer.
         if (currentAudiobook && audioRef.current) {
             const posMs = Math.floor(audioRef.current.currentTime * 1000)
+            const capturedAt = new Date().toISOString()
             updateProgress('audiobook', currentAudiobook.id, {
                 audio_position_ms: posMs,
                 book_pair_id: currentAudiobook.pairId || undefined,
-                device_id: 'web',
+                device_id: getDeviceId(),
+                device_name: getDeviceName(),
+                captured_at: capturedAt,
             }).catch(() => {})
             if (currentAudiobook.pairId) {
                 updateBookmark(currentAudiobook.pairId, {
                     source: 'audiobook',
                     audio_position_ms: posMs,
                     append_to_log: true,
+                    device_id: getDeviceId(),
+                    device_name: getDeviceName(),
+                    captured_at: capturedAt,
                 }).catch(() => {})
                 lastLogTimeRef.current = Date.now()
             }

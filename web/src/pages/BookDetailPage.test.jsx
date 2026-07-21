@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import BookDetailPage from './BookDetailPage'
 
@@ -7,12 +7,16 @@ import BookDetailPage from './BookDetailPage'
 // exercises the enrich-from-ABS toast logic.
 const {
     getAudiobookMock, getSettingsMock, enrichAudiobookFromAbsMock, getProgressMock, getBookmarkMock,
+    updateProgressMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAudiobookMock: vi.fn(),
     getSettingsMock: vi.fn(),
     enrichAudiobookFromAbsMock: vi.fn(),
     getProgressMock: vi.fn(),
     getBookmarkMock: vi.fn(),
+    updateProgressMock: vi.fn(),
+    getDeviceIdMock: vi.fn(() => 'device-abc'),
+    getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
 }))
 
 vi.mock('../api', () => ({
@@ -24,9 +28,11 @@ vi.mock('../api', () => ({
     getSettings: getSettingsMock,
     enrichAudiobookFromAbs: enrichAudiobookFromAbsMock,
     getProgress: getProgressMock,
-    updateProgress: vi.fn(),
+    updateProgress: updateProgressMock,
     getBookmark: getBookmarkMock,
     updateBookmark: vi.fn(),
+    getDeviceId: getDeviceIdMock,
+    getDeviceName: getDeviceNameMock,
 }))
 
 vi.mock('react-markdown', () => ({ default: ({ children }) => <div>{children}</div> }))
@@ -55,6 +61,9 @@ beforeEach(() => {
     enrichAudiobookFromAbsMock.mockReset()
     getProgressMock.mockReset().mockResolvedValue(null)
     getBookmarkMock.mockReset().mockResolvedValue(null)
+    updateProgressMock.mockReset().mockResolvedValue({})
+    getDeviceIdMock.mockReset().mockReturnValue('device-abc')
+    getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
 })
 
 describe('BookDetailPage enrich from ABS', () => {
@@ -86,5 +95,37 @@ describe('BookDetailPage enrich from ABS', () => {
 
         const toast = await screen.findByText(/written back to file/)
         expect(toast.getAttribute('style')).toContain('var(--success)')
+    })
+})
+
+describe('BookDetailPage progress actions (issue #54 device attribution)', () => {
+    it('sends device_id, device_name, and captured_at when marking complete', async () => {
+        getProgressMock.mockResolvedValue({ is_completed: false, audio_position_ms: 1000 })
+        renderPage()
+
+        fireEvent.click(await screen.findByRole('button', { name: /Mark Complete/ }))
+
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', '1538', expect.objectContaining({
+            is_completed: true,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+    })
+
+    it('sends device_id, device_name, and captured_at when resetting progress', async () => {
+        getProgressMock.mockResolvedValue({ is_completed: false, audio_position_ms: 1000 })
+        renderPage()
+
+        fireEvent.click(await screen.findByRole('button', { name: /Reset Progress/ }))
+
+        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', '1538', expect.objectContaining({
+            is_completed: false,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
     })
 })
