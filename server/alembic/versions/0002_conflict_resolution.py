@@ -12,7 +12,7 @@ server sync endpoints (and, in later tasks, the web and Android clients):
 All new columns are nullable — legacy rows and legacy clients (which never
 send ``captured_at``) are unaffected; see ``routers.sync._is_stale``.
 
-Revision ID: 0002_conflict_resolution_contract
+Revision ID: 0002_conflict_resolution
 Revises: 0001_baseline
 Create Date: 2026-07-20
 
@@ -23,7 +23,13 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0002_conflict_resolution_contract"
+# NOTE: keep this at or under 32 chars — Alembic's default alembic_version
+# table stores it in a VARCHAR(32) column, and a longer id fails at
+# migration time with "value too long for type character varying(32)"
+# (a legacy client-app value of 200 chars is unrelated; this is Alembic's
+# own bookkeeping column, not a domain column, and Alembic does not
+# configure a wider one by default).
+revision: str = "0002_conflict_resolution"
 down_revision: Union[str, None] = "0001_baseline"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
