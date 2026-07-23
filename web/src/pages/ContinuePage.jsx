@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, updateBookmark, getAccessToken } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, updateBookmark, getAccessToken, getDeviceId, getDeviceName } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -146,16 +146,25 @@ function ContinuePage() {
 
     // --- Actions ---
 
+    // Device attribution + write-ordering fields sent with every progress
+    // write (issue #54). captured_at is read fresh per-call so a batch of
+    // Promise.all writes each stamp their own moment.
+    const deviceMeta = () => ({
+        device_id: getDeviceId(),
+        device_name: getDeviceName(),
+        captured_at: new Date().toISOString(),
+    })
+
     const handleMarkComplete = async (item) => {
         setMenuOpen(null)
         try {
             if (item.itemType === 'pair') {
                 await Promise.all([
-                    item.ebookId ? updateProgress('ebook', item.ebookId, { is_completed: true, device_id: 'web' }).catch(() => {}) : null,
-                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, { is_completed: true, device_id: 'web' }).catch(() => {}) : null,
+                    item.ebookId ? updateProgress('ebook', item.ebookId, { is_completed: true, ...deviceMeta() }).catch(() => {}) : null,
+                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, { is_completed: true, ...deviceMeta() }).catch(() => {}) : null,
                 ].filter(Boolean))
             } else {
-                await updateProgress(item.itemType, item.mediaId, { is_completed: true, device_id: 'web' })
+                await updateProgress(item.itemType, item.mediaId, { is_completed: true, ...deviceMeta() })
             }
             setItems(prev => prev.filter(i => i.itemId !== item.itemId))
         } catch (err) {
@@ -169,22 +178,22 @@ function ContinuePage() {
             if (item.itemType === 'pair') {
                 await Promise.all([
                     item.ebookId ? updateProgress('ebook', item.ebookId, {
-                        is_completed: false, device_id: 'web',
+                        is_completed: false, ...deviceMeta(),
                         epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
                     }).catch(() => {}) : null,
                     item.audiobookId ? updateProgress('audiobook', item.audiobookId, {
-                        is_completed: false, device_id: 'web',
+                        is_completed: false, ...deviceMeta(),
                         audio_position_ms: 0,
                     }).catch(() => {}) : null,
                 ].filter(Boolean))
             } else if (item.itemType === 'ebook') {
                 await updateProgress('ebook', item.mediaId, {
-                    is_completed: false, device_id: 'web',
+                    is_completed: false, ...deviceMeta(),
                     epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
                 })
             } else {
                 await updateProgress('audiobook', item.mediaId, {
-                    is_completed: false, device_id: 'web',
+                    is_completed: false, ...deviceMeta(),
                     audio_position_ms: 0,
                 })
             }

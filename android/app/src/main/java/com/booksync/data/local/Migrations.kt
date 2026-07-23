@@ -28,3 +28,25 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN locatorAudioMs INTEGER")
     }
 }
+
+/** v14 -> v15: multi-device conflict resolution (issue #54) — capturedAt/deviceId/deviceName
+ *  on bookmarks, capturedAt/deviceName on user_progress (deviceId already existed there). */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN capturedAt TEXT")
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN deviceId TEXT")
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN deviceName TEXT")
+        addColumnIfMissing(db, "ALTER TABLE user_progress ADD COLUMN capturedAt TEXT")
+        addColumnIfMissing(db, "ALTER TABLE user_progress ADD COLUMN deviceName TEXT")
+    }
+}
+
+/** v15 -> v16: bookmark_log never got deviceId/deviceName in MIGRATION_14_15 — every
+ *  History-tab entry silently lost device attribution regardless of what the server
+ *  returned, since getBookmarkHistory always reads back through this local cache. */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE bookmark_log ADD COLUMN deviceId TEXT")
+        addColumnIfMissing(db, "ALTER TABLE bookmark_log ADD COLUMN deviceName TEXT")
+    }
+}

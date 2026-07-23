@@ -2,11 +2,29 @@
 Pydantic schemas for API request/response validation.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from models.book import PairStatus
 from models.bookmark import BookmarkSource
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """
+    Conflict-resolution contract (issue #54): normalize an incoming
+    `captured_at` to a naive UTC datetime.
+
+    Pydantic parses a 'Z'/offset-suffixed timestamp (e.g. JS
+    `Date.toISOString()` or Kotlin `Instant.toString()`) into a
+    timezone-aware datetime, but the DB columns are naive `DateTime` and
+    SQLAlchemy always reads them back naive. Comparing an aware value
+    against a naive one in `_is_stale` raises `TypeError`. Normalizing here
+    guarantees whatever is stored and compared is always naive UTC, leaving
+    already-naive inputs (legacy clients) untouched.
+    """
+    if value is not None and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 # ============================================================
@@ -309,6 +327,17 @@ class BookmarkUpdate(BaseModel):
     # pause, stop (track ended, player closed, cast session ends), or every
     # 30 minutes of continuous playback. Keeps the history tab scannable.
     append_to_log: bool = False
+    # Conflict-resolution contract (issue #54): wall-clock time the client
+    # captured this position. Omitted by legacy clients, which preserves the
+    # old last-write-wins behavior (no staleness check is possible without it).
+    captured_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+    @field_validator("captured_at")
+    @classmethod
+    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+        return _naive_utc(value)
 
 
 class TextMatchRequest(BaseModel):
@@ -335,6 +364,9 @@ class BookmarkResponse(BaseModel):
     epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
+    captured_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -350,6 +382,9 @@ class BookmarkLogResponse(BaseModel):
     new_epub_sentence_index: Optional[int]
     new_audio_position_ms: Optional[int]
     changed_at: datetime
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    captured_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -369,6 +404,16 @@ class ProgressUpdate(BaseModel):
     audio_position_ms: Optional[int] = None
     is_completed: Optional[bool] = None
     device_id: Optional[str] = None
+    # Conflict-resolution contract (issue #54): wall-clock time the client
+    # captured this position. Omitted by legacy clients, which preserves the
+    # old last-write-wins behavior (no staleness check is possible without it).
+    captured_at: Optional[datetime] = None
+    device_name: Optional[str] = None
+
+    @field_validator("captured_at")
+    @classmethod
+    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+        return _naive_utc(value)
 
 class ProgressResponse(BaseModel):
     id: int
@@ -384,6 +429,8 @@ class ProgressResponse(BaseModel):
     is_completed: bool
     updated_at: datetime
     device_id: Optional[str]
+    captured_at: Optional[datetime] = None
+    device_name: Optional[str] = None
 
     class Config:
         from_attributes = True

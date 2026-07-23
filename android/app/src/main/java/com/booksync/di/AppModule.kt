@@ -133,6 +133,8 @@ object AppModule {
         ).addMigrations(
             com.booksync.data.local.MIGRATION_12_13,
             com.booksync.data.local.MIGRATION_13_14,
+            com.booksync.data.local.MIGRATION_14_15,
+            com.booksync.data.local.MIGRATION_15_16,
         )
          .fallbackToDestructiveMigration(dropAllTables = true)
          .build()
@@ -164,6 +166,9 @@ object AppModule {
     @Provides
     fun provideBookmarkLogDao(db: BookSyncDatabase): BookmarkLogDao = db.bookmarkLogDao()
 
+    // Backs both ServerUrlManager and DeviceIdManager, which are each provided via their
+    // own @Singleton @Inject constructor (no explicit @Provides needed) — Hilt resolves
+    // them automatically once this DataStore binding is available.
     @Provides
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =

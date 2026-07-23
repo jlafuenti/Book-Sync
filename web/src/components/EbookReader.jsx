@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
-import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio } from '../api'
+import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
 import './EbookReader.css'
 
 function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
@@ -19,6 +19,17 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     const [fontSize, setFontSize] = useState(100)
     const fontSizeRef = useRef(100)
     const [savedIndicator, setSavedIndicator] = useState(false)
+    // Stale-conflict affordance (issue #54): set when the progress write in
+    // doSave() comes back `rejected: true` with a newer position from a
+    // genuinely different device. { cfi, deviceName }. Only cleared via the
+    // explicit "Jump" click below -- never auto-navigated.
+    //
+    // A rejected updateBookmark(...) call (fix for a review finding on Task
+    // 3) sets this same state with `cfi: null` -- BookmarkResponse has no
+    // navigable epub_cfi field, so there's no jump target, only a passive
+    // "Dismiss"-only notice. Never overwrites an already-showing jump-capable
+    // (cfi-bearing) conflict with a lesser message-only one.
+    const [staleConflict, setStaleConflict] = useState(null)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
     // Tracks progression (0-1) within the current chapter, updated on each page turn
     const currentChapterProgressionRef = useRef(0)
@@ -82,20 +93,59 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         return text.substring(0, 220)
     }, [bookTitle])
 
+    // A bookmark write (not progress) was rejected by a genuinely different
+    // device. BookmarkResponse carries no navigable epub_cfi, so there's no
+    // jump target here -- just a visibility signal so the rejection isn't
+    // silent. Never clobbers an already-showing jump-capable (cfi-bearing)
+    // conflict from the progress write in the same doSave() call.
+    const handleBookmarkConflict = useCallback((result) => {
+        if (
+            result?.rejected &&
+            result.device_id &&
+            result.device_id !== getDeviceId()
+        ) {
+            setStaleConflict(prev => (prev && prev.cfi) ? prev : {
+                cfi: null,
+                deviceName: result.device_name || result.device_id,
+            })
+        }
+        return result
+    }, [])
+
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         // Don't save while text nav is hopping between chapters looking for text
         if (textNavInProgressRef.current) return
         const chapter = spineIndex ?? currentSpineIndexRef.current
+        // Captured once so every write from this save (progress + whichever
+        // bookmark branch below fires) reports the same read-moment timestamp.
+        const capturedAt = new Date().toISOString()
         console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}, chapterProgression=${currentChapterProgressionRef.current?.toFixed(3)}`)
         try {
-            await updateProgress('ebook', ebookId, {
+            const progressResult = await updateProgress('ebook', ebookId, {
                 epub_cfi: cfi,
                 epub_chapter: chapter,
                 epub_progress_percent: Math.round(percent * 100) / 100,
                 book_pair_id: pairId || undefined,
-                device_id: 'web',
+                device_id: getDeviceId(),
+                device_name: getDeviceName(),
+                captured_at: capturedAt,
             })
+            // A different device's write is newer and won -- surface it so the
+            // reader isn't silently left showing a stale position. Only a
+            // rejection carrying a usable epub_cfi is actionable; skip an echo
+            // of this device's own id (a retried/out-of-order write).
+            if (
+                progressResult?.rejected &&
+                progressResult.device_id &&
+                progressResult.device_id !== getDeviceId() &&
+                progressResult.epub_cfi
+            ) {
+                setStaleConflict({
+                    cfi: progressResult.epub_cfi,
+                    deviceName: progressResult.device_name || progressResult.device_id,
+                })
+            }
             if (pairId) {
                 // Extract visible text and match against sync map for accurate audio position
                 const textPreview = extractVisibleText()
@@ -112,21 +162,30 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                             epub_chapter: match.epub_chapter,
                             epub_sentence_index: match.epub_sentence_index,
                             audio_position_ms: match.audio_position_ms,
-                        }).catch(() => {})
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: capturedAt,
+                        }).then(handleBookmarkConflict).catch(() => {})
                     } else {
                         console.warn(`[EbookReader] No match found — saving epub position only`)
                         // No match — save epub position only, don't corrupt audio position
                         await updateBookmark(pairId, {
                             source: 'ebook',
                             epub_chapter: chapter,
-                        }).catch(() => {})
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: capturedAt,
+                        }).then(handleBookmarkConflict).catch(() => {})
                     }
                 } else {
                     console.warn(`[EbookReader] Text too short for matching (${textPreview?.length} chars), saving chapter only`)
                     await updateBookmark(pairId, {
                         source: 'ebook',
                         epub_chapter: chapter,
-                    }).catch(() => {})
+                        device_id: getDeviceId(),
+                        device_name: getDeviceName(),
+                        captured_at: capturedAt,
+                    }).then(handleBookmarkConflict).catch(() => {})
                 }
             } else {
                 console.log(`[EbookReader] No pairId, skipping bookmark sync`)
@@ -134,7 +193,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
         }
-    }, [ebookId, pairId, extractVisibleText])
+    }, [ebookId, pairId, extractVisibleText, handleBookmarkConflict])
 
     // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
@@ -501,6 +560,36 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     </button>
                 </div>
             </div>
+
+            {/* Stale-conflict banner (issue #54): a different device's write was
+                newer than ours and won. Never auto-navigate -- only jump on an
+                explicit click. */}
+            {staleConflict && (
+                <div className="alert alert-warning" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1 }}>
+                        Newer position available from {staleConflict.deviceName}
+                        {staleConflict.cfi ? '' : ' on this book'}
+                    </span>
+                    {staleConflict.cfi ? (
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => {
+                                renditionRef.current?.display(staleConflict.cfi)
+                                setStaleConflict(null)
+                            }}
+                        >
+                            Jump
+                        </button>
+                    ) : (
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={() => setStaleConflict(null)}
+                        >
+                            Dismiss
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* Reader area */}
             <div className="ebook-reader-container">

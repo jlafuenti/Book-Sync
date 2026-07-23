@@ -32,6 +32,53 @@ function clearTokens() {
     localStorage.removeItem('tandem_refresh');
 }
 
+// ============ Device Identity (issue #54 — multi-device conflict resolution) ============
+//
+// A stable per-install id/name sent with every bookmark/progress write so the
+// server can attribute writes to a device and detect stale-write conflicts
+// (see the `captured_at` handling in updateBookmark/updateProgress below).
+
+function uuidv4Fallback() {
+    // RFC 4122 v4 UUID, for browsers/environments without crypto.randomUUID
+    // (e.g. non-HTTPS contexts, which disable the Crypto API's randomUUID).
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
+export function getDeviceId() {
+    let id = localStorage.getItem('tandem_device_id');
+    if (!id) {
+        id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+            ? crypto.randomUUID()
+            : uuidv4Fallback();
+        localStorage.setItem('tandem_device_id', id);
+    }
+    return id;
+}
+
+function deriveDeviceName() {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    let browser = 'Browser';
+    if (/Edg\//.test(ua)) browser = 'Edge';
+    else if (/OPR\//.test(ua)) browser = 'Opera';
+    else if (/Firefox\//.test(ua)) browser = 'Firefox';
+    else if (/Chrome\//.test(ua) && !/Chromium/.test(ua)) browser = 'Chrome';
+    else if (/Safari\//.test(ua) && !/Chrome/.test(ua)) browser = 'Safari';
+    return `Web · ${browser}`;
+}
+
+export function getDeviceName() {
+    let name = localStorage.getItem('tandem_device_name');
+    if (!name) {
+        name = deriveDeviceName();
+        localStorage.setItem('tandem_device_name', name);
+    }
+    return name;
+}
+
 // Short-lived tokens scoped to one cover/audiobook resource, minted via
 // /api/auth/media-token. Used instead of the long-lived access token on URLs
 // that can't carry an Authorization header (img tags, the <audio> element,
@@ -546,6 +593,15 @@ export async function updateProgress(mediaType, mediaId, progressData) {
         method: 'PUT',
         body: JSON.stringify(progressData),
     });
+    // A 409 means the write carried a `captured_at` older than what the server
+    // already has — an expected outcome of a stale/out-of-order device write,
+    // not an error. The body is the current authoritative ProgressResponse; the
+    // write was NOT applied. Mark it so callers can distinguish this from a
+    // normal save without treating it as a thrown error.
+    if (resp.status === 409) {
+        const body = await resp.json();
+        return Object.assign(body, { rejected: true });
+    }
     if (!resp.ok) throw new Error('Failed to update progress');
     return resp.json();
 }
@@ -571,6 +627,12 @@ export async function updateBookmark(pairId, data) {
         method: 'PUT',
         body: JSON.stringify(data),
     });
+    // See the matching comment in updateProgress: a 409 is an expected
+    // "rejected — server state is newer" result, not an error.
+    if (resp.status === 409) {
+        const body = await resp.json();
+        return Object.assign(body, { rejected: true });
+    }
     if (!resp.ok) throw new Error('Failed to update bookmark');
     return resp.json();
 }

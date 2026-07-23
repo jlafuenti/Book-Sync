@@ -54,6 +54,14 @@ class Bookmark(Base):
     )
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
+    # Conflict-resolution contract (issue #54): the client-reported wall-clock
+    # time the position was captured (not when the request reached the
+    # server). Used to reject stale replays from offline devices instead of
+    # blindly overwriting a newer position (last-write-wins).
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    device_id: Mapped[str] = mapped_column(String(200), nullable=True)
+    device_name: Mapped[str] = mapped_column(String(200), nullable=True)
+
     # Relationships
     user = relationship("User", back_populates="bookmarks")
     book_pair = relationship("BookPair", back_populates="bookmarks")
@@ -94,6 +102,13 @@ class BookmarkLog(Base):
     changed_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+
+    # Device attribution + client-captured event time, copied from the
+    # Bookmark at the moment this log row was written — lets Session History
+    # show which device made each change and when it actually happened.
+    device_id: Mapped[str] = mapped_column(String(200), nullable=True)
+    device_name: Mapped[str] = mapped_column(String(200), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     # Relationships
     bookmark = relationship("Bookmark", back_populates="logs")
