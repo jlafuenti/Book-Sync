@@ -206,6 +206,25 @@ class OversizedChunkError(RuntimeError):
     """
 
 
+def _is_chunk_oversized(actual_chunk_sec: float, requested_chunk_size: int) -> bool:
+    """True if ffmpeg returned far more audio than requested (see OversizedChunkError)."""
+    return actual_chunk_sec > requested_chunk_size * OVERSIZED_CHUNK_TOLERANCE
+
+
+def _shrink_chunk_size(current_chunk_size: int) -> Optional[int]:
+    """Halve the chunk size after an oversized-chunk or OoM failure.
+
+    Shared by both recovery paths in `_transcribe_file`. Returns the halved
+    size to retry with, or None once that size would drop below
+    MIN_CHUNK_SIZE_SEC — the caller should treat None as a signal to stop
+    retrying and propagate the original failure instead.
+    """
+    new_size = current_chunk_size // 2
+    if new_size < MIN_CHUNK_SIZE_SEC:
+        return None
+    return new_size
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint system — preserves progress across OoM failures
 # ---------------------------------------------------------------------------
@@ -495,7 +514,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                     break
 
                 actual_chunk_sec = len(audio_array) / 16000
-                if actual_chunk_sec > current_chunk_size * OVERSIZED_CHUNK_TOLERANCE:
+                if _is_chunk_oversized(actual_chunk_sec, current_chunk_size):
                     del audio_array
                     raise OversizedChunkError(
                         f"ffmpeg returned {actual_chunk_sec:.1f}s of audio for a "
@@ -574,15 +593,16 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
 
                 # No transcribe() call happened, so there's nothing to reload —
                 # just shrink and retry at the same position.
-                current_chunk_size = current_chunk_size // 2
-                if current_chunk_size < MIN_CHUNK_SIZE_SEC:
+                new_size = _shrink_chunk_size(current_chunk_size)
+                if new_size is None:
                     logger.error(
-                        f"  Chunk size {current_chunk_size}s below minimum "
-                        f"({MIN_CHUNK_SIZE_SEC}s) and ffmpeg is still returning "
-                        f"oversized audio at {start_sec}s. Aborting — source file "
-                        f"is likely corrupt/malformed and needs to be re-imported."
+                        f"  Chunk size below minimum ({MIN_CHUNK_SIZE_SEC}s) and "
+                        f"ffmpeg is still returning oversized audio at {start_sec}s. "
+                        f"Aborting — source file is likely corrupt/malformed and "
+                        f"needs to be re-imported."
                     )
                     raise
+                current_chunk_size = new_size
                 logger.info(
                     f"  Retrying @ {start_sec}s with reduced chunk size "
                     f"{current_chunk_size}s"
@@ -604,13 +624,14 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                     gc.collect()
 
                     # Halve chunk size and retry
-                    current_chunk_size = current_chunk_size // 2
-                    if current_chunk_size < MIN_CHUNK_SIZE_SEC:
+                    new_size = _shrink_chunk_size(current_chunk_size)
+                    if new_size is None:
                         logger.error(
-                            f"  Chunk size {current_chunk_size}s below minimum "
-                            f"({MIN_CHUNK_SIZE_SEC}s). Cannot recover."
+                            f"  Chunk size below minimum ({MIN_CHUNK_SIZE_SEC}s). "
+                            f"Cannot recover."
                         )
                         raise
+                    current_chunk_size = new_size
                     logger.info(
                         f"  Retrying @ {start_sec}s with reduced chunk size "
                         f"{current_chunk_size}s"
