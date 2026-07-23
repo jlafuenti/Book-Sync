@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,6 +28,23 @@ from schemas import (
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
+
+
+def _is_stale(incoming: datetime | None, stored: datetime | None) -> bool:
+    """
+    Conflict-resolution contract (issue #54): is an incoming update stale
+    relative to what's stored?
+
+    Legacy clients (pre-#54) never send `captured_at`, and the first write
+    to a row has no stored `captured_at` to compare against — in both cases
+    there's nothing to compare, so we fall back to the historical
+    last-write-wins behavior rather than reject the update.
+    """
+    if incoming is None:      # legacy client -> preserve LWW
+        return False
+    if stored is None:        # legacy/first row -> nothing to compare
+        return False
+    return incoming < stored
 
 
 async def _convert_position(
@@ -144,7 +163,11 @@ async def get_bookmark(
     return response
 
 
-@router.put("/bookmark/{pair_id}", response_model=BookmarkResponse)
+@router.put(
+    "/bookmark/{pair_id}",
+    response_model=BookmarkResponse,
+    responses={409: {"model": BookmarkResponse}},
+)
 async def update_bookmark(
     pair_id: int,
     update: BookmarkUpdate,
@@ -155,6 +178,13 @@ async def update_bookmark(
     Update the user's bookmark position for a book pair.
     Automatically computes the corresponding position in the other format
     using the SyncMap.
+
+    Conflict resolution (issue #54): if the bookmark already exists and the
+    incoming `captured_at` is older than the stored one, the update is a
+    stale replay (e.g. an offline device catching up) and is rejected with
+    409 — the response body is the current, unchanged state. Legacy clients
+    that omit `captured_at`, and the first write to a pair, always apply
+    (last-write-wins).
     """
     # Verify book pair exists
     result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
@@ -170,12 +200,24 @@ async def update_bookmark(
     )
     bookmark = result.scalar_one_or_none()
 
+    if bookmark and _is_stale(update.captured_at, bookmark.captured_at):
+        _, _, _, current_preview = await _convert_position(
+            db, pair_id, bookmark.source,
+            bookmark.epub_chapter, bookmark.epub_sentence_index,
+            bookmark.audio_position_ms,
+        )
+        current = BookmarkResponse.model_validate(bookmark)
+        current.epub_text_preview = current_preview
+        return JSONResponse(status_code=409, content=jsonable_encoder(current))
+
     # Convert position using sync map
     epub_ch, epub_si, audio_ms, text_preview = await _convert_position(
         db, pair_id, update.source,
         update.epub_chapter, update.epub_sentence_index,
         update.audio_position_ms,
     )
+
+    stamped_captured_at = update.captured_at or datetime.utcnow()
 
     if not bookmark:
         bookmark = Bookmark(
@@ -186,6 +228,9 @@ async def update_bookmark(
             epub_sentence_index=epub_si,
             audio_position_ms=audio_ms,
             epub_locator=update.epub_locator,
+            captured_at=stamped_captured_at,
+            device_id=update.device_id,
+            device_name=update.device_name,
         )
         db.add(bookmark)
         await db.flush()
@@ -197,7 +242,17 @@ async def update_bookmark(
             or bookmark.epub_sentence_index != epub_si
             or bookmark.audio_position_ms != audio_ms
         )
+        # Conflict-resolution contract (issue #54): only overwrite device_id/
+        # device_name when the client actually sent a value — matching
+        # progress's pattern. A write that omits these fields must preserve
+        # whatever was previously stored, not wipe it to null.
+        resolved_device_id = update.device_id if update.device_id is not None else bookmark.device_id
+        resolved_device_name = update.device_name if update.device_name is not None else bookmark.device_name
+
         if position_changed and update.append_to_log:
+            # The log row reflects what will actually be applied to the
+            # bookmark (the resolved/preserved values), not the raw incoming
+            # request which may have omitted device_id/device_name.
             log = BookmarkLog(
                 bookmark_id=bookmark.id,
                 source=update.source,
@@ -207,6 +262,9 @@ async def update_bookmark(
                 new_epub_chapter=epub_ch,
                 new_epub_sentence_index=epub_si,
                 new_audio_position_ms=audio_ms,
+                device_id=resolved_device_id,
+                device_name=resolved_device_name,
+                captured_at=stamped_captured_at,
             )
             db.add(log)
 
@@ -219,6 +277,9 @@ async def update_bookmark(
         # updates omit it and must not wipe the stored ebook locator).
         if update.epub_locator is not None:
             bookmark.epub_locator = update.epub_locator
+        bookmark.captured_at = stamped_captured_at
+        bookmark.device_id = resolved_device_id
+        bookmark.device_name = resolved_device_name
         bookmark.updated_at = datetime.utcnow()
         bookmark.synced_at = datetime.utcnow()
 
@@ -315,7 +376,11 @@ async def get_progress(
     return progress
 
 
-@router.put("/progress/{media_type}/{media_id}", response_model=ProgressResponse)
+@router.put(
+    "/progress/{media_type}/{media_id}",
+    response_model=ProgressResponse,
+    responses={409: {"model": ProgressResponse}},
+)
 async def update_progress(
     media_type: ProgressType,
     media_id: int,
@@ -323,8 +388,14 @@ async def update_progress(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update progress for a specific piece of media."""
-    
+    """
+    Update progress for a specific piece of media.
+
+    Conflict resolution (issue #54): same contract as `update_bookmark` — a
+    stale `captured_at` on an existing row is rejected with 409 and the
+    current (unchanged) state, instead of silently overwriting it.
+    """
+
     # 1. Verify existence of media
     if media_type == ProgressType.EBOOK:
         result = await db.execute(select(EBook).where(EBook.id == media_id))
@@ -334,20 +405,24 @@ async def update_progress(
         result = await db.execute(select(AudioBook).where(AudioBook.id == media_id))
         if not result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail=f"Audiobook {media_id} not found")
-        
+
     query = select(UserProgress).where(
         UserProgress.user_id == current_user.id,
         UserProgress.media_type == media_type
     )
-    
+
     if media_type == ProgressType.EBOOK:
         query = query.where(UserProgress.ebook_id == media_id)
     else:
         query = query.where(UserProgress.audiobook_id == media_id)
-        
+
     result = await db.execute(query)
     progress = result.scalar_one_or_none()
-    
+
+    if progress and _is_stale(update_data.captured_at, progress.captured_at):
+        current = ProgressResponse.model_validate(progress)
+        return JSONResponse(status_code=409, content=jsonable_encoder(current))
+
     if not progress:
         progress_data = {
             "user_id": current_user.id,
@@ -379,10 +454,14 @@ async def update_progress(
             
     if update_data.is_completed is not None:
         progress.is_completed = update_data.is_completed
-        
+
     if update_data.device_id is not None:
         progress.device_id = update_data.device_id
-        
+
+    if update_data.device_name is not None:
+        progress.device_name = update_data.device_name
+
+    progress.captured_at = update_data.captured_at or datetime.utcnow()
     progress.updated_at = datetime.utcnow()
 
     await db.commit()

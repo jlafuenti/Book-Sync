@@ -1246,7 +1246,8 @@ private fun HistoryTab(
                         fontSize = 14.sp,
                     )
                     Text(
-                        text = "${item.source} · ${formatAbsoluteTime(item.changed_at)}",
+                        text = "${item.source} · ${formatAbsoluteTime(item.changed_at)}" +
+                            historyDeviceSuffix(item.device_name, item.device_id),
                         color = colors.textMuted,
                         fontSize = 12.sp,
                     )
@@ -1345,6 +1346,16 @@ private fun formatAbsoluteTime(isoTimestamp: String): String {
     } catch (_: Exception) {
         isoTimestamp
     }
+}
+
+/**
+ * Renders the trailing " · from {label}" suffix for a History-tab entry, preferring
+ * a friendly device name over the raw device id, and rendering nothing at all when
+ * neither is present (e.g. legacy log rows predating issue #54's device attribution).
+ */
+internal fun historyDeviceSuffix(deviceName: String?, deviceId: String?): String {
+    val label = deviceName?.trim()?.takeIf { it.isNotBlank() } ?: deviceId
+    return if (label.isNullOrBlank()) "" else " · from $label"
 }
 
 /**

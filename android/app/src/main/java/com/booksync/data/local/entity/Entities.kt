@@ -88,7 +88,16 @@ data class BookmarkEntity(
     // reader reuse the exact locator when audio hasn't moved much since.
     val locatorAudioMs: Int? = null,
     val updatedAt: String,
-    val syncedToServer: Boolean = true
+    val syncedToServer: Boolean = true,
+    // Multi-device conflict resolution (issue #54). capturedAt is the ISO-8601
+    // moment this position was actually recorded on a device (as opposed to
+    // updatedAt, which may be a bookkeeping timestamp) — preferred for
+    // last-write-wins comparisons when present. deviceId/deviceName attribute
+    // the write to a device, either this one (local write) or whichever device's
+    // state the server returned (pull / 409-conflict adoption).
+    val capturedAt: String? = null,
+    val deviceId: String? = null,
+    val deviceName: String? = null
 )
 
 @Entity(tableName = "pending_sync")
@@ -125,7 +134,10 @@ data class UserProgressEntity(
     val isCompleted: Boolean,
     val updatedAt: Long,
     val deviceId: String?,
-    val syncedToServer: Boolean = true
+    val syncedToServer: Boolean = true,
+    // See BookmarkEntity — same multi-device conflict resolution contract (issue #54).
+    val capturedAt: String? = null,
+    val deviceName: String? = null
 )
 
 /**
@@ -147,5 +159,7 @@ data class BookmarkLogEntity(
     val newEpubChapter: Int?,
     val newEpubSentenceIndex: Int?,
     val newAudioPositionMs: Int?,
-    val changedAt: String
+    val changedAt: String,
+    val deviceId: String? = null,
+    val deviceName: String? = null
 )

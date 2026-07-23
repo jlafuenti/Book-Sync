@@ -48,9 +48,18 @@ class UserProgress(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
-    
-    # Device ID that last updated this progress, helps resolve conflicts
+
+    # Conflict-resolution contract (issue #54): the client-reported wall-clock
+    # time the position was captured (not when the request reached the
+    # server). Used to reject stale replays from offline devices instead of
+    # blindly overwriting a newer position (last-write-wins).
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    # Device ID that last updated this progress. Read for attribution/display
+    # (device_name below is the human-readable counterpart), and used to
+    # resolve conflicts alongside captured_at.
     device_id: Mapped[str] = mapped_column(String(200), nullable=True)
+    device_name: Mapped[str] = mapped_column(String(200), nullable=True)
 
     def __repr__(self) -> str:
         return f"<UserProgress(user={self.user_id}, type={self.media_type})>"

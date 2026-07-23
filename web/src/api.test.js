@@ -388,6 +388,180 @@ describe('prefetchMediaTokens()', () => {
     })
 })
 
+describe('getDeviceId()', () => {
+    it('generates a UUID-shaped id and persists it under tandem_device_id', async () => {
+        const { getDeviceId } = await import('./api')
+        const id = getDeviceId()
+
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+        expect(localStorage.getItem('tandem_device_id')).toBe(id)
+    })
+
+    it('returns the same value across repeated calls once persisted in localStorage', async () => {
+        const { getDeviceId } = await import('./api')
+        const first = getDeviceId()
+        const second = getDeviceId()
+
+        expect(second).toBe(first)
+    })
+
+    it('reuses a pre-existing tandem_device_id from localStorage instead of generating a new one', async () => {
+        localStorage.setItem('tandem_device_id', 'preexisting-device-id')
+
+        const { getDeviceId } = await import('./api')
+        expect(getDeviceId()).toBe('preexisting-device-id')
+    })
+
+    it('falls back to the hand-rolled v4 generator when crypto.randomUUID is unavailable', async () => {
+        // Non-HTTPS contexts (and some older browsers) expose `crypto` without
+        // `randomUUID` -- getDeviceId() must still produce a valid v4 UUID.
+        vi.stubGlobal('crypto', {})
+
+        const { getDeviceId } = await import('./api')
+        const id = getDeviceId()
+
+        expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+        expect(localStorage.getItem('tandem_device_id')).toBe(id)
+    })
+})
+
+describe('getDeviceName()', () => {
+    it('derives a friendly name from navigator.userAgent and persists it under tandem_device_name', async () => {
+        vi.stubGlobal('navigator', {
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        })
+
+        const { getDeviceName } = await import('./api')
+        const name = getDeviceName()
+
+        expect(name).toContain('Web')
+        expect(name).toContain('Chrome')
+        expect(localStorage.getItem('tandem_device_name')).toBe(name)
+    })
+
+    it('reuses a pre-existing tandem_device_name from localStorage instead of re-deriving it', async () => {
+        localStorage.setItem('tandem_device_name', 'My Saved Name')
+
+        const { getDeviceName } = await import('./api')
+        expect(getDeviceName()).toBe('My Saved Name')
+    })
+
+    it('derives "Safari" for a Safari user agent (no Chrome token present)', async () => {
+        vi.stubGlobal('navigator', {
+            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        })
+
+        const { getDeviceName } = await import('./api')
+        expect(getDeviceName()).toBe('Web · Safari')
+    })
+})
+
+describe('updateBookmark()', () => {
+    it('sends device_id, device_name, and captured_at in the payload', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { updateBookmark } = await import('./api')
+        await updateBookmark(5, {
+            source: 'audiobook',
+            audio_position_ms: 1000,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: '2026-07-20T12:00:00.000Z',
+        })
+
+        const [, options] = fetchMock.mock.calls[0]
+        const sentBody = JSON.parse(options.body)
+        expect(sentBody).toMatchObject({
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: '2026-07-20T12:00:00.000Z',
+        })
+    })
+
+    it('returns the parsed body unchanged (no rejected marker) on a normal 200', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
+        }))
+
+        const { updateBookmark } = await import('./api')
+        const result = await updateBookmark(5, { source: 'audiobook', audio_position_ms: 1000 })
+
+        expect(result).toEqual({ audio_position_ms: 1000 })
+        expect(result.rejected).toBeUndefined()
+    })
+
+    it('returns { rejected: true, ...serverState } on 409 instead of throwing', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409, json: async () => ({ audio_position_ms: 5000, device_name: 'Phone' }),
+        }))
+
+        const { updateBookmark } = await import('./api')
+        const result = await updateBookmark(5, { source: 'audiobook', audio_position_ms: 1000 })
+
+        expect(result).toEqual({ audio_position_ms: 5000, device_name: 'Phone', rejected: true })
+    })
+
+    it('still throws on a genuine server error (not 409)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { updateBookmark } = await import('./api')
+        await expect(updateBookmark(5, { source: 'audiobook' })).rejects.toThrow('Failed to update bookmark')
+    })
+})
+
+describe('updateProgress()', () => {
+    it('sends device_id, device_name, and captured_at in the payload', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { updateProgress } = await import('./api')
+        await updateProgress('audiobook', 7, {
+            audio_position_ms: 1000,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: '2026-07-20T12:00:00.000Z',
+        })
+
+        const [, options] = fetchMock.mock.calls[0]
+        const sentBody = JSON.parse(options.body)
+        expect(sentBody).toMatchObject({
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: '2026-07-20T12:00:00.000Z',
+        })
+    })
+
+    it('returns { rejected: true, ...serverState } on 409 instead of throwing', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409, json: async () => ({ audio_position_ms: 5000 }),
+        }))
+
+        const { updateProgress } = await import('./api')
+        const result = await updateProgress('audiobook', 7, { audio_position_ms: 1000 })
+
+        expect(result).toEqual({ audio_position_ms: 5000, rejected: true })
+    })
+
+    it('still throws on a genuine server error (not 409)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { updateProgress } = await import('./api')
+        await expect(updateProgress('audiobook', 7, {})).rejects.toThrow('Failed to update progress')
+    })
+})
+
 describe('testAbsConnection()', () => {
     it('sends the url and token as query params and returns the parsed result', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
