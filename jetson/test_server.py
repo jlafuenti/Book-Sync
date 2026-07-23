@@ -1,12 +1,13 @@
 """
-Tests for the shared-secret auth guard added in jetson/server.py (#38).
+Tests for the shared-secret auth guard added in jetson/server.py (#38), plus
+the oversized-chunk shrink/abort decision logic (#80).
 
-Not wired into CI: the jetson service has its own hardware-specific
-dependency stack (faster-whisper, nltk sentence-tokenizer data, ffmpeg) that
-isn't installed in the main server's pytest environment. Run these on/near
-the Jetson (or anywhere with jetson/requirements.txt installed):
+Wired into CI via .github/workflows/jetson-tests.yml, path-filtered to
+jetson/**. CI installs only the light deps (fastapi, uvicorn, pytest) — NOT
+faster-whisper or nltk's data corpus. jetson/conftest.py stubs both modules
+in sys.modules so server.py can be imported without either. Run locally:
 
-    cd jetson && pip install -r requirements.txt && python -m pytest test_server.py -v
+    cd jetson && python -m pytest test_server.py -v
 
 Only exercises verify_api_key() directly rather than going through
 TestClient — the app's startup event loads the real faster-whisper model,
