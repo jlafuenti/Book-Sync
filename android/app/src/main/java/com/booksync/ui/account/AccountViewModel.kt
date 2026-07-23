@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import android.content.Context
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DEFAULT_SERVER_URL
+import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PasswordChangeRequest
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
@@ -55,6 +56,7 @@ class AccountViewModel @Inject constructor(
     private val api: BookSyncApi,
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
+    private val deviceIdManager: DeviceIdManager,
     networkMonitor: NetworkMonitor,
 ) : ViewModel() {
 
@@ -68,6 +70,16 @@ class AccountViewModel @Inject constructor(
         }
     }
 
+    val deviceName = deviceIdManager.deviceNameFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), deviceIdManager.deviceName)
+
+    fun setDeviceName(name: String) {
+        viewModelScope.launch { deviceIdManager.setDeviceName(name) }
+    }
+
+    fun resetDeviceName() {
+        viewModelScope.launch { deviceIdManager.setDeviceName(null) }
+    }
 
     /** Live network reachability — used by the UI to gate "Change password" and show the offline chip. */
     val isOnline = networkMonitor.isOnline

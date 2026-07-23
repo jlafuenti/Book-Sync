@@ -105,6 +105,7 @@ fun AccountScreen(
     val user                  by viewModel.user.collectAsState()
     val isOnline              by viewModel.isOnline.collectAsState()
     val serverUrl             by viewModel.serverUrl.collectAsState()
+    val deviceName             by viewModel.deviceName.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -252,6 +253,47 @@ fun AccountScreen(
                         description = "Delete every downloaded file. Progress stays on the server.",
                         destructive = true,
                         onClick = { confirmClearDownloads = true },
+                    )
+                }
+            }
+
+            item { SectionTitle("Device") }
+            item {
+                var deviceNameEdit by remember(deviceName) { mutableStateOf(deviceName) }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedTextField(
+                        value = deviceNameEdit,
+                        onValueChange = { if (it.length <= 60) deviceNameEdit = it },
+                        label = { Text("Device name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    )
+                    Button(
+                        onClick = { viewModel.setDeviceName(deviceNameEdit.trim()) },
+                        enabled = deviceNameEdit.isNotBlank() && deviceNameEdit.trim() != deviceName,
+                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                    ) {
+                        Text("Save")
+                    }
+                    Text(
+                        "Shown to your other devices in Session History (e.g. \"Kitchen Pixel\").",
+                        color = colors.textMuted,
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        "Reset to default",
+                        color = colors.accent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable { viewModel.resetDeviceName() },
                     )
                 }
             }
