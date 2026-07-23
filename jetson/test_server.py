@@ -1,12 +1,13 @@
 """
-Tests for the shared-secret auth guard added in jetson/server.py (#38).
+Tests for the shared-secret auth guard added in jetson/server.py (#38), plus
+the oversized-chunk shrink/abort decision logic (#80).
 
-Not wired into CI: the jetson service has its own hardware-specific
-dependency stack (faster-whisper, nltk sentence-tokenizer data, ffmpeg) that
-isn't installed in the main server's pytest environment. Run these on/near
-the Jetson (or anywhere with jetson/requirements.txt installed):
+Wired into CI via .github/workflows/jetson-tests.yml, path-filtered to
+jetson/**. CI installs only the light deps (fastapi, uvicorn, pytest) — NOT
+faster-whisper or nltk's data corpus. jetson/conftest.py stubs both modules
+in sys.modules so server.py can be imported without either. Run locally:
 
-    cd jetson && pip install -r requirements.txt && python -m pytest test_server.py -v
+    cd jetson && python -m pytest test_server.py -v
 
 Only exercises verify_api_key() directly rather than going through
 TestClient — the app's startup event loads the real faster-whisper model,
@@ -67,3 +68,31 @@ def test_all_v1_routes_declare_the_auth_dependency():
         assert jetson_server.verify_api_key in dependant_calls, (
             f"{route.path} is missing the verify_api_key dependency"
         )
+
+
+def test_is_chunk_oversized_true_when_ffmpeg_returns_excess_audio():
+    # OVERSIZED_CHUNK_TOLERANCE is 1.5x; 200s actual for a 100s request exceeds it
+    assert jetson_server._is_chunk_oversized(actual_chunk_sec=200, requested_chunk_size=100) is True
+
+
+def test_is_chunk_oversized_false_within_tolerance():
+    assert jetson_server._is_chunk_oversized(actual_chunk_sec=140, requested_chunk_size=100) is False
+
+
+def test_shrink_chunk_size_halves_the_value():
+    assert jetson_server._shrink_chunk_size(900) == 450
+
+
+def test_shrink_chunk_size_retry_sequence_reaches_clean_failure():
+    """Simulates the retry loop: keep shrinking until the pure function signals
+    abort (None), matching the oversized -> shrink/retry -> clean failure path."""
+    sizes = []
+    size = jetson_server.DEFAULT_CHUNK_SIZE_SEC  # 900
+    while True:
+        size = jetson_server._shrink_chunk_size(size)
+        if size is None:
+            break
+        sizes.append(size)
+    # 900 -> 450 -> 225 -> 112 (still >= MIN_CHUNK_SIZE_SEC=112, so one more retry)
+    # -> 56 (< 112, abort)
+    assert sizes == [450, 225, 112]
