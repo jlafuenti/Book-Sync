@@ -755,7 +755,9 @@ class BookSyncRepository @Inject constructor(
                     newEpubChapter = merged.epubChapter,
                     newEpubSentenceIndex = merged.epubSentenceIndex,
                     newAudioPositionMs = merged.audioPositionMs,
-                    changedAt = java.time.Instant.ofEpochMilli(System.currentTimeMillis()).toString(),
+                    changedAt = localHistoryTimestamp(nowMillis),
+                    deviceId = deviceIdManager.deviceId,
+                    deviceName = deviceIdManager.deviceName,
                 )
             )
         }
@@ -1380,7 +1382,7 @@ internal fun ProgressResponse.toEntity(mediaType: String, mediaId: Int) = UserPr
 
 // ============ BookmarkLog mappers ============
 
-private fun BookmarkLogResponse.toEntity(pairId: Int) = BookmarkLogEntity(
+internal fun BookmarkLogResponse.toEntity(pairId: Int) = BookmarkLogEntity(
     serverId = id,
     bookPairId = pairId,
     source = source,
@@ -1391,9 +1393,11 @@ private fun BookmarkLogResponse.toEntity(pairId: Int) = BookmarkLogEntity(
     newEpubSentenceIndex = new_epub_sentence_index,
     newAudioPositionMs = new_audio_position_ms,
     changedAt = changed_at,
+    deviceId = device_id,
+    deviceName = device_name,
 )
 
-private fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
+internal fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
     id = serverId ?: -localId.toInt(),
     source = source,
     prev_epub_chapter = prevEpubChapter,
@@ -1403,4 +1407,16 @@ private fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
     new_epub_sentence_index = newEpubSentenceIndex,
     new_audio_position_ms = newAudioPositionMs,
     changed_at = changedAt,
+    device_id = deviceId,
+    device_name = deviceName,
 )
+
+/**
+ * Timestamp for an optimistic, local-only history entry (see [updateBookmark]),
+ * shaped to match what the server actually sends for `changed_at` — 'T'-separated,
+ * no trailing zone suffix (contrast `java.time.Instant.toString()`, which always
+ * appends "Z" and PlayerScreen.kt's `formatAbsoluteTime` cannot parse).
+ */
+internal fun localHistoryTimestamp(epochMillis: Long): String =
+    java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(epochMillis), java.time.ZoneOffset.UTC)
+        .toString()

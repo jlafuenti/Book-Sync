@@ -159,5 +159,7 @@ data class BookmarkLogEntity(
     val newEpubChapter: Int?,
     val newEpubSentenceIndex: Int?,
     val newAudioPositionMs: Int?,
-    val changedAt: String
+    val changedAt: String,
+    val deviceId: String? = null,
+    val deviceName: String? = null
 )
