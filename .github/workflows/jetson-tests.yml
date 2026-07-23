@@ -1,0 +1,38 @@
+name: Jetson tests
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "jetson/**"
+  pull_request:
+    paths:
+      - "jetson/**"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jetson
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install light dependencies
+        # Only fastapi/uvicorn/pytest — NOT faster-whisper (GPU-only build,
+        # not pip-installable off-device) or nltk's data corpus (network
+        # download). conftest.py stubs both modules so server.py can still
+        # be imported for unit testing.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "fastapi>=0.110.0" "uvicorn>=0.27.0" pytest
+
+      - name: Run tests
+        run: python -m pytest test_server.py -v
