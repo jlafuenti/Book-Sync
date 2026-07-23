@@ -188,14 +188,18 @@ see issue #41.
 
 ## Jetson (`jetson/`)
 
-`jetson/test_server.py` covers the shared-secret auth guard. It is **not wired into CI**
-(the service's faster-whisper/ffmpeg stack isn't installed there), so run it manually
-whenever `jetson/server.py` changes:
+`jetson/test_server.py` covers the shared-secret auth guard and the oversized-chunk
+decision logic (`_is_chunk_oversized` / `_shrink_chunk_size` in `jetson/server.py`).
+It **is wired into CI** (`.github/workflows/jetson-tests.yml`, path-filtered to
+`jetson/**`) — `jetson/conftest.py` stubs `nltk` and `faster_whisper` in `sys.modules`
+so the suite runs with only `fastapi`/`uvicorn`/`pytest` installed, no GPU or network
+access needed. Run it locally with:
 
 ```bash
 cd jetson && python -m pytest test_server.py -v
 ```
 
-The transcription pipeline itself (chunking, oversized-chunk OOM guard) has no automated
-tests; the client-side retry logic is covered in
-`server/tests/test_remote_transcription_provider.py`.
+The rest of the transcription pipeline (actual ffmpeg chunk loading, faster-whisper
+transcription, checkpointing) still has no automated test — that needs real audio and
+a GPU, which is out of scope for this suite. The client-side instance_id retry logic is
+covered in `server/tests/test_remote_transcription_provider.py`.
