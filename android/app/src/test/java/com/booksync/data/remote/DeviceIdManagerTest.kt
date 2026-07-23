@@ -102,4 +102,64 @@ class DeviceIdManagerTest {
         assertFalse(manager.deviceName.isBlank())
         assertTrue(manager.deviceName.isNotEmpty())
     }
+
+    @Test
+    fun `deviceName falls back to auto-derived value when no override is stored`() {
+        val manager = DeviceIdManager(newDataStore())
+
+        assertEquals(
+            "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+            manager.deviceName,
+        )
+    }
+
+    @Test
+    fun `setDeviceName persists an override readable by a second manager instance`() = runBlocking {
+        val dataStore = newDataStore()
+        val firstManager = DeviceIdManager(dataStore)
+
+        firstManager.setDeviceName("Kitchen Pixel")
+
+        val secondManager = DeviceIdManager(dataStore)
+        assertEquals("Kitchen Pixel", secondManager.deviceName)
+    }
+
+    @Test
+    fun `setDeviceName trims whitespace before persisting`() = runBlocking {
+        val manager = DeviceIdManager(newDataStore())
+
+        manager.setDeviceName("  Kitchen Pixel  ")
+
+        assertEquals("Kitchen Pixel", manager.deviceName)
+    }
+
+    @Test
+    fun `setDeviceName with null clears the override and reverts to auto-derived`() = runBlocking {
+        val dataStore = newDataStore()
+        val manager = DeviceIdManager(dataStore)
+        manager.setDeviceName("Kitchen Pixel")
+
+        manager.setDeviceName(null)
+
+        assertEquals(
+            "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+            manager.deviceName,
+        )
+        val overrideKey = stringPreferencesKey("device_name_override")
+        assertEquals(null, dataStore.data.first()[overrideKey])
+    }
+
+    @Test
+    fun `setDeviceName with blank string clears the override and reverts to auto-derived`() = runBlocking {
+        val dataStore = newDataStore()
+        val manager = DeviceIdManager(dataStore)
+        manager.setDeviceName("Kitchen Pixel")
+
+        manager.setDeviceName("   ")
+
+        assertEquals(
+            "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+            manager.deviceName,
+        )
+    }
 }
