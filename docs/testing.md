@@ -146,6 +146,19 @@ The floor is a starting point, not the goal. As coverage grows:
 3. Genuinely untestable branches (hardware/external) can be marked `# pragma: no cover` rather
    than excluding a whole file.
 
+### Web
+
+Same rule, different knob. After any PR that raises the web total, bump each entry in
+`coverage.thresholds` (`web/vite.config.js`) to `metric_total − 3`, whole percent — all four
+metrics, not just lines. Milestone targets for lines: **30 → 40 → 50** and up.
+
+Highest-leverage backfill targets are the large, near-zero pages (percentages as of the
+2026-07-27 run): `ImportSourcesPage.jsx` (0.2%), `TranscriptionPage.jsx` (1.1%),
+`PairsPage.jsx` (1.4%), `NewPairsPage.jsx` (4.3%), `LibraryPage.jsx` (6.2%),
+`UserManagementPage.jsx` (6.7%), `UnpairedPage.jsx` (6.3%). Component-level gaps worth
+closing first because they are small: `FilterPill.jsx` (1.9%), `MobileTopBar.jsx` (6.3%),
+`MobileDrawer.jsx` (19%).
+
 ## Web (`web/`)
 
 Vitest + React Testing Library on jsdom; config lives in the `test` block of
@@ -165,9 +178,20 @@ needed follow-up commits when the patch-coverage gate failed — the gate is a b
 the workflow. Tests live next to the code (`src/**/*.test.jsx`); mock the API at the
 `fetch`/module boundary as the existing page tests do.
 
-CI (`.github/workflows/web-tests.yml`): ≥80% patch coverage via diff-cover on PRs. There is
-no global floor yet; once overall coverage is non-trivial, add vitest `coverage.thresholds`
-and ratchet like the server.
+CI (`.github/workflows/web-tests.yml`) enforces the same **two independent gates** as the
+server:
+
+1. **Global floor (anti-backslide)** — vitest `coverage.thresholds` in the `test.coverage`
+   block of `web/vite.config.js`, currently **28% lines / 28% statements / 28% functions /
+   64% branches**. `npm run coverage` exits non-zero below any of them, and CI runs that on
+   every push (not just PRs), so no separate workflow step is needed.
+2. **Patch coverage (stop-the-bleeding, PRs only)** — `diff-cover` requires **≥80%** coverage
+   of the lines a PR adds or changes.
+
+Thresholds apply to whatever actually ran, so a *filtered* run
+(`npx vitest run src/pages/HomePage.test.jsx --coverage`) will fail the floor spuriously —
+that is expected. Only the full `npm run coverage` is the gate; use `npm test` for the
+red-green loop.
 
 ## Android (`android/`)
 

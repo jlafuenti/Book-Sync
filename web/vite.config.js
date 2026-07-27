@@ -22,10 +22,20 @@ export default defineConfig({
             reporter: ['text', 'cobertura'],
             include: ['src/**/*.{js,jsx}'],
             exclude: ['src/main.jsx', 'src/test/**', '**/*.test.{js,jsx}'],
-            // No global floor yet: the app is almost entirely untested, so a global
-            // number would be meaningless. The web gate is PATCH coverage (diff-cover
-            // in CI): new/changed lines must be >=80% covered. Add a global floor once
-            // overall coverage is non-trivial (see docs/testing.md).
+            // Global floor (anti-backslide), mirroring the server policy in
+            // docs/testing.md: floor = total - 3. Totals when this was added:
+            // 31 stmts / 67.47 branches / 31.32 funcs / 31 lines. Raise these after
+            // any PR that increases the total. The other web gate is PATCH coverage
+            // (diff-cover >=80% on changed lines, PRs only, in web-tests.yml).
+            // NOTE: thresholds apply to whatever ran, so a filtered run
+            // (`npx vitest run one.test.jsx --coverage`) will fail them spuriously.
+            // Only the full `npm run coverage` is the gate.
+            thresholds: {
+                lines: 28,
+                statements: 28,
+                functions: 28,
+                branches: 64,
+            },
         },
     },
 })
