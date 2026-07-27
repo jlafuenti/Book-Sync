@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import pytest
 
 from models.bookmark import BookmarkSource
+from services import sync_matcher
 from models.sync_map import SyncMap
 from tests.factories import make_sync_map
 from routers.sync import (
@@ -41,10 +42,13 @@ def _load(name):
 
 @dataclass
 class _FakeSyncPoint:
-    """Duck-typed stand-in — the matcher only reads these three attributes."""
+    """Duck-typed stand-in — the matcher only reads these four attributes."""
     epub_chapter: int
     epub_sentence_index: int
     epub_text_preview: str | None
+    # 0 means interpolated; the matcher nudges away from those. Fixture cases that
+    # don't care omit the key and get a fully-confident point.
+    confidence: float = 1.0
 
 
 @pytest.mark.parametrize("case", _load("normalize_cases.json"), ids=lambda c: repr(c["input"]))
@@ -55,7 +59,7 @@ def test_normalize_for_search_golden(case):
 @pytest.mark.parametrize("case", _load("match_cases.json"), ids=lambda c: c["name"])
 def test_match_text_to_sync_points_golden(case):
     points = [
-        _FakeSyncPoint(p["chapter"], p["sentence_index"], p["preview"])
+        _FakeSyncPoint(p["chapter"], p["sentence_index"], p["preview"], p.get("confidence", 1.0))
         for p in case["sync_points"]
     ]
     result = _match_text_to_sync_points(points, case["epub_text"], case["chapter_hint"])
@@ -65,6 +69,56 @@ def test_match_text_to_sync_points_golden(case):
         assert result is not None
         assert result.epub_chapter == case["expected_chapter"]
         assert result.epub_sentence_index == case["expected_sentence_index"]
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-pass internals (issue #41) — edge cases the golden vectors can't reach
+# ---------------------------------------------------------------------------
+
+def test_dice_similarity_identical_and_disjoint():
+    a = sync_matcher.bigram_set("the quick brown fox")
+    assert sync_matcher.dice_similarity(a, a) == 1.0
+    assert sync_matcher.dice_similarity(a, sync_matcher.bigram_set("")) == 0.0
+
+
+def test_fuzzy_find_rejects_short_needle():
+    transcript = "the old clock in the hallway struck midnight and the house fell silent "
+    assert sync_matcher.fuzzy_find_in_transcript(transcript, "too short") is None
+
+
+def test_fuzzy_find_rejects_transcript_shorter_than_needle():
+    needle = "the old clock in the hallway struck midnight and the house fell silent"
+    assert sync_matcher.fuzzy_find_in_transcript("the old clock in the hall", needle) is None
+
+
+def test_fuzzy_find_refines_to_the_exact_offset():
+    needle = "the old clock in the hallway struck midnight and the house fell silent"
+    # Pad by 7 chars — not a multiple of the coarse step, so only the step-1
+    # refinement pass can land on the true offset with a perfect score.
+    transcript = "abcdefg" + needle + " and then nobody stirred upstairs for a very long while "
+    hit = sync_matcher.fuzzy_find_in_transcript(transcript, needle)
+    assert hit is not None
+    offset, score = hit
+    assert offset == 7
+    assert score == 1.0
+
+
+def test_fuzzy_find_returns_none_below_threshold():
+    needle = "the old clock in the hallway struck midnight and the house fell silent"
+    transcript = "bananas and helicopters collided noisily above the purple accounting firm downtown "
+    assert sync_matcher.fuzzy_find_in_transcript(transcript, needle) is None
+
+
+def test_nudge_keeps_a_confident_match():
+    points = [_FakeSyncPoint(2, 0, "a", 0.9), _FakeSyncPoint(2, 1, "b", 0.8)]
+    assert sync_matcher.nudge_to_confident_point(points, 1) is points[1]
+
+
+def test_nudge_ignores_confident_points_beyond_three_positions():
+    points = [_FakeSyncPoint(2, i, "x", 0.0) for i in range(6)]
+    points.append(_FakeSyncPoint(2, 6, "x", 0.9))
+    # index 0 is interpolated; the only confident point is 6 positions away.
+    assert sync_matcher.nudge_to_confident_point(points, 0) is points[0]
 
 
 # ---------------------------------------------------------------------------
