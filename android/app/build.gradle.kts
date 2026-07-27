@@ -47,6 +47,13 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        // JVM unit tests link against a stub android.jar whose methods throw by default.
+        // Returning defaults instead keeps ViewModel tests from blowing up on incidental
+        // framework calls (android.util.Log and friends) they aren't asserting on.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -118,6 +125,12 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // mockk mocks final Kotlin classes (NetworkMonitor, TokenManager) and suspend
+    // functions, which is what makes ViewModels unit-testable off-device.
+    testImplementation("io.mockk:mockk:1.14.2")
+    // Version must track the kotlinx-coroutines-core the app resolves to (1.10.2) —
+    // a mismatch breaks Dispatchers.setMain.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
