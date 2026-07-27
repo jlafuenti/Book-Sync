@@ -130,7 +130,7 @@
         "preview": "Nobody expected the storm that gathered darkly over the distant grey mountains"
       }
     ],
-    "epub_text": "CHAPTER FIVE \u2014 THE DARK ROOM   They said nothing at all as the night grew colder and the small fire died down.",
+    "epub_text": "CHAPTER FIVE — THE DARK ROOM   They said nothing at all as the night grew colder and the small fire died down.",
     "chapter_hint": 5,
     "expected_chapter": 5,
     "expected_sentence_index": 2
@@ -202,5 +202,217 @@
     "chapter_hint": 5,
     "expected_chapter": null,
     "expected_sentence_index": null
+  },
+  {
+    "name": "fuzzy_near_miss_wording_matches",
+    "sync_points": [
+      {
+        "chapter": 3,
+        "sentence_index": 0,
+        "preview": "The old clock in the hallway struck midnight and the house fell silent"
+      },
+      {
+        "chapter": 3,
+        "sentence_index": 1,
+        "preview": "She set the candle down beside the letter and read it through once more"
+      },
+      {
+        "chapter": 3,
+        "sentence_index": 2,
+        "preview": "Outside the wind pushed against the shutters with a low and steady moan"
+      }
+    ],
+    "epub_text": "The old clocks in the hallways struck at midnight, and the houses fell silent.",
+    "chapter_hint": 3,
+    "expected_chapter": 3,
+    "expected_sentence_index": 0
+  },
+  {
+    "name": "fuzzy_below_threshold_returns_none",
+    "sync_points": [
+      {
+        "chapter": 3,
+        "sentence_index": 0,
+        "preview": "The old clock in the hallway struck midnight and the house fell silent"
+      },
+      {
+        "chapter": 3,
+        "sentence_index": 1,
+        "preview": "She set the candle down beside the letter and read it through once more"
+      },
+      {
+        "chapter": 3,
+        "sentence_index": 2,
+        "preview": "Outside the wind pushed against the shutters with a low and steady moan"
+      }
+    ],
+    "epub_text": "Bananas and helicopters collided noisily above the purple accounting firm downtown.",
+    "chapter_hint": 3,
+    "expected_chapter": null,
+    "expected_sentence_index": null
+  },
+  {
+    "name": "exact_in_neighbor_chapter_beats_fuzzy_in_hint",
+    "sync_points": [
+      {
+        "chapter": 4,
+        "sentence_index": 0,
+        "preview": "The old clocks in the hallways struck at midnight and the houses fell silent"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 0,
+        "preview": "The old clock in the hallway struck midnight and the house fell silent"
+      },
+      {
+        "chapter": 5,
+        "sentence_index": 1,
+        "preview": "She set the candle down beside the letter and read it through once more"
+      }
+    ],
+    "epub_text": "The old clock in the hallway struck midnight and the house fell silent.",
+    "chapter_hint": 4,
+    "expected_chapter": 5,
+    "expected_sentence_index": 0
+  },
+  {
+    "name": "best_fuzzy_score_wins_across_chapters",
+    "sync_points": [
+      {
+        "chapter": 7,
+        "sentence_index": 0,
+        "preview": "The old clock in the parlour struck at midnight while the house was still"
+      },
+      {
+        "chapter": 7,
+        "sentence_index": 1,
+        "preview": "Nobody stirred upstairs and the candles had all guttered out an hour before"
+      },
+      {
+        "chapter": 8,
+        "sentence_index": 0,
+        "preview": "The old clocks in the hallways struck at twelve and the houses fell silent"
+      }
+    ],
+    "epub_text": "The old clock in the hallway struck at midnight and the house fell silent.",
+    "chapter_hint": 7,
+    "expected_chapter": 8,
+    "expected_sentence_index": 0
+  },
+  {
+    "name": "interpolated_match_nudges_to_confident_neighbor",
+    "sync_points": [
+      {
+        "chapter": 2,
+        "sentence_index": 0,
+        "preview": "The caravan left the city gates before the sun had fully risen today",
+        "confidence": 0.2
+      },
+      {
+        "chapter": 2,
+        "sentence_index": 1,
+        "preview": "They traveled north along the river until the road turned sharply east",
+        "confidence": 0.0
+      },
+      {
+        "chapter": 2,
+        "sentence_index": 2,
+        "preview": "At noon they stopped beneath a stand of olive trees to rest the horses",
+        "confidence": 0.9
+      }
+    ],
+    "epub_text": "They traveled north along the river until the road turned sharply east.",
+    "chapter_hint": 2,
+    "expected_chapter": 2,
+    "expected_sentence_index": 2
+  },
+  {
+    "name": "interpolated_match_without_confident_neighbor_stays_put",
+    "sync_points": [
+      {
+        "chapter": 2,
+        "sentence_index": 0,
+        "preview": "The caravan left the city gates before the sun had fully risen today",
+        "confidence": 0.2
+      },
+      {
+        "chapter": 2,
+        "sentence_index": 1,
+        "preview": "They traveled north along the river until the road turned sharply east",
+        "confidence": 0.0
+      },
+      {
+        "chapter": 2,
+        "sentence_index": 2,
+        "preview": "At noon they stopped beneath a stand of olive trees to rest the horses",
+        "confidence": 0.3
+      }
+    ],
+    "epub_text": "They traveled north along the river until the road turned sharply east.",
+    "chapter_hint": 2,
+    "expected_chapter": 2,
+    "expected_sentence_index": 1
+  },
+  {
+    "name": "null_and_unnormalizable_previews_are_skipped",
+    "sync_points": [
+      {
+        "chapter": 9,
+        "sentence_index": 0,
+        "preview": null
+      },
+      {
+        "chapter": 9,
+        "sentence_index": 1,
+        "preview": "*** --- ***"
+      },
+      {
+        "chapter": 9,
+        "sentence_index": 2,
+        "preview": "The caravan left the city gates before the sun had fully risen today"
+      }
+    ],
+    "epub_text": "The caravan left the city gates before the sun had fully risen today.",
+    "chapter_hint": 9,
+    "expected_chapter": 9,
+    "expected_sentence_index": 2
+  },
+  {
+    "name": "no_chapters_within_range_returns_none",
+    "sync_points": [
+      {
+        "chapter": 50,
+        "sentence_index": 0,
+        "preview": "The caravan left the city gates before the sun had fully risen today"
+      }
+    ],
+    "epub_text": "The caravan left the city gates before the sun had fully risen today.",
+    "chapter_hint": 5,
+    "expected_chapter": null,
+    "expected_sentence_index": null
+  },
+  {
+    "name": "chapter_with_only_unusable_previews_is_skipped",
+    "sync_points": [
+      {
+        "chapter": 9,
+        "sentence_index": 0,
+        "preview": null
+      },
+      {
+        "chapter": 9,
+        "sentence_index": 1,
+        "preview": "*** --- ***"
+      },
+      {
+        "chapter": 10,
+        "sentence_index": 0,
+        "preview": "The caravan left the city gates before the sun had fully risen today"
+      }
+    ],
+    "epub_text": "The caravan left the city gates before the sun had fully risen today.",
+    "chapter_hint": 9,
+    "expected_chapter": 10,
+    "expected_sentence_index": 0
   }
 ]

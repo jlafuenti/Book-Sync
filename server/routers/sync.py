@@ -514,102 +514,14 @@ async def reset_pair_progress(
     return {"status": "ok"}
 
 
-import re
-import unicodedata
+# The matching algorithm itself lives in services/sync_matcher.py -- it is shared,
+# vector-for-vector, with the Android client (issue #41). Aliased here because
+# existing call sites and tests import these private names from this module.
+from services.sync_matcher import (  # noqa: E402
+    match_text_to_sync_points as _match_text_to_sync_points,
+    normalize_for_search as _normalize_for_search,
+)
 
-
-def _normalize_for_search(text: str) -> str:
-    """Normalize text for substring matching — same algorithm as Android normalizeForSearch."""
-    t = text.lower()
-    # Replace all whitespace variants with regular space
-    for ch in "\n\r\t\u00a0\u2002\u2003\u2009\u200b\u202f":
-        t = t.replace(ch, " ")
-    # Keep only a-z, 0-9, and space
-    t = re.sub(r"[^a-z0-9 ]", "", t)
-    # Collapse multiple spaces
-    t = re.sub(r" +", " ", t)
-    return t.strip()
-
-
-def _match_text_to_sync_points(
-    sync_points: list[SyncPoint],
-    epub_text: str,
-    chapter_hint: int,
-) -> SyncPoint | None:
-    """
-    Find the sync point matching extracted EPUB text.
-    Same algorithm as Android getSyncPointForEpubText:
-    1. Normalize epub text
-    2. For each chapter (hint first, then ±10):
-       - Build transcript by concatenating normalized sync point previews
-       - Progressive substring search (200→150→100→60→30 chars)
-       - Try from start, then skip 30 chars
-    """
-    normalized_epub = _normalize_for_search(epub_text)
-    if len(normalized_epub) < 10:
-        return None
-
-    # Group sync points by chapter
-    chapters: dict[int, list[SyncPoint]] = {}
-    for p in sync_points:
-        chapters.setdefault(p.epub_chapter, []).append(p)
-    for ch in chapters:
-        chapters[ch].sort(key=lambda p: p.epub_sentence_index)
-
-    # Try chapters in order: hint first, then expanding outward ±10
-    chapters_to_try = [chapter_hint]
-    for d in range(1, 11):
-        chapters_to_try.extend([chapter_hint - d, chapter_hint + d])
-
-    search_lengths = sorted(set(
-        min(len(normalized_epub), l) for l in [200, 150, 100, 60, 30]
-        if min(len(normalized_epub), l) > 10
-    ), reverse=True)
-
-    for target_chapter in chapters_to_try:
-        points = chapters.get(target_chapter)
-        if not points:
-            continue
-
-        # Build concatenated transcript with sentence boundary tracking
-        transcript_parts = []
-        boundaries = []  # (start_char_index, point_index)
-        pos = 0
-        for idx, point in enumerate(points):
-            preview = point.epub_text_preview
-            if not preview:
-                continue
-            normalized = _normalize_for_search(preview)
-            if not normalized:
-                continue
-            boundaries.append((pos, idx))
-            transcript_parts.append(normalized)
-            pos += len(normalized) + 1  # +1 for space separator
-
-        transcript = " ".join(transcript_parts)
-        if not transcript:
-            continue
-
-        for search_len in search_lengths:
-            search_text = normalized_epub[:search_len]
-            match_index = transcript.find(search_text)
-
-            # Also try skipping first 30 chars (handles chapter headings)
-            if match_index < 0 and len(normalized_epub) > search_len + 30:
-                offset_text = normalized_epub[30 : 30 + search_len]
-                match_index = transcript.find(offset_text)
-
-            if match_index >= 0:
-                # Map character offset to sentence index
-                matched_idx = 0
-                for start_pos, idx in boundaries:
-                    if start_pos <= match_index:
-                        matched_idx = idx
-                    else:
-                        break
-                return points[matched_idx]
-
-    return None
 
 
 @router.post("/match-text/{pair_id}", response_model=TextMatchResponse)
