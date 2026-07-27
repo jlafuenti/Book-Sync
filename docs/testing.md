@@ -218,6 +218,22 @@ bigram (Dice) pass, then the interpolated-point nudge — implemented in
 update both implementations and the shared fixtures in the same PR**, or one of the two
 suites will fail.
 
+`SyncMatcherInternalsTest` covers the fuzzy-pass edge cases the golden vectors can't reach
+through the public `match` entry point (short needle, over-long needle, sub-threshold score,
+the ±3 window of the interpolation nudge). It mirrors the corresponding assertions in
+`server/tests/test_sync_matching.py` — keep the two in step.
+
+`AccountViewModelLogoutTest` pins the logout wiring added in #39: revoke on the server
+*before* clearing local tokens (AuthInterceptor needs the still-stored bearer token to
+authenticate that call), and clear the local tokens unconditionally so an offline or
+already-expired session can still log out.
+
+The module has **mockk** and **kotlinx-coroutines-test** (`testOptions.unitTests
+.isReturnDefaultValues = true`), so ViewModels are testable off-device: mock the
+collaborators, `Dispatchers.setMain(UnconfinedTestDispatcher())` so `viewModelScope.launch`
+runs eagerly, and assert straight after the call. Pin `kotlinx-coroutines-test` to the same
+version `kotlinx-coroutines-core` resolves to — a mismatch breaks `Dispatchers.setMain`.
+
 ## Jetson (`jetson/`)
 
 `jetson/test_server.py` covers the shared-secret auth guard and the oversized-chunk

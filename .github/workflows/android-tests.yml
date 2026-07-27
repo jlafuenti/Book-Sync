@@ -31,9 +31,10 @@ jobs:
 
       - name: Run JVM unit tests
         working-directory: android
-        # JVM unit tests only (no emulator). Compiles the app + test sources and runs
-        # SyncMatcherParityTest against the shared fixtures. Espresso/Compose UI tests
-        # are deferred (they need an emulator).
+        # JVM unit tests only (no emulator). Compiles the app + test sources and runs the
+        # whole suite: the sync-parity tests against the shared fixtures, the matcher
+        # internals, the DataStore-backed managers, and the ViewModel tests (mockk +
+        # coroutines-test). Espresso/Compose UI tests are deferred (they need an emulator).
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest --stacktrace
