@@ -46,8 +46,10 @@ jobs:
       - name: Check patch coverage (PRs)
         # Stop-the-bleeding gate: changed web lines must be >=80% covered. Vacuous
         # (passes) when a PR changes no source lines. Reuses diff-cover for parity
-        # with the server. There is no global floor yet — web coverage is ~0 until
-        # the pages get tests; add one once it's non-trivial.
+        # with the server. The other gate — the global anti-backslide floor — is
+        # enforced by vitest `coverage.thresholds` in web/vite.config.js, so the
+        # "Run tests + coverage" step above already fails on a total drop (on push
+        # as well as on PRs). See docs/testing.md for the ratchet.
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: |
