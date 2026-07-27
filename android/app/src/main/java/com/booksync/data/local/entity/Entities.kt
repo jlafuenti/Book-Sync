@@ -2,6 +2,7 @@ package com.booksync.data.local.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import com.booksync.sync.MatchablePoint
 
 /**
  * Room entities for offline storage.
@@ -67,14 +68,14 @@ data class AudioBookEntity(
 data class SyncPointEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val bookPairId: Int,
-    val epubChapter: Int,
-    val epubSentenceIndex: Int,
-    val epubTextPreview: String?,
+    override val epubChapter: Int,
+    override val epubSentenceIndex: Int,
+    override val epubTextPreview: String?,
     val audioStartMs: Int,
     val audioEndMs: Int,
     // Alignment confidence 0..1 from the server; 0 means interpolated
-    val confidence: Float = 0f
-)
+    override val confidence: Float = 0f
+) : MatchablePoint
 
 @Entity(tableName = "bookmarks")
 data class BookmarkEntity(

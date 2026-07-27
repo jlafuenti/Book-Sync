@@ -202,13 +202,21 @@ cd android
 ./gradlew :app:testDebugUnitTest
 ```
 
-The key test is `SyncMatcherParityTest`, which asserts `SyncMatcher.normalizeForSearch`
-matches the server's `_normalize_for_search` for every golden vector in
-`server/tests/fixtures/sync_parity/` (fixtures are copied in by the
-`copySyncParityFixtures` Gradle task). **Any matcher change must update the shared fixtures**
-so both platforms stay pinned to the same contract. The `match_cases.json` half
-(`getSyncPointForEpubText` ↔ `_match_text_to_sync_points`) is not yet enforced on Android —
-see issue #41.
+The key tests are the two parity suites, which pin the Kotlin matcher to the server's for
+every golden vector in `server/tests/fixtures/sync_parity/` (fixtures are copied onto the
+test classpath by the `copySyncParityFixtures` Gradle task):
+
+| Suite | Asserts | Against |
+|---|---|---|
+| `SyncMatcherParityTest` | `SyncMatcher.normalizeForSearch` | `normalize_cases.json` |
+| `MatchParityTest` | `SyncMatcher.match` | `match_cases.json` |
+
+Since #41 both platforms run the *same* algorithm — exact substring pass, then a fuzzy
+bigram (Dice) pass, then the interpolated-point nudge — implemented in
+`server/services/sync_matcher.py` and mirrored in
+`android/app/src/main/java/com/booksync/sync/SyncMatcher.kt`. **Any matcher change must
+update both implementations and the shared fixtures in the same PR**, or one of the two
+suites will fail.
 
 ## Jetson (`jetson/`)
 
