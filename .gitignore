@@ -55,8 +55,10 @@ data/
 !android/app/src/**/data/
 !android/app/src/**/data/**
 
-# Android Gradle cache
+# Android Gradle cache and build output (incl. Kover coverage reports)
 android/.gradle/
+android/build/
+android/app/build/
 
 # Android build outputs
 android/app/build/
