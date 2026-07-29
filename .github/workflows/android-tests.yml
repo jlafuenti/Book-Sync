@@ -38,3 +38,19 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Check coverage floor
+        working-directory: android
+        # Anti-backslide gate (#95): fails the job if total line coverage of the JVM unit
+        # tests drops below the floor in app/build.gradle.kts. Reuses the test run above —
+        # Kover does not re-execute the suite. See docs/testing.md ("Android").
+        run: ./gradlew :app:koverXmlReportDebug :app:koverVerifyDebug --stacktrace
+
+      - name: Upload coverage report
+        # Uploaded even when the gate fails, so a coverage drop can be diagnosed.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-coverage
+          path: android/app/build/reports/kover/reportDebug.xml
+          if-no-files-found: warn

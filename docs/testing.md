@@ -159,6 +159,20 @@ Highest-leverage backfill targets are the large, near-zero pages (percentages as
 closing first because they are small: `FilterPill.jsx` (1.9%), `MobileTopBar.jsx` (6.3%),
 `MobileDrawer.jsx` (19%).
 
+### Android
+
+Same rule again. After any PR that raises the Android total, bump `minValue` in the `kover`
+block of `android/app/build.gradle.kts` to `new_total − 3`, whole percent. Milestone targets:
+**10 → 20 → 30** and up (a lower ladder than server/web — the module starts further back).
+
+Highest-leverage backfill targets, by missed lines as of the 2026-07-28 run (all at 0%):
+`BookSyncRepository` (497 lines — by far the biggest single win), `PlayerViewModel` (261),
+`SearchViewModel` (147), `LibraryViewModel` (129), `BookDetailsViewModel` (78),
+`DiagnosticsViewModel` (69), `HomeViewModel` (62), `DiagnosticLogger` (57),
+`DownloadedViewModel` (50), `DownloadWorker` (45), `AuthInterceptor` (23). The ViewModels are
+the cheapest of these — mockk + `Dispatchers.setMain` already work here, see the Android
+section below.
+
 ## Web (`web/`)
 
 Vitest + React Testing Library on jsdom; config lives in the `test` block of
@@ -233,6 +247,54 @@ The module has **mockk** and **kotlinx-coroutines-test** (`testOptions.unitTests
 collaborators, `Dispatchers.setMain(UnconfinedTestDispatcher())` so `viewModelScope.launch`
 runs eagerly, and assert straight after the call. Pin `kotlinx-coroutines-test` to the same
 version `kotlinx-coroutines-core` resolves to — a mismatch breaks `Dispatchers.setMain`.
+
+### Coverage floor
+
+Android has **one** gate, not two: a global line-coverage floor (anti-backslide). There is no
+patch-coverage equivalent — no mature Kotlin diff-cover exists, and the repo isn't going to
+grow one just for this. Coverage is measured with **Kover** (`org.jetbrains.kotlinx.kover`,
+pinned in `android/build.gradle.kts`) rather than JaCoCo: it is Kotlin/AGP-native, so nothing
+has to hand-wire the unit-test `.exec` file or per-variant class dirs on AGP 9, and it
+attributes Kotlin inline functions correctly. Note the version floor — Kover **≥ 0.9.9** is
+required; earlier 0.9.x releases don't see AGP 9's build variants and silently report
+"No sources".
+
+```bash
+cd android
+./gradlew :app:koverVerifyDebug            # the gate CI runs
+./gradlew :app:koverLogDebug               # print the current total
+./gradlew :app:koverHtmlReportDebug        # browsable line-by-line report
+```
+
+The floor lives in the `kover { reports { verify { ... } } }` block of
+`android/app/build.gradle.kts`, currently **7% lines** — measured total was **10.63%** on
+2026-07-28 (the post-#82 baseline), floor set a few points under, exactly like the server's
+`--cov-fail-under`. `.github/workflows/android-tests.yml` runs
+`koverXmlReportDebug` + `koverVerifyDebug` after the test step (Kover reuses the test run; it
+does not re-execute the suite) and uploads `reportDebug.xml` as the `android-coverage`
+artifact.
+
+Scope is **JVM unit tests only** — there are no instrumented/Espresso tests in CI, so the
+number is not a whole-app figure. Three buckets are excluded from the denominator:
+
+1. **Generated code** — Hilt (`*_Factory`, `Hilt_*`, `*_HiltModules*`, the aggregated-deps
+   packages), Room `*_Impl`, kotlinx-serialization `$$serializer`, Compose
+   `ComposableSingletons`, `BuildConfig`, `R`.
+2. **Compose UI** — `*Screen*`, `ui.components.*`, `ui.theme.*`, navigation, `ReaderActivity`,
+   the sheets and `UnifiedAudioPlayer`, `MainActivity`, `BookSyncApp`. Untestable without an
+   emulator or Robolectric today; revisit if Robolectric is adopted.
+3. **Framework/service glue with no JVM-testable surface** — `AudioPlayerService`,
+   `LocalCastHttpServer`, `cast.*`, `auto.*`, `di.*`, `BookSyncDatabase`. Same reasoning as
+   the server excluding its ffmpeg/hardware glue.
+
+**ViewModels are deliberately *not* excluded** even though they live under `ui/`. They are
+plain JVM classes, two are already tested, and they are the largest untested logic surface in
+the app — excluding them would make the floor look better while hiding the thing most worth
+fixing. Because they're in the denominator the starting floor is low; that's the point of the
+ratchet.
+
+Like the web thresholds, the floor applies to whatever actually ran — a filtered test run
+will fail it spuriously. Only the full `koverVerifyDebug` is the gate.
 
 ## Jetson (`jetson/`)
 
