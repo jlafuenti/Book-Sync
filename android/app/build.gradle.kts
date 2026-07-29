@@ -1,3 +1,4 @@
+import kotlinx.kover.gradle.plugin.dsl.CoverageUnit
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,6 +7,7 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("org.jetbrains.kotlinx.kover")
 }
 
 android {
@@ -151,3 +153,72 @@ val copySyncParityFixtures by tasks.registering(Copy::class) {
 }
 tasks.named("preBuild") { dependsOn(copySyncParityFixtures) }
 tasks.withType<Test>().configureEach { dependsOn(copySyncParityFixtures) }
+
+// Coverage floor for the JVM unit tests (issue #95), mirroring the server's
+// --cov-fail-under and the web module's vitest thresholds. Anti-backslide only: the
+// number is deliberately a few points under the measured total, and gets ratcheted up
+// as coverage grows. See docs/testing.md ("Android") for the policy and the exclusion
+// rationale. Tasks: :app:koverXmlReportDebug, :app:koverVerifyDebug.
+kover {
+    reports {
+        filters {
+            excludes {
+                classes(
+                    // --- Generated code ---
+                    "*_Factory",
+                    "*_Factory\$*",
+                    "*_MembersInjector",
+                    "*Hilt_*",
+                    "*_HiltModules*",
+                    "*_GeneratedInjector",
+                    "*_ComponentTreeDeps",
+                    "dagger.hilt.internal.aggregatedroot.codegen.*",
+                    "hilt_aggregated_deps.*",
+                    "com.booksync.BuildConfig",
+                    "com.booksync.R",
+                    "com.booksync.R\$*",
+                    "*ComposableSingletons*",
+                    "*\$\$serializer",
+                    "*_Impl",
+                    "*_Impl\$*",
+
+                    // --- Compose UI: no emulator or Robolectric in CI, so screens,
+                    // components, theme and navigation are untestable today. ViewModels
+                    // under ui/ are deliberately NOT excluded — they are the main
+                    // backfill target.
+                    "com.booksync.ui.*Screen*",
+                    "com.booksync.ui.components.*",
+                    "com.booksync.ui.theme.*",
+                    "com.booksync.ui.BookSyncNavigation*",
+                    "com.booksync.ui.reader.ReaderActivity*",
+                    "com.booksync.ui.reader.DictionarySheet*",
+                    "com.booksync.ui.player.UnifiedAudioPlayer*",
+                    "com.booksync.ui.account.ChangePasswordSheet*",
+                    "com.booksync.MainActivity*",
+                    "com.booksync.BookSyncApp*",
+
+                    // --- Android framework / service glue with no JVM-testable surface
+                    // (same reasoning as the server excluding ffmpeg/hardware glue).
+                    "com.booksync.player.AudioPlayerService*",
+                    "com.booksync.player.LocalCastHttpServer*",
+                    "com.booksync.cast.*",
+                    "com.booksync.auto.*",
+                    "com.booksync.di.*",
+                    "com.booksync.data.local.BookSyncDatabase*",
+                )
+            }
+        }
+        verify {
+            rule {
+                bound {
+                    // Measured 10.63% line coverage on 2026-07-28 (post-#82 baseline);
+                    // floor set a few points under, same as the server's --cov-fail-under.
+                    // Ratchet: after any PR that raises the total, bump this to
+                    // (new total − 3), whole percent.
+                    minValue = 7
+                    coverageUnits = CoverageUnit.LINE
+                }
+            }
+        }
+    }
+}
