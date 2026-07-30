@@ -572,13 +572,49 @@ class ReaderActivity : AppCompatActivity() {
             }
 
             val locatorJson = bookmark?.epubLocator
-            if (locatorJson != null) {
-                Locator.fromJSON(org.json.JSONObject(locatorJson))
-            } else null
+            val storedLocator = locatorJson?.let { Locator.fromJSON(org.json.JSONObject(it)) }
+            when {
+                storedLocator == null -> null
+                // Cross-device position contract (issue #40): chapter +
+                // sentence is the portable anchor, the locator only a hint.
+                // A locator pointing at a different chapter than the anchor
+                // was left behind by a client that can't produce one (the web
+                // reader) — following it would reopen at the wrong page.
+                isLocatorStaleForChapter(
+                    pub.readingOrder.map { it.href.toString() },
+                    storedLocator.href.toString(),
+                    bookmark.epubChapter,
+                ) -> {
+                    Log.d(TAG, "getInitialLocator: stored locator is stale for chapter " +
+                        "${bookmark.epubChapter} — resolving from the portable anchor")
+                    locatorFromChapterAnchor(pub, bookmark.epubChapter)
+                }
+                else -> storedLocator
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error getting initial locator", e)
             null
         }
+    }
+
+    /**
+     * Resolve a position from the portable anchor alone (chapter + sentence),
+     * used when the stored locator can't be trusted. Same preview -> spine ->
+     * progression chain the audiobook slow path uses; falls back to the start
+     * of the chapter when there's no usable preview text.
+     */
+    private suspend fun locatorFromChapterAnchor(pub: Publication, chapter: Int?): Locator? {
+        val bookmark = repository.getBookmark(pairId)
+        val chapterIdx = chapter?.takeIf { it in pub.readingOrder.indices } ?: return null
+        val previewText = repository.epubTextForSentence(
+            pairId, chapterIdx, bookmark?.epubSentenceIndex)
+        val base = pub.locatorFromLink(pub.readingOrder[chapterIdx]) ?: return null
+        if (previewText.isEmpty()) return base
+        val resolvedIdx = findSpineIndexForText(previewText, chapterIdx) ?: chapterIdx
+        val link = pub.readingOrder.getOrNull(resolvedIdx) ?: return base
+        val resolvedBase = pub.locatorFromLink(link) ?: return base
+        val progressionVal = findTextProgressionInChapter(resolvedIdx, previewText) ?: 0.0
+        return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
     }
 
     /** Extract a text preview from a chapter at a given progression, stripping headings and book title. */
@@ -605,6 +641,23 @@ class ReaderActivity : AppCompatActivity() {
         return text
     }
 
+    /** Spine index [locator] points at, or -1 if it matches no reading-order item. */
+    private fun Publication.spineIndexOf(locator: Locator): Int =
+        spineIndexForHref(readingOrder.map { it.href.toString() }, locator.href.toString())
+
+    /**
+     * Book-level progress (0-100) for the UserProgress record, matching the
+     * scale the web reader writes. Uses Readium's totalProgression when the
+     * publication provides one, else the cached chapter lengths.
+     */
+    private suspend fun bookPercentFor(locator: Locator, chapterIndex: Int): Float =
+        bookProgressPercent(
+            totalProgression = locator.locations.totalProgression,
+            chapterLengths = chapterLengthsDeferred?.await() ?: LongArray(0),
+            spineIndex = chapterIndex,
+            chapterProgression = locator.locations.progression ?: 0.0,
+        )
+
     private fun savePosition(locator: Locator) {
         val bookPair = pair ?: return
         // Inject selection tracker on every page turn (content may have changed).
@@ -613,11 +666,7 @@ class ReaderActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val pub = publication ?: return@launch
-                val rawChapterIndex = pub.readingOrder.indexOfFirst {
-                    val pubHref = it.href.toString()
-                    val locHref = locator.href.toString()
-                    pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-                }
+                val rawChapterIndex = pub.spineIndexOf(locator)
                 val chapterIndex = rawChapterIndex.coerceAtLeast(0)
                 Log.d(TAG, "savePosition: locator.href='${locator.href}', rawIndex=$rawChapterIndex, chapterIndex=$chapterIndex, progression=${locator.locations.progression}")
 
@@ -660,6 +709,19 @@ class ReaderActivity : AppCompatActivity() {
                     )
                 }
             }
+
+            // Bookmarks carry the resume position; UserProgress carries the
+            // metrics the web Home/Continue lists are built from. The reader
+            // only ever wrote the bookmark, so phone reading was invisible on
+            // web (issue #61). Percent is 0-100 to match the web reader —
+            // Readium's totalProgression is 0-1.
+            repository.updateProgress(
+                mediaType = "ebook",
+                mediaId = bookPair.ebookId,
+                bookPairId = pairId,
+                epubChapter = chapterIndex,
+                epubProgressPercent = bookPercentFor(locator, chapterIndex),
+            )
             } catch (e: Exception) {
                 Log.w(TAG, "Error saving position", e)
             }
@@ -769,11 +831,7 @@ class ReaderActivity : AppCompatActivity() {
         val pub = publication ?: return
         
         // Find chapter using robust matching
-        val rawChapterIndex = pub.readingOrder.indexOfFirst { 
-            val pubHref = it.href.toString()
-            val locHref = locator.href.toString()
-            pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-        }
+        val rawChapterIndex = pub.spineIndexOf(locator)
         val chapterIndex = rawChapterIndex.coerceAtLeast(0)
 
         val progression = locator.locations.progression ?: 0.0
@@ -1417,12 +1475,7 @@ class ReaderActivity : AppCompatActivity() {
 
         val locator = navigator?.currentLocator?.value ?: return
         val pub = publication ?: return
-        val rawChapterIndex = pub.readingOrder.indexOfFirst {
-            val pubHref = it.href.toString()
-            val locHref = locator.href.toString()
-            pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-        }
-        val chapterIndex = rawChapterIndex.coerceAtLeast(0)
+        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
         Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
         lifecycleScope.launch {

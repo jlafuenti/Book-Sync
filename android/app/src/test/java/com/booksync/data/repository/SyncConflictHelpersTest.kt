@@ -147,6 +147,72 @@ class SyncConflictHelpersTest {
     }
 
     @Test
+    fun `BookmarkResponse toEntity drops the local locator when an ebook write cleared it`() {
+        // Cross-device position contract (issue #40): the server clears
+        // epub_locator when an ebook-source write moves the anchor without
+        // supplying one — i.e. the user read on web. Falling back to the local
+        // value here would resurrect exactly the stale locator the server just
+        // invalidated, and the reader would reopen at the wrong page.
+        val response = BookmarkResponse(
+            id = 1,
+            user_id = 2,
+            book_pair_id = 42,
+            source = "ebook",
+            epub_chapter = 7,
+            epub_sentence_index = 2,
+            epub_locator = null,
+            updated_at = "2026-04-12T15:30:00Z",
+        )
+        val previous = BookmarkEntity(
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 1,
+            epubSentenceIndex = 1,
+            audioPositionMs = 0,
+            epubLocator = "{\"stale\":true}",
+            locatorAudioMs = 999,
+            updatedAt = "0",
+        )
+
+        val entity = response.toEntity(previous)
+
+        assertNull(entity.epubLocator)
+        assertNull(entity.locatorAudioMs)
+        assertEquals(7, entity.epubChapter)
+    }
+
+    @Test
+    fun `BookmarkResponse toEntity takes the server locator and its audio anchor`() {
+        // locator_audio_ms now round-trips through the server (issue #40 step
+        // 4), so a *second* device can judge whether the locator still
+        // describes where the audio is — not just the device that wrote it.
+        val response = BookmarkResponse(
+            id = 1,
+            user_id = 2,
+            book_pair_id = 42,
+            source = "ebook",
+            epub_locator = "{\"fromServer\":true}",
+            locator_audio_ms = 61_000,
+            updated_at = "2026-04-12T15:30:00Z",
+        )
+        val previous = BookmarkEntity(
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 1,
+            epubSentenceIndex = 1,
+            audioPositionMs = 0,
+            epubLocator = "{\"local\":true}",
+            locatorAudioMs = 999,
+            updatedAt = "0",
+        )
+
+        val entity = response.toEntity(previous)
+
+        assertEquals("{\"fromServer\":true}", entity.epubLocator)
+        assertEquals(61_000, entity.locatorAudioMs)
+    }
+
+    @Test
     fun `BookmarkResponse toEntity with no previous entity leaves locator null`() {
         val response = BookmarkResponse(
             id = 1,

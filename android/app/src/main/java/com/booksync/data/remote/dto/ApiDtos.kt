@@ -169,6 +169,9 @@ data class BookmarkUpdateRequest(
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
     val epub_locator: String? = null,
+    // Audio position the locator was captured at; travels with it so a second
+    // device can judge whether the locator is still usable (issue #40).
+    val locator_audio_ms: Int? = null,
     // When false (default), server updates the bookmark but does NOT append
     // a BookmarkLog row. Clients set true only on pause / stop / 30-min
     // boundaries. Mirrors server BookmarkUpdate.append_to_log.
@@ -191,6 +194,7 @@ data class BookmarkResponse(
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
     val epub_locator: String? = null,
+    val locator_audio_ms: Int? = null,
     val updated_at: String,
     val synced_at: String? = null,
     val device_id: String? = null,

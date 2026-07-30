@@ -627,6 +627,7 @@ class BookSyncRepository @Inject constructor(
                 epub_sentence_index = entity.epubSentenceIndex,
                 audio_position_ms = entity.audioPositionMs,
                 epub_locator = entity.epubLocator,
+                locator_audio_ms = entity.locatorAudioMs,
                 append_to_log = appendToLog,
                 device_id = deviceIdManager.deviceId,
                 device_name = deviceIdManager.deviceName,
@@ -775,6 +776,7 @@ class BookSyncRepository @Inject constructor(
                         epubSentenceIndex = merged.epubSentenceIndex,
                         audioPositionMs = merged.audioPositionMs,
                         epubLocator = merged.epubLocator,
+                        locatorAudioMs = merged.locatorAudioMs,
                         appendToLog = appendToLog,
                         // Preserve the true capture moment (not whenever this queue
                         // insert happens to run) so a later replay's captured_at is
@@ -795,6 +797,7 @@ class BookSyncRepository @Inject constructor(
                     epubSentenceIndex = merged.epubSentenceIndex,
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
+                    locatorAudioMs = merged.locatorAudioMs,
                     appendToLog = appendToLog,
                     createdAt = nowMillis,
                 )
@@ -884,6 +887,27 @@ class BookSyncRepository @Inject constructor(
         } else {
             Pair(0, "")
         }
+    }
+
+    /**
+     * Text preview stored for a chapter + sentence-index anchor, or "" if the
+     * pair has no sync map or no such point.
+     *
+     * The chapter/sentence pair is the portable cross-device position anchor
+     * (issue #40); this turns it back into searchable text so the reader can
+     * resolve a real page position when a device-local locator can't be
+     * trusted. Falls back to the nearest earlier sentence in the same chapter,
+     * matching how the server's `_convert_position` resolves a preview.
+     */
+    suspend fun epubTextForSentence(pairId: Int, chapter: Int, sentenceIndex: Int?): String {
+        val inChapter = syncPointDao.getPointsForPair(pairId)
+            .filter { it.epubChapter == chapter }
+            .sortedBy { it.epubSentenceIndex }
+        if (inChapter.isEmpty()) return ""
+        val target = sentenceIndex ?: 0
+        val best = inChapter.lastOrNull { it.epubSentenceIndex <= target && !it.epubTextPreview.isNullOrBlank() }
+            ?: inChapter.firstOrNull { !it.epubTextPreview.isNullOrBlank() }
+        return best?.epubTextPreview ?: ""
     }
 
     // ============ User Progress ============
@@ -1060,6 +1084,7 @@ class BookSyncRepository @Inject constructor(
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
                         epub_locator = sync.epubLocator,
+                        locator_audio_ms = sync.locatorAudioMs,
                         append_to_log = sync.appendToLog,
                         device_id = deviceIdManager.deviceId,
                         device_name = deviceIdManager.deviceName,
@@ -1182,9 +1207,16 @@ internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
 
 /**
  * Maps a server [BookmarkResponse] — a normal 200 body, or the authoritative state returned
- * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies the Readium
- * EPUB locator and its audio-position anchor, which the server has no concept of and so
- * never returns.
+ * in a 409 conflict body — onto a local [BookmarkEntity].
+ *
+ * Locator handling follows the cross-device position contract (issue #40):
+ * chapter + sentence is the portable anchor, the Readium locator is a hint the
+ * server only keeps while it still matches that anchor. So when the server
+ * returns no locator on an *ebook*-source bookmark it has deliberately cleared
+ * it (another client moved the position) and the local value must go too —
+ * falling back to [previous] there would resurrect the exact stale locator the
+ * server just invalidated. An audiobook-source write never invalidates the
+ * ebook locator, so [previous] still supplies it there.
  */
 internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEntity(
     bookPairId = book_pair_id,
@@ -1192,8 +1224,9 @@ internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEnti
     epubChapter = epub_chapter,
     epubSentenceIndex = epub_sentence_index,
     audioPositionMs = audio_position_ms,
-    epubLocator = epub_locator ?: previous?.epubLocator,
-    locatorAudioMs = previous?.locatorAudioMs,
+    epubLocator = epub_locator ?: previous?.epubLocator.takeIf { source != "ebook" },
+    locatorAudioMs = if (epub_locator != null) locator_audio_ms
+        else previous?.locatorAudioMs.takeIf { source != "ebook" },
     updatedAt = updated_at,
     capturedAt = captured_at,
     deviceId = device_id,

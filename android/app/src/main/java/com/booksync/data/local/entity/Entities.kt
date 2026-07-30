@@ -110,6 +110,10 @@ data class PendingSyncEntity(
     val epubSentenceIndex: Int?,
     val audioPositionMs: Int?,
     val epubLocator: String? = null,
+    // The locator's audio anchor. Queued alongside the locator so an offline
+    // write replays with the same payload an online one would have sent —
+    // without it the server would store a locator with no anchor (issue #40).
+    val locatorAudioMs: Int? = null,
     // Persisted so the SyncWorker's flushed request carries the same
     // history-log flag the original write intended. False for heartbeat
     // position saves, true for pause/stop/30-min-tick saves.

@@ -322,6 +322,8 @@ class BookmarkUpdate(BaseModel):
     # Precise client-side EPUB locator/CFI. Persisted and echoed back so the
     # client can resume at the exact reading position.
     epub_locator: Optional[str] = None
+    # Audio position the locator was captured at; travels with the locator.
+    locator_audio_ms: Optional[int] = None
     # When False (default), the bookmark is updated but no BookmarkLog row is
     # appended. Clients set this to True only on meaningful session boundaries:
     # pause, stop (track ended, player closed, cast session ends), or every
@@ -361,6 +363,7 @@ class BookmarkResponse(BaseModel):
     epub_sentence_index: Optional[int]
     audio_position_ms: Optional[int]
     epub_locator: Optional[str] = None
+    locator_audio_ms: Optional[int] = None
     epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
