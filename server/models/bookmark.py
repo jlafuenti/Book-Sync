@@ -48,6 +48,10 @@ class Bookmark(Base):
     # bookmark can resume at the exact reading position; the server stores and
     # echoes it back. Independent of the sync-map derived position.
     epub_locator: Mapped[str] = mapped_column(Text, nullable=True)
+    # Audio position (ms) the locator above was captured at. Lets a *second*
+    # device decide whether the locator still describes where the audio is
+    # now, instead of only the device that wrote it (issue #40).
+    locator_audio_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False

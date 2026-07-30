@@ -3,6 +3,39 @@ import ePub from 'epubjs'
 import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
 import './EbookReader.css'
 
+/**
+ * What to hand `rendition.display()` on open, or null for "start of book".
+ *
+ * Cross-device position contract (issue #40): `epub_chapter` is the portable
+ * anchor every client writes; `epub_cfi` is an epub.js-only hint that only the
+ * web reader can produce. Android writes progress with chapter + percent and
+ * no CFI (issue #61), so a stored CFI can be left over from a much earlier
+ * position — displaying it would reopen the book at the wrong page. Trust the
+ * CFI only when it resolves to the anchor chapter.
+ *
+ * A CFI the spine can't resolve isn't *proven* stale, so it's still used —
+ * that's the pre-existing behaviour and the anchor may itself be absent.
+ */
+export function resolveInitialDisplayTarget(book, initialCfi, initialChapter) {
+    const chapterHref =
+        initialChapter != null && initialChapter >= 0 && book?.spine?.items?.[initialChapter]
+            ? book.spine.items[initialChapter].href
+            : null
+
+    if (!initialCfi) return chapterHref
+
+    if (chapterHref !== null) {
+        let cfiIndex = null
+        try {
+            cfiIndex = book.spine.get(initialCfi)?.index ?? null
+        } catch {
+            cfiIndex = null
+        }
+        if (cfiIndex !== null && cfiIndex !== initialChapter) return chapterHref
+    }
+    return initialCfi
+}
+
 function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
     const viewerRef = useRef(null)
     const bookRef = useRef(null)
@@ -262,11 +295,11 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     setToc(nav.toc || [])
                 }
 
-                // Display at saved position or chapter, or start
-                if (initialCfi) {
-                    await rendition.display(initialCfi)
-                } else if (initialChapter != null && initialChapter >= 0 && book.spine.items[initialChapter]) {
-                    await rendition.display(book.spine.items[initialChapter].href)
+                // Display at the saved position (CFI, if it's still consistent
+                // with the portable chapter anchor), else that chapter, else start
+                const initialTarget = resolveInitialDisplayTarget(book, initialCfi, initialChapter)
+                if (initialTarget !== null) {
+                    await rendition.display(initialTarget)
                 } else {
                     await rendition.display()
                 }

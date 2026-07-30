@@ -228,6 +228,7 @@ async def update_bookmark(
             epub_sentence_index=epub_si,
             audio_position_ms=audio_ms,
             epub_locator=update.epub_locator,
+            locator_audio_ms=update.locator_audio_ms,
             captured_at=stamped_captured_at,
             device_id=update.device_id,
             device_name=update.device_name,
@@ -273,10 +274,25 @@ async def update_bookmark(
         bookmark.epub_chapter = epub_ch
         bookmark.epub_sentence_index = epub_si
         bookmark.audio_position_ms = audio_ms
-        # Only overwrite the locator when the client sent one (audiobook-source
-        # updates omit it and must not wipe the stored ebook locator).
+        # Cross-device position contract (issue #40): epub_chapter +
+        # epub_sentence_index is the portable anchor; epub_locator is a
+        # device-local hint that is only trustworthy if it came with the write
+        # that set the current anchor.
+        #   - client sent one  -> store it (with its audio anchor)
+        #   - ebook-source write that MOVED the position without one -> clear,
+        #     otherwise the web reader (which has no Readium locator to send)
+        #     leaves the phone's stale locator in place and Android reopens at
+        #     the wrong page
+        #   - anything else    -> preserve. In particular an audiobook-source
+        #     write must not wipe the ebook locator: audio drift doesn't
+        #     invalidate the page, and locator_audio_ms already lets a client
+        #     judge that for itself.
         if update.epub_locator is not None:
             bookmark.epub_locator = update.epub_locator
+            bookmark.locator_audio_ms = update.locator_audio_ms
+        elif position_changed and update.source == BookmarkSource.EBOOK:
+            bookmark.epub_locator = None
+            bookmark.locator_audio_ms = None
         bookmark.captured_at = stamped_captured_at
         bookmark.device_id = resolved_device_id
         bookmark.device_name = resolved_device_name
@@ -442,8 +458,22 @@ async def update_progress(
         progress.book_pair_id = update_data.book_pair_id
         
     if media_type == ProgressType.EBOOK:
+        # Mirror of the bookmark locator rule above (issue #40): epub_cfi is
+        # epub.js-specific and only the web reader can produce one. Android
+        # writes chapter + percent with no CFI (issue #61), so a moved
+        # position without a CFI must clear the stored one — otherwise web
+        # reopens at the stale CFI instead of the position just read on the
+        # phone.
+        position_moved = (
+            (update_data.epub_chapter is not None
+             and update_data.epub_chapter != progress.epub_chapter)
+            or (update_data.epub_progress_percent is not None
+                and update_data.epub_progress_percent != progress.epub_progress_percent)
+        )
         if update_data.epub_cfi is not None:
             progress.epub_cfi = update_data.epub_cfi
+        elif position_moved:
+            progress.epub_cfi = None
         if update_data.epub_chapter is not None:
             progress.epub_chapter = update_data.epub_chapter
         if update_data.epub_progress_percent is not None:

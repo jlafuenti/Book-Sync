@@ -131,6 +131,13 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 - `EBOOKS_PATH`, `AUDIOBOOKS_PATH`, `APP_DATA_PATH` — File system paths
 - `GOOGLE_BOOKS_API_KEY` — Optional; enables metadata enrichment
 
+### Cross-Device Position Sync
+Chapter + sentence index is the portable anchor; `epub_locator` (Android) and
+`epub_cfi` (web) are device-local hints the server invalidates when they no
+longer match the anchor. Read `docs/position-sync-contract.md` before touching
+bookmark/progress writes or reader restore logic — the rules are non-obvious
+and the failure mode (reopening at the wrong page) is silent.
+
 ### Authentication
 - JWT (HS256), access token 24h, refresh token 30 days
 - Stored in `localStorage` on the frontend
