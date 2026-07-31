@@ -162,6 +162,32 @@ async def _upsert_hint(
         existing.updated_at = datetime.utcnow()
 
 
+async def latest_progress_row(
+    db: AsyncSession, user_id: int, media_type: ProgressType, media_id: int
+) -> Optional[UserProgress]:
+    """The newest `user_progress` row for a media item, tolerating duplicates.
+
+    `user_progress` has no unique constraint, and the old `GET /progress`
+    created rows with flush-but-no-commit — two concurrent reads could leave
+    two rows for the same media. `scalar_one_or_none()` raises
+    `MultipleResultsFound` on those, so a book that hit the race became
+    unwritable. Ordering and taking the newest keeps it working; the extra
+    rows are inert.
+    """
+    id_col = (UserProgress.ebook_id if media_type == ProgressType.EBOOK
+              else UserProgress.audiobook_id)
+    rows = (await db.execute(
+        select(UserProgress)
+        .where(
+            UserProgress.user_id == user_id,
+            UserProgress.media_type == media_type,
+            id_col == media_id,
+        )
+        .order_by(UserProgress.updated_at.desc().nullslast(), UserProgress.id.desc())
+    )).scalars().all()
+    return rows[0] if rows else None
+
+
 async def _sync_derived_progress(
     db: AsyncSession, user_id: int, ref: ScopeRef, bookmark: Bookmark
 ) -> None:
@@ -178,15 +204,7 @@ async def _sync_derived_progress(
         targets.append((ProgressType.AUDIOBOOK, ref.audiobook_id))
 
     for media_type, media_id in targets:
-        id_col = (UserProgress.ebook_id if media_type == ProgressType.EBOOK
-                  else UserProgress.audiobook_id)
-        row = (await db.execute(
-            select(UserProgress).where(
-                UserProgress.user_id == user_id,
-                UserProgress.media_type == media_type,
-                id_col == media_id,
-            )
-        )).scalar_one_or_none()
+        row = await latest_progress_row(db, user_id, media_type, media_id)
 
         if row is None:
             row = UserProgress(user_id=user_id, media_type=media_type,
@@ -229,13 +247,8 @@ async def _mirror_legacy_columns(db: AsyncSession, bookmark: Bookmark, ref: Scop
 
     cfi = next((h for h in current if h.hint_kind == HintKind.EPUBJS_CFI), None)
     if cfi is not None and ref.ebook_id is not None:
-        row = (await db.execute(
-            select(UserProgress).where(
-                UserProgress.user_id == user_id,
-                UserProgress.media_type == ProgressType.EBOOK,
-                UserProgress.ebook_id == ref.ebook_id,
-            )
-        )).scalar_one_or_none()
+        row = await latest_progress_row(
+            db, user_id, ProgressType.EBOOK, ref.ebook_id)
         if row is not None:
             row.epub_cfi = cfi.hint_value
 

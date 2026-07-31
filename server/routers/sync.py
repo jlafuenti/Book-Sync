@@ -28,8 +28,8 @@ from schemas import (
 )
 from models.bookmark import HintKind
 from services.position_service import (
-    PositionScopeError, apply_position, read_position, resolve_scope,
-    to_response_dict,
+    PositionScopeError, apply_position, latest_progress_row, read_position,
+    resolve_scope, to_response_dict,
 )
 from routers.auth import get_current_user
 
@@ -388,14 +388,9 @@ async def update_progress(
     _, accepted = await apply_position(db, current_user.id, ref, position)
 
     # Return the projected row the caller asked about.
-    id_col = UserProgress.ebook_id if media_type == ProgressType.EBOOK else UserProgress.audiobook_id
-    row = (await db.execute(
-        select(UserProgress).where(
-            UserProgress.user_id == current_user.id,
-            UserProgress.media_type == media_type,
-            id_col == media_id,
-        )
-    )).scalar_one_or_none()
+    # Tolerates the duplicate rows an old flush-without-commit race left behind
+    # (see latest_progress_row) — those books would otherwise 500 on every write.
+    row = await latest_progress_row(db, current_user.id, media_type, media_id)
     if row is None:
         raise HTTPException(status_code=500, detail="progress projection missing")
 
