@@ -91,17 +91,59 @@ The client shows something but sets no position as established.
 
 ## The write gate
 
-A client must not write a position until it knows where the reader is:
+A client must not write *anchors* until it knows where the reader is. On
+Android this is `PositionSavePolicy`; the web reader keeps the boolean form.
+Every save produces one of two verdicts — there is no "suppress everything":
 
-- **`positionEstablished`** — saving is blocked until a rung has landed, or the
-  record was genuinely empty. Without it, a failed restore sitting on page one
-  gets persisted over a real position.
+- **`FullSave`** — the restore landed, the record was genuinely empty, or the
+  user has deliberately navigated since open (a user page-turn makes the
+  current position the truth). Writes the whole position: local row first,
+  then the server.
+- **`LocalMetadataOnly`** — the restore is *unresolved* (a non-empty ladder
+  where no rung landed). Only the local row's `source`/`updatedAt` are
+  stamped, so open-target routing still follows the session; anchor fields
+  are left untouched locally and nothing goes to the server. Without this
+  split, a failed restore sitting on page one either got persisted over a
+  real position (no gate) or suppressed even the local write, so the app
+  kept reopening the other format (gate too wide — the original §4 bug).
 - **Full position per write** — anchors are never inherited from a stale local
   row; omission on the wire means "leave alone", and a write carrying no anchor
   never clears one.
+- **Saves must survive teardown.** The final flush runs in an
+  application-scoped, non-cancellable coroutine with the local write *before*
+  the server call. Running it in the activity's lifecycle scope meant a
+  back-press cancelled it mid-request and both writes were lost.
 - **Resume paths refresh first.** The reader, the player and Android Auto all
   pull the server position (bounded, then fall back to cache) *before* seeking.
   Refreshing afterwards meant a position set elsewhere always arrived too late.
+
+## Who may claim `source`
+
+`bookmarks.source` decides which format opens next (`resolvePairOpenTarget`
+keys on it). **The format follows actual consumption:**
+
+- A save claims the format (sends `source`) only when playback is actively
+  playing at save time or the save came from an explicit user playback command
+  (play/pause, seek, skip — including Android Auto/MediaSession commands).
+  Reader saves always claim `ebook`: having the reader open is consumption.
+- Background saves — service or ViewModel teardown while paused, screen-open
+  saves, refreshes — omit `source`. The server treats an omitted `source` like
+  any other omitted field: keep the stored value. They also leave the local
+  Room `source` untouched, so local and server routing agree.
+
+> Why: a player teardown save used to stamp `audiobook` seconds after the
+> reader closed, so a reading session still reopened the audiobook.
+
+## Reset
+
+`DELETE /api/sync/progress/pair/{pair_id}` is a true reset: it deletes the
+canonical bookmark rows (pair-scoped plus the pair's standalone-media rows),
+their hints, and the `user_progress` projection, in one transaction. After it,
+`GET /api/sync/position/...` returns 204 — the book is *unread* again, not
+"pinned at zero".
+
+The "hints are never deleted" rule above governs position **writes**; an
+explicit user reset is the one sanctioned deletion path.
 
 ## Percent scale
 
