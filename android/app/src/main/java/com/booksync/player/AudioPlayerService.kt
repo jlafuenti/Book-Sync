@@ -54,6 +54,13 @@ import java.io.File
 import java.net.Inet4Address
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * How long a resume waits for the server's position before falling back to
+ * the local cache. Mirrors PlayerScreen's bound.
+ */
+private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Foreground media playback service using Media3 MediaLibraryService.
@@ -227,15 +234,23 @@ class AudioPlayerService : MediaLibraryService() {
                     stopAutoPositionSave()
                     // Pause is a session boundary — log it. Also covers the
                     // sleep-timer path, which drops playWhenReady to false.
-                    saveCurrentPositionForAuto(appendToLog = true)
+                    // claimFormat=false: this listener fires for ANY reason
+                    // playback stopped (a deliberate pause, audio focus loss,
+                    // Bluetooth disconnect, the sleep timer) and can't tell
+                    // them apart, so it can't be trusted to claim the format —
+                    // this is the exact background-save-hijacks-routing bug
+                    // the claimFormat split exists to fix.
+                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
                 }
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // Track/audiobook reached its natural end (fires on both
                 // ExoPlayer and CastPlayer since the same listener is attached
-                // to both). Log as a session boundary.
+                // to both). Log as a session boundary. claimFormat=false:
+                // the player is not playing at this moment (state is ENDED),
+                // same conservative rule as the pause listener above.
                 if (playbackState == Player.STATE_ENDED) {
-                    saveCurrentPositionForAuto(appendToLog = true)
+                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
                     val player = mediaLibrarySession?.player ?: return
                     val mediaId = player.currentMediaItem?.mediaId ?: return
                     serviceScope.launch {
@@ -547,7 +562,11 @@ class AudioPlayerService : MediaLibraryService() {
         if (currentPlayer === newPlayer) return
 
         // Every cast transition is a session boundary — log it when saving.
-        if (savePosition) saveCurrentPositionForAuto(appendToLog = true)
+        // claimFormat=false: a cast handoff isn't itself a playback command
+        // (the ExoPlayer<->CastPlayer switch, not a play/pause/seek), and
+        // this path also fires during e.g. connection loss, so it gets the
+        // same conservative treatment as the other background boundary saves.
+        if (savePosition) saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
 
         val currentItem = currentPlayer.currentMediaItem
         val rawPositionMs = currentPlayer.currentPosition
@@ -786,8 +805,17 @@ class AudioPlayerService : MediaLibraryService() {
      * @param appendToLog false for 5-second heartbeat saves (position-only, no
      *   history entry). True on pause / stop / 30-min-tick / cast transitions —
      *   those produce a BookmarkLog row and reset the continuous-playback timer.
+     * @param claimFormat whether this save may claim "audiobook" as the format
+     *   `resolvePairOpenTarget` routes to next (see
+     *   [BookSyncRepository.savePlaybackPosition]'s doc for the full rule).
+     *   No default — every call site decides explicitly. Only the
+     *   still-playing heartbeat loop ([startAutoPositionSave]) passes true;
+     *   every other call site here (pause, natural end, cast transition,
+     *   controller disconnect) is a boundary where the player either isn't
+     *   playing or the listener can't tell a deliberate command from an
+     *   involuntary stop, so they all pass false.
      */
-    private fun saveCurrentPositionForAuto(appendToLog: Boolean = false) {
+    private fun saveCurrentPositionForAuto(appendToLog: Boolean = false, claimFormat: Boolean) {
         val player = mediaLibrarySession?.player ?: return
         val mediaId = player.currentMediaItem?.mediaId ?: return
         val posMs = player.currentPosition.toInt()
@@ -800,21 +828,21 @@ class AudioPlayerService : MediaLibraryService() {
                 when {
                     mediaId.startsWith("pair_") -> {
                         val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
-                        repository.updateBookmark(
+                        repository.savePlaybackPosition(
                             pairId = pairId,
-                            source = "audiobook",
                             audioPositionMs = posMs,
                             appendToLog = appendToLog,
+                            claimFormat = claimFormat,
                         )
                     }
                     mediaId.startsWith("audiobook_") -> {
                         // Standalone audiobooks: no pair → no bookmark_log entry to
                         // worry about. updateProgress only writes UserProgress.
                         val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
-                        repository.updateProgress(
-                            mediaType = "audiobook",
-                            mediaId = audiobookId,
-                            audioPositionMs = posMs
+                        repository.savePlaybackPositionStandalone(
+                            audiobookId = audiobookId,
+                            audioPositionMs = posMs,
+                            claimFormat = claimFormat,
                         )
                     }
                 }
@@ -830,13 +858,16 @@ class AudioPlayerService : MediaLibraryService() {
             while (true) {
                 delay(AUTO_SAVE_INTERVAL_MS)
                 // Heartbeat: keep bookmark position fresh, no history entry.
-                saveCurrentPositionForAuto(appendToLog = false)
+                // claimFormat=true: this loop only runs while playing (started
+                // on isPlaying=true, torn down by stopAutoPositionSave on
+                // pause), so every tick here is genuine active consumption.
+                saveCurrentPositionForAuto(appendToLog = false, claimFormat = true)
                 // 30-min continuous-playback tick: write a single history entry
                 // and reset the timer. Only reached while isPlaying (the loop is
                 // torn down by stopAutoPositionSave on pause), so pauses freeze
                 // the clock automatically.
                 if (System.currentTimeMillis() - lastAutoLogTimeMs >= AUTO_LOG_INTERVAL_MS) {
-                    saveCurrentPositionForAuto(appendToLog = true)
+                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = true)
                 }
             }
         }
@@ -981,8 +1012,11 @@ class AudioPlayerService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo
         ) {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onDisconnected pkg=${controller.packageName}")
-            // Save position when any client disconnects (covers Android Auto disconnect on car shutoff)
-            saveCurrentPositionForAuto()
+            // Save position when any client disconnects (covers Android Auto
+            // disconnect on car shutoff). claimFormat=false: a disconnect is a
+            // teardown boundary, not a playback command — the same
+            // background-save treatment as the other boundary calls above.
+            saveCurrentPositionForAuto(claimFormat = false)
         }
 
         // --- Browse tree ---
@@ -1070,6 +1104,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val positionMs = when {
                         mediaId.startsWith("pair_") -> {
                             val pairId = mediaId.removePrefix("pair_").toIntOrNull()
+                            pairId?.let { refreshPositionBeforeResume(it) }
                             pairId?.let { repository.getBookmark(it)?.audioPositionMs?.toLong() }
                                 ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                         }
@@ -1267,11 +1302,31 @@ class AudioPlayerService : MediaLibraryService() {
         return future
     }
 
+    /**
+     * Pull the server's position before resuming, bounded so an unreachable
+     * server can't stall playback.
+     *
+     * Only the paths that decide where audio *starts* do this. The browse-tree
+     * builders deliberately don't: they render a list and would otherwise fire
+     * one request per row on every browse.
+     */
+    private suspend fun refreshPositionBeforeResume(pairId: Int) {
+        withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+            repository.refreshBookmark(pairId)
+        } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
+    }
+
     private suspend fun resolveMediaItem(mediaId: String): MediaItem? {
         return when {
             mediaId.startsWith("pair_") -> {
                 val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
                 val pair = repository.getPairById(pairId) ?: return null
+                // This is the playback-start path — what it returns is where
+                // audio actually begins — so pull the server's position first.
+                // Reading only the local cache meant a position set on another
+                // device was never seen here. Bounded, so an unreachable server
+                // falls back to the cache instead of stalling playback.
+                refreshPositionBeforeResume(pairId)
                 val bookmark = repository.getBookmark(pairId)
                 val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                 val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)

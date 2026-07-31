@@ -136,6 +136,54 @@ def test_downgrade_then_upgrade_is_clean():
     assert _EXPECTED_TABLES <= set(inspect(engine).get_table_names())
 
 
+def test_existing_bookmarks_survive_locator_audio_ms_migration():
+    """0003 adds ``bookmarks.locator_audio_ms``. A bookmark written before it
+    must still be readable afterwards, with a NULL anchor (issue #40) — it
+    simply doesn't qualify for the locator fast path until its next write.
+    """
+    from alembic import command
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+
+    command.downgrade(cfg, "base")
+    command.upgrade(cfg, "0002_conflict_resolution")
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO users (username, email, hashed_password, is_admin, is_active, created_at) "
+            "VALUES ('legacy', 'legacy@example.com', 'x', false, true, now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/e.epub', 'epub', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A', 'a.m4b', '/x/a.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks LIMIT 1), (SELECT id FROM audiobooks LIMIT 1), 'UNMATCHED'"
+        ))
+        conn.execute(text(
+            "INSERT INTO bookmarks (user_id, book_pair_id, source, epub_chapter, "
+            "epub_sentence_index, epub_locator, updated_at) "
+            "SELECT (SELECT id FROM users WHERE username='legacy'), "
+            "(SELECT id FROM book_pairs LIMIT 1), 'EBOOK', 3, 7, '{\"href\":\"/ch3\"}', now()"
+        ))
+
+    command.upgrade(cfg, "head")
+
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT epub_chapter, epub_locator, locator_audio_ms FROM bookmarks"
+        )).one()
+    assert row.epub_chapter == 3
+    assert row.epub_locator == '{"href":"/ch3"}'
+    assert row.locator_audio_ms is None
+
+
 def test_no_model_migration_drift():
     """The migrations and the ORM models must stay in sync (the drift gate).
 

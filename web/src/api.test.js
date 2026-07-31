@@ -562,6 +562,118 @@ describe('updateProgress()', () => {
     })
 })
 
+describe('getPosition()', () => {
+    it('returns null on a 204 ("never opened"), distinct from a position at chapter 0', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 204 }))
+
+        const { getPosition } = await import('./api')
+        const result = await getPosition('pair', 42)
+
+        expect(result).toBeNull()
+    })
+
+    it('fetches the scoped position endpoint and returns the parsed body on 200', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ epub_chapter: 3, anchor_revision: 2 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getPosition } = await import('./api')
+        const result = await getPosition('ebook', 7)
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/sync/position/ebook/7', expect.anything())
+        expect(result).toEqual({ epub_chapter: 3, anchor_revision: 2 })
+    })
+
+    it('throws on a genuine server error', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }))
+
+        const { getPosition } = await import('./api')
+        await expect(getPosition('pair', 42)).rejects.toThrow('Failed to fetch position')
+    })
+})
+
+describe('updatePosition()', () => {
+    it('PUTs the whole position payload to the scoped endpoint', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ epub_chapter: 3 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { updatePosition } = await import('./api')
+        const result = await updatePosition('pair', 42, { epub_chapter: 3, source: 'ebook' })
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/sync/position/pair/42', expect.objectContaining({
+            method: 'PUT',
+            body: JSON.stringify({ epub_chapter: 3, source: 'ebook' }),
+        }))
+        expect(result).toEqual({ epub_chapter: 3 })
+    })
+
+    it('returns { rejected: true, ...serverState } on 409 (a newer write already applied)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409, json: async () => ({ epub_chapter: 9, device_name: 'Phone' }),
+        }))
+
+        const { updatePosition } = await import('./api')
+        const result = await updatePosition('pair', 42, { epub_chapter: 3 })
+
+        expect(result).toEqual({ epub_chapter: 9, device_name: 'Phone', rejected: true })
+    })
+
+    it('still throws on a genuine server error (not 409)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { updatePosition } = await import('./api')
+        await expect(updatePosition('pair', 42, {})).rejects.toThrow('Failed to update position')
+    })
+})
+
+describe('sendPositionKeepalive()', () => {
+    // Fire-and-forget save used on tab close; must never throw into the
+    // caller and must omit nothing the canonical PositionUpdate schema needs.
+
+    it('does nothing without an access token', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { sendPositionKeepalive } = await import('./api')
+        sendPositionKeepalive('pair', 42, { epub_chapter: 3 })
+
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('fires a keepalive PUT carrying the bearer token when a token is present', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { sendPositionKeepalive } = await import('./api')
+        sendPositionKeepalive('pair', 42, { epub_chapter: 3 })
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/sync/position/pair/42', expect.objectContaining({
+            method: 'PUT',
+            keepalive: true,
+            headers: expect.objectContaining({ Authorization: 'Bearer access-1' }),
+            body: JSON.stringify({ epub_chapter: 3 }),
+        }))
+    })
+
+    it('swallows a synchronous fetch failure instead of throwing (there is no UI left to show it)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn(() => { throw new Error('network unavailable') }))
+
+        const { sendPositionKeepalive } = await import('./api')
+        expect(() => sendPositionKeepalive('pair', 42, { epub_chapter: 3 })).not.toThrow()
+    })
+})
+
 describe('testAbsConnection()', () => {
     it('sends the url and token as query params and returns the parsed result', async () => {
         const fetchMock = vi.fn().mockResolvedValue({

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, getProgress, getBookmark, updateBookmark, getAccessToken, getDeviceId, getDeviceName } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, resetPairProgress, getProgress, getBookmark, updateBookmark, getAccessToken, getDeviceId, getDeviceName } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -176,16 +176,11 @@ function ContinuePage() {
         setMenuOpen(null)
         try {
             if (item.itemType === 'pair') {
-                await Promise.all([
-                    item.ebookId ? updateProgress('ebook', item.ebookId, {
-                        is_completed: false, ...deviceMeta(),
-                        epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
-                    }).catch(() => {}) : null,
-                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, {
-                        is_completed: false, ...deviceMeta(),
-                        audio_position_ms: 0,
-                    }).catch(() => {}) : null,
-                ].filter(Boolean))
+                // Pair-level DELETE removes the canonical bookmark + hints +
+                // user_progress server-side. The old per-leg zero-write left
+                // the bookmark in place, which re-seeded progress right back
+                // (issue: reset buttons not actually resetting).
+                await resetPairProgress(item.book_pair_id)
             } else if (item.itemType === 'ebook') {
                 await updateProgress('ebook', item.mediaId, {
                     is_completed: false, ...deviceMeta(),

@@ -50,3 +50,12 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
         addColumnIfMissing(db, "ALTER TABLE bookmark_log ADD COLUMN deviceName TEXT")
     }
 }
+
+/** v16 -> v17: queued bookmark writes dropped locatorAudioMs (issue #40) — an offline
+ *  save replayed a locator with no audio anchor, so the server (and any second device)
+ *  couldn't tell whether that locator still described the current audio position. */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE pending_sync ADD COLUMN locatorAudioMs INTEGER")
+    }
+}

@@ -190,11 +190,25 @@ interface BookmarkDao {
     @Query("UPDATE bookmarks SET syncedToServer = 0 WHERE bookPairId = :pairId")
     suspend fun markUnsynced(pairId: Int)
 
+    // Companion to markUnsynced: saveReaderPosition writes the initial row
+    // unsynced (so a crash between the Room write and the PUT doesn't leave a
+    // row falsely claiming to be synced), then calls this once the canonical
+    // PUT actually succeeds (issue #61/#40 fix 5).
+    @Query("UPDATE bookmarks SET syncedToServer = 1 WHERE bookPairId = :pairId")
+    suspend fun markSynced(pairId: Int)
+
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
     suspend fun updateLocator(pairId: Int, locatorJson: String)
 
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson, locatorAudioMs = :audioMs WHERE bookPairId = :pairId")
     suspend fun updateLocatorWithAudio(pairId: Int, locatorJson: String, audioMs: Int?)
+
+    // A pair-level progress reset (issue: reset buttons not actually
+    // resetting) must remove this row too — otherwise it resurrects the old
+    // position on the next offline open and keeps routing resolvePairOpenTarget
+    // to whatever format `source` still names.
+    @Query("DELETE FROM bookmarks WHERE bookPairId = :pairId")
+    suspend fun deleteBookmark(pairId: Int)
 }
 
 @Dao
@@ -210,6 +224,11 @@ interface PendingSyncDao {
 
     @Query("DELETE FROM pending_sync")
     suspend fun deleteAll()
+
+    // See BookmarkDao.deleteBookmark — a queued retry carrying the pre-reset
+    // position would otherwise replay it right back onto the server.
+    @Query("DELETE FROM pending_sync WHERE bookPairId = :pairId")
+    suspend fun deleteForPair(pairId: Int)
 }
 
 @Dao
@@ -228,6 +247,14 @@ interface UserProgressDao {
 
     @Query("UPDATE user_progress SET syncedToServer = 0 WHERE mediaType = :mediaType AND mediaId = :mediaId")
     suspend fun markUnsynced(mediaType: String, mediaId: Int)
+
+    // A pair-level progress reset (issue #61/#40 fix 3) must remove these rows
+    // too — otherwise a stale, unsynced local row can be picked up by
+    // syncAllBookmarksAndProgress/processPendingSync and pushed back to the
+    // server, resurrecting the position the reset was supposed to have
+    // cleared.
+    @Query("DELETE FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun deleteProgress(mediaType: String, mediaId: Int)
 
     @Query("SELECT * FROM user_progress WHERE syncedToServer = 0")
     suspend fun getUnsyncedProgress(): List<UserProgressEntity>

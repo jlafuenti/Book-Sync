@@ -7,7 +7,7 @@ import BookDetailPage from './BookDetailPage'
 // exercises the enrich-from-ABS toast logic.
 const {
     getAudiobookMock, getSettingsMock, enrichAudiobookFromAbsMock, getProgressMock, getBookmarkMock,
-    updateProgressMock, getDeviceIdMock, getDeviceNameMock,
+    updateProgressMock, resetPairProgressMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAudiobookMock: vi.fn(),
     getSettingsMock: vi.fn(),
@@ -15,6 +15,7 @@ const {
     getProgressMock: vi.fn(),
     getBookmarkMock: vi.fn(),
     updateProgressMock: vi.fn(),
+    resetPairProgressMock: vi.fn(),
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
 }))
@@ -29,6 +30,7 @@ vi.mock('../api', () => ({
     enrichAudiobookFromAbs: enrichAudiobookFromAbsMock,
     getProgress: getProgressMock,
     updateProgress: updateProgressMock,
+    resetPairProgress: resetPairProgressMock,
     getBookmark: getBookmarkMock,
     updateBookmark: vi.fn(),
     getDeviceId: getDeviceIdMock,
@@ -62,6 +64,7 @@ beforeEach(() => {
     getProgressMock.mockReset().mockResolvedValue(null)
     getBookmarkMock.mockReset().mockResolvedValue(null)
     updateProgressMock.mockReset().mockResolvedValue({})
+    resetPairProgressMock.mockReset().mockResolvedValue({})
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
 })
@@ -114,7 +117,7 @@ describe('BookDetailPage progress actions (issue #54 device attribution)', () =>
         }))
     })
 
-    it('sends device_id, device_name, and captured_at when resetting progress', async () => {
+    it('sends device_id, device_name, and captured_at when resetting progress (standalone)', async () => {
         getProgressMock.mockResolvedValue({ is_completed: false, audio_position_ms: 1000 })
         renderPage()
 
@@ -127,5 +130,22 @@ describe('BookDetailPage progress actions (issue #54 device attribution)', () =>
             device_name: 'Web · Chrome',
             captured_at: expect.any(String),
         }))
+        expect(resetPairProgressMock).not.toHaveBeenCalled()
+    })
+
+    it('calls the pair-level DELETE instead of zero-writing when the book is paired', async () => {
+        // The legacy per-media zero-write left the canonical bookmark in
+        // place, which re-seeded progress right back (issue: reset buttons
+        // not actually resetting). A paired book must use the DELETE.
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr', cover_path: null, pair_id: 77,
+        })
+        getProgressMock.mockResolvedValue({ is_completed: false, audio_position_ms: 1000 })
+        renderPage()
+
+        fireEvent.click(await screen.findByRole('button', { name: /Reset Progress/ }))
+
+        await waitFor(() => expect(resetPairProgressMock).toHaveBeenCalledWith(77))
+        expect(updateProgressMock).not.toHaveBeenCalledWith('audiobook', '1538', expect.anything())
     })
 })

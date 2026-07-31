@@ -6,13 +6,19 @@ import android.content.Context
 import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.*
+import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -47,6 +53,21 @@ class BookSyncRepository @Inject constructor(
     private val deviceIdManager: DeviceIdManager,
     private val json: Json,
 ) {
+    /** This device's stable id / display name, for position attribution. */
+    val deviceId: String get() = deviceIdManager.deviceId
+    val deviceName: String get() = deviceIdManager.deviceName
+
+    /**
+     * Application-scoped — outlives any Activity's `lifecycleScope`. The
+     * reader's close-flush save used to run inside `lifecycleScope.launch`,
+     * so back press -> onPause -> finish() cancelled that coroutine
+     * mid-network-call and lost BOTH the server write and the local Room
+     * write (issue #61/#40 — see [saveReaderPosition]). `internal var` so
+     * tests can substitute a scope backed by a `TestDispatcher`'s scheduler
+     * for deterministic assertions.
+     */
+    internal var appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private fun log(msg: String) = diagnosticLogger.i(LogChannel.APP, REPO_TAG, msg)
     private fun logW(msg: String) = diagnosticLogger.w(LogChannel.APP, REPO_TAG, msg)
     private fun logE(msg: String, t: Throwable? = null) = diagnosticLogger.e(LogChannel.APP, REPO_TAG, msg, t)
@@ -187,6 +208,51 @@ class BookSyncRepository @Inject constructor(
             audioPositionMs = 0,
             isCompleted = false
         )
+    }
+
+    /**
+     * Reset ALL progress for a paired book: deletes the canonical bookmark (+
+     * hints) and every user_progress row on the server, then clears the
+     * matching local caches. [resetMediaProgress]'s legacy zero-write only
+     * pins `epub_progress_percent`/`audio_position_ms` at 0 and leaves the
+     * Bookmark row in place — the next sync (or even the next open) re-seeds
+     * progress right back from it, so the reset silently un-resets itself
+     * (same failure mode as server issue #6, now fixed pair-side by
+     * `DELETE /api/sync/progress/pair/{pairId}`).
+     *
+     * Local cleanup only happens once the server DELETE actually succeeds
+     * (issue #61/#40 fix 3). Clearing local state first (or on failure/offline)
+     * would leave the reset half-applied on this device while the server
+     * still holds the old position — and worse, an unsynced local
+     * `user_progress` row could then be picked up by
+     * `syncAllBookmarksAndProgress`/`processPendingSync` and pushed back to
+     * the server, resurrecting exactly what the reset was supposed to clear.
+     * On failure/offline this changes nothing locally and returns `false` so
+     * the reset can honestly be reported as not having happened; callers may
+     * ignore the result.
+     */
+    suspend fun resetPairProgress(pairId: Int): Boolean {
+        val response = try {
+            api.resetPairProgress(pairId)
+        } catch (e: Exception) {
+            logW("resetPairProgress pair=$pairId: offline (${e.message}) — leaving local state unchanged")
+            return false
+        }
+        if (!response.isSuccessful) {
+            logW("resetPairProgress pair=$pairId: HTTP ${response.code()} — leaving local state unchanged")
+            return false
+        }
+        bookmarkDao.deleteBookmark(pairId)
+        pendingSyncDao.deleteForPair(pairId)
+        // Also clear the local user_progress projection for the pair's own
+        // ebook/audiobook — a stale row here is exactly the resurrection
+        // vector this fix closes (see the doc comment above).
+        val pair = bookPairDao.getPairById(pairId)
+        if (pair != null) {
+            userProgressDao.deleteProgress("ebook", pair.ebookId)
+            userProgressDao.deleteProgress("audiobook", pair.audiobookId)
+        }
+        return true
     }
 
     /** Get the current bookmark for a pair (single snapshot, not a flow). */
@@ -627,6 +693,7 @@ class BookSyncRepository @Inject constructor(
                 epub_sentence_index = entity.epubSentenceIndex,
                 audio_position_ms = entity.audioPositionMs,
                 epub_locator = entity.epubLocator,
+                locator_audio_ms = entity.locatorAudioMs,
                 append_to_log = appendToLog,
                 device_id = deviceIdManager.deviceId,
                 device_name = deviceIdManager.deviceName,
@@ -695,6 +762,154 @@ class BookSyncRepository @Inject constructor(
     }
 
     /**
+     * Fetch the canonical position for a book, or null when the user has none.
+     *
+     * Returns null on 204 (never opened) *and* when the server is unreachable —
+     * callers fall back to their local cache in both cases. The two are
+     * distinguished by [PositionFetch.reachable] where it matters.
+     */
+    suspend fun fetchPosition(scope: String, id: Int): PositionFetch {
+        return try {
+            val response = api.getPosition(scope, id)
+            when {
+                response.code() == 204 -> PositionFetch(null, reachable = true)
+                response.isSuccessful -> PositionFetch(response.body(), reachable = true)
+                else -> {
+                    logW("fetchPosition $scope/$id: HTTP ${response.code()}")
+                    PositionFetch(null, reachable = false)
+                }
+            }
+        } catch (e: Exception) {
+            logW("fetchPosition $scope/$id: offline (${e.message})")
+            PositionFetch(null, reachable = false)
+        }
+    }
+
+    /**
+     * Write a whole position in one request.
+     *
+     * Replaces the updateBookmark + updateProgress pair, which the server
+     * adjudicated separately: either could be rejected while the other applied,
+     * leaving two records that disagreed about where the reader was.
+     */
+    suspend fun updatePosition(
+        scope: String,
+        id: Int,
+        request: PositionUpdateRequest,
+    ): PositionResponse? {
+        return try {
+            val response = api.updatePosition(scope, id, request)
+            when {
+                response.isSuccessful -> response.body()
+                response.code() == 409 -> {
+                    val serverState = parseConflictBody<PositionResponse>(
+                        response.errorBody()?.string())
+                    logW("updatePosition $scope/$id: 409 — this write lost, adopting server state")
+                    serverState
+                }
+                else -> {
+                    logW("updatePosition $scope/$id: failed HTTP ${response.code()}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            logW("updatePosition $scope/$id: offline (${e.message})")
+            null
+        }
+    }
+
+    /**
+     * Save an audio playback position for a paired book — one server write.
+     *
+     * The player used to write the bookmark and the progress row separately,
+     * through the legacy endpoints. Two writes meant two staleness verdicts,
+     * and a stop-write from a backgrounded player could land after the
+     * reader's save and stamp `source = audiobook` over it, which is what sent
+     * the app to the player when the user had last been reading. The derived
+     * progress row is now written server-side from this same call.
+     *
+     * [claimFormat] decides whether this save is allowed to claim "audiobook"
+     * as the format `resolvePairOpenTarget` routes to next. Product rule: only
+     * a save that happens while the player is actively playing, or one
+     * triggered by an explicit user playback command (play/pause tap, seek,
+     * skip, sleep-timer stop, Android Auto MediaSession command), may claim
+     * it. A save from a paused/idle player still needs to persist the
+     * position — that's what this call does regardless — but must leave
+     * `source` alone: omitted from the wire request (the server keeps
+     * whatever is stored, see `PositionUpdateRequest.source`) and untouched in
+     * the local Room bookmark (see `updateBookmark`'s `stampSource`). This is
+     * the fix for background saves (heartbeats, teardown while paused)
+     * hijacking routing back to the player after the user switched to
+     * reading.
+     *
+     * Exception (issue #61/#40 fix 4): when there is no existing local
+     * bookmark row at all, `claimFormat=false` is escalated to a claim
+     * anyway. A first-ever write has no previously-stored `source` to
+     * preserve — omitting it would leave the server's new-row default
+     * (`ebook`) standing while this device's local fallback stamps
+     * `"audiobook"`, permanently disagreeing about routing from the very
+     * first write. The user did just play this book, so it's correct for
+     * this one write to claim it.
+     */
+    suspend fun savePlaybackPosition(
+        pairId: Int,
+        audioPositionMs: Int,
+        appendToLog: Boolean = false,
+        claimFormat: Boolean = true,
+    ) {
+        val hasExistingRow = bookmarkDao.getBookmark(pairId) != null
+        val effectiveClaim = claimFormat || !hasExistingRow
+
+        val result = updatePosition(
+            "pair", pairId,
+            PositionUpdateRequest(
+                source = if (effectiveClaim) "audiobook" else null,
+                audio_position_ms = audioPositionMs,
+                append_to_log = appendToLog,
+                captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
+                device_id = deviceId,
+                device_name = deviceName,
+            ),
+        )
+        // Room stays warm for offline opens; only fall back to the legacy push
+        // when the canonical write didn't get through.
+        updateBookmark(
+            pairId = pairId,
+            source = "audiobook",
+            audioPositionMs = audioPositionMs,
+            appendToLog = appendToLog,
+            pushToServer = result == null,
+            stampSource = effectiveClaim,
+        )
+    }
+
+    /** Same, for a standalone audiobook (no pair). See [savePlaybackPosition]'s
+     *  [claimFormat] doc — standalone audio has no paired ebook to route
+     *  between, so this only affects what's sent on the wire. */
+    suspend fun savePlaybackPositionStandalone(
+        audiobookId: Int,
+        audioPositionMs: Int,
+        claimFormat: Boolean = true,
+    ) {
+        val result = updatePosition(
+            "audiobook", audiobookId,
+            PositionUpdateRequest(
+                source = if (claimFormat) "audiobook" else null,
+                audio_position_ms = audioPositionMs,
+                captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
+                device_id = deviceId,
+                device_name = deviceName,
+            ),
+        )
+        updateProgress(
+            mediaType = "audiobook",
+            mediaId = audiobookId,
+            audioPositionMs = audioPositionMs,
+            pushToServer = result == null,
+        )
+    }
+
+    /**
      * Update bookmark position.
      * Saves locally immediately and queues sync to server.
      */
@@ -712,14 +927,29 @@ class BookSyncRepository @Inject constructor(
         // and no BookmarkLog row is written — server and local history stay clean.
         // Set true on pause / stop / 30-min-continuous-playback boundaries.
         appendToLog: Boolean = false,
+        // When false, write the Room row only. Callers that have already sent
+        // the position via updatePosition use this to keep the offline cache
+        // warm without issuing a second server write — two writes per save is
+        // the very thing the canonical endpoint exists to remove.
+        pushToServer: Boolean = true,
+        // When false, [source] is NOT written — the merged row (and every
+        // downstream use of it: the BookmarkLog entry, the legacy
+        // BookmarkUpdateRequest, the pending_sync retry row) keeps whatever
+        // `source` is already stored, only falling back to [source] when no
+        // bookmark exists yet at all. Backs `savePlaybackPosition`'s
+        // `claimFormat=false` path: the position still needs to move, but a
+        // save from a paused/idle player must not re-route which format opens
+        // next (issue: background saves hijacking format routing).
+        stampSource: Boolean = true,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
         val nowMillis = System.currentTimeMillis()
+        val resolvedSource = if (stampSource) source else (existing?.source ?: source)
 
         // Merge with existing
         val merged = BookmarkEntity(
             bookPairId = pairId,
-            source = source,
+            source = resolvedSource,
             epubChapter = epubChapter ?: existing?.epubChapter,
             epubSentenceIndex = epubSentenceIndex ?: existing?.epubSentenceIndex,
             audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
@@ -737,8 +967,14 @@ class BookSyncRepository @Inject constructor(
             syncedToServer = false,
         )
 
-        // Save locally
-        bookmarkDao.upsertBookmark(merged)
+        // Save locally. A local-only write is marked synced because the caller
+        // has already sent this position through the canonical endpoint —
+        // leaving it unsynced would have the startup reconcile push it a
+        // second time.
+        bookmarkDao.upsertBookmark(
+            if (pushToServer) merged else merged.copy(syncedToServer = true))
+
+        if (!pushToServer) return
 
         // Record a local history entry ONLY on meaningful session boundaries so the
         // offline history mirrors what the server will record. Heartbeat saves stay
@@ -748,7 +984,7 @@ class BookSyncRepository @Inject constructor(
                 BookmarkLogEntity(
                     serverId = null,
                     bookPairId = pairId,
-                    source = source,
+                    source = resolvedSource,
                     prevEpubChapter = existing?.epubChapter,
                     prevEpubSentenceIndex = existing?.epubSentenceIndex,
                     prevAudioPositionMs = existing?.audioPositionMs,
@@ -770,11 +1006,12 @@ class BookSyncRepository @Inject constructor(
                 pendingSyncDao.insert(
                     PendingSyncEntity(
                         bookPairId = pairId,
-                        source = source,
+                        source = resolvedSource,
                         epubChapter = merged.epubChapter,
                         epubSentenceIndex = merged.epubSentenceIndex,
                         audioPositionMs = merged.audioPositionMs,
                         epubLocator = merged.epubLocator,
+                        locatorAudioMs = merged.locatorAudioMs,
                         appendToLog = appendToLog,
                         // Preserve the true capture moment (not whenever this queue
                         // insert happens to run) so a later replay's captured_at is
@@ -790,16 +1027,170 @@ class BookSyncRepository @Inject constructor(
             pendingSyncDao.insert(
                 PendingSyncEntity(
                     bookPairId = pairId,
-                    source = source,
+                    source = resolvedSource,
                     epubChapter = merged.epubChapter,
                     epubSentenceIndex = merged.epubSentenceIndex,
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
+                    locatorAudioMs = merged.locatorAudioMs,
                     appendToLog = appendToLog,
                     createdAt = nowMillis,
                 )
             )
         }
+    }
+
+    /**
+     * Executes an already-captured reader-position save: writes the local
+     * Room row FIRST, then attempts the canonical position PUT, falling
+     * through to the legacy pending-sync queue on failure. See
+     * [ReaderPositionSnapshot] — the caller (`ReaderActivity.savePosition`)
+     * must capture everything this needs while the activity/publication/
+     * navigator are still alive, since this runs on [appScope] and must not
+     * touch any of them.
+     *
+     * Runs under [NonCancellable] on a scope that is never a child of the
+     * caller's, so cancelling the caller (the activity's `lifecycleScope`
+     * being torn down) cannot abort it mid-write — this is the fix for issue
+     * #61/#40's close-flush bug: the old code ran Room write + server call
+     * inside `lifecycleScope.launch`, Room write LAST, so a back-press ->
+     * onPause -> finish() sequence killed the coroutine mid network call and
+     * lost both writes.
+     *
+     * The sync-point lookup (chapter+text -> sentence+audio position) also
+     * happens in here rather than in the caller (fix 2): it's only a Room
+     * read (see [getSyncPointForEpubText]), so — like the rest of this save —
+     * it belongs on the side that can't be cancelled by activity teardown,
+     * not on the caller's `lifecycleScope`.
+     *
+     * Returns the [Job] so tests can await completion; `ReaderActivity` fires
+     * and forgets it.
+     */
+    fun saveReaderPosition(snapshot: ReaderPositionSnapshot): Job = appScope.launch {
+        withContext(NonCancellable) {
+            val capturedAtIso = capturedAtIsoFromMillis(snapshot.capturedAtMillis)
+            val existing = bookmarkDao.getBookmark(snapshot.pairId)
+
+            // A sync-map match upgrades the coarse spine chapter to a precise
+            // sentence + audio position. A miss is not a failure: the chapter
+            // and the preview still describe where the reader is, and other
+            // clients can resolve from them. [ReaderPositionSnapshot.skipSyncPointLookup]
+            // is set when a manual audio-sync write (syncSelectedTextToAudio)
+            // is already in flight for this page — resolving a match here too
+            // could overwrite that fresher, deliberately-chosen audio
+            // position with a stale automatic guess.
+            val syncPoint = if (snapshot.skipSyncPointLookup) null
+                else resolveSyncPoint(snapshot.pairId, snapshot.chapterIndex, snapshot.textPreview)
+            val resolvedChapterIndex = syncPoint?.epubChapter ?: snapshot.chapterIndex
+            val resolvedSentenceIndex = syncPoint?.epubSentenceIndex
+            val resolvedAudioMs = syncPoint?.audioStartMs
+
+            // Room-first: this is the one write that must land no matter what
+            // happens to the network call below. Written unsynced, then
+            // flipped to synced only once the PUT below actually succeeds
+            // (fix 5) — otherwise a failed PUT would leave a row claiming to
+            // be synced when the server never saw it.
+            val merged = BookmarkEntity(
+                bookPairId = snapshot.pairId,
+                source = "ebook",
+                epubChapter = resolvedChapterIndex,
+                epubSentenceIndex = resolvedSentenceIndex ?: existing?.epubSentenceIndex,
+                audioPositionMs = resolvedAudioMs ?: existing?.audioPositionMs,
+                epubLocator = snapshot.locatorJson,
+                locatorAudioMs = resolvedAudioMs ?: existing?.locatorAudioMs,
+                updatedAt = snapshot.capturedAtMillis.toString(),
+                capturedAt = capturedAtIso,
+                deviceId = deviceId,
+                deviceName = deviceName,
+                syncedToServer = false,
+            )
+            bookmarkDao.upsertBookmark(merged)
+
+            val request = PositionUpdateRequest(
+                source = "ebook",
+                epub_chapter = resolvedChapterIndex,
+                epub_sentence_index = resolvedSentenceIndex,
+                epub_text_preview = snapshot.textPreview.takeIf { it.isNotEmpty() },
+                // Null when it can't be computed; omitted rather than sent as
+                // 0, which would overwrite a real percent.
+                epub_progress_percent = snapshot.progressPercent,
+                audio_position_ms = resolvedAudioMs,
+                hint = PositionHintDto(
+                    kind = HINT_READIUM_LOCATOR,
+                    value = snapshot.locatorJson,
+                    audio_position_ms = resolvedAudioMs,
+                ),
+                captured_at = capturedAtIso,
+                device_id = deviceId,
+                device_name = deviceName,
+            )
+            val result = updatePosition("pair", snapshot.pairId, request)
+            if (result == null) {
+                // Canonical write failed (offline / server error) — queue for
+                // retry with the TRUE capture moment, not whenever this
+                // fallback happens to run, so a later replay isn't mistaken
+                // for a fresh write (issue #54).
+                pendingSyncDao.insert(
+                    PendingSyncEntity(
+                        bookPairId = snapshot.pairId,
+                        source = "ebook",
+                        epubChapter = merged.epubChapter,
+                        epubSentenceIndex = merged.epubSentenceIndex,
+                        audioPositionMs = merged.audioPositionMs,
+                        epubLocator = merged.epubLocator,
+                        locatorAudioMs = merged.locatorAudioMs,
+                        appendToLog = false,
+                        createdAt = snapshot.capturedAtMillis,
+                    )
+                )
+            } else {
+                // The canonical write landed — this row now genuinely matches
+                // the server, so it's safe to mark synced (fix 5).
+                bookmarkDao.markSynced(snapshot.pairId)
+            }
+        }
+    }
+
+    /**
+     * Stamps only the local bookmark's `source` — never touches
+     * chapter/sentence/locator/audio, never calls the server, never enqueues
+     * `pending_sync`.
+     *
+     * Backs [com.booksync.ui.reader.PositionSavePolicy]'s `LocalMetadataOnly`
+     * verdict: while a restore is unresolved the reader view sits at spine 0,
+     * and writing that into the real anchors would recreate the chapter-0
+     * data loss this whole redesign exists to fix. But `resolvePairOpenTarget`
+     * keys off this row's `source`, so *something* has to record "the user
+     * was last in the reader" even when the position itself can't be trusted
+     * yet — this is that something.
+     *
+     * Deliberately does NOT bump `updatedAt`/`capturedAt` on an existing row
+     * (issue #61/#40 fix 5): doing so used to make `refreshBookmark` think
+     * this local row was newer than it really is, which blocks pulling a
+     * genuinely newer position from another device on the next open. Only a
+     * brand-new row (no existing bookmark at all) gets a fresh timestamp,
+     * since there's nothing to preserve.
+     */
+    suspend fun updateBookmarkMetadata(pairId: Int, source: String) {
+        val existing = bookmarkDao.getBookmark(pairId)
+        val nowMillis = System.currentTimeMillis()
+        val base = existing ?: BookmarkEntity(
+            bookPairId = pairId,
+            source = source,
+            epubChapter = null,
+            epubSentenceIndex = null,
+            audioPositionMs = null,
+            updatedAt = nowMillis.toString(),
+            capturedAt = capturedAtIsoFromMillis(nowMillis),
+        )
+        val merged = base.copy(
+            source = source,
+            // Marked synced so this never gets picked up by the
+            // syncedToServer=false startup retry sweep — there is nothing to
+            // retry, this write was never meant to reach the server.
+            syncedToServer = true,
+        )
+        bookmarkDao.upsertBookmark(merged)
     }
 
     /**
@@ -824,13 +1215,22 @@ class BookSyncRepository @Inject constructor(
      * with the server's services/sync_matcher.py (issue #41), so the same page yields
      * the same audio position on Android and in the web reader. This wrapper only does
      * the I/O (DAO read) and logging that the pure matcher deliberately can't.
+     *
+     * Dispatched onto [Dispatchers.Default] for callers on the main thread.
+     * [saveReaderPosition] calls [resolveSyncPoint] directly instead — it
+     * already runs off-main on [appScope], and hopping through another
+     * dispatcher there would break the "Room write happens before anything
+     * else, deterministically" guarantee that's the whole point of fix 2.
      */
-    suspend fun getSyncPointForEpubText(pairId: Int, chapter: Int, epubText: String): SyncPointEntity? = withContext(Dispatchers.Default) {
+    suspend fun getSyncPointForEpubText(pairId: Int, chapter: Int, epubText: String): SyncPointEntity? =
+        withContext(Dispatchers.Default) { resolveSyncPoint(pairId, chapter, epubText) }
+
+    private suspend fun resolveSyncPoint(pairId: Int, chapter: Int, epubText: String): SyncPointEntity? {
         val allPoints = syncPointDao.getPointsForPair(pairId)
 
         if (allPoints.isEmpty()) {
             android.util.Log.d("SyncMatch", "No sync points found for pair $pairId")
-            return@withContext null
+            return null
         }
 
         android.util.Log.d("SyncMatch", "Available sync chapters: ${allPoints.map { it.epubChapter }.distinct().sorted()}")
@@ -843,7 +1243,7 @@ class BookSyncRepository @Inject constructor(
                 "sentence=${matchedPoint.epubSentenceIndex} audio=${matchedPoint.audioStartMs}ms " +
                 "preview='${matchedPoint.epubTextPreview?.take(60)}'")
         }
-        return@withContext matchedPoint
+        return matchedPoint
     }
 
     suspend fun getSentenceIndexFromProgression(pairId: Int, chapter: Int, progression: Float): Int {
@@ -884,6 +1284,27 @@ class BookSyncRepository @Inject constructor(
         } else {
             Pair(0, "")
         }
+    }
+
+    /**
+     * Text preview stored for a chapter + sentence-index anchor, or "" if the
+     * pair has no sync map or no such point.
+     *
+     * The chapter/sentence pair is the portable cross-device position anchor
+     * (issue #40); this turns it back into searchable text so the reader can
+     * resolve a real page position when a device-local locator can't be
+     * trusted. Falls back to the nearest earlier sentence in the same chapter,
+     * matching how the server's `_convert_position` resolves a preview.
+     */
+    suspend fun epubTextForSentence(pairId: Int, chapter: Int, sentenceIndex: Int?): String {
+        val inChapter = syncPointDao.getPointsForPair(pairId)
+            .filter { it.epubChapter == chapter }
+            .sortedBy { it.epubSentenceIndex }
+        if (inChapter.isEmpty()) return ""
+        val target = sentenceIndex ?: 0
+        val best = inChapter.lastOrNull { it.epubSentenceIndex <= target && !it.epubTextPreview.isNullOrBlank() }
+            ?: inChapter.firstOrNull { !it.epubTextPreview.isNullOrBlank() }
+        return best?.epubTextPreview ?: ""
     }
 
     // ============ User Progress ============
@@ -928,7 +1349,10 @@ class BookSyncRepository @Inject constructor(
         epubProgressPercent: Float? = null,
         audioPositionMs: Int? = null,
         isCompleted: Boolean? = null,
-        deviceId: String? = deviceIdManager.deviceId
+        deviceId: String? = deviceIdManager.deviceId,
+        // See updateBookmark: false writes the Room row only, for callers that
+        // have already sent this position through the canonical endpoint.
+        pushToServer: Boolean = true,
     ) {
         val existing = userProgressDao.getProgress(mediaType, mediaId)
         val nowMillis = System.currentTimeMillis()
@@ -952,7 +1376,10 @@ class BookSyncRepository @Inject constructor(
             syncedToServer = false
         )
 
-        userProgressDao.upsertProgress(merged)
+        userProgressDao.upsertProgress(
+            if (pushToServer) merged else merged.copy(syncedToServer = true))
+
+        if (!pushToServer) return
 
         try {
             pushProgress(mediaType, mediaId, merged)
@@ -1060,6 +1487,7 @@ class BookSyncRepository @Inject constructor(
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
                         epub_locator = sync.epubLocator,
+                        locator_audio_ms = sync.locatorAudioMs,
                         append_to_log = sync.appendToLog,
                         device_id = deviceIdManager.deviceId,
                         device_name = deviceIdManager.deviceName,
@@ -1182,9 +1610,15 @@ internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
 
 /**
  * Maps a server [BookmarkResponse] — a normal 200 body, or the authoritative state returned
- * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies the Readium
- * EPUB locator and its audio-position anchor, which the server has no concept of and so
- * never returns.
+ * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies
+ * the Readium locator when the server returns none.
+ *
+ * A previous revision dropped the local locator on an ebook-source response
+ * with no locator, to match a server rule that cleared it. Both halves are
+ * gone: clearing a position hint that the writing client can't replace leaves
+ * the reader with nothing to restore from, which is how a real position got
+ * overwritten with chapter 0. A hint's freshness is judged by the anchor it
+ * was captured at, not by deleting it.
  */
 internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEntity(
     bookPairId = book_pair_id,
@@ -1193,7 +1627,7 @@ internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEnti
     epubSentenceIndex = epub_sentence_index,
     audioPositionMs = audio_position_ms,
     epubLocator = epub_locator ?: previous?.epubLocator,
-    locatorAudioMs = previous?.locatorAudioMs,
+    locatorAudioMs = if (epub_locator != null) locator_audio_ms else previous?.locatorAudioMs,
     updatedAt = updated_at,
     capturedAt = captured_at,
     deviceId = device_id,
@@ -1263,3 +1697,100 @@ internal fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
 internal fun localHistoryTimestamp(epochMillis: Long): String =
     java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(epochMillis), java.time.ZoneOffset.UTC)
         .toString()
+
+/**
+ * Result of a canonical-position fetch.
+ *
+ * [reachable] separates "the server says this book has no position" from "we
+ * couldn't ask". The first means starting at the beginning is correct; the
+ * second means fall back to the local cache and change nothing.
+ */
+data class PositionFetch(
+    val position: PositionResponse?,
+    val reachable: Boolean,
+)
+
+/**
+ * Everything a reader-position save needs, captured synchronously while the
+ * activity, publication and navigator are still alive.
+ *
+ * [BookSyncRepository.saveReaderPosition] runs on [BookSyncRepository.appScope],
+ * a coroutine scope that can outlive the activity, so it must not — and does
+ * not need to — touch the Readium `Publication`, navigator, or WebView; this
+ * snapshot is everything it needs. Unlike an earlier version of this class,
+ * [chapterIndex] here is the COARSE spine chapter, not yet upgraded by a
+ * sync-point match — that lookup (`getSyncPointForEpubText`, a Room read) now
+ * happens INSIDE `saveReaderPosition` itself (issue #61/#40 fix 2), since it
+ * needs only a DB read and belongs on the side that can't be cancelled by
+ * activity teardown, same as everything else here.
+ */
+data class ReaderPositionSnapshot(
+    val pairId: Int,
+    val chapterIndex: Int,
+    val locatorJson: String,
+    val textPreview: String,
+    val progressPercent: Float?,
+    val capturedAtMillis: Long,
+    /**
+     * Skip the sync-point lookup entirely. Set when a manual audio-sync write
+     * (`ReaderActivity.syncSelectedTextToAudio`) is already in flight for this
+     * page — resolving a (possibly stale) match against the sync map here too
+     * would overwrite that fresher, deliberately-chosen audio position.
+     */
+    val skipSyncPointLookup: Boolean = false,
+)
+
+/**
+ * Map a server [PositionResponse] onto the resolver's input type.
+ *
+ * The resolver is deliberately transport-agnostic (it is shared, fixture-tested
+ * logic), so the DTO is converted here rather than the resolver depending on
+ * Retrofit types.
+ */
+internal fun PositionResponse.toStoredPosition() = com.booksync.data.sync.StoredPosition(
+    anchorRevision = anchor_revision,
+    source = source,
+    epubChapter = epub_chapter,
+    epubSentenceIndex = epub_sentence_index,
+    epubTextPreview = epub_text_preview,
+    epubProgressPercent = epub_progress_percent,
+    audioPositionMs = audio_position_ms,
+    hints = hints.map {
+        com.booksync.data.sync.PositionHint(
+            kind = it.kind,
+            deviceId = it.device_id,
+            value = it.value,
+            anchorRevision = it.anchor_revision,
+            audioPositionMs = it.audio_position_ms,
+        )
+    },
+)
+
+/**
+ * Build the resolver's input from the local cache, for use when the server is
+ * unreachable.
+ *
+ * The locally stored locator is offered as a hint at the record's own anchor
+ * revision, so it qualifies — this device captured it against this anchor.
+ */
+internal fun BookmarkEntity.toStoredPosition(deviceId: String) =
+    com.booksync.data.sync.StoredPosition(
+        anchorRevision = 0L,
+        source = source,
+        epubChapter = epubChapter,
+        epubSentenceIndex = epubSentenceIndex,
+        epubTextPreview = null,
+        epubProgressPercent = null,
+        audioPositionMs = audioPositionMs,
+        hints = epubLocator?.let {
+            listOf(
+                com.booksync.data.sync.PositionHint(
+                    kind = com.booksync.data.sync.HINT_READIUM_LOCATOR,
+                    deviceId = deviceId,
+                    value = it,
+                    anchorRevision = 0L,
+                    audioPositionMs = locatorAudioMs,
+                )
+            )
+        } ?: emptyList(),
+    )
