@@ -195,6 +195,13 @@ interface BookmarkDao {
 
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson, locatorAudioMs = :audioMs WHERE bookPairId = :pairId")
     suspend fun updateLocatorWithAudio(pairId: Int, locatorJson: String, audioMs: Int?)
+
+    // A pair-level progress reset (issue: reset buttons not actually
+    // resetting) must remove this row too — otherwise it resurrects the old
+    // position on the next offline open and keeps routing resolvePairOpenTarget
+    // to whatever format `source` still names.
+    @Query("DELETE FROM bookmarks WHERE bookPairId = :pairId")
+    suspend fun deleteBookmark(pairId: Int)
 }
 
 @Dao
@@ -210,6 +217,11 @@ interface PendingSyncDao {
 
     @Query("DELETE FROM pending_sync")
     suspend fun deleteAll()
+
+    // See BookmarkDao.deleteBookmark — a queued retry carrying the pre-reset
+    // position would otherwise replay it right back onto the server.
+    @Query("DELETE FROM pending_sync WHERE bookPairId = :pairId")
+    suspend fun deleteForPair(pairId: Int)
 }
 
 @Dao

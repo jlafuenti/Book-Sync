@@ -322,10 +322,11 @@ class BookDetailsViewModel @Inject constructor(
         val ui = uiState.value
         runSafely {
             when {
-                ui.pair != null -> {
-                    repository.resetMediaProgress("audiobook", ui.pair.audiobookId)
-                    repository.resetMediaProgress("ebook", ui.pair.ebookId)
-                }
+                // Paired: delete the canonical bookmark + progress server-side
+                // and clear the matching local caches, rather than pinning
+                // both legs at 0 with the legacy per-media write (which left
+                // the old bookmark in place to silently re-seed progress).
+                ui.pair != null -> repository.resetPairProgress(ui.pair.id)
                 ui.ebook != null     -> repository.resetMediaProgress("ebook", ui.ebook.id)
                 ui.audiobook != null -> repository.resetMediaProgress("audiobook", ui.audiobook.id)
             }

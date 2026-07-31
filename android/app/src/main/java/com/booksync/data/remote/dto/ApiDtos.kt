@@ -281,7 +281,16 @@ data class PositionHintResponse(
 
 @Serializable
 data class PositionUpdateRequest(
-    val source: String,
+    // Null (the default) omits `source` from the wire payload entirely —
+    // kotlinx.serialization skips a property whose value equals its default
+    // when `encodeDefaults = false` (see AppModule.provideJson). The server's
+    // `PositionUpdate.source` treats omission as "keep whatever is stored"
+    // (see server schemas.PositionUpdate), which is exactly what a save from
+    // a paused/idle player needs: it must still move the position without
+    // re-claiming which format opens next (issue: background saves hijacking
+    // format routing — see BookSyncRepository.savePlaybackPosition's
+    // `claimFormat` parameter).
+    val source: String? = null,
     // Spine index — the axis both readers position by.
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,

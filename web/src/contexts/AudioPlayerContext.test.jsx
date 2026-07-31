@@ -4,13 +4,13 @@ import { AudioPlayerProvider, useAudioPlayer } from './AudioPlayerContext'
 
 const {
     getAudiobookStreamUrlMock, updateProgressMock, updateBookmarkMock,
-    getAccessTokenMock, sendBookmarkKeepaliveMock, getDeviceIdMock, getDeviceNameMock,
+    getAccessTokenMock, sendPositionKeepaliveMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAudiobookStreamUrlMock: vi.fn(),
     updateProgressMock: vi.fn(),
     updateBookmarkMock: vi.fn(),
     getAccessTokenMock: vi.fn(() => 'token'),
-    sendBookmarkKeepaliveMock: vi.fn(),
+    sendPositionKeepaliveMock: vi.fn(),
     getDeviceIdMock: vi.fn(() => 'device-123'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
 }))
@@ -20,7 +20,7 @@ vi.mock('../api', () => ({
     updateProgress: updateProgressMock,
     updateBookmark: updateBookmarkMock,
     getAccessToken: getAccessTokenMock,
-    sendBookmarkKeepalive: sendBookmarkKeepaliveMock,
+    sendPositionKeepalive: sendPositionKeepaliveMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
 }))
@@ -75,7 +75,7 @@ beforeEach(() => {
     getAudiobookStreamUrlMock.mockReset().mockResolvedValue('/api/files/audiobook/7?token=first-token')
     updateProgressMock.mockReset().mockResolvedValue({})
     updateBookmarkMock.mockReset().mockResolvedValue({})
-    sendBookmarkKeepaliveMock.mockReset()
+    sendPositionKeepaliveMock.mockReset()
     getDeviceIdMock.mockReset().mockReturnValue('device-123')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
 })
@@ -194,7 +194,41 @@ describe('AudioPlayerProvider heartbeat', () => {
 })
 
 describe('AudioPlayerProvider unload keepalive', () => {
-    it('sends device_id, device_name, and captured_at with the keepalive bookmark write on pagehide', async () => {
+    // Product rule (background saves must not hijack format routing): a
+    // teardown save only claims `source` when the player was actually
+    // playing at that instant. The canonical position endpoint (not the
+    // legacy bookmark one) is used specifically because it can express
+    // "leave `source` alone" via omission.
+    it('claims source=audiobook when still playing at unload', async () => {
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 55
+        // MockAudio.play() (triggered by the 'canplay' handler) sets paused=false
+        // and fires 'play', so the provider's `playing` state is true here.
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+            source: 'audiobook',
+            audio_position_ms: 55000,
+            append_to_log: true,
+            device_id: 'device-123',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+    })
+
+    it('omits source when paused/idle at unload', async () => {
         render(
             <AudioPlayerProvider>
                 <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
@@ -209,15 +243,19 @@ describe('AudioPlayerProvider unload keepalive', () => {
         act(() => audio.dispatchEvent(new Event('canplay')))
         audio.currentTime = 55
 
+        // Pause before the tab closes -- the paused/idle-player case the
+        // product rule exists for (e.g. the user switched to reading, left
+        // the player backgrounded and paused, then closed the tab later).
+        fireEvent.click(screen.getByText('pause'))
+        sendPositionKeepaliveMock.mockClear()
+
         act(() => { window.dispatchEvent(new Event('pagehide')) })
 
-        expect(sendBookmarkKeepaliveMock).toHaveBeenCalledWith(99, expect.objectContaining({
-            audio_position_ms: 55000,
-            append_to_log: true,
-            device_id: 'device-123',
-            device_name: 'Web · Chrome',
-            captured_at: expect.any(String),
-        }))
+        const call = sendPositionKeepaliveMock.mock.calls[0]
+        expect(call[0]).toBe('pair')
+        expect(call[1]).toBe(99)
+        expect(call[2].source).toBeUndefined()
+        expect(call[2].audio_position_ms).toBe(55000)
     })
 })
 

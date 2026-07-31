@@ -707,6 +707,32 @@ export function sendBookmarkKeepalive(pairId, data) {
     } catch {}
 }
 
+/**
+ * Same as [sendBookmarkKeepalive] but against the canonical position endpoint
+ * rather than the legacy bookmark one. Used for the audio player's tab-close
+ * save, which must be able to OMIT `source` when the player wasn't actively
+ * playing at unload (product rule: a save only claims the format when
+ * playing or triggered by an explicit user command — see
+ * AudioPlayerContext's `onUnload`). The legacy bookmark endpoint's `source`
+ * is required, so it can't express "leave the format alone"; the canonical
+ * `PositionUpdate` schema treats an omitted `source` as "keep whatever is
+ * stored" (server `schemas.PositionUpdate`).
+ */
+export function sendPositionKeepalive(scope, id, data) {
+    if (!accessToken) return;
+    try {
+        fetch(`${API_BASE}/sync/position/${scope}/${id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify(data),
+            keepalive: true,
+        });
+    } catch {}
+}
+
 export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/match-text/${pairId}`, {
         method: 'POST',

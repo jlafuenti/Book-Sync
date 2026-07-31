@@ -165,9 +165,12 @@ class DownloadedViewModel @Inject constructor(
         repository.markComplete("ebook", pair.ebookId)
     }
 
+    // Pair-level DELETE removes the canonical bookmark + hints + user_progress
+    // server-side and clears the matching local Room caches. The old per-leg
+    // zero-write left the bookmark in place, which re-seeded progress right
+    // back (issue: reset buttons not actually resetting).
     fun resetProgress(pair: BookPairEntity) = runSafely {
-        repository.resetMediaProgress("audiobook", pair.audiobookId)
-        repository.resetMediaProgress("ebook", pair.ebookId)
+        repository.resetPairProgress(pair.id)
     }
 
     fun unlinkPair(pair: BookPairEntity) = runSafely { repository.deletePair(pair.id) }
