@@ -89,7 +89,7 @@ def _scope_filter(query, user_id: int, ref: ScopeRef):
 
 
 async def read_position(
-    db: AsyncSession, user_id: int, ref: ScopeRef
+    db: AsyncSession, user_id: int, ref: ScopeRef, *, refresh: bool = False
 ) -> Optional[Bookmark]:
     """The canonical record, or None.
 
@@ -97,9 +97,16 @@ async def read_position(
     chapter-0 row on a miss, which made "does this user have a position?"
     unanswerable — and a fabricated chapter 0 is indistinguishable from a real
     one at the start of a book.
+
+    [refresh] forces the loaded state to be overwritten from the database. The
+    session runs `expire_on_commit=False`, so re-reading an already-loaded
+    record otherwise returns it with the `hints` collection as it was *before*
+    the write — the PUT response then omitted the hint it had just stored.
     """
     query = _scope_filter(
         select(Bookmark).options(selectinload(Bookmark.hints)), user_id, ref)
+    if refresh:
+        query = query.execution_options(populate_existing=True)
     return (await db.execute(query)).scalar_one_or_none()
 
 
@@ -345,7 +352,8 @@ async def apply_position(
         await db.commit()
         # Re-read rather than refresh: `hints` must come back eagerly loaded,
         # or serialising the response lazy-loads outside the async context.
-        reloaded = await read_position(db, user_id, ref)
+        # populate_existing, or the identity map returns the pre-write state.
+        reloaded = await read_position(db, user_id, ref, refresh=True)
         if reloaded is not None:
             return reloaded, True
     return bookmark, True
