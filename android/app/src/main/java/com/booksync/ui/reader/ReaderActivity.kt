@@ -18,10 +18,8 @@ import com.booksync.R
 import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
-import com.booksync.data.repository.capturedAtIsoFromMillis
+import com.booksync.data.repository.ReaderPositionSnapshot
 import com.booksync.data.repository.toStoredPosition
-import com.booksync.data.remote.PositionHintDto
-import com.booksync.data.remote.PositionUpdateRequest
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.data.sync.RestoreStep
 import com.booksync.data.sync.StoredPosition
@@ -29,6 +27,7 @@ import com.booksync.data.sync.planRestore
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -139,12 +138,24 @@ class ReaderActivity : AppCompatActivity() {
     private var canonicalPosition: StoredPosition? = null
 
     /**
-     * Nothing may be written until the restore has landed, or the record was
-     * genuinely empty. Without this gate a restore that failed and left the
-     * book on page one gets persisted over a real position from another
-     * device — which is exactly how chapter 39 became chapter 0.
+     * Replaces the old `positionEstablished` boolean latch, which had two
+     * defects: an unresolved restore left it false forever (suppressing every
+     * later save, even after real page-turns), and the catch in
+     * `getInitialLocator` could reset it to false after an earlier rung had
+     * already landed. See [PositionSavePolicy].
      */
-    private var positionEstablished = false
+    private val savePolicy = PositionSavePolicy()
+
+    /**
+     * The navigator's very first locator emission after (re)creation reflects
+     * the restore (the initial locator passed to the fragment factory), not a
+     * user page-turn — it must not be read as navigation. Cleared after that
+     * first emission; every locator change after it is the user turning a
+     * page (or dragging the progress slider), so it's reported to
+     * [savePolicy] — see `startPositionTracking`.
+     */
+    private var awaitingRestoreLocator = true
+
     // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
     private var lastSelectedText: String = ""
 
@@ -496,6 +507,15 @@ class ReaderActivity : AppCompatActivity() {
                 // Update progress UI
                 updateProgressUI(locator)
 
+                // The first emission is the restore settling in, not a user
+                // action — everything after it is the user turning a page or
+                // dragging the slider, and unblocks a full save even when the
+                // restore itself never resolved (see PositionSavePolicy).
+                if (awaitingRestoreLocator) {
+                    awaitingRestoreLocator = false
+                } else {
+                    savePolicy.onUserNavigation()
+                }
 
                 // Debounced position save
                 val now = System.currentTimeMillis()
@@ -588,24 +608,34 @@ class ReaderActivity : AppCompatActivity() {
                 val locator = executeRestoreStep(pub, step, position)
                 if (locator != null) {
                     Log.d(TAG, "getInitialLocator: restored via '${step.kind}'")
-                    positionEstablished = true
+                    // Monotonic — see PositionSavePolicy. An exception thrown
+                    // by a LATER step (caught below) can no longer demote this
+                    // back to Unresolved, unlike the old boolean flag.
+                    savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Landed)
                     return locator
                 }
                 Log.d(TAG, "getInitialLocator: step '${step.kind}' did not resolve")
             }
 
             // No steps at all means the book is genuinely unread, and opening
-            // at the beginning is correct — saving is safe. Steps that all
-            // failed mean we hold a position we could not resolve; saving stays
-            // blocked so a page-one view can't be written over it.
-            positionEstablished = steps.isEmpty()
-            if (!positionEstablished) {
-                Log.w(TAG, "getInitialLocator: position unresolved — saves suppressed")
+            // at the beginning is correct — a full save is safe. Steps that
+            // all failed mean we hold a position we could not resolve — the
+            // policy still allows a local metadata-only stamp (never the full
+            // anchors) until the user actually turns a page.
+            val outcome = if (steps.isEmpty())
+                PositionSavePolicy.RestoreOutcome.Unread
+            else
+                PositionSavePolicy.RestoreOutcome.Unresolved
+            savePolicy.onRestoreOutcome(outcome)
+            if (outcome == PositionSavePolicy.RestoreOutcome.Unresolved) {
+                Log.w(TAG, "getInitialLocator: position unresolved — full saves withheld until a page turn")
             }
             null
         } catch (e: Exception) {
             Log.w(TAG, "Error getting initial locator", e)
-            positionEstablished = false
+            // Monotonic — a landed rung earlier in the ladder is not undone
+            // by an exception thrown while trying a later one.
+            savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Unresolved)
             null
         }
     }
@@ -747,14 +777,29 @@ class ReaderActivity : AppCompatActivity() {
         )
 
     private fun savePosition(locator: Locator) {
-        val bookPair = pair ?: return
-        // Nothing may be written until we know where the reader actually is.
-        // A restore that failed and left the book on page one would otherwise
-        // persist chapter 0 over a real position set on another device.
-        if (!positionEstablished) {
-            Log.w(TAG, "savePosition: suppressed — position not established yet")
+        pair ?: return
+        val verdict = savePolicy.verdictForSave()
+        Log.d(TAG, "savePosition: verdict=$verdict")
+
+        if (verdict == PositionSavePolicy.SaveVerdict.LocalMetadataOnly) {
+            // The restore hasn't resolved yet, so this locator is the ladder's
+            // failed guess (spine 0), not a place the user chose. Only the
+            // bookmark's source/updatedAt are stamped — see
+            // BookSyncRepository.updateBookmarkMetadata — so format routing
+            // (resolvePairOpenTarget) still works without risking the
+            // chapter-0 data loss a full save here would recreate.
+            lifecycleScope.launch {
+                try {
+                    repository.updateBookmarkMetadata(pairId, source = "ebook")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error saving position metadata", e)
+                }
+            }
             return
         }
+
         // Inject selection tracker on every page turn (content may have changed).
         // Called on the main thread before the coroutine, so WebView access is safe.
         injectSelectionTracker()
@@ -769,53 +814,31 @@ class ReaderActivity : AppCompatActivity() {
                 // A sync-map match upgrades the anchor to a sentence and its
                 // audio position. A miss is not a failure: the chapter and the
                 // preview still describe where the reader is, and the other
-                // clients can resolve from them.
+                // clients can resolve from them. Resolving this needs only a
+                // DB read (no publication/navigator access), so — like
+                // everything else here — it happens before handoff.
                 val syncPoint = if (sentenceSyncPending) null
                     else repository.getSyncPointForEpubText(pairId, chapterIndex, textPreview)
 
-                // ONE write carrying the whole position. The bookmark and
-                // progress writes used to be separate requests judged
-                // separately, so one could be accepted while the other was
-                // rejected and the two records would then disagree.
-                val request = PositionUpdateRequest(
-                    source = "ebook",
-                    epub_chapter = syncPoint?.epubChapter ?: chapterIndex,
-                    epub_sentence_index = syncPoint?.epubSentenceIndex,
-                    epub_text_preview = textPreview.takeIf { it.isNotEmpty() },
-                    // Null when it can't be computed; omitted rather than
-                    // sent as 0, which would overwrite a real percent.
-                    epub_progress_percent = bookPercentFor(locator, chapterIndex),
-                    audio_position_ms = syncPoint?.audioStartMs,
-                    hint = PositionHintDto(
-                        kind = HINT_READIUM_LOCATOR,
-                        value = locatorJson,
-                        audio_position_ms = syncPoint?.audioStartMs,
-                    ),
-                    captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
-                    device_id = repository.deviceId,
-                    device_name = repository.deviceName,
-                )
-                val result = repository.updatePosition("pair", pairId, request)
-                if (result != null) {
-                    canonicalPosition = result.toStoredPosition()
-                }
-
-                // Keep the local cache warm for offline opens. When the
-                // canonical write succeeded this is Room-only — issuing a
-                // second server write per save is exactly what the position
-                // endpoint exists to remove. When it failed (offline), fall
-                // through to the legacy path so the write still gets queued
-                // and retried.
-                repository.updateBookmark(
-                    pushToServer = result == null,
+                // Snapshot everything the save needs, then hand off. The save
+                // itself runs on the repository's app-scoped coroutine (see
+                // saveReaderPosition) so activity teardown — this call is
+                // itself running inside lifecycleScope — can't cancel it
+                // mid-write; the snapshot exists so that detached coroutine
+                // never has to touch the publication, navigator, or WebView.
+                val snapshot = ReaderPositionSnapshot(
                     pairId = pairId,
-                    source = "ebook",
-                    epubChapter = syncPoint?.epubChapter ?: chapterIndex,
+                    chapterIndex = syncPoint?.epubChapter ?: chapterIndex,
                     epubSentenceIndex = syncPoint?.epubSentenceIndex,
+                    locatorJson = locatorJson,
+                    textPreview = textPreview,
+                    progressPercent = bookPercentFor(locator, chapterIndex),
                     audioPositionMs = syncPoint?.audioStartMs,
-                    epubLocator = locatorJson,
-                    locatorAudioMs = syncPoint?.audioStartMs,
+                    capturedAtMillis = System.currentTimeMillis(),
                 )
+                repository.saveReaderPosition(snapshot)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Error saving position", e)
             }

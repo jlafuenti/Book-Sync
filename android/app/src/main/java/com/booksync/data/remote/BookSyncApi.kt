@@ -142,6 +142,14 @@ interface BookSyncApi {
         @Body update: ProgressUpdateRequest
     ): Response<ProgressResponse>
 
+    // Deletes the canonical bookmark (+ hints) and every user_progress row for
+    // this pair, server-side. Used by "Reset Progress" for a paired book —
+    // the legacy per-media PUT-with-zeros only pinned position at 0 and left
+    // the old bookmark in place, which then re-seeded progress right back
+    // (issue: reset buttons not actually resetting).
+    @DELETE("api/sync/progress/pair/{pairId}")
+    suspend fun resetPairProgress(@Path("pairId") pairId: Int): Response<Unit>
+
     // ============ Transcription ============
 
     /** Add a book pair to the transcription queue (user-role endpoint). */
