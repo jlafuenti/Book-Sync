@@ -1,0 +1,144 @@
+[
+  {
+    "name": "no_position_at_all",
+    "why": "A book never opened has nothing to restore. This is the ONLY case that may yield an empty plan.",
+    "position": null,
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": []
+  },
+  {
+    "name": "empty_record_has_no_anchor",
+    "why": "A row that exists but holds no anchor is the same as no position.",
+    "position": {"anchor_revision": 1},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": []
+  },
+  {
+    "name": "current_hint_wins",
+    "why": "A hint captured at the live anchor by this device is the most precise thing available.",
+    "position": {
+      "anchor_revision": 7, "epub_chapter": 12, "epub_text_preview": "the harbour lay still",
+      "epub_progress_percent": 30.0,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["hint", "text", "chapter", "percent"]
+  },
+  {
+    "name": "stale_hint_is_skipped_not_fatal",
+    "why": "The anchor moved after this hint was captured. It is ignored, and the anchor still resolves. Deleting it instead is what lost a real position.",
+    "position": {
+      "anchor_revision": 9, "epub_chapter": 12, "epub_text_preview": "the harbour lay still",
+      "epub_progress_percent": 30.0,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["text", "chapter", "percent"]
+  },
+  {
+    "name": "locator_from_another_device_is_not_used",
+    "why": "Readium locators encode how THAT device rendered the page.",
+    "position": {
+      "anchor_revision": 7, "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "other-phone", "value": "{}", "anchor_revision": 7}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["chapter"]
+  },
+  {
+    "name": "cfi_from_another_web_client_is_usable",
+    "why": "epub.js CFIs are derived from the EPUB DOM, so they are portable between browsers.",
+    "position": {
+      "anchor_revision": 7, "epub_chapter": 12,
+      "hints": [{"kind": "epubjs_cfi", "device_id": "other-browser", "value": "epubcfi(/6/4)", "anchor_revision": 7}]
+    },
+    "context": {"spine_count": 40, "device_id": "this-browser", "hint_kind": "epubjs_cfi"},
+    "expected": ["hint", "chapter"]
+  },
+  {
+    "name": "wrong_kind_hint_ignored",
+    "why": "A browser cannot act on a Readium locator.",
+    "position": {
+      "anchor_revision": 7, "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7}]
+    },
+    "context": {"spine_count": 40, "device_id": "this-browser", "hint_kind": "epubjs_cfi"},
+    "expected": ["chapter"]
+  },
+  {
+    "name": "audio_moved_far_from_where_locator_was_captured",
+    "why": "On an audiobook-source position the locator only describes the page if the audio has not moved on.",
+    "position": {
+      "anchor_revision": 7, "source": "audiobook", "audio_position_ms": 900000,
+      "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": 100000}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["chapter", "audio"]
+  },
+  {
+    "name": "audio_barely_moved_keeps_the_locator",
+    "why": "Audio drift within the reuse threshold does not invalidate the page.",
+    "position": {
+      "anchor_revision": 7, "source": "audiobook", "audio_position_ms": 105000,
+      "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": 100000}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["hint", "chapter", "audio"]
+  },
+  {
+    "name": "web_written_position_seen_by_the_phone",
+    "why": "The exact handoff that was broken: web writes chapter + preview + percent and no Readium locator. The phone must still land on the page, never at the start of the book.",
+    "position": {
+      "anchor_revision": 12, "epub_chapter": 39, "epub_sentence_index": 4,
+      "epub_text_preview": "althea counted the ships at anchor",
+      "epub_progress_percent": 46.81,
+      "hints": []
+    },
+    "context": {"spine_count": 83, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["text", "chapter", "percent"]
+  },
+  {
+    "name": "percent_only_never_start",
+    "why": "The invariant: an anchor exists, so the plan is never empty even with no hint, no preview and no chapter.",
+    "position": {"anchor_revision": 3, "epub_progress_percent": 40.0},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["percent"]
+  },
+  {
+    "name": "chapter_out_of_range_is_not_navigable",
+    "why": "A chapter past the end of this spine cannot be opened; the percent rung still can.",
+    "position": {"anchor_revision": 3, "epub_chapter": 99, "epub_progress_percent": 40.0},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["percent"]
+  },
+  {
+    "name": "zero_percent_is_not_an_anchor",
+    "why": "0% is indistinguishable from an unread book, so it must not masquerade as a position.",
+    "position": {"anchor_revision": 1, "epub_progress_percent": 0.0},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": []
+  },
+  {
+    "name": "short_preview_is_not_searchable",
+    "why": "Too little text to locate reliably; fall through rather than land somewhere arbitrary.",
+    "position": {"anchor_revision": 3, "epub_text_preview": "the end", "epub_chapter": 5},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["chapter"]
+  },
+  {
+    "name": "audio_only_position",
+    "why": "An audiobook-only position still resolves to a page through the sync map.",
+    "position": {"anchor_revision": 3, "source": "audiobook", "audio_position_ms": 54373980},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["audio"]
+  },
+  {
+    "name": "chapter_zero_is_a_real_position",
+    "why": "Chapter 0 is the first spine item, not a null. It must be navigable.",
+    "position": {"anchor_revision": 2, "epub_chapter": 0},
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["chapter"]
+  }
+]

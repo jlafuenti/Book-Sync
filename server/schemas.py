@@ -3,6 +3,7 @@ Pydantic schemas for API request/response validation.
 """
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from models.book import PairStatus
@@ -322,6 +323,8 @@ class BookmarkUpdate(BaseModel):
     # Precise client-side EPUB locator/CFI. Persisted and echoed back so the
     # client can resume at the exact reading position.
     epub_locator: Optional[str] = None
+    # Audio position the locator was captured at; travels with the locator.
+    locator_audio_ms: Optional[int] = None
     # When False (default), the bookmark is updated but no BookmarkLog row is
     # appended. Clients set this to True only on meaningful session boundaries:
     # pause, stop (track ended, player closed, cast session ends), or every
@@ -361,6 +364,7 @@ class BookmarkResponse(BaseModel):
     epub_sentence_index: Optional[int]
     audio_position_ms: Optional[int]
     epub_locator: Optional[str] = None
+    locator_audio_ms: Optional[int] = None
     epub_text_preview: Optional[str] = None
     updated_at: datetime
     synced_at: Optional[datetime]
@@ -535,3 +539,89 @@ class AcknowledgeItemsRequest(BaseModel):
 
 class AcknowledgePairsRequest(BaseModel):
     pair_ids: List[int]
+
+
+# ============================================================
+# Canonical Position Schemas
+# ============================================================
+
+from models.bookmark import HintKind  # noqa: E402
+
+
+class PositionScope(str, Enum):
+    """What a position belongs to. Standalone media had no canonical position
+    row at all before; it lived only in user_progress."""
+    PAIR = "pair"
+    EBOOK = "ebook"
+    AUDIOBOOK = "audiobook"
+
+
+class PositionHintPayload(BaseModel):
+    """A reader-specific precise position, offered with the write that set the
+    anchor. The server tags it with the resulting anchor revision, which is how
+    staleness is judged later — hints are never deleted."""
+    kind: HintKind
+    value: str
+    audio_position_ms: Optional[int] = None
+
+
+class PositionHintResponse(BaseModel):
+    kind: HintKind
+    device_id: str
+    value: str
+    anchor_revision: int
+    audio_position_ms: Optional[int] = None
+    # True when captured at the position's live anchor. A false hint is stale,
+    # not useless: its device makes it current again by re-capturing.
+    current: bool
+
+
+class PositionUpdate(BaseModel):
+    """One write carrying the whole position.
+
+    Every field is optional and omission means "leave alone" — a write that
+    carries no anchor never clears one.
+
+    `source` follows the same rule: only a foreground, user-initiated write
+    claims which format the clients open next. A background write (service
+    teardown, Android Auto heartbeat) omits it to move the position without
+    re-stamping the format (issue: background writes re-claiming source).
+    """
+    source: Optional[BookmarkSource] = None
+    # Spine index: the axis both readers position by.
+    epub_chapter: Optional[int] = None
+    epub_sentence_index: Optional[int] = None
+    epub_text_preview: Optional[str] = None
+    epub_progress_percent: Optional[float] = None
+    audio_position_ms: Optional[int] = None
+    is_completed: Optional[bool] = None
+    hint: Optional[PositionHintPayload] = None
+    append_to_log: bool = False
+    captured_at: Optional[datetime] = None
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+    @field_validator("captured_at")
+    @classmethod
+    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
+        return _naive_utc(value)
+
+
+class PositionResponse(BaseModel):
+    scope: PositionScope
+    book_pair_id: Optional[int] = None
+    ebook_id: Optional[int] = None
+    audiobook_id: Optional[int] = None
+    source: BookmarkSource
+    anchor_revision: int
+    epub_chapter: Optional[int] = None
+    epub_sentence_index: Optional[int] = None
+    epub_text_preview: Optional[str] = None
+    epub_progress_percent: Optional[float] = None
+    audio_position_ms: Optional[int] = None
+    is_completed: bool = False
+    captured_at: Optional[datetime] = None
+    updated_at: datetime
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    hints: List[PositionHintResponse] = []

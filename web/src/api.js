@@ -614,6 +614,42 @@ export async function resetPairProgress(pairId) {
     return resp.json();
 }
 
+// ============ Canonical position ============
+//
+// One record per book, written atomically. Replaces the pair of
+// updateProgress + updateBookmark calls, which were adjudicated separately —
+// either could be rejected while the other applied, leaving the two rows
+// describing different positions with nothing to reconcile them.
+
+/**
+ * The canonical position, or null when the user has none.
+ *
+ * A 204 means "never opened". It is deliberately distinct from a position at
+ * chapter 0: the reader must be able to tell "no position" from "at the start".
+ */
+export async function getPosition(scope, id) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`);
+    if (resp.status === 204) return null;
+    if (!resp.ok) throw new Error('Failed to fetch position');
+    return resp.json();
+}
+
+export async function updatePosition(scope, id, position) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(position),
+    });
+    // Same convention as updateProgress/updateBookmark: a 409 is an expected
+    // "rejected — server state is newer" result carrying the authoritative
+    // record, not an error. Nothing was written.
+    if (resp.status === 409) {
+        const body = await resp.json();
+        return Object.assign(body, { rejected: true });
+    }
+    if (!resp.ok) throw new Error('Failed to update position');
+    return resp.json();
+}
+
 // ============ Bookmarks ============
 
 export async function getBookmark(pairId) {
@@ -660,6 +696,32 @@ export function sendBookmarkKeepalive(pairId, data) {
     if (!accessToken) return;
     try {
         fetch(`${API_BASE}/sync/bookmark/${pairId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify(data),
+            keepalive: true,
+        });
+    } catch {}
+}
+
+/**
+ * Same as [sendBookmarkKeepalive] but against the canonical position endpoint
+ * rather than the legacy bookmark one. Used for the audio player's tab-close
+ * save, which must be able to OMIT `source` when the player wasn't actively
+ * playing at unload (product rule: a save only claims the format when
+ * playing or triggered by an explicit user command — see
+ * AudioPlayerContext's `onUnload`). The legacy bookmark endpoint's `source`
+ * is required, so it can't express "leave the format alone"; the canonical
+ * `PositionUpdate` schema treats an omitted `source` as "keep whatever is
+ * stored" (server `schemas.PositionUpdate`).
+ */
+export function sendPositionKeepalive(scope, id, data) {
+    if (!accessToken) return;
+    try {
+        fetch(`${API_BASE}/sync/position/${scope}/${id}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',

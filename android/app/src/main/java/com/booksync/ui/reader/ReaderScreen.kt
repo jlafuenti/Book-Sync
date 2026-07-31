@@ -114,8 +114,14 @@ class ReaderViewModel @Inject constructor(
     fun resetProgress() {
         viewModelScope.launch {
             val p = _pair.value ?: return@launch
-            p.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
-            p.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+            // Pair-level DELETE removes the canonical bookmark + hints +
+            // user_progress server-side and clears the matching local Room
+            // caches. The old per-leg zero-write left the bookmark in place,
+            // which re-seeded progress right back (issue: reset buttons not
+            // actually resetting). ReaderScreen only ever has a genuine pair
+            // here (BookPairEntity.audiobookId/ebookId are non-null), so
+            // there's no standalone branch to preserve.
+            repository.resetPairProgress(p.id)
         }
     }
 }

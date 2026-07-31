@@ -18,6 +18,7 @@ import pytest
 
 from schemas import (
     BookPairCreate,
+    BookmarkResponse,
     BookmarkUpdate,
     PasswordChange,
     ProgressUpdate,
@@ -83,6 +84,17 @@ def test_all_mapped_request_dtos_exist(kotlin_dtos):
     """Guard against a client DTO being renamed out from under this test."""
     missing = [name for name in REQUEST_MAP if name not in kotlin_dtos]
     assert not missing, f"Mapped Kotlin request DTOs not found in ApiDtos.kt: {missing}"
+
+
+@pytest.mark.parametrize("model", [BookmarkUpdate, BookmarkResponse],
+                         ids=["request", "response"])
+def test_precise_position_fields_are_pinned(model):
+    """`epub_locator` was dropped once already (issue #40); `locator_audio_ms`
+    is its audio anchor and is just as easy to lose. Both must survive on the
+    request *and* response side, or exact cross-device resume silently
+    degrades with no test failing."""
+    fields = set(model.model_fields.keys())
+    assert {"epub_locator", "locator_audio_ms"} <= fields
 
 
 @pytest.mark.parametrize("kotlin_name,model", REQUEST_MAP.items(), ids=list(REQUEST_MAP))

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, getBookmark, updateBookmark, getDeviceId, getDeviceName } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, resetPairProgress, getBookmark, updateBookmark, getDeviceId, getDeviceName } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -300,15 +300,25 @@ function BookDetailPage() {
                         )}
                         {progress && (progress.is_completed || progress.epub_progress_percent > 0 || progress.audio_position_ms > 0) && (
                             <button className="btn btn-secondary" onClick={async () => {
-                                const resetData = {
-                                    is_completed: false,
-                                    device_id: getDeviceId(),
-                                    device_name: getDeviceName(),
-                                    captured_at: new Date().toISOString(),
+                                if (book.pair_id) {
+                                    // Paired: the pair-scoped DELETE removes the
+                                    // canonical bookmark + hints + user_progress
+                                    // server-side. The legacy per-media zero-write
+                                    // below left the bookmark in place, which
+                                    // re-seeded progress right back (issue: reset
+                                    // buttons not actually resetting).
+                                    await resetPairProgress(book.pair_id)
+                                } else {
+                                    const resetData = {
+                                        is_completed: false,
+                                        device_id: getDeviceId(),
+                                        device_name: getDeviceName(),
+                                        captured_at: new Date().toISOString(),
+                                    }
+                                    if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = ''; resetData.epub_chapter = 0 }
+                                    else { resetData.audio_position_ms = 0 }
+                                    await updateProgress(type, id, resetData)
                                 }
-                                if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = ''; resetData.epub_chapter = 0 }
-                                else { resetData.audio_position_ms = 0 }
-                                await updateProgress(type, id, resetData)
                                 setProgress(null)
                                 showToast('Progress reset')
                             }}>

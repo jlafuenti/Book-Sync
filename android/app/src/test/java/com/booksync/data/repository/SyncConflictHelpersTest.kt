@@ -147,6 +147,73 @@ class SyncConflictHelpersTest {
     }
 
     @Test
+    fun `BookmarkResponse toEntity keeps the local locator on an ebook write that carries none`() {
+        // A web-written bookmark carries a chapter anchor and no Readium
+        // locator. Dropping the local locator here (as an earlier revision did,
+        // mirroring a server rule that cleared it) leaves the reader with
+        // nothing precise to restore from; combined with a restore path that
+        // read "no locator" as "no position", that overwrote a real position
+        // with chapter 0. The anchor moving is not a reason to destroy a hint.
+        val response = BookmarkResponse(
+            id = 1,
+            user_id = 2,
+            book_pair_id = 42,
+            source = "ebook",
+            epub_chapter = 7,
+            epub_sentence_index = 2,
+            epub_locator = null,
+            updated_at = "2026-04-12T15:30:00Z",
+        )
+        val previous = BookmarkEntity(
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 1,
+            epubSentenceIndex = 1,
+            audioPositionMs = 0,
+            epubLocator = "{\"local\":true}",
+            locatorAudioMs = 999,
+            updatedAt = "0",
+        )
+
+        val entity = response.toEntity(previous)
+
+        assertEquals("{\"local\":true}", entity.epubLocator)
+        assertEquals(999, entity.locatorAudioMs)
+        assertEquals(7, entity.epubChapter)
+    }
+
+    @Test
+    fun `BookmarkResponse toEntity takes the server locator and its audio anchor`() {
+        // locator_audio_ms now round-trips through the server (issue #40 step
+        // 4), so a *second* device can judge whether the locator still
+        // describes where the audio is — not just the device that wrote it.
+        val response = BookmarkResponse(
+            id = 1,
+            user_id = 2,
+            book_pair_id = 42,
+            source = "ebook",
+            epub_locator = "{\"fromServer\":true}",
+            locator_audio_ms = 61_000,
+            updated_at = "2026-04-12T15:30:00Z",
+        )
+        val previous = BookmarkEntity(
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 1,
+            epubSentenceIndex = 1,
+            audioPositionMs = 0,
+            epubLocator = "{\"local\":true}",
+            locatorAudioMs = 999,
+            updatedAt = "0",
+        )
+
+        val entity = response.toEntity(previous)
+
+        assertEquals("{\"fromServer\":true}", entity.epubLocator)
+        assertEquals(61_000, entity.locatorAudioMs)
+    }
+
+    @Test
     fun `BookmarkResponse toEntity with no previous entity leaves locator null`() {
         val response = BookmarkResponse(
             id = 1,

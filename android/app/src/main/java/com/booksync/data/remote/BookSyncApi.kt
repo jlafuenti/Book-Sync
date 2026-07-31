@@ -106,6 +106,26 @@ interface BookSyncApi {
         @Query("limit") limit: Int = 50
     ): List<BookmarkLogResponse>
 
+    // ============ Canonical position ============
+
+    // Response<T> so callers can tell 204 ("never opened") from 200. That
+    // distinction matters: a position at chapter 0 and no position at all are
+    // different things, and conflating them is how a failed restore came to
+    // overwrite a real position.
+    @GET("api/sync/position/{scope}/{id}")
+    suspend fun getPosition(
+        @Path("scope") scope: String,
+        @Path("id") id: Int,
+    ): Response<PositionResponse>
+
+    // See updateBookmark above — same Response<T> rationale for 409 detection.
+    @PUT("api/sync/position/{scope}/{id}")
+    suspend fun updatePosition(
+        @Path("scope") scope: String,
+        @Path("id") id: Int,
+        @Body update: PositionUpdateRequest,
+    ): Response<PositionResponse>
+
     // ============ User Progress ============
 
     @GET("api/sync/progress/{mediaType}/{mediaId}")
@@ -121,6 +141,14 @@ interface BookSyncApi {
         @Path("mediaId") mediaId: Int,
         @Body update: ProgressUpdateRequest
     ): Response<ProgressResponse>
+
+    // Deletes the canonical bookmark (+ hints) and every user_progress row for
+    // this pair, server-side. Used by "Reset Progress" for a paired book —
+    // the legacy per-media PUT-with-zeros only pinned position at 0 and left
+    // the old bookmark in place, which then re-seeded progress right back
+    // (issue: reset buttons not actually resetting).
+    @DELETE("api/sync/progress/pair/{pairId}")
+    suspend fun resetPairProgress(@Path("pairId") pairId: Int): Response<Unit>
 
     // ============ Transcription ============
 

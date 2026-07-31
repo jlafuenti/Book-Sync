@@ -18,9 +18,16 @@ import com.booksync.R
 import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.ReaderPositionSnapshot
+import com.booksync.data.repository.toStoredPosition
+import com.booksync.data.sync.HINT_READIUM_LOCATOR
+import com.booksync.data.sync.RestoreStep
+import com.booksync.data.sync.StoredPosition
+import com.booksync.data.sync.planRestore
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -126,6 +133,39 @@ class ReaderActivity : AppCompatActivity() {
     private var chapterLengthsDeferred: Deferred<LongArray>? = null
     /** When true, savePosition skips overwriting the audio bookmark (preserves sentence sync). */
     private var sentenceSyncPending = false
+
+    /** The canonical record this reader opened with, server-fresh where possible. */
+    private var canonicalPosition: StoredPosition? = null
+
+    /**
+     * Replaces the old `positionEstablished` boolean latch, which had two
+     * defects: an unresolved restore left it false forever (suppressing every
+     * later save, even after real page-turns), and the catch in
+     * `getInitialLocator` could reset it to false after an earlier rung had
+     * already landed. See [PositionSavePolicy].
+     */
+    private val savePolicy = PositionSavePolicy()
+
+    /**
+     * The href + progression of the last locator the code displayed
+     * programmatically — the initial restored locator, or a `navigator.go(...)`
+     * call such as [goToProgress]. Used by `startPositionTracking`'s collector
+     * to recognize Readium's "settle" emission (issue #61/#40 fix 1): the
+     * `currentLocator` StateFlow emits again right after ANY programmatic
+     * display settles in the WebView, with a computed progression but no user
+     * input at all. The old code only skipped the very FIRST emission
+     * (`awaitingRestoreLocator`, a single-shot flag that was also never reset
+     * on tracker re-entry) — the settle emission slipped through as the
+     * "first real" one and got misread as [savePolicy]'s
+     * `onUserNavigation()`, which could upgrade an unresolved restore to a
+     * full save and write spine 0 over a real server position. Comparing
+     * against this target on every emission (see [isProgrammaticEcho]) fixes
+     * both: it isn't consumed after one use, and re-entering
+     * `startPositionTracking` doesn't reset anything back to "everything is
+     * an echo".
+     */
+    private var programmaticTarget: Locator? = null
+
     // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
     private var lastSelectedText: String = ""
 
@@ -280,8 +320,36 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Publication opened: ${pub.metadata.title}, readingOrder=${pub.readingOrder.size} items")
                 publication = pub
 
+                // Pull the server's position before restoring (issue #40). The
+                // reader used to read only the local cache, so a position set
+                // on another device was never seen and the phone reopened at
+                // its own last page — the locator checks below can't catch
+                // that, since a stale local bookmark agrees with itself.
+                // Offline-safe and unsynced-local-safe: refreshBookmark keeps
+                // the local row in both cases.
+                repository.refreshBookmark(pairId)
+
+                // Fetch the canonical record before restoring. Reading only the
+                // local cache meant a position set on another device was never
+                // seen, so the reader confidently reopened at its own old page.
+                val fetch = repository.fetchPosition("pair", pairId)
+                canonicalPosition = fetch.position?.toStoredPosition()
+                    ?: repository.getBookmark(pairId)
+                        ?.toStoredPosition(repository.deviceId)
+                        .takeIf { !fetch.reachable }
+
                 val initialLocator = getInitialLocator(pub)
                 Log.d(TAG, "Initial locator: $initialLocator")
+                // The navigator displays SOMETHING even when the restore
+                // ladder produced no locator at all — Readium falls back to
+                // the start of the publication (the same "failed guess" the
+                // policy's LocalMetadataOnly verdict is guarding). Track that
+                // fallback target too, so the settle emission for a
+                // genuinely-unresolved restore is still recognized as an
+                // echo instead of a user page-turn — see [programmaticTarget]
+                // and [isProgrammaticEcho].
+                programmaticTarget = initialLocator
+                    ?: pub.readingOrder.firstOrNull()?.let { pub.locatorFromLink(it) }
 
                 val navigatorFactory = EpubNavigatorFactory(pub)
                 supportFragmentManager.fragmentFactory =
@@ -448,11 +516,37 @@ class ReaderActivity : AppCompatActivity() {
 
         positionSaveJob?.cancel()
         positionSaveJob = lifecycleScope.launch {
-            var lastSaveTime = 0L
+            // Start the throttle window at "now" rather than 0 so the first
+            // locator the navigator emits — which is just the position we
+            // restored — isn't written straight back to the server. Echoing it
+            // is pointless when the restore worked, and destructive when it
+            // didn't: a restore that lands on page one would otherwise
+            // overwrite a real position from another device with chapter 0.
+            var lastSaveTime = System.currentTimeMillis()
             nav.currentLocator.collect { locator ->
                 // Update progress UI
                 updateProgressUI(locator)
 
+                // Readium's currentLocator emits again right after ANY
+                // programmatic display settles (initial restore, or a
+                // navigator.go(...) call) — same href, a recomputed
+                // progression, but no user input. Only an emission that does
+                // NOT match the last programmatic target is a real page-turn
+                // or slider drag; see [isProgrammaticEcho] and
+                // [programmaticTarget]. Explicit navigator.go(...) call sites
+                // (goToProgress) call onUserNavigation() themselves so a
+                // user-initiated jump isn't swallowed just because its own
+                // echo matches.
+                val target = programmaticTarget
+                val isEcho = isProgrammaticEcho(
+                    targetHref = target?.href?.toString(),
+                    targetProgression = target?.locations?.progression,
+                    emittedHref = locator.href.toString(),
+                    emittedProgression = locator.locations.progression,
+                )
+                if (!isEcho) {
+                    savePolicy.onUserNavigation()
+                }
 
                 // Debounced position save
                 val now = System.currentTimeMillis()
@@ -519,12 +613,17 @@ class ReaderActivity : AppCompatActivity() {
             Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
             val link = readingOrder[targetSpineIndex]
             val locator = pub.locatorFromLink(link) ?: return@launch
-            nav.go(
-                locator.copy(locations = locator.locations.copy(
-                    progression = targetProgression.coerceIn(0.0, 1.0)
-                )),
-                animated = false
-            )
+            val target = locator.copy(locations = locator.locations.copy(
+                progression = targetProgression.coerceIn(0.0, 1.0)
+            ))
+            // The user dragging the slider IS navigation — call this
+            // explicitly rather than relying on the collector's echo
+            // detection, since the emission this produces WILL match
+            // [programmaticTarget] (that's the point of setting it below) and
+            // would otherwise be silently swallowed as an echo.
+            savePolicy.onUserNavigation()
+            programmaticTarget = target
+            nav.go(target, animated = false)
         }
     }
 
@@ -532,138 +631,266 @@ class ReaderActivity : AppCompatActivity() {
 
     private suspend fun getInitialLocator(pub: Publication): Locator? {
         return try {
-            val bookmark = repository.getBookmarkFlow(pairId).firstOrNull()
-            Log.d(TAG, "Bookmark loaded: source=${bookmark?.source} locatorAudioMs=${bookmark?.locatorAudioMs} epubLocator=${bookmark?.epubLocator?.take(80)}")
+            val position = canonicalPosition
+            val steps = planRestore(
+                position,
+                spineCount = pub.readingOrder.size,
+                deviceId = repository.deviceId,
+                hintKind = HINT_READIUM_LOCATOR,
+            )
+            Log.d(TAG, "getInitialLocator: plan=${steps.map { it.kind }}")
 
-            if (bookmark?.source == "audiobook" && bookmark.audioPositionMs != null) {
-                // FAST PATH: if we hold an exact Readium locator captured when the
-                // audio was at (almost) this same position, reuse it verbatim. This
-                // sidesteps the lossy preview -> spine -> char-fraction chain and
-                // lands on the exact page the user left from.
-                val storedLocatorJson = bookmark.epubLocator
-                val locatorAudioMs = bookmark.locatorAudioMs
-                if (storedLocatorJson != null && locatorAudioMs != null &&
-                    kotlin.math.abs(bookmark.audioPositionMs - locatorAudioMs) < LOCATOR_REUSE_THRESHOLD_MS
-                ) {
-                    Log.d(TAG, "getInitialLocator: reusing stored locator " +
-                        "(audio moved ${bookmark.audioPositionMs - locatorAudioMs}ms)")
-                    return Locator.fromJSON(org.json.JSONObject(storedLocatorJson))
+            for (step in steps) {
+                val locator = executeRestoreStep(pub, step, position)
+                if (locator != null) {
+                    Log.d(TAG, "getInitialLocator: restored via '${step.kind}'")
+                    // Monotonic — see PositionSavePolicy. An exception thrown
+                    // by a LATER step (caught below) can no longer demote this
+                    // back to Unresolved, unlike the old boolean flag.
+                    savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Landed)
+                    return locator
                 }
-
-                // SLOW PATH: audio genuinely moved — recompute from the sync map.
-                val (syncChapter, previewText) = repository.audioToEpubText(pairId, bookmark.audioPositionMs)
-                Log.d(TAG, "getInitialLocator: audioPos=${bookmark.audioPositionMs}ms => syncChapter=$syncChapter, preview='${previewText.take(60)}'")
-                // Find correct spine index via text search, searching near expected chapter
-                val chapterIdx = findSpineIndexForText(previewText, syncChapter)
-                    ?: syncChapter.takeIf { it in pub.readingOrder.indices }
-                Log.d(TAG, "getInitialLocator: syncChapter=$syncChapter, resolved chapterIdx=$chapterIdx")
-                if (chapterIdx != null && chapterIdx in pub.readingOrder.indices) {
-                    val link = pub.readingOrder[chapterIdx]
-                    val baseLocator = pub.locatorFromLink(link)
-                    if (baseLocator != null && previewText.isNotEmpty()) {
-                        val progressionVal = findTextProgressionInChapter(chapterIdx, previewText) ?: 0.0
-                        val computed = baseLocator.copy(locations = Locator.Locations(progression = progressionVal))
-                        // Persist so the NEXT open at this audio position hits the fast path.
-                        repository.updateBookmarkLocator(
-                            pairId, computed.toJSON().toString(), bookmark.audioPositionMs)
-                        return computed
-                    }
-                }
+                Log.d(TAG, "getInitialLocator: step '${step.kind}' did not resolve")
             }
 
-            val locatorJson = bookmark?.epubLocator
-            if (locatorJson != null) {
-                Locator.fromJSON(org.json.JSONObject(locatorJson))
-            } else null
+            // No steps at all means the book is genuinely unread, and opening
+            // at the beginning is correct — a full save is safe. Steps that
+            // all failed mean we hold a position we could not resolve — the
+            // policy still allows a local metadata-only stamp (never the full
+            // anchors) until the user actually turns a page.
+            val outcome = if (steps.isEmpty())
+                PositionSavePolicy.RestoreOutcome.Unread
+            else
+                PositionSavePolicy.RestoreOutcome.Unresolved
+            savePolicy.onRestoreOutcome(outcome)
+            if (outcome == PositionSavePolicy.RestoreOutcome.Unresolved) {
+                Log.w(TAG, "getInitialLocator: position unresolved — full saves withheld until a page turn")
+            }
+            null
         } catch (e: Exception) {
             Log.w(TAG, "Error getting initial locator", e)
+            // Monotonic — a landed rung earlier in the ladder is not undone
+            // by an exception thrown while trying a later one.
+            savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Unresolved)
             null
         }
     }
 
-    /** Extract a text preview from a chapter at a given progression, stripping headings and book title. */
+    /** Try one rung of the ladder. Returns null when it doesn't resolve. */
+    private suspend fun executeRestoreStep(
+        pub: Publication,
+        step: RestoreStep,
+        position: StoredPosition?,
+    ): Locator? = when (step) {
+        is RestoreStep.Hint ->
+            runCatching { Locator.fromJSON(org.json.JSONObject(step.value)) }.getOrNull()
+
+        is RestoreStep.Text -> {
+            val seed = step.seedChapter ?: 0
+            val idx = findSpineIndexForText(step.text, seed)
+            if (idx != null && idx in pub.readingOrder.indices) {
+                pub.locatorFromLink(pub.readingOrder[idx])?.copy(
+                    locations = Locator.Locations(
+                        progression = findTextProgressionInChapter(idx, step.text) ?: 0.0
+                    )
+                )
+            } else null
+        }
+
+        is RestoreStep.Chapter ->
+            pub.readingOrder.getOrNull(step.chapter)?.let { pub.locatorFromLink(it) }
+
+        is RestoreStep.Percent -> locatorForProgress(pub, step.percent / 100.0)
+
+        is RestoreStep.Audio -> {
+            // Audio -> sync map -> preview -> the same text search as above.
+            val (syncChapter, previewText) = repository.audioToEpubText(
+                pairId, step.audioPositionMs)
+            val idx = findSpineIndexForText(previewText, syncChapter)
+                ?: syncChapter.takeIf { it in pub.readingOrder.indices }
+            if (idx != null && idx in pub.readingOrder.indices && previewText.isNotEmpty()) {
+                val computed = pub.locatorFromLink(pub.readingOrder[idx])?.copy(
+                    locations = Locator.Locations(
+                        progression = findTextProgressionInChapter(idx, previewText) ?: 0.0
+                    )
+                )
+                // Persist so the next open at this audio position takes the
+                // exact-hint rung instead of redoing this lossy chain.
+                if (computed != null) {
+                    repository.updateBookmarkLocator(
+                        pairId, computed.toJSON().toString(), step.audioPositionMs)
+                }
+                computed
+            } else null
+        }
+    }
+
+    /** Map a 0..1 book fraction onto a locator, weighting chapters by length. */
+    private suspend fun locatorForProgress(pub: Publication, progress: Double): Locator? {
+        val readingOrder = pub.readingOrder
+        if (readingOrder.isEmpty()) return null
+        val lengths = chapterLengthsDeferred?.await()
+            ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
+        val total = lengths.sum().coerceAtLeast(1)
+        val targetChar = (progress * total).toLong().coerceIn(0, total - 1)
+
+        var accumulated = 0L
+        var spineIndex = readingOrder.size - 1
+        var withinChapter = 1.0
+        for (i in lengths.indices) {
+            val len = lengths[i]
+            if (accumulated + len > targetChar) {
+                spineIndex = i
+                withinChapter = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
+                break
+            }
+            accumulated += len
+        }
+        return pub.locatorFromLink(readingOrder[spineIndex])?.copy(
+            locations = Locator.Locations(progression = withinChapter.coerceIn(0.0, 1.0))
+        )
+    }
+
+    /**
+     * Resolve a position from the portable anchor alone (chapter + sentence),
+     * used when the stored locator can't be trusted. Same preview -> spine ->
+     * progression chain the audiobook slow path uses; falls back to the start
+     * of the chapter when there's no usable preview text.
+     */
+    private suspend fun locatorFromChapterAnchor(pub: Publication, chapter: Int?): Locator? {
+        val bookmark = repository.getBookmark(pairId)
+        val chapterIdx = chapter?.takeIf { it in pub.readingOrder.indices } ?: return null
+        val previewText = repository.epubTextForSentence(
+            pairId, chapterIdx, bookmark?.epubSentenceIndex)
+        val base = pub.locatorFromLink(pub.readingOrder[chapterIdx]) ?: return null
+        if (previewText.isEmpty()) return base
+        val resolvedIdx = findSpineIndexForText(previewText, chapterIdx) ?: chapterIdx
+        val link = pub.readingOrder.getOrNull(resolvedIdx) ?: return base
+        val resolvedBase = pub.locatorFromLink(link) ?: return base
+        val progressionVal = findTextProgressionInChapter(resolvedIdx, previewText) ?: 0.0
+        return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
+    }
+
+    /** Extract a text preview from a chapter at a given progression, stripping headings and book title.
+     *  Suspend, parse-on-miss version used by callers that are already inside a
+     *  coroutine and can afford to touch the publication (e.g. [syncAudioToPage]);
+     *  [savePosition]'s synchronous capture uses [extractTextPreviewFromCache] instead. */
     private suspend fun extractTextPreview(chapterIndex: Int, progression: Double): String {
         val plainText = getChapterPlainText(chapterIndex) ?: return ""
-        val charIndex = (plainText.length * progression).toInt()
-        val startIndex = maxOf(0, charIndex - 20)
-        val endIndex = minOf(charIndex + 200, plainText.length)
-        // Extract a focused window, strip chapter headings
-        // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines)
-        var text = plainText.substring(startIndex, endIndex)
-            .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
-            .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
-            .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
-            .trim()
-        // Strip book title from start (Jsoup includes <title> text at top of chapter)
-        val bookTitle = pair?.ebookTitle
-        if (!bookTitle.isNullOrEmpty()) {
-            val titlePattern = Regex("^${Regex.escape(bookTitle)}\\s*", RegexOption.IGNORE_CASE)
-            text = titlePattern.replace(text, "") // Remove first occurrence
-            text = titlePattern.replace(text, "") // Remove possible second occurrence
-            text = text.trim()
+        return buildTextPreview(plainText, progression, pair?.ebookTitle)
+    }
+
+    /**
+     * Cache-only, synchronous counterpart to [extractTextPreview].
+     *
+     * [savePosition]'s FullSave capture (issue #61/#40 fix 2) must run
+     * synchronously on the calling thread — no `lifecycleScope.launch`, so a
+     * fast close can't cancel it before `saveReaderPosition` is even called —
+     * which means it cannot parse a chapter that isn't already sitting in
+     * [chapterTextCache] (parsing needs Jsoup + resource IO on a background
+     * dispatcher). On a cache miss this logs and returns an empty preview
+     * rather than blocking the main thread to parse; the chapter index and
+     * locator still describe where the reader is.
+     */
+    private fun extractTextPreviewFromCache(chapterIndex: Int, progression: Double): String {
+        val plainText = chapterTextCache[chapterIndex]
+        if (plainText == null) {
+            Log.w(TAG, "extractTextPreviewFromCache: chapter $chapterIndex not cached, using empty preview")
+            return ""
         }
-        return text
+        return buildTextPreview(plainText, progression, pair?.ebookTitle)
+    }
+
+    /** Spine index [locator] points at, or -1 if it matches no reading-order item. */
+    private fun Publication.spineIndexOf(locator: Locator): Int =
+        spineIndexForHref(readingOrder.map { it.href.toString() }, locator.href.toString())
+
+    /**
+     * Book-level progress (0-100) for the UserProgress record, matching the
+     * scale the web reader writes. Uses Readium's totalProgression when the
+     * publication provides one; otherwise falls back to the precomputed
+     * chapter lengths ONLY if that background computation has already
+     * finished (`isCompleted`) — [savePosition]'s capture must not suspend to
+     * await it (issue #61/#40 fix 2), so an in-flight computation is treated
+     * the same as no chapter-length data at all: the percent is omitted
+     * (null) rather than blocking, and the server keeps whatever it has.
+     */
+    private fun bookPercentFor(locator: Locator, chapterIndex: Int): Float? {
+        val deferred = chapterLengthsDeferred
+        val lengths = if (deferred != null && deferred.isCompleted) deferred.getCompleted() else LongArray(0)
+        return bookProgressPercent(
+            totalProgression = locator.locations.totalProgression,
+            chapterLengths = lengths,
+            spineIndex = chapterIndex,
+            chapterProgression = locator.locations.progression ?: 0.0,
+        )
     }
 
     private fun savePosition(locator: Locator) {
-        val bookPair = pair ?: return
+        pair ?: return
+        val pub = publication ?: return
+        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
+        val progression = locator.locations.progression ?: 0.0
+        // The hard safety net (issue #61/#40 fix 1b): an Unresolved restore
+        // sitting at spine 0 must not FullSave even if userNavigated was
+        // (mis)set, since there's no per-emission signal that reliably tells
+        // a settle emission apart from a real page-turn. See
+        // PositionSavePolicy.verdictForSave.
+        val atStartOfBook = isAtStartOfBook(chapterIndex, progression)
+        val verdict = savePolicy.verdictForSave(atStartOfBook)
+        Log.d(TAG, "savePosition: verdict=$verdict atStartOfBook=$atStartOfBook")
+
+        if (verdict == PositionSavePolicy.SaveVerdict.LocalMetadataOnly) {
+            // The restore hasn't resolved yet, so this locator is the ladder's
+            // failed guess (spine 0), not a place the user chose. Only the
+            // bookmark's source/updatedAt are stamped — see
+            // BookSyncRepository.updateBookmarkMetadata — so format routing
+            // (resolvePairOpenTarget) still works without risking the
+            // chapter-0 data loss a full save here would recreate.
+            lifecycleScope.launch {
+                try {
+                    repository.updateBookmarkMetadata(pairId, source = "ebook")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error saving position metadata", e)
+                }
+            }
+            return
+        }
+
         // Inject selection tracker on every page turn (content may have changed).
         // Called on the main thread before the coroutine, so WebView access is safe.
         injectSelectionTracker()
-        lifecycleScope.launch {
-            try {
-                val pub = publication ?: return@launch
-                val rawChapterIndex = pub.readingOrder.indexOfFirst {
-                    val pubHref = it.href.toString()
-                    val locHref = locator.href.toString()
-                    pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-                }
-                val chapterIndex = rawChapterIndex.coerceAtLeast(0)
-                Log.d(TAG, "savePosition: locator.href='${locator.href}', rawIndex=$rawChapterIndex, chapterIndex=$chapterIndex, progression=${locator.locations.progression}")
 
-                val progression = locator.locations.progression ?: 0.0
-                val textPreview = extractTextPreview(chapterIndex, progression)
-                
-                val locatorJson = locator.toJSON().toString()
-
-            if (sentenceSyncPending) {
-                // Don't overwrite the sentence-level audio bookmark;
-                // just save the epub locator so we can restore the page position.
-                // Flag stays true for the rest of the activity lifecycle.
-                Log.d(TAG, "savePosition: sentenceSyncPending=true, skipping audio sync")
-                repository.updateBookmark(
-                    pairId = pairId,
-                    source = "ebook",
-                    epubChapter = chapterIndex,
-                    epubLocator = locatorJson,
-                )
-            } else {
-                val syncPoint = repository.getSyncPointForEpubText(pairId, chapterIndex, textPreview)
-                if (syncPoint != null) {
-                    repository.updateBookmark(
-                        pairId = pairId,
-                        source = "ebook",
-                        epubChapter = syncPoint.epubChapter,
-                        epubSentenceIndex = syncPoint.epubSentenceIndex,
-                        audioPositionMs = syncPoint.audioStartMs,
-                        epubLocator = locatorJson,
-                        locatorAudioMs = syncPoint.audioStartMs,
-                    )
-                } else {
-                    // Only save epub locator — don't corrupt audio position
-                    Log.w(TAG, "savePosition: no sync match found, saved epub locator only")
-                    repository.updateBookmark(
-                        pairId = pairId,
-                        source = "ebook",
-                        epubChapter = chapterIndex,
-                        epubLocator = locatorJson,
-                    )
-                }
-            }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error saving position", e)
-            }
-        }
+        // Everything from here down is synchronous, main-thread-cheap, and
+        // runs BEFORE any coroutine boundary (issue #61/#40 fix 2). The old
+        // code ran this whole capture inside lifecycleScope.launch with the
+        // Room write at the very end, so a fast close cancelled it at the
+        // first suspension point — repository.saveReaderPosition was never
+        // even called, and nothing was written; onDestroy's
+        // publication?.close() could also degrade an in-flight capture's
+        // preview to "". Capturing synchronously means the snapshot is
+        // complete before savePosition returns, so activity teardown
+        // afterward can't lose it — the handoff to saveReaderPosition (which
+        // itself now resolves the sync-point match on the repository's own
+        // appScope) is the only thing that crosses a coroutine boundary.
+        val textPreview = extractTextPreviewFromCache(chapterIndex, progression)
+        val locatorJson = locator.toJSON().toString()
+        val snapshot = ReaderPositionSnapshot(
+            pairId = pairId,
+            chapterIndex = chapterIndex,
+            locatorJson = locatorJson,
+            textPreview = textPreview,
+            progressPercent = bookPercentFor(locator, chapterIndex),
+            capturedAtMillis = System.currentTimeMillis(),
+            // A manual audio-sync write is already in flight for this page
+            // (see syncSelectedTextToAudio) — resolving a sync-point match
+            // here too could overwrite that fresher, deliberately-chosen
+            // audio position with a stale automatic guess.
+            skipSyncPointLookup = sentenceSyncPending,
+        )
+        repository.saveReaderPosition(snapshot)
     }
 
     // ============ Manual Sync ============
@@ -769,11 +996,7 @@ class ReaderActivity : AppCompatActivity() {
         val pub = publication ?: return
         
         // Find chapter using robust matching
-        val rawChapterIndex = pub.readingOrder.indexOfFirst { 
-            val pubHref = it.href.toString()
-            val locHref = locator.href.toString()
-            pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-        }
+        val rawChapterIndex = pub.spineIndexOf(locator)
         val chapterIndex = rawChapterIndex.coerceAtLeast(0)
 
         val progression = locator.locations.progression ?: 0.0
@@ -1417,12 +1640,7 @@ class ReaderActivity : AppCompatActivity() {
 
         val locator = navigator?.currentLocator?.value ?: return
         val pub = publication ?: return
-        val rawChapterIndex = pub.readingOrder.indexOfFirst {
-            val pubHref = it.href.toString()
-            val locHref = locator.href.toString()
-            pubHref == locHref || pubHref.endsWith(locHref.substringAfterLast("/")) || locHref.endsWith(pubHref.substringAfterLast("/"))
-        }
-        val chapterIndex = rawChapterIndex.coerceAtLeast(0)
+        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
         Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
         lifecycleScope.launch {

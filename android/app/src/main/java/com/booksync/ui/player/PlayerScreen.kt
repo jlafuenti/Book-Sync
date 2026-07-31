@@ -67,9 +67,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
+
+/**
+ * How long the player waits for the server's position before falling back to
+ * the local cache. Long enough for a normal request, short enough that an
+ * unreachable server doesn't visibly delay playback.
+ */
+private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Represents a chapter marker in an M4B audiobook.
@@ -264,8 +273,16 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
-        // Load local bookmark immediately — don't wait for server
+        // Pull the server's position first, then let the local flow below apply
+        // it. The refresh used to run *after* the seek, so a position set on
+        // another device consistently arrived too late to be used — the same
+        // bug the reader had. Bounded so an unreachable server delays the seek
+        // by at most a moment before falling back to the local cache.
         viewModelScope.launch {
+            withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                repository.refreshBookmark(pairId)
+            } ?: Log.w("PlayerViewModel", "server position not available in time — using local cache")
+
             repository.getBookmarkFlow(pairId).collect { bm ->
                 bm?.audioPositionMs?.let { pos ->
                     Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")
@@ -289,11 +306,6 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
-        // Refresh from server in background — won't block local bookmark loading
-        viewModelScope.launch {
-            repository.refreshBookmark(pairId)
-        }
-
         } // end else (non-standalone)
 
         connectToService()
@@ -328,8 +340,10 @@ class PlayerViewModel @Inject constructor(
                         }
                         // Track / audiobook reached its natural end — log a
                         // history entry so the session shows up as "finished".
+                        // claimFormat=true: listening all the way to the end is
+                        // the clearest possible consumption signal there is.
                         if (playbackState == Player.STATE_ENDED) {
-                            saveBookmark(appendToLog = true)
+                            saveBookmark(appendToLog = true, claimFormat = true)
                             markComplete()
                         }
                     }
@@ -494,21 +508,28 @@ class PlayerViewModel @Inject constructor(
 
                     // Heartbeat: save position every 5s while playing (NO history
                     // entry — just keeps Bookmark fresh so a crash doesn't lose
-                    // more than a few seconds of listening).
+                    // more than a few seconds of listening). claimFormat=true:
+                    // this only ever fires while ctrl.isPlaying is true.
                     val now = System.currentTimeMillis()
                     if (ctrl.isPlaying && (now - lastSaveTimeMs >= SAVE_INTERVAL_MS)) {
                         lastSaveTimeMs = now
-                        saveBookmark(appendToLog = false)
+                        saveBookmark(appendToLog = false, claimFormat = true)
                     }
                     // 30-min continuous-playback log tick: writes a history entry.
                     // Only advances lastLogTimeMs while playing, so pauses freeze
                     // the timer; any pause/stop that logs also resets it.
+                    // claimFormat=true: only fires while ctrl.isPlaying is true.
                     if (ctrl.isPlaying && (now - lastLogTimeMs >= LOG_INTERVAL_MS)) {
-                        saveBookmark(appendToLog = true)
+                        saveBookmark(appendToLog = true, claimFormat = true)
                     }
-                    // Pause → log this as a session boundary.
+                    // Pause → log this as a session boundary. This is the phone
+                    // screen's own pause detection (as opposed to
+                    // AudioPlayerService's, which also serves Android Auto and
+                    // can't tell a deliberate pause from an involuntary one) —
+                    // claimFormat=true: an explicit playback command, not a
+                    // background save.
                     if (wasPlaying && !ctrl.isPlaying) {
-                        saveBookmark(appendToLog = true)
+                        saveBookmark(appendToLog = true, claimFormat = true)
                     }
                 }
             }
@@ -696,19 +717,24 @@ class PlayerViewModel @Inject constructor(
      * @param appendToLog false for 5-second heartbeat saves (position-only, no
      *   history entry). True for pause / stop / 30-min-tick boundaries — those
      *   produce a BookmarkLog row and reset the 30-min continuous-playback timer.
+     * @param claimFormat whether this save may claim "audiobook" as the format
+     *   `resolvePairOpenTarget` routes to next (see
+     *   [BookSyncRepository.savePlaybackPosition]'s doc for the full rule).
+     *   Every call site here passes it explicitly — there is no default —
+     *   so adding a new call site forces a conscious choice instead of
+     *   silently inheriting whatever the last one happened to use.
      */
-    private fun saveBookmark(appendToLog: Boolean = false) {
+    private fun saveBookmark(appendToLog: Boolean = false, claimFormat: Boolean) {
         if (appendToLog) lastLogTimeMs = System.currentTimeMillis()
         if (isStandalone) {
             // Standalone audiobooks track progress locally only (no pair-linked bookmark)
             val audio = _standaloneAudio.value ?: return
             viewModelScope.launch {
                 try {
-                    repository.updateProgress(
-                        mediaType = "audiobook",
-                        mediaId = audio.id,
-                        bookPairId = null,
+                    repository.savePlaybackPositionStandalone(
+                        audiobookId = audio.id,
                         audioPositionMs = _positionMs.value.toInt(),
+                        claimFormat = claimFormat,
                     )
                 } catch (_: Exception) {}
             }
@@ -716,40 +742,38 @@ class PlayerViewModel @Inject constructor(
         }
         viewModelScope.launch {
             try {
-                val posMs = _positionMs.value.toInt()
-                // Server handles epub<->audio position conversion via SyncMap
-                repository.updateBookmark(
+                // One write. The server converts audio <-> epub position via the
+                // SyncMap and projects the progress row the Continue list reads,
+                // so there is no second call to keep in step.
+                repository.savePlaybackPosition(
                     pairId = pairId,
-                    source = "audiobook",
-                    audioPositionMs = posMs,
+                    audioPositionMs = _positionMs.value.toInt(),
                     appendToLog = appendToLog,
+                    claimFormat = claimFormat,
                 )
-                // Also write to UserProgress so the Continue section can track this
-                _pair.value?.audiobookId?.let { audiobookId ->
-                    repository.updateProgress(
-                        mediaType = "audiobook",
-                        mediaId = audiobookId,
-                        bookPairId = pairId,
-                        audioPositionMs = posMs,
-                    )
-                }
             } catch (_: Exception) {}
         }
     }
 
     /**
      * Pause playback and save bookmark. Called when switching to reader — this
-     * is a session boundary so we do log a history entry.
+     * is a session boundary so we do log a history entry. claimFormat=true:
+     * an explicit user command (the "switch to reader" button), not a
+     * background save.
      */
     fun stopAndSave() {
         controller?.pause()
-        saveBookmark(appendToLog = true)
+        saveBookmark(appendToLog = true, claimFormat = true)
     }
 
     override fun onCleared() {
         positionPollingJob?.cancel()
-        // Save final position before cleanup — user closing the player is a stop event.
-        saveBookmark(appendToLog = true)
+        // Save final position before cleanup — user closing the player is a
+        // stop event. claimFormat reflects whether the player was actually
+        // playing at this moment: if it's paused/idle at teardown, this save
+        // must not claim the format (product rule — a background/idle save
+        // doesn't count as consumption, even at session end).
+        saveBookmark(appendToLog = true, claimFormat = _isPlaying.value)
         controller?.release()
         controller = null
         super.onCleared()
@@ -778,12 +802,18 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             val standalone = _standaloneAudio.value
             if (standalone != null) {
+                // No pair to delete server-side for standalone audio — the
+                // server's reset DELETE is pair-scoped only.
                 repository.resetMediaProgress("audiobook", standalone.id)
                 return@launch
             }
             val p = _pair.value ?: return@launch
-            p.audiobookId?.let { repository.resetMediaProgress("audiobook", it) }
-            p.ebookId?.let { repository.resetMediaProgress("ebook", it) }
+            // Pair-level DELETE removes the canonical bookmark + hints +
+            // user_progress server-side and clears the matching local Room
+            // caches. The old per-leg zero-write left the bookmark in place,
+            // which re-seeded progress right back (issue: reset buttons not
+            // actually resetting).
+            repository.resetPairProgress(p.id)
         }
     }
 }

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendBookmarkKeepalive, getDeviceId, getDeviceName } from '../api'
+import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendPositionKeepalive, getDeviceId, getDeviceName } from '../api'
 
 const AudioPlayerContext = createContext(null)
 
@@ -23,6 +23,13 @@ export function AudioPlayerProvider({ children }) {
     // Latest audiobook / timing refs so the beforeunload handler can read
     // current state without re-binding the listener on every state change.
     const currentAudiobookRef = useRef(null)
+    // Live "was playing at this instant" snapshot for the unload handler
+    // (product rule: a save only claims `source` when playing or triggered
+    // by an explicit user command — see `onUnload` below). A plain `playing`
+    // state read would be stale here since this ref, like currentAudiobookRef,
+    // exists so the mount-only unload listener can see current state without
+    // re-binding on every play/pause.
+    const playingRef = useRef(false)
     // Guards the stream-error recovery below against retry loops: only one
     // re-mint attempt per load, cleared once playback resumes successfully.
     const recoveringStreamRef = useRef(false)
@@ -149,6 +156,10 @@ export function AudioPlayerProvider({ children }) {
         currentAudiobookRef.current = currentAudiobook
     }, [currentAudiobook])
 
+    useEffect(() => {
+        playingRef.current = playing
+    }, [playing])
+
     // Auto-save progress every 5s while playing. Heartbeat keeps the bookmark
     // position fresh so a crash / tab close costs at most a few seconds of
     // listening. The 5s cadence WAS also clogging the history log; now the
@@ -203,15 +214,23 @@ export function AudioPlayerProvider({ children }) {
     // Final history entry when the tab closes / reloads. Regular fetch is
     // aborted during unload, so we use the keepalive helper that sends the
     // request in the background. sendBeacon can't be used here because the
-    // bookmark endpoint is PUT, not POST.
+    // canonical position endpoint is PUT, not POST.
+    //
+    // claimFormat = was actually playing at this instant (product rule: a
+    // save only claims `source` when playing, or triggered by an explicit
+    // user command — this teardown is neither when the player is paused/idle
+    // in the background). Uses the canonical position endpoint rather than
+    // the legacy bookmark one specifically so `source` can be omitted here —
+    // `BookmarkUpdate.source` is required, `PositionUpdate.source` is not.
     useEffect(() => {
         const onUnload = () => {
             const audio = audioRef.current
             const ab = currentAudiobookRef.current
             if (!ab?.pairId || !audio) return
             const posMs = Math.floor(audio.currentTime * 1000)
-            sendBookmarkKeepalive(ab.pairId, {
-                source: 'audiobook',
+            const claimFormat = playingRef.current
+            sendPositionKeepalive('pair', ab.pairId, {
+                source: claimFormat ? 'audiobook' : undefined,
                 audio_position_ms: posMs,
                 append_to_log: true,
                 device_id: getDeviceId(),

@@ -169,6 +169,9 @@ data class BookmarkUpdateRequest(
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
     val epub_locator: String? = null,
+    // Audio position the locator was captured at; travels with it so a second
+    // device can judge whether the locator is still usable (issue #40).
+    val locator_audio_ms: Int? = null,
     // When false (default), server updates the bookmark but does NOT append
     // a BookmarkLog row. Clients set true only on pause / stop / 30-min
     // boundaries. Mirrors server BookmarkUpdate.append_to_log.
@@ -191,6 +194,7 @@ data class BookmarkResponse(
     val epub_sentence_index: Int? = null,
     val audio_position_ms: Int? = null,
     val epub_locator: String? = null,
+    val locator_audio_ms: Int? = null,
     val updated_at: String,
     val synced_at: String? = null,
     val device_id: String? = null,
@@ -247,4 +251,77 @@ data class ProgressResponse(
     val device_id: String? = null,
     val device_name: String? = null,
     val captured_at: String? = null
+)
+
+// ============ Canonical position ============
+//
+// One record per book, written atomically. Replaces the pair of
+// updateBookmark + updateProgress calls, which the server adjudicated
+// separately — either could be rejected while the other applied, leaving two
+// records describing different positions with nothing to reconcile them.
+
+@Serializable
+data class PositionHintDto(
+    val kind: String,
+    val value: String,
+    val audio_position_ms: Int? = null,
+)
+
+@Serializable
+data class PositionHintResponse(
+    val kind: String,
+    val device_id: String,
+    val value: String,
+    val anchor_revision: Long,
+    val audio_position_ms: Int? = null,
+    // False means the anchor moved after this hint was captured. Stale, not
+    // useless: its device makes it current again by re-capturing.
+    val current: Boolean,
+)
+
+@Serializable
+data class PositionUpdateRequest(
+    // Null (the default) omits `source` from the wire payload entirely —
+    // kotlinx.serialization skips a property whose value equals its default
+    // when `encodeDefaults = false` (see AppModule.provideJson). The server's
+    // `PositionUpdate.source` treats omission as "keep whatever is stored"
+    // (see server schemas.PositionUpdate), which is exactly what a save from
+    // a paused/idle player needs: it must still move the position without
+    // re-claiming which format opens next (issue: background saves hijacking
+    // format routing — see BookSyncRepository.savePlaybackPosition's
+    // `claimFormat` parameter).
+    val source: String? = null,
+    // Spine index — the axis both readers position by.
+    val epub_chapter: Int? = null,
+    val epub_sentence_index: Int? = null,
+    val epub_text_preview: String? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean? = null,
+    val hint: PositionHintDto? = null,
+    val append_to_log: Boolean = false,
+    val captured_at: String? = null,
+    val device_id: String? = null,
+    val device_name: String? = null,
+)
+
+@Serializable
+data class PositionResponse(
+    val scope: String,
+    val book_pair_id: Int? = null,
+    val ebook_id: Int? = null,
+    val audiobook_id: Int? = null,
+    val source: String,
+    val anchor_revision: Long,
+    val epub_chapter: Int? = null,
+    val epub_sentence_index: Int? = null,
+    val epub_text_preview: String? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean = false,
+    val captured_at: String? = null,
+    val updated_at: String,
+    val device_id: String? = null,
+    val device_name: String? = null,
+    val hints: List<PositionHintResponse> = emptyList(),
 )

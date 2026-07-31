@@ -135,6 +135,7 @@ object AppModule {
             com.booksync.data.local.MIGRATION_13_14,
             com.booksync.data.local.MIGRATION_14_15,
             com.booksync.data.local.MIGRATION_15_16,
+            com.booksync.data.local.MIGRATION_16_17,
         )
          .fallbackToDestructiveMigration(dropAllTables = true)
          .build()
