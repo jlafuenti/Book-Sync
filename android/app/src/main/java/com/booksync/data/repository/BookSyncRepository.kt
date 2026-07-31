@@ -774,6 +774,11 @@ class BookSyncRepository @Inject constructor(
         // and no BookmarkLog row is written — server and local history stay clean.
         // Set true on pause / stop / 30-min-continuous-playback boundaries.
         appendToLog: Boolean = false,
+        // When false, write the Room row only. Callers that have already sent
+        // the position via updatePosition use this to keep the offline cache
+        // warm without issuing a second server write — two writes per save is
+        // the very thing the canonical endpoint exists to remove.
+        pushToServer: Boolean = true,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
         val nowMillis = System.currentTimeMillis()
@@ -799,8 +804,14 @@ class BookSyncRepository @Inject constructor(
             syncedToServer = false,
         )
 
-        // Save locally
-        bookmarkDao.upsertBookmark(merged)
+        // Save locally. A local-only write is marked synced because the caller
+        // has already sent this position through the canonical endpoint —
+        // leaving it unsynced would have the startup reconcile push it a
+        // second time.
+        bookmarkDao.upsertBookmark(
+            if (pushToServer) merged else merged.copy(syncedToServer = true))
+
+        if (!pushToServer) return
 
         // Record a local history entry ONLY on meaningful session boundaries so the
         // offline history mirrors what the server will record. Heartbeat saves stay
