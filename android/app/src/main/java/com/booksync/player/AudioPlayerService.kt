@@ -807,9 +807,8 @@ class AudioPlayerService : MediaLibraryService() {
                 when {
                     mediaId.startsWith("pair_") -> {
                         val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
-                        repository.updateBookmark(
+                        repository.savePlaybackPosition(
                             pairId = pairId,
-                            source = "audiobook",
                             audioPositionMs = posMs,
                             appendToLog = appendToLog,
                         )
@@ -818,10 +817,9 @@ class AudioPlayerService : MediaLibraryService() {
                         // Standalone audiobooks: no pair → no bookmark_log entry to
                         // worry about. updateProgress only writes UserProgress.
                         val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
-                        repository.updateProgress(
-                            mediaType = "audiobook",
-                            mediaId = audiobookId,
-                            audioPositionMs = posMs
+                        repository.savePlaybackPositionStandalone(
+                            audiobookId = audiobookId,
+                            audioPositionMs = posMs,
                         )
                     }
                 }
