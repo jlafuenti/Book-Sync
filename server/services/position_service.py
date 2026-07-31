@@ -278,15 +278,20 @@ async def apply_position(
     stamped = update.captured_at or datetime.utcnow()
 
     if bookmark is None:
-        bookmark = Bookmark(
+        new_fields = dict(
             user_id=user_id,
             book_pair_id=ref.book_pair_id,
             ebook_id=ref.ebook_id if ref.scope != PositionScope.PAIR else None,
             audiobook_id=ref.audiobook_id if ref.scope != PositionScope.PAIR else None,
-            source=update.source,
             anchor_revision=1,
             is_completed=False,
         )
+        # Omitting the kwarg (rather than passing None) lets the column's own
+        # default apply — `source` is NOT NULL, so a source-less first write
+        # must not hand SQLAlchemy an explicit None to insert.
+        if update.source is not None:
+            new_fields["source"] = update.source
+        bookmark = Bookmark(**new_fields)
         db.add(bookmark)
         await db.flush()
 
@@ -295,8 +300,12 @@ async def apply_position(
             bookmark.audio_position_ms)
 
     # Omission means "leave alone". A write carrying no anchor — a completion
-    # toggle, say — must never blank one out.
-    bookmark.source = update.source
+    # toggle, say — must never blank one out. `source` follows the same rule:
+    # only a foreground, user-initiated write claims the format, so a
+    # background save (service teardown, Android Auto heartbeat) that omits
+    # it must not re-stamp the stored value.
+    if update.source is not None:
+        bookmark.source = update.source
     if update.epub_chapter is not None:
         bookmark.epub_chapter = update.epub_chapter
     if update.epub_sentence_index is not None:
@@ -333,8 +342,13 @@ async def apply_position(
     position_changed = prev != (bookmark.epub_chapter, bookmark.epub_sentence_index,
                                 bookmark.audio_position_ms)
     if position_changed and update.append_to_log:
+        # `bookmark.source`, not `update.source`: the update's source is
+        # optional and may be None on a background write (the very write a
+        # session-boundary log entry is likely to accompany), but the log's
+        # `source` column is NOT NULL. The bookmark's resolved value is never
+        # None once any write has landed.
         db.add(BookmarkLog(
-            bookmark_id=bookmark.id, source=update.source,
+            bookmark_id=bookmark.id, source=bookmark.source,
             prev_epub_chapter=prev[0], prev_epub_sentence_index=prev[1],
             prev_audio_position_ms=prev[2],
             new_epub_chapter=bookmark.epub_chapter,

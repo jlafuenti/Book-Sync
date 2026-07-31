@@ -581,8 +581,13 @@ class PositionUpdate(BaseModel):
 
     Every field is optional and omission means "leave alone" — a write that
     carries no anchor never clears one.
+
+    `source` follows the same rule: only a foreground, user-initiated write
+    claims which format the clients open next. A background write (service
+    teardown, Android Auto heartbeat) omits it to move the position without
+    re-stamping the format (issue: background writes re-claiming source).
     """
-    source: BookmarkSource = BookmarkSource.EBOOK
+    source: Optional[BookmarkSource] = None
     # Spine index: the axis both readers position by.
     epub_chapter: Optional[int] = None
     epub_sentence_index: Optional[int] = None

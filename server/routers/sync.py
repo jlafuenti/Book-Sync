@@ -10,7 +10,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -371,8 +371,13 @@ async def update_progress(
         hint = PositionHintPayload(kind=HintKind.EPUBJS_CFI, value=update_data.epub_cfi)
 
     position = PositionUpdate(
-        source=(BookmarkSource.EBOOK if media_type == ProgressType.EBOOK
-                else BookmarkSource.AUDIOBOOK),
+        # This endpoint's request body has no `source` field at all, so every
+        # write through it used to synthesize one from the URL's media_type —
+        # a background audiobook-player save through
+        # `/progress/audiobook/{id}` re-stamped `source=audiobook` even
+        # mid-read. Passing None lets apply_position's merge rule keep
+        # whatever source is already stored.
+        source=None,
         # A progress write's epub_chapter is a spine index (that is what both
         # readers send here), which is the axis the canonical record stores.
         epub_chapter=update_data.epub_chapter,
@@ -406,12 +411,42 @@ async def reset_pair_progress(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete ALL progress records for a book pair (catches corrupted records too)."""
+    """Delete ALL progress records for a book pair (catches corrupted records too).
+
+    `user_progress` is only a projection of the canonical `Bookmark` now (see
+    `services/position_service.py`). Deleting just the projection used to leave
+    the bookmark in place, so the next write re-seeded `user_progress` from it
+    and "reset" silently un-reset itself (issue #6). So this also deletes the
+    canonical bookmark row(s) for this pair — the pair-scoped row and any
+    standalone ebook/audiobook rows for the same underlying media, since a
+    client can reach those independently of the pair.
+    """
     # Verify the pair exists
     result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
     pair = result.scalar_one_or_none()
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
+
+    # Load (not bulk-delete) the bookmark rows: `Bookmark.hints` cascades via
+    # `cascade="all, delete-orphan"`, which only fires on ORM instance deletion
+    # — a Core `delete()` statement would bypass it and orphan `position_hints`.
+    bookmark_scopes = [Bookmark.book_pair_id == pair_id]
+    if pair.ebook_id:
+        bookmark_scopes.append(
+            (Bookmark.book_pair_id.is_(None)) & (Bookmark.ebook_id == pair.ebook_id)
+        )
+    if pair.audiobook_id:
+        bookmark_scopes.append(
+            (Bookmark.book_pair_id.is_(None)) & (Bookmark.audiobook_id == pair.audiobook_id)
+        )
+
+    result = await db.execute(
+        select(Bookmark)
+        .options(selectinload(Bookmark.hints))
+        .where(Bookmark.user_id == current_user.id, or_(*bookmark_scopes))
+    )
+    for bookmark in result.scalars().all():
+        await db.delete(bookmark)
 
     # Delete all progress records linked to this pair for this user
     await db.execute(
