@@ -43,6 +43,21 @@ def _load_migration():
     return module
 
 
+def test_enum_is_declared_so_create_table_wont_duplicate_it():
+    """Native Postgres enums must be declared `create_type=False`.
+
+    Without it, `op.create_table` emits its own `CREATE TYPE` on top of the
+    explicit `.create()`, and the whole migration dies with
+    `DuplicateObject: type "hintkind" already exists`. 0001_baseline documents
+    this in a comment; 0004 shipped ignoring it and broke the migrations job.
+
+    Asserted on the type object because the failure itself only reproduces
+    against a real Postgres, which the default suite has no access to.
+    """
+    migration = _load_migration()
+    assert migration.hintkind.create_type is False
+
+
 PROSE_A = ("<html><body><p>The harbour lay still under a flat grey sky. "
            "Althea counted the ships at anchor and found one missing.</p></body></html>")
 PROSE_B = ("<html><body><p>Brashen kept his own counsel on the matter. "

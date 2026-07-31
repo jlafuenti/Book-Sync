@@ -35,6 +35,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 # NOTE: keep this at or under 32 chars — see 0002_conflict_resolution.py.
@@ -45,7 +46,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 logger = logging.getLogger("alembic.runtime.migration")
 
-hintkind = sa.Enum("READIUM_LOCATOR", "EPUBJS_CFI", name="hintkind")
+# Native Postgres enum, created once up front and referenced with
+# ``create_type=False`` — same convention as 0001_baseline. Without that flag
+# ``create_table`` emits its own ``CREATE TYPE`` on top of the explicit
+# ``.create()`` below and the migration fails with "type already exists".
+hintkind = postgresql.ENUM(
+    "READIUM_LOCATOR", "EPUBJS_CFI", name="hintkind", create_type=False,
+)
 
 
 def _remap_sync_points(conn) -> None:
