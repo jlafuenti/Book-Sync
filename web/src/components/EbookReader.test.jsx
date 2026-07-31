@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import EbookReader, { resolveInitialDisplayTarget } from './EbookReader'
+import EbookReader, { resolveInitialDisplayTarget, executeRestore } from './EbookReader'
 
 const {
     fetchEbookBlobMock, getPositionMock, updatePositionMock, matchTextToAudioMock,
@@ -200,6 +200,22 @@ describe('EbookReader doSave — one atomic write', () => {
 
         expect(screen.queryByText(/Newer position available/)).not.toBeInTheDocument()
     })
+
+    it('still saves a plain chapter + preview anchor when matchTextToAudio rejects outright', async () => {
+        // A network error from the matcher is not a failed save either -- the
+        // .catch() in doSave() must swallow it the same way a clean miss
+        // (resolved null) is handled, falling back to the chapter anchor.
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockRejectedValue(new Error('match service down'))
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+        const body = updatePositionMock.mock.calls[0][2]
+        expect(body.epub_chapter).toBe(0)
+        expect(body.epub_text_preview).toBeTruthy()
+        expect(body.audio_position_ms).toBeUndefined()
+    })
 })
 
 describe('EbookReader — a failed restore must not overwrite a real position', () => {
@@ -247,6 +263,93 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
 
         await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
     })
+
+    it('does not save when the only anchor (a percent) cannot be resolved on this book', async () => {
+        // A record holding just an epub_progress_percent, with no hint/chapter/
+        // preview/audio to fall back on. This book's fake `locations` has no
+        // cfiFromPercentage, mirroring an epub.js book that hasn't generated
+        // locations yet -- the percent step can't land, executeRestore must
+        // return false, and doSave must stay shut just like the no-anchor case.
+        getPositionMock.mockResolvedValue({
+            anchor_revision: 2,
+            epub_progress_percent: 45,
+            hints: [],
+        })
+        const { book, rendition, handlers } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialCfi={null} initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        await waitFor(() => expect(rendition.display).toHaveBeenCalled())
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-test', percentage: 0.45, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await new Promise(r => setTimeout(r, 50))
+
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the props-supplied CFI when the position fetch fails (offline)', async () => {
+        // loadBook()'s getPosition(...).catch() must synthesize a usable
+        // fallback position from the initial* props rather than leaving the
+        // reader with nothing to restore from.
+        getPositionMock.mockRejectedValue(new Error('offline'))
+        const { book, rendition } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialCfi="cfi-prop" initialChapter={0} initialTextPreview="some preview text"
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('cfi-prop'))
+    })
+
+    it('builds an empty hints array in the offline fallback when there is no initialCfi prop', async () => {
+        // Same offline fallback, but only a chapter prop is available -- the
+        // synthesized position must omit the epub_cfi hint entirely (`: []`)
+        // rather than push a hint with an undefined value.
+        getPositionMock.mockRejectedValue(new Error('offline'))
+        const { book, rendition } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialCfi={null} initialChapter={0} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+
+        // No CFI hint to land on; the chapter step must be used instead.
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml'))
+    })
+
+    it('falls back to null (open at start) when the fetch fails and there are no initial* props either', async () => {
+        getPositionMock.mockRejectedValue(new Error('offline'))
+        const { book, rendition } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialCfi={null} initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+
+        // No anchor at all: executeRestore's "genuinely unread" path, calling
+        // display() with no arguments.
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith())
+    })
 })
 
 describe('resolveInitialDisplayTarget — stale CFI (issue #40)', () => {
@@ -288,5 +391,115 @@ describe('resolveInitialDisplayTarget — stale CFI (issue #40)', () => {
         expect(resolveInitialDisplayTarget(bookWith(null), null, null)).toBe(null)
         // Chapter index past the end of the spine is not navigable.
         expect(resolveInitialDisplayTarget(bookWith(null, 2), null, 9)).toBe(null)
+    })
+})
+
+describe('executeRestore — walks the ladder, landing on the first step that works', () => {
+    // Direct unit tests against the exported function: cheaper and more
+    // precise than driving the whole component through every ladder shape.
+
+    it('lands on a chapter step, displaying the spine item at that index', async () => {
+        const rendition = { display: vi.fn().mockResolvedValue(undefined) }
+        const book = { spine: { items: [{ href: 'ch0.xhtml' }, { href: 'ch1.xhtml' }] } }
+
+        const landed = await executeRestore(book, rendition, [{ kind: 'chapter', chapter: 1 }])
+
+        expect(landed).toBe(true)
+        expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml')
+    })
+
+    it('skips a chapter step whose index has no spine item, falling through to the next step', async () => {
+        const rendition = { display: vi.fn().mockResolvedValue(undefined) }
+        const book = { spine: { items: [{ href: 'ch0.xhtml' }] } }
+
+        const landed = await executeRestore(book, rendition, [
+            { kind: 'chapter', chapter: 5 },
+            { kind: 'hint', value: 'cfi-fallback' },
+        ])
+
+        expect(landed).toBe(true)
+        expect(rendition.display).toHaveBeenCalledTimes(1)
+        expect(rendition.display).toHaveBeenCalledWith('cfi-fallback')
+    })
+
+    it('lands on a percent step via book.locations.cfiFromPercentage', async () => {
+        const rendition = { display: vi.fn().mockResolvedValue(undefined) }
+        const book = {
+            spine: { items: [] },
+            locations: { cfiFromPercentage: vi.fn(() => 'cfi-at-40') },
+        }
+
+        const landed = await executeRestore(book, rendition, [{ kind: 'percent', percent: 40 }])
+
+        expect(landed).toBe(true)
+        expect(book.locations.cfiFromPercentage).toHaveBeenCalledWith(0.4)
+        expect(rendition.display).toHaveBeenCalledWith('cfi-at-40')
+    })
+
+    it('catches a step that throws and falls through to the next one', async () => {
+        const rendition = {
+            display: vi.fn()
+                .mockRejectedValueOnce(new Error('render exploded'))
+                .mockResolvedValueOnce(undefined),
+        }
+        const book = { spine: { items: [] } }
+
+        const landed = await executeRestore(book, rendition, [
+            { kind: 'hint', value: 'cfi-bad' },
+            { kind: 'hint', value: 'cfi-good' },
+        ])
+
+        expect(landed).toBe(true)
+        expect(rendition.display).toHaveBeenNthCalledWith(1, 'cfi-bad')
+        expect(rendition.display).toHaveBeenNthCalledWith(2, 'cfi-good')
+    })
+
+    it('opens at the start of book when there are no steps at all (genuinely unread)', async () => {
+        const rendition = { display: vi.fn().mockResolvedValue(undefined) }
+        const book = { spine: { items: [] } }
+
+        const landed = await executeRestore(book, rendition, [])
+
+        expect(landed).toBe(true)
+        expect(rendition.display).toHaveBeenCalledWith()
+    })
+
+    it('returns false and still lands on start-of-book when every step fails to resolve', async () => {
+        const rendition = { display: vi.fn().mockResolvedValue(undefined) }
+        const book = { spine: { items: [{ href: 'ch0.xhtml' }] } }
+
+        const landed = await executeRestore(book, rendition, [{ kind: 'chapter', chapter: 99 }])
+
+        expect(landed).toBe(false)
+        expect(rendition.display).toHaveBeenCalledWith()
+    })
+})
+
+describe('EbookReader — initial text-nav pass', () => {
+    it('does not leave saving suppressed when the preview is too short to search', async () => {
+        // A preview under 5 normalized characters skips the search entirely
+        // (the `if (shortTarget.length >= 5)` branch) and must still clear
+        // textNavInProgressRef so the very next autosave is not swallowed by
+        // doSave()'s "text nav in progress" guard.
+        const { book, rendition, handlers } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        matchTextToAudioMock.mockResolvedValue(null)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialCfi={null} initialChapter={null} initialTextPreview="hi"
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        await waitFor(() => expect(rendition.display).toHaveBeenCalled())
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-test', percentage: 0.5, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
     })
 })
