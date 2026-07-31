@@ -301,3 +301,37 @@ async def test_legacy_bookmark_get_still_returns_the_mirror_columns(
         f"/api/sync/bookmark/{pair.id}", headers=auth_header(user))
     assert legacy.status_code == 200
     assert legacy.json()["epub_locator"] == LOCATOR
+
+
+async def test_the_write_response_includes_the_hint_it_just_stored(
+    client, make_user, auth_header, db
+):
+    """The PUT response is meant to be authoritative — a client adopts it as
+    its new local state.
+
+    It came back with `hints: []` on production: the session is configured
+    `expire_on_commit=False`, so re-reading after the commit returned the
+    identity-mapped bookmark still holding the empty `hints` collection loaded
+    before the hint was written. The client then believed it had no current
+    hint until its next fetch.
+    """
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    # The record must already exist: that is what puts it in the session's
+    # identity map with an empty `hints` collection, which the post-commit
+    # re-read then hands straight back.
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=1, captured_at="2026-07-30T09:00:00Z",
+    )
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, hint={"kind": "readium_locator", "value": LOCATOR},
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.status_code == 200, put.text
+    hints = put.json()["hints"]
+    assert [h["value"] for h in hints] == [LOCATOR]
+    assert hints[0]["current"] is True
