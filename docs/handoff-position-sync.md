@@ -2,7 +2,8 @@
 
 Branch: `claude/book-sync-issues-61-40-6944a0`
 Deployed on the server as of writing: `969eed1` (schema at `0004_canonical_position`)
-Status: **shipped and working, with one open bug blocking further testing** (see §4)
+Status: **§4 diagnosed and fixed on-branch (2026-07-31; see §4 for the real root
+cause — it was not the gate). Known issues 2 and 6 fixed in the same pass.**
 
 ---
 
@@ -151,7 +152,35 @@ or at minimum never check out that revision on its own.
 
 ---
 
-## 4. THE OPEN BUG — the Android reader is not persisting
+## 4. RESOLVED — the Android reader was not persisting
+
+**Resolution (2026-07-31).** On-device logcat + DB inspection disproved the gate
+hypothesis below: the restore landed (`restored via 'text'`), the gate was open,
+and no "suppressed" line was ever logged. The bug was two mechanisms compounding:
+
+1. **The close-flush save was cancelled.** `savePosition` launched its write
+   into `lifecycleScope.launch`; a back-press destroyed the activity and
+   cancelled the coroutine mid-network-call (`JobCancellationException`), and
+   the Room write sat *after* the server call — so both writes died. Short
+   sessions also produced no tracker save (5-second throttle), leaving zero
+   reader writes: exactly the byte-identical `epub_progress_percent`.
+2. **A background player save re-stamped the format.** ~4 s after the reader
+   closed, a player teardown save wrote `source=audiobook`, so
+   `resolvePairOpenTarget` reopened the audiobook even when a reader write had
+   landed. (Known issue 2 was half of this bug, not a follow-up.)
+
+Fixes: saves now run Room-first in an application-scoped `NonCancellable`
+coroutine (`BookSyncRepository.saveReaderPosition`); the boolean gate became
+`PositionSavePolicy` (`FullSave` / `LocalMetadataOnly` — the latter stamps only
+local `source` so routing follows the session while anchors stay protected;
+a user page-turn upgrades an unresolved session to `FullSave`); background
+player saves no longer claim `source` (see the contract doc, "Who may claim
+`source`"). The gate's latent defects (all-rungs-fail latching saves off
+forever; the catch demoting a landed restore) were fixed in the same pass.
+
+The original report and hypothesis are kept below for the record.
+
+## The original report
 
 **Reported flow (reproduced three times):**
 
@@ -267,13 +296,11 @@ invalidate the reading page.
 
 ## 6. Known issues and follow-ups
 
-1. **The reader-not-persisting bug (§4)** — blocking; fix first.
-2. **"Which format opens" follows the last writer.** `resolvePairOpenTarget`
-   keys on `bookmarks.source`, which any background component can set — a
-   player teardown save stamps `audiobook` even when the user was reading.
-   Deliberately deferred pending a product decision. Suggested direction: only a
-   foreground, user-initiated session claims the format; a background save still
-   records the position but not the format.
+1. **The reader-not-persisting bug (§4)** — ~~blocking~~ **fixed** (see §4).
+2. **"Which format opens" follows the last writer** — **fixed** (2026-07-31):
+   the format follows actual consumption. Saves claim `source` only while
+   playback is playing or on an explicit user playback command; background
+   saves omit it and the server keeps the stored value. See the contract doc.
 3. **Duplicate `user_progress` rows** for `(user 1, ebook 1726)`, two empty rows
    3ms apart from the old GET race. Left in place by choice; reads tolerate them,
    but they may show a phantom Continue entry.
@@ -282,8 +309,12 @@ invalidate the reading page.
    on the preview/percent rungs. Fix by parsing the artifact the reader renders.
 5. **`is_completed` at ≥98%** — from #61, never implemented; needs both clients
    together or they disagree.
-6. **`reset_pair_progress` doesn't delete the canonical bookmark**, so "reset"
-   re-seeds progress from it.
+6. **`reset_pair_progress` doesn't delete the canonical bookmark** — **fixed**
+   (2026-07-31): the DELETE now removes the bookmark rows (all scopes), their
+   hints, and the projection; `GET /position` returns 204 afterwards. Client
+   reset buttons that used to legacy-write zeros (ContinuePage, BookDetailPage,
+   Android) were rewired to the DELETE for paired media; standalone-media reset
+   still uses the legacy zero-write (no DELETE scope for it yet).
 7. **Legacy endpoints and mirror columns** (`bookmarks.epub_locator`,
    `locator_audio_ms`, `user_progress.epub_cfi`) can be dropped once no old build
    is in the field.
