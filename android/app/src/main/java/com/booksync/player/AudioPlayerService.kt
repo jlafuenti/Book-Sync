@@ -54,6 +54,13 @@ import java.io.File
 import java.net.Inet4Address
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * How long a resume waits for the server's position before falling back to
+ * the local cache. Mirrors PlayerScreen's bound.
+ */
+private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Foreground media playback service using Media3 MediaLibraryService.
@@ -1070,6 +1077,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val positionMs = when {
                         mediaId.startsWith("pair_") -> {
                             val pairId = mediaId.removePrefix("pair_").toIntOrNull()
+                            pairId?.let { refreshPositionBeforeResume(it) }
                             pairId?.let { repository.getBookmark(it)?.audioPositionMs?.toLong() }
                                 ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                         }
@@ -1267,11 +1275,31 @@ class AudioPlayerService : MediaLibraryService() {
         return future
     }
 
+    /**
+     * Pull the server's position before resuming, bounded so an unreachable
+     * server can't stall playback.
+     *
+     * Only the paths that decide where audio *starts* do this. The browse-tree
+     * builders deliberately don't: they render a list and would otherwise fire
+     * one request per row on every browse.
+     */
+    private suspend fun refreshPositionBeforeResume(pairId: Int) {
+        withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+            repository.refreshBookmark(pairId)
+        } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
+    }
+
     private suspend fun resolveMediaItem(mediaId: String): MediaItem? {
         return when {
             mediaId.startsWith("pair_") -> {
                 val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
                 val pair = repository.getPairById(pairId) ?: return null
+                // This is the playback-start path — what it returns is where
+                // audio actually begins — so pull the server's position first.
+                // Reading only the local cache meant a position set on another
+                // device was never seen here. Bounded, so an unreachable server
+                // falls back to the cache instead of stalling playback.
+                refreshPositionBeforeResume(pairId)
                 val bookmark = repository.getBookmark(pairId)
                 val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                 val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)

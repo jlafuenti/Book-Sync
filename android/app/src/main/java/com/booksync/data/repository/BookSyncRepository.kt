@@ -47,6 +47,10 @@ class BookSyncRepository @Inject constructor(
     private val deviceIdManager: DeviceIdManager,
     private val json: Json,
 ) {
+    /** This device's stable id / display name, for position attribution. */
+    val deviceId: String get() = deviceIdManager.deviceId
+    val deviceName: String get() = deviceIdManager.deviceName
+
     private fun log(msg: String) = diagnosticLogger.i(LogChannel.APP, REPO_TAG, msg)
     private fun logW(msg: String) = diagnosticLogger.w(LogChannel.APP, REPO_TAG, msg)
     private fun logE(msg: String, t: Throwable? = null) = diagnosticLogger.e(LogChannel.APP, REPO_TAG, msg, t)
@@ -696,6 +700,63 @@ class BookSyncRepository @Inject constructor(
     }
 
     /**
+     * Fetch the canonical position for a book, or null when the user has none.
+     *
+     * Returns null on 204 (never opened) *and* when the server is unreachable —
+     * callers fall back to their local cache in both cases. The two are
+     * distinguished by [PositionFetch.reachable] where it matters.
+     */
+    suspend fun fetchPosition(scope: String, id: Int): PositionFetch {
+        return try {
+            val response = api.getPosition(scope, id)
+            when {
+                response.code() == 204 -> PositionFetch(null, reachable = true)
+                response.isSuccessful -> PositionFetch(response.body(), reachable = true)
+                else -> {
+                    logW("fetchPosition $scope/$id: HTTP ${response.code()}")
+                    PositionFetch(null, reachable = false)
+                }
+            }
+        } catch (e: Exception) {
+            logW("fetchPosition $scope/$id: offline (${e.message})")
+            PositionFetch(null, reachable = false)
+        }
+    }
+
+    /**
+     * Write a whole position in one request.
+     *
+     * Replaces the updateBookmark + updateProgress pair, which the server
+     * adjudicated separately: either could be rejected while the other applied,
+     * leaving two records that disagreed about where the reader was.
+     */
+    suspend fun updatePosition(
+        scope: String,
+        id: Int,
+        request: PositionUpdateRequest,
+    ): PositionResponse? {
+        return try {
+            val response = api.updatePosition(scope, id, request)
+            when {
+                response.isSuccessful -> response.body()
+                response.code() == 409 -> {
+                    val serverState = parseConflictBody<PositionResponse>(
+                        response.errorBody()?.string())
+                    logW("updatePosition $scope/$id: 409 — this write lost, adopting server state")
+                    serverState
+                }
+                else -> {
+                    logW("updatePosition $scope/$id: failed HTTP ${response.code()}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            logW("updatePosition $scope/$id: offline (${e.message})")
+            null
+        }
+    }
+
+    /**
      * Update bookmark position.
      * Saves locally immediately and queues sync to server.
      */
@@ -1207,16 +1268,15 @@ internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
 
 /**
  * Maps a server [BookmarkResponse] — a normal 200 body, or the authoritative state returned
- * in a 409 conflict body — onto a local [BookmarkEntity].
+ * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies
+ * the Readium locator when the server returns none.
  *
- * Locator handling follows the cross-device position contract (issue #40):
- * chapter + sentence is the portable anchor, the Readium locator is a hint the
- * server only keeps while it still matches that anchor. So when the server
- * returns no locator on an *ebook*-source bookmark it has deliberately cleared
- * it (another client moved the position) and the local value must go too —
- * falling back to [previous] there would resurrect the exact stale locator the
- * server just invalidated. An audiobook-source write never invalidates the
- * ebook locator, so [previous] still supplies it there.
+ * A previous revision dropped the local locator on an ebook-source response
+ * with no locator, to match a server rule that cleared it. Both halves are
+ * gone: clearing a position hint that the writing client can't replace leaves
+ * the reader with nothing to restore from, which is how a real position got
+ * overwritten with chapter 0. A hint's freshness is judged by the anchor it
+ * was captured at, not by deleting it.
  */
 internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEntity(
     bookPairId = book_pair_id,
@@ -1224,9 +1284,8 @@ internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEnti
     epubChapter = epub_chapter,
     epubSentenceIndex = epub_sentence_index,
     audioPositionMs = audio_position_ms,
-    epubLocator = epub_locator ?: previous?.epubLocator.takeIf { source != "ebook" },
-    locatorAudioMs = if (epub_locator != null) locator_audio_ms
-        else previous?.locatorAudioMs.takeIf { source != "ebook" },
+    epubLocator = epub_locator ?: previous?.epubLocator,
+    locatorAudioMs = if (epub_locator != null) locator_audio_ms else previous?.locatorAudioMs,
     updatedAt = updated_at,
     capturedAt = captured_at,
     deviceId = device_id,
@@ -1296,3 +1355,70 @@ internal fun BookmarkLogEntity.toResponse() = BookmarkLogResponse(
 internal fun localHistoryTimestamp(epochMillis: Long): String =
     java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(epochMillis), java.time.ZoneOffset.UTC)
         .toString()
+
+/**
+ * Result of a canonical-position fetch.
+ *
+ * [reachable] separates "the server says this book has no position" from "we
+ * couldn't ask". The first means starting at the beginning is correct; the
+ * second means fall back to the local cache and change nothing.
+ */
+data class PositionFetch(
+    val position: PositionResponse?,
+    val reachable: Boolean,
+)
+
+/**
+ * Map a server [PositionResponse] onto the resolver's input type.
+ *
+ * The resolver is deliberately transport-agnostic (it is shared, fixture-tested
+ * logic), so the DTO is converted here rather than the resolver depending on
+ * Retrofit types.
+ */
+internal fun PositionResponse.toStoredPosition() = com.booksync.data.sync.StoredPosition(
+    anchorRevision = anchor_revision,
+    source = source,
+    epubChapter = epub_chapter,
+    epubSentenceIndex = epub_sentence_index,
+    epubTextPreview = epub_text_preview,
+    epubProgressPercent = epub_progress_percent,
+    audioPositionMs = audio_position_ms,
+    hints = hints.map {
+        com.booksync.data.sync.PositionHint(
+            kind = it.kind,
+            deviceId = it.device_id,
+            value = it.value,
+            anchorRevision = it.anchor_revision,
+            audioPositionMs = it.audio_position_ms,
+        )
+    },
+)
+
+/**
+ * Build the resolver's input from the local cache, for use when the server is
+ * unreachable.
+ *
+ * The locally stored locator is offered as a hint at the record's own anchor
+ * revision, so it qualifies — this device captured it against this anchor.
+ */
+internal fun BookmarkEntity.toStoredPosition(deviceId: String) =
+    com.booksync.data.sync.StoredPosition(
+        anchorRevision = 0L,
+        source = source,
+        epubChapter = epubChapter,
+        epubSentenceIndex = epubSentenceIndex,
+        epubTextPreview = null,
+        epubProgressPercent = null,
+        audioPositionMs = audioPositionMs,
+        hints = epubLocator?.let {
+            listOf(
+                com.booksync.data.sync.PositionHint(
+                    kind = com.booksync.data.sync.HINT_READIUM_LOCATOR,
+                    deviceId = deviceId,
+                    value = it,
+                    anchorRevision = 0L,
+                    audioPositionMs = locatorAudioMs,
+                )
+            )
+        } ?: emptyList(),
+    )

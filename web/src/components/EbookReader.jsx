@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
-import { fetchEbookBlob, updateProgress, updateBookmark, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
+import { fetchEbookBlob, getPosition, updatePosition, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
+import { planRestore } from '../lib/positionLadder'
 import './EbookReader.css'
 
 /**
@@ -34,6 +35,49 @@ export function resolveInitialDisplayTarget(book, initialCfi, initialChapter) {
         if (cfiIndex !== null && cfiIndex !== initialChapter) return chapterHref
     }
     return initialCfi
+}
+
+/**
+ * Walk the restore ladder, taking the first step that actually lands.
+ *
+ * Returns true when the reader is at a position the record describes, false
+ * when every step failed. False is *not* "start of book": the caller keeps
+ * saving blocked, because a book showing page one after a failed restore is
+ * exactly what overwrote a real position with chapter 0.
+ */
+export async function executeRestore(book, rendition, steps) {
+    for (const step of steps) {
+        try {
+            if (step.kind === 'hint') {
+                await rendition.display(step.value)
+                return true
+            }
+            if (step.kind === 'chapter') {
+                const item = book.spine?.items?.[step.chapter]
+                if (!item) continue
+                await rendition.display(item.href)
+                return true
+            }
+            if (step.kind === 'percent') {
+                const cfi = book.locations?.cfiFromPercentage?.(step.percent / 100)
+                if (!cfi) continue
+                await rendition.display(cfi)
+                return true
+            }
+            // 'text' is refined after the first relocated event (it needs the
+            // rendered DOM to search); 'audio' needs the sync map. Neither can
+            // land the initial display on its own, so they fall through here.
+        } catch (e) {
+            console.warn(`[EbookReader] restore step '${step.kind}' failed:`, e?.message || e)
+        }
+    }
+    if (steps.length === 0) {
+        // Genuinely unread — start of book is the right answer.
+        await rendition.display()
+        return true
+    }
+    await rendition.display()
+    return false
 }
 
 function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
@@ -70,6 +114,15 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     const textNavDoneRef = useRef(false)
     // Suppress auto-saves while text nav is hopping between chapters
     const textNavInProgressRef = useRef(false)
+    // Nothing may be saved until the restore has landed (or the record was
+    // genuinely empty). Without this gate a failed restore sitting on page one
+    // gets persisted over a real position from another device.
+    const positionEstablishedRef = useRef(false)
+    // The canonical record this reader opened with.
+    const positionRef = useRef(null)
+    // True when the record held a position we could not resolve. Distinct from
+    // "unread": saving stays blocked and the reader is told.
+    const [unresolvedPosition, setUnresolvedPosition] = useState(false)
 
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
@@ -126,107 +179,73 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
         return text.substring(0, 220)
     }, [bookTitle])
 
-    // A bookmark write (not progress) was rejected by a genuinely different
-    // device. BookmarkResponse carries no navigable epub_cfi, so there's no
-    // jump target here -- just a visibility signal so the rejection isn't
-    // silent. Never clobbers an already-showing jump-capable (cfi-bearing)
-    // conflict from the progress write in the same doSave() call.
-    const handleBookmarkConflict = useCallback((result) => {
-        if (
-            result?.rejected &&
-            result.device_id &&
-            result.device_id !== getDeviceId()
-        ) {
-            setStaleConflict(prev => (prev && prev.cfi) ? prev : {
-                cfi: null,
-                deviceName: result.device_name || result.device_id,
-            })
-        }
-        return result
-    }, [])
 
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
         if (!cfi) return
         // Don't save while text nav is hopping between chapters looking for text
         if (textNavInProgressRef.current) return
+        // Nothing may be written until we know where the reader actually is.
+        // A restore that failed and left the book at page one would otherwise
+        // persist chapter 0 over a real position set on another device.
+        if (!positionEstablishedRef.current) {
+            console.warn('[EbookReader] save suppressed: position not established yet')
+            return
+        }
         const chapter = spineIndex ?? currentSpineIndexRef.current
-        // Captured once so every write from this save (progress + whichever
-        // bookmark branch below fires) reports the same read-moment timestamp.
         const capturedAt = new Date().toISOString()
-        console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}, chapterProgression=${currentChapterProgressionRef.current?.toFixed(3)}`)
+        console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}`)
         try {
-            const progressResult = await updateProgress('ebook', ebookId, {
-                epub_cfi: cfi,
-                epub_chapter: chapter,
+            // Sync-map match (paired books only) upgrades the anchor to a
+            // sentence and its audio position. A miss is not a failure — the
+            // chapter + preview anchor still describes the position.
+            const textPreview = extractVisibleText()
+            let match = null
+            if (pairId && textPreview && textPreview.length > 10) {
+                match = await matchTextToAudio(pairId, textPreview, chapter).catch(e => {
+                    console.warn('[EbookReader] matchTextToAudio failed:', e.message || e)
+                    return null
+                })
+            }
+
+            // ONE write carrying the whole position. Two writes (progress +
+            // bookmark) were adjudicated separately, so one could be accepted
+            // while the other was rejected and the two rows would then
+            // disagree about where the reader was, permanently.
+            const position = {
+                source: 'ebook',
+                epub_chapter: match ? match.epub_chapter : chapter,
+                epub_sentence_index: match ? match.epub_sentence_index : undefined,
+                epub_text_preview: textPreview || undefined,
                 epub_progress_percent: Math.round(percent * 100) / 100,
-                book_pair_id: pairId || undefined,
+                audio_position_ms: match ? match.audio_position_ms : undefined,
+                hint: { kind: 'epubjs_cfi', value: cfi },
                 device_id: getDeviceId(),
                 device_name: getDeviceName(),
                 captured_at: capturedAt,
-            })
-            // A different device's write is newer and won -- surface it so the
-            // reader isn't silently left showing a stale position. Only a
-            // rejection carrying a usable epub_cfi is actionable; skip an echo
-            // of this device's own id (a retried/out-of-order write).
-            if (
-                progressResult?.rejected &&
-                progressResult.device_id &&
-                progressResult.device_id !== getDeviceId() &&
-                progressResult.epub_cfi
-            ) {
-                setStaleConflict({
-                    cfi: progressResult.epub_cfi,
-                    deviceName: progressResult.device_name || progressResult.device_id,
-                })
             }
-            if (pairId) {
-                // Extract visible text and match against sync map for accurate audio position
-                const textPreview = extractVisibleText()
-                console.log(`[EbookReader] textPreview (${textPreview?.length} chars): '${textPreview?.substring(0, 80)}...'`)
-                if (textPreview && textPreview.length > 10) {
-                    const match = await matchTextToAudio(pairId, textPreview, chapter).catch(e => {
-                        console.warn(`[EbookReader] matchTextToAudio failed:`, e.message || e)
-                        return null
-                    })
-                    if (match) {
-                        console.log(`[EbookReader] MATCH: ch${match.epub_chapter} s${match.epub_sentence_index} audio=${match.audio_position_ms}ms, preview='${match.preview?.substring(0, 60)}'`)
-                        await updateBookmark(pairId, {
-                            source: 'ebook',
-                            epub_chapter: match.epub_chapter,
-                            epub_sentence_index: match.epub_sentence_index,
-                            audio_position_ms: match.audio_position_ms,
-                            device_id: getDeviceId(),
-                            device_name: getDeviceName(),
-                            captured_at: capturedAt,
-                        }).then(handleBookmarkConflict).catch(() => {})
-                    } else {
-                        console.warn(`[EbookReader] No match found — saving epub position only`)
-                        // No match — save epub position only, don't corrupt audio position
-                        await updateBookmark(pairId, {
-                            source: 'ebook',
-                            epub_chapter: chapter,
-                            device_id: getDeviceId(),
-                            device_name: getDeviceName(),
-                            captured_at: capturedAt,
-                        }).then(handleBookmarkConflict).catch(() => {})
-                    }
-                } else {
-                    console.warn(`[EbookReader] Text too short for matching (${textPreview?.length} chars), saving chapter only`)
-                    await updateBookmark(pairId, {
-                        source: 'ebook',
-                        epub_chapter: chapter,
-                        device_id: getDeviceId(),
-                        device_name: getDeviceName(),
-                        captured_at: capturedAt,
-                    }).then(handleBookmarkConflict).catch(() => {})
-                }
-            } else {
-                console.log(`[EbookReader] No pairId, skipping bookmark sync`)
+            const scope = pairId ? 'pair' : 'ebook'
+            const result = await updatePosition(scope, pairId || ebookId, position)
+
+            // A genuinely different device wrote something newer. Surface it;
+            // never navigate on the user's behalf.
+            if (
+                result?.rejected &&
+                result.device_id &&
+                result.device_id !== getDeviceId()
+            ) {
+                const currentCfiHint = (result.hints || []).find(
+                    h => h.kind === 'epubjs_cfi' && h.current
+                )
+                setStaleConflict({
+                    cfi: currentCfiHint ? currentCfiHint.value : null,
+                    deviceName: result.device_name || result.device_id,
+                })
             }
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
         }
-    }, [ebookId, pairId, extractVisibleText, handleBookmarkConflict])
+    }, [ebookId, pairId, extractVisibleText])
+
 
     // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
@@ -295,14 +314,40 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     setToc(nav.toc || [])
                 }
 
-                // Display at the saved position (CFI, if it's still consistent
-                // with the portable chapter anchor), else that chapter, else start
-                const initialTarget = resolveInitialDisplayTarget(book, initialCfi, initialChapter)
-                if (initialTarget !== null) {
-                    await rendition.display(initialTarget)
-                } else {
-                    await rendition.display()
-                }
+                // Fetch the canonical position at open. Reading a snapshot
+                // taken when the *page* loaded meant a position set on another
+                // device in the meantime was never seen.
+                const scope = pairId ? 'pair' : 'ebook'
+                const position = await getPosition(scope, pairId || ebookId).catch(e => {
+                    console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
+                    // Offline: fall back to whatever the caller passed in.
+                    return initialCfi || initialChapter != null
+                        ? {
+                            anchor_revision: 0,
+                            epub_chapter: initialChapter ?? undefined,
+                            epub_text_preview: initialTextPreview || undefined,
+                            hints: initialCfi
+                                ? [{ kind: 'epubjs_cfi', device_id: getDeviceId(),
+                                     value: initialCfi, anchor_revision: 0 }]
+                                : [],
+                        }
+                        : null
+                })
+                if (destroyed) return
+                positionRef.current = position
+
+                const steps = planRestore(position, {
+                    spineCount: book.spine?.items?.length ?? 0,
+                    deviceId: getDeviceId(),
+                    hintKind: 'epubjs_cfi',
+                })
+                const landed = await executeRestore(book, rendition, steps)
+
+                // A position we could not resolve is NOT the same as no
+                // position. Saving stays blocked in that case, so a failed
+                // restore can never overwrite a real position with page one.
+                positionEstablishedRef.current = landed || steps.length === 0
+                if (!destroyed) setUnresolvedPosition(!landed && steps.length > 0)
 
                 if (!destroyed) setLoading(false)
 
@@ -334,11 +379,15 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                     // On first render: if we have a text preview, navigate to it within the chapter
                     // Tries current chapter first, then adjacent chapters (±1, ±2) to handle
                     // sync map chapter numbering offset from epub spine indices
-                    if (!textNavDoneRef.current && initialTextPreview) {
+                    // Prefer the canonical record's preview: the prop is a
+                    // page-load-time snapshot, the record is what the book
+                    // actually says now.
+                    const previewText = positionRef.current?.epub_text_preview || initialTextPreview
+                    if (!textNavDoneRef.current && previewText) {
                         textNavDoneRef.current = true
                         textNavInProgressRef.current = true
 
-                        const targetNorm = initialTextPreview.toLowerCase()
+                        const targetNorm = previewText.toLowerCase()
                             .replace(/[\n\r\t]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
                         const shortTarget = targetNorm.substring(0, 30)
 

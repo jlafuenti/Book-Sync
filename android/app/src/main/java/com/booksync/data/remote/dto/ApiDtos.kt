@@ -252,3 +252,67 @@ data class ProgressResponse(
     val device_name: String? = null,
     val captured_at: String? = null
 )
+
+// ============ Canonical position ============
+//
+// One record per book, written atomically. Replaces the pair of
+// updateBookmark + updateProgress calls, which the server adjudicated
+// separately — either could be rejected while the other applied, leaving two
+// records describing different positions with nothing to reconcile them.
+
+@Serializable
+data class PositionHintDto(
+    val kind: String,
+    val value: String,
+    val audio_position_ms: Int? = null,
+)
+
+@Serializable
+data class PositionHintResponse(
+    val kind: String,
+    val device_id: String,
+    val value: String,
+    val anchor_revision: Long,
+    val audio_position_ms: Int? = null,
+    // False means the anchor moved after this hint was captured. Stale, not
+    // useless: its device makes it current again by re-capturing.
+    val current: Boolean,
+)
+
+@Serializable
+data class PositionUpdateRequest(
+    val source: String,
+    // Spine index — the axis both readers position by.
+    val epub_chapter: Int? = null,
+    val epub_sentence_index: Int? = null,
+    val epub_text_preview: String? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean? = null,
+    val hint: PositionHintDto? = null,
+    val append_to_log: Boolean = false,
+    val captured_at: String? = null,
+    val device_id: String? = null,
+    val device_name: String? = null,
+)
+
+@Serializable
+data class PositionResponse(
+    val scope: String,
+    val book_pair_id: Int? = null,
+    val ebook_id: Int? = null,
+    val audiobook_id: Int? = null,
+    val source: String,
+    val anchor_revision: Long,
+    val epub_chapter: Int? = null,
+    val epub_sentence_index: Int? = null,
+    val epub_text_preview: String? = null,
+    val epub_progress_percent: Float? = null,
+    val audio_position_ms: Int? = null,
+    val is_completed: Boolean = false,
+    val captured_at: String? = null,
+    val updated_at: String,
+    val device_id: String? = null,
+    val device_name: String? = null,
+    val hints: List<PositionHintResponse> = emptyList(),
+)

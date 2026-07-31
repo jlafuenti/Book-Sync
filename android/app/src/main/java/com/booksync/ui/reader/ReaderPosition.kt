@@ -25,29 +25,6 @@ internal fun spineIndexForHref(readingOrderHrefs: List<String>, locatorHref: Str
 }
 
 /**
- * Whether a stored Readium locator can still be trusted to describe the
- * bookmark's position.
- *
- * `epub_chapter` + `epub_sentence_index` is the portable cross-device anchor;
- * the locator is a device-local hint. If the anchor says chapter 7 but the
- * locator points at chapter 1, another client (the web reader, which has no
- * Readium locator to send) moved the position and the locator is stale — the
- * reader must resolve from the anchor instead of jumping to the wrong page.
- *
- * With no chapter anchor to check against there's nothing to contradict the
- * locator, so it's trusted.
- */
-internal fun isLocatorStaleForChapter(
-    readingOrderHrefs: List<String>,
-    locatorHref: String?,
-    bookmarkChapter: Int?,
-): Boolean {
-    if (bookmarkChapter == null) return false
-    if (locatorHref == null) return true
-    return spineIndexForHref(readingOrderHrefs, locatorHref) != bookmarkChapter
-}
-
-/**
  * Book-level reading progress as a percentage (0-100) for `UserProgress`.
  *
  * The web reader sends 0-100 (epub.js `percentage * 100`) while Readium's

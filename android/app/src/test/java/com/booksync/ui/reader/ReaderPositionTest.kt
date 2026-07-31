@@ -1,8 +1,6 @@
 package com.booksync.ui.reader
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -40,30 +38,6 @@ class ReaderPositionTest {
         assertEquals(-1, spineIndexForHref(spine, "EPUB/text/nope.xhtml"))
         assertEquals(-1, spineIndexForHref(spine, ""))
         assertEquals(-1, spineIndexForHref(emptyList(), "EPUB/text/ch01.xhtml"))
-    }
-
-    // ---------- isLocatorStaleForChapter ----------
-
-    @Test
-    fun `locator is fresh when its href resolves to the bookmark chapter`() {
-        assertFalse(isLocatorStaleForChapter(spine, "EPUB/text/ch02.xhtml", bookmarkChapter = 1))
-    }
-
-    @Test
-    fun `locator is stale when another device moved the anchor to a different chapter`() {
-        // The web reader writes chapter/sentence but no Readium locator, so a
-        // leftover locator can point at a chapter the user has long left.
-        assertTrue(isLocatorStaleForChapter(spine, "EPUB/text/ch01.xhtml", bookmarkChapter = 2))
-    }
-
-    @Test
-    fun `locator is stale when its href is not in the spine at all`() {
-        assertTrue(isLocatorStaleForChapter(spine, "EPUB/text/gone.xhtml", bookmarkChapter = 1))
-    }
-
-    @Test
-    fun `locator is trusted when there is no chapter anchor to check it against`() {
-        assertFalse(isLocatorStaleForChapter(spine, "EPUB/text/ch01.xhtml", bookmarkChapter = null))
     }
 
     // ---------- bookProgressPercent ----------

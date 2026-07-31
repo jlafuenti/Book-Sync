@@ -147,12 +147,13 @@ class SyncConflictHelpersTest {
     }
 
     @Test
-    fun `BookmarkResponse toEntity drops the local locator when an ebook write cleared it`() {
-        // Cross-device position contract (issue #40): the server clears
-        // epub_locator when an ebook-source write moves the anchor without
-        // supplying one — i.e. the user read on web. Falling back to the local
-        // value here would resurrect exactly the stale locator the server just
-        // invalidated, and the reader would reopen at the wrong page.
+    fun `BookmarkResponse toEntity keeps the local locator on an ebook write that carries none`() {
+        // A web-written bookmark carries a chapter anchor and no Readium
+        // locator. Dropping the local locator here (as an earlier revision did,
+        // mirroring a server rule that cleared it) leaves the reader with
+        // nothing precise to restore from; combined with a restore path that
+        // read "no locator" as "no position", that overwrote a real position
+        // with chapter 0. The anchor moving is not a reason to destroy a hint.
         val response = BookmarkResponse(
             id = 1,
             user_id = 2,
@@ -169,15 +170,15 @@ class SyncConflictHelpersTest {
             epubChapter = 1,
             epubSentenceIndex = 1,
             audioPositionMs = 0,
-            epubLocator = "{\"stale\":true}",
+            epubLocator = "{\"local\":true}",
             locatorAudioMs = 999,
             updatedAt = "0",
         )
 
         val entity = response.toEntity(previous)
 
-        assertNull(entity.epubLocator)
-        assertNull(entity.locatorAudioMs)
+        assertEquals("{\"local\":true}", entity.epubLocator)
+        assertEquals(999, entity.locatorAudioMs)
         assertEquals(7, entity.epubChapter)
     }
 

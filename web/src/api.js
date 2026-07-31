@@ -614,6 +614,42 @@ export async function resetPairProgress(pairId) {
     return resp.json();
 }
 
+// ============ Canonical position ============
+//
+// One record per book, written atomically. Replaces the pair of
+// updateProgress + updateBookmark calls, which were adjudicated separately —
+// either could be rejected while the other applied, leaving the two rows
+// describing different positions with nothing to reconcile them.
+
+/**
+ * The canonical position, or null when the user has none.
+ *
+ * A 204 means "never opened". It is deliberately distinct from a position at
+ * chapter 0: the reader must be able to tell "no position" from "at the start".
+ */
+export async function getPosition(scope, id) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`);
+    if (resp.status === 204) return null;
+    if (!resp.ok) throw new Error('Failed to fetch position');
+    return resp.json();
+}
+
+export async function updatePosition(scope, id, position) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(position),
+    });
+    // Same convention as updateProgress/updateBookmark: a 409 is an expected
+    // "rejected — server state is newer" result carrying the authoritative
+    // record, not an error. Nothing was written.
+    if (resp.status === 409) {
+        const body = await resp.json();
+        return Object.assign(body, { rejected: true });
+    }
+    if (!resp.ok) throw new Error('Failed to update position');
+    return resp.json();
+}
+
 // ============ Bookmarks ============
 
 export async function getBookmark(pairId) {
