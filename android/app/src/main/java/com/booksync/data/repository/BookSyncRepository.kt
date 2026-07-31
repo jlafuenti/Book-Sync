@@ -757,6 +757,63 @@ class BookSyncRepository @Inject constructor(
     }
 
     /**
+     * Save an audio playback position for a paired book — one server write.
+     *
+     * The player used to write the bookmark and the progress row separately,
+     * through the legacy endpoints. Two writes meant two staleness verdicts,
+     * and a stop-write from a backgrounded player could land after the
+     * reader's save and stamp `source = audiobook` over it, which is what sent
+     * the app to the player when the user had last been reading. The derived
+     * progress row is now written server-side from this same call.
+     */
+    suspend fun savePlaybackPosition(
+        pairId: Int,
+        audioPositionMs: Int,
+        appendToLog: Boolean = false,
+    ) {
+        val result = updatePosition(
+            "pair", pairId,
+            PositionUpdateRequest(
+                source = "audiobook",
+                audio_position_ms = audioPositionMs,
+                append_to_log = appendToLog,
+                captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
+                device_id = deviceId,
+                device_name = deviceName,
+            ),
+        )
+        // Room stays warm for offline opens; only fall back to the legacy push
+        // when the canonical write didn't get through.
+        updateBookmark(
+            pairId = pairId,
+            source = "audiobook",
+            audioPositionMs = audioPositionMs,
+            appendToLog = appendToLog,
+            pushToServer = result == null,
+        )
+    }
+
+    /** Same, for a standalone audiobook (no pair). */
+    suspend fun savePlaybackPositionStandalone(audiobookId: Int, audioPositionMs: Int) {
+        val result = updatePosition(
+            "audiobook", audiobookId,
+            PositionUpdateRequest(
+                source = "audiobook",
+                audio_position_ms = audioPositionMs,
+                captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
+                device_id = deviceId,
+                device_name = deviceName,
+            ),
+        )
+        updateProgress(
+            mediaType = "audiobook",
+            mediaId = audiobookId,
+            audioPositionMs = audioPositionMs,
+            pushToServer = result == null,
+        )
+    }
+
+    /**
      * Update bookmark position.
      * Saves locally immediately and queues sync to server.
      */
@@ -1024,7 +1081,10 @@ class BookSyncRepository @Inject constructor(
         epubProgressPercent: Float? = null,
         audioPositionMs: Int? = null,
         isCompleted: Boolean? = null,
-        deviceId: String? = deviceIdManager.deviceId
+        deviceId: String? = deviceIdManager.deviceId,
+        // See updateBookmark: false writes the Room row only, for callers that
+        // have already sent this position through the canonical endpoint.
+        pushToServer: Boolean = true,
     ) {
         val existing = userProgressDao.getProgress(mediaType, mediaId)
         val nowMillis = System.currentTimeMillis()
@@ -1048,7 +1108,10 @@ class BookSyncRepository @Inject constructor(
             syncedToServer = false
         )
 
-        userProgressDao.upsertProgress(merged)
+        userProgressDao.upsertProgress(
+            if (pushToServer) merged else merged.copy(syncedToServer = true))
+
+        if (!pushToServer) return
 
         try {
             pushProgress(mediaType, mediaId, merged)

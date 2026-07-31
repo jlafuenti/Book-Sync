@@ -716,10 +716,8 @@ class PlayerViewModel @Inject constructor(
             val audio = _standaloneAudio.value ?: return
             viewModelScope.launch {
                 try {
-                    repository.updateProgress(
-                        mediaType = "audiobook",
-                        mediaId = audio.id,
-                        bookPairId = null,
+                    repository.savePlaybackPositionStandalone(
+                        audiobookId = audio.id,
                         audioPositionMs = _positionMs.value.toInt(),
                     )
                 } catch (_: Exception) {}
@@ -728,23 +726,14 @@ class PlayerViewModel @Inject constructor(
         }
         viewModelScope.launch {
             try {
-                val posMs = _positionMs.value.toInt()
-                // Server handles epub<->audio position conversion via SyncMap
-                repository.updateBookmark(
+                // One write. The server converts audio <-> epub position via the
+                // SyncMap and projects the progress row the Continue list reads,
+                // so there is no second call to keep in step.
+                repository.savePlaybackPosition(
                     pairId = pairId,
-                    source = "audiobook",
-                    audioPositionMs = posMs,
+                    audioPositionMs = _positionMs.value.toInt(),
                     appendToLog = appendToLog,
                 )
-                // Also write to UserProgress so the Continue section can track this
-                _pair.value?.audiobookId?.let { audiobookId ->
-                    repository.updateProgress(
-                        mediaType = "audiobook",
-                        mediaId = audiobookId,
-                        bookPairId = pairId,
-                        audioPositionMs = posMs,
-                    )
-                }
             } catch (_: Exception) {}
         }
     }
