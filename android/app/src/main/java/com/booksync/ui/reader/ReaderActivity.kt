@@ -738,7 +738,7 @@ class ReaderActivity : AppCompatActivity() {
      * scale the web reader writes. Uses Readium's totalProgression when the
      * publication provides one, else the cached chapter lengths.
      */
-    private suspend fun bookPercentFor(locator: Locator, chapterIndex: Int): Float =
+    private suspend fun bookPercentFor(locator: Locator, chapterIndex: Int): Float? =
         bookProgressPercent(
             totalProgression = locator.locations.totalProgression,
             chapterLengths = chapterLengthsDeferred?.await() ?: LongArray(0),
@@ -782,6 +782,8 @@ class ReaderActivity : AppCompatActivity() {
                     epub_chapter = syncPoint?.epubChapter ?: chapterIndex,
                     epub_sentence_index = syncPoint?.epubSentenceIndex,
                     epub_text_preview = textPreview.takeIf { it.isNotEmpty() },
+                    // Null when it can't be computed; omitted rather than
+                    // sent as 0, which would overwrite a real percent.
                     epub_progress_percent = bookPercentFor(locator, chapterIndex),
                     audio_position_ms = syncPoint?.audioStartMs,
                     hint = PositionHintDto(
@@ -798,10 +800,14 @@ class ReaderActivity : AppCompatActivity() {
                     canonicalPosition = result.toStoredPosition()
                 }
 
-                // Keep the local cache warm for offline opens. The server write
-                // above is the source of truth; this is the fallback the reader
-                // uses when it can't reach it.
+                // Keep the local cache warm for offline opens. When the
+                // canonical write succeeded this is Room-only — issuing a
+                // second server write per save is exactly what the position
+                // endpoint exists to remove. When it failed (offline), fall
+                // through to the legacy path so the write still gets queued
+                // and retried.
                 repository.updateBookmark(
+                    pushToServer = result == null,
                     pairId = pairId,
                     source = "ebook",
                     epubChapter = syncPoint?.epubChapter ?: chapterIndex,

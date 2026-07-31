@@ -34,18 +34,26 @@ internal fun spineIndexForHref(readingOrderHrefs: List<String>, locatorHref: Str
  * [totalProgression] is absent for some publications; the fallback weights the
  * spine by chapter length, the inverse of what `goToProgress` does to turn a
  * percentage back into a locator.
+ *
+ * Returns null when neither source is usable, so the caller omits the field
+ * rather than reporting 0%.
  */
 internal fun bookProgressPercent(
     totalProgression: Double?,
     chapterLengths: LongArray,
     spineIndex: Int,
     chapterProgression: Double,
-): Float {
+): Float? {
     if (totalProgression != null) {
         return (totalProgression * 100).coerceIn(0.0, 100.0).toFloat()
     }
     val total = chapterLengths.sum()
-    if (total <= 0L) return 0f
+    // Nothing to compute from. Returning 0 here would write "start of book"
+    // over a real percent — a locator restored from the text anchor carries no
+    // totalProgression, and the chapter lengths aren't always ready on the
+    // first save after opening. Null means "omit"; the server leaves the
+    // stored value alone.
+    if (total <= 0L) return null
     if (spineIndex < 0) return 0f
     if (spineIndex >= chapterLengths.size) return 100f
     val before = chapterLengths.take(spineIndex).sum()
