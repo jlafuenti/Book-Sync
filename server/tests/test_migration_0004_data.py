@@ -20,6 +20,7 @@ Two things have to hold:
 import importlib.util
 import os
 import zipfile
+from datetime import datetime
 
 import pytest
 from sqlalchemy import text
@@ -248,3 +249,60 @@ async def test_a_missing_ebook_file_leaves_chapters_untouched(db, make_user):
 
     chapter = (await db.execute(text("SELECT epub_chapter FROM sync_points"))).scalar_one()
     assert chapter == 5
+
+
+async def test_duplicate_progress_rows_yield_one_canonical_row(db, make_user):
+    """Production had two `user_progress` rows for the same standalone ebook,
+    3ms apart, left by the old GET-creates-a-row race.
+
+    Inserting both violates the new partial unique index and aborts the entire
+    migration — which is exactly what happened on the first deploy attempt.
+    Exactly one row must be produced, the newest.
+    """
+    migration = _load_migration()
+    user = await make_user(username="reader")
+    pair = await make_book_pair(db)
+
+    db.add_all([
+        UserProgress(
+            user_id=user.id, media_type=ProgressType.EBOOK, ebook_id=pair.ebook_id,
+            book_pair_id=None, epub_chapter=3, epub_progress_percent=10.0,
+            is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 38),
+        ),
+        UserProgress(
+            user_id=user.id, media_type=ProgressType.EBOOK, ebook_id=pair.ebook_id,
+            book_pair_id=None, epub_chapter=9, epub_progress_percent=40.0,
+            is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 39),
+        ),
+    ])
+    await db.commit()
+
+    def _insert_standalone(sync_conn):
+        sync_conn.execute(text(
+            "INSERT INTO bookmarks "
+            "(user_id, book_pair_id, ebook_id, source, epub_chapter, "
+            " epub_progress_percent, audio_position_ms, is_completed, anchor_revision, "
+            " updated_at, captured_at, device_id, device_name) "
+            "SELECT up.user_id, NULL, up.ebook_id, "
+            "       'EBOOK', up.epub_chapter, up.epub_progress_percent, "
+            "       up.audio_position_ms, up.is_completed, 1, "
+            "       up.updated_at, up.captured_at, up.device_id, up.device_name "
+            "FROM user_progress up "
+            "WHERE up.book_pair_id IS NULL AND up.ebook_id IS NOT NULL "
+            "  AND up.media_type = 'EBOOK' "
+            "  AND NOT EXISTS ("
+            "    SELECT 1 FROM user_progress dup "
+            "    WHERE dup.user_id = up.user_id AND dup.ebook_id = up.ebook_id "
+            "      AND dup.media_type = 'EBOOK' AND dup.book_pair_id IS NULL "
+            "      AND (dup.updated_at > up.updated_at "
+            "           OR (dup.updated_at = up.updated_at AND dup.id > up.id)))"
+        ))
+
+    await db.run_sync(_insert_standalone)
+    await db.commit()
+
+    rows = (await db.execute(text(
+        "SELECT epub_chapter, epub_progress_percent FROM bookmarks WHERE ebook_id IS NOT NULL"
+    ))).all()
+    assert len(rows) == 1, "duplicates must collapse to one canonical row"
+    assert rows[0][0] == 9, "the newest position wins"

@@ -236,6 +236,13 @@ def upgrade() -> None:
     # ---- 5. canonical rows for standalone media ---------------------------
     # user_progress.epub_chapter is already a spine index on both clients, so
     # it carries over unchanged.
+    #
+    # Exactly one row per (user, media). `user_progress` has no unique
+    # constraint and the old `GET /progress` created rows with
+    # flush-but-no-commit, so two concurrent reads could leave duplicates —
+    # production had one such pair. Inserting both violates the new partial
+    # unique index and aborts the whole migration, so the newest wins
+    # (updated_at, id as tiebreak) and the rest are left inert.
     for media, id_col in (("EBOOK", "ebook_id"), ("AUDIOBOOK", "audiobook_id")):
         conn.execute(sa.text(
             f"INSERT INTO bookmarks "
@@ -248,7 +255,13 @@ def upgrade() -> None:
             f"       up.updated_at, up.captured_at, up.device_id, up.device_name "
             f"FROM user_progress up "
             f"WHERE up.book_pair_id IS NULL AND up.{id_col} IS NOT NULL "
-            f"  AND up.media_type = '{media}'"
+            f"  AND up.media_type = '{media}' "
+            f"  AND NOT EXISTS ("
+            f"    SELECT 1 FROM user_progress dup "
+            f"    WHERE dup.user_id = up.user_id AND dup.{id_col} = up.{id_col} "
+            f"      AND dup.media_type = '{media}' AND dup.book_pair_id IS NULL "
+            f"      AND (dup.updated_at > up.updated_at "
+            f"           OR (dup.updated_at = up.updated_at AND dup.id > up.id)))"
         ))
 
 
