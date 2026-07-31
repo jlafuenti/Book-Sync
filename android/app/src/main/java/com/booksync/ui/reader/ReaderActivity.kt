@@ -147,14 +147,24 @@ class ReaderActivity : AppCompatActivity() {
     private val savePolicy = PositionSavePolicy()
 
     /**
-     * The navigator's very first locator emission after (re)creation reflects
-     * the restore (the initial locator passed to the fragment factory), not a
-     * user page-turn — it must not be read as navigation. Cleared after that
-     * first emission; every locator change after it is the user turning a
-     * page (or dragging the progress slider), so it's reported to
-     * [savePolicy] — see `startPositionTracking`.
+     * The href + progression of the last locator the code displayed
+     * programmatically — the initial restored locator, or a `navigator.go(...)`
+     * call such as [goToProgress]. Used by `startPositionTracking`'s collector
+     * to recognize Readium's "settle" emission (issue #61/#40 fix 1): the
+     * `currentLocator` StateFlow emits again right after ANY programmatic
+     * display settles in the WebView, with a computed progression but no user
+     * input at all. The old code only skipped the very FIRST emission
+     * (`awaitingRestoreLocator`, a single-shot flag that was also never reset
+     * on tracker re-entry) — the settle emission slipped through as the
+     * "first real" one and got misread as [savePolicy]'s
+     * `onUserNavigation()`, which could upgrade an unresolved restore to a
+     * full save and write spine 0 over a real server position. Comparing
+     * against this target on every emission (see [isProgrammaticEcho]) fixes
+     * both: it isn't consumed after one use, and re-entering
+     * `startPositionTracking` doesn't reset anything back to "everything is
+     * an echo".
      */
-    private var awaitingRestoreLocator = true
+    private var programmaticTarget: Locator? = null
 
     // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
     private var lastSelectedText: String = ""
@@ -330,6 +340,16 @@ class ReaderActivity : AppCompatActivity() {
 
                 val initialLocator = getInitialLocator(pub)
                 Log.d(TAG, "Initial locator: $initialLocator")
+                // The navigator displays SOMETHING even when the restore
+                // ladder produced no locator at all — Readium falls back to
+                // the start of the publication (the same "failed guess" the
+                // policy's LocalMetadataOnly verdict is guarding). Track that
+                // fallback target too, so the settle emission for a
+                // genuinely-unresolved restore is still recognized as an
+                // echo instead of a user page-turn — see [programmaticTarget]
+                // and [isProgrammaticEcho].
+                programmaticTarget = initialLocator
+                    ?: pub.readingOrder.firstOrNull()?.let { pub.locatorFromLink(it) }
 
                 val navigatorFactory = EpubNavigatorFactory(pub)
                 supportFragmentManager.fragmentFactory =
@@ -507,13 +527,24 @@ class ReaderActivity : AppCompatActivity() {
                 // Update progress UI
                 updateProgressUI(locator)
 
-                // The first emission is the restore settling in, not a user
-                // action — everything after it is the user turning a page or
-                // dragging the slider, and unblocks a full save even when the
-                // restore itself never resolved (see PositionSavePolicy).
-                if (awaitingRestoreLocator) {
-                    awaitingRestoreLocator = false
-                } else {
+                // Readium's currentLocator emits again right after ANY
+                // programmatic display settles (initial restore, or a
+                // navigator.go(...) call) — same href, a recomputed
+                // progression, but no user input. Only an emission that does
+                // NOT match the last programmatic target is a real page-turn
+                // or slider drag; see [isProgrammaticEcho] and
+                // [programmaticTarget]. Explicit navigator.go(...) call sites
+                // (goToProgress) call onUserNavigation() themselves so a
+                // user-initiated jump isn't swallowed just because its own
+                // echo matches.
+                val target = programmaticTarget
+                val isEcho = isProgrammaticEcho(
+                    targetHref = target?.href?.toString(),
+                    targetProgression = target?.locations?.progression,
+                    emittedHref = locator.href.toString(),
+                    emittedProgression = locator.locations.progression,
+                )
+                if (!isEcho) {
                     savePolicy.onUserNavigation()
                 }
 
@@ -582,12 +613,17 @@ class ReaderActivity : AppCompatActivity() {
             Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
             val link = readingOrder[targetSpineIndex]
             val locator = pub.locatorFromLink(link) ?: return@launch
-            nav.go(
-                locator.copy(locations = locator.locations.copy(
-                    progression = targetProgression.coerceIn(0.0, 1.0)
-                )),
-                animated = false
-            )
+            val target = locator.copy(locations = locator.locations.copy(
+                progression = targetProgression.coerceIn(0.0, 1.0)
+            ))
+            // The user dragging the slider IS navigation — call this
+            // explicitly rather than relying on the collector's echo
+            // detection, since the emission this produces WILL match
+            // [programmaticTarget] (that's the point of setting it below) and
+            // would otherwise be silently swallowed as an echo.
+            savePolicy.onUserNavigation()
+            programmaticTarget = target
+            nav.go(target, animated = false)
         }
     }
 
@@ -735,28 +771,34 @@ class ReaderActivity : AppCompatActivity() {
         return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
     }
 
-    /** Extract a text preview from a chapter at a given progression, stripping headings and book title. */
+    /** Extract a text preview from a chapter at a given progression, stripping headings and book title.
+     *  Suspend, parse-on-miss version used by callers that are already inside a
+     *  coroutine and can afford to touch the publication (e.g. [syncAudioToPage]);
+     *  [savePosition]'s synchronous capture uses [extractTextPreviewFromCache] instead. */
     private suspend fun extractTextPreview(chapterIndex: Int, progression: Double): String {
         val plainText = getChapterPlainText(chapterIndex) ?: return ""
-        val charIndex = (plainText.length * progression).toInt()
-        val startIndex = maxOf(0, charIndex - 20)
-        val endIndex = minOf(charIndex + 200, plainText.length)
-        // Extract a focused window, strip chapter headings
-        // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines)
-        var text = plainText.substring(startIndex, endIndex)
-            .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
-            .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
-            .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
-            .trim()
-        // Strip book title from start (Jsoup includes <title> text at top of chapter)
-        val bookTitle = pair?.ebookTitle
-        if (!bookTitle.isNullOrEmpty()) {
-            val titlePattern = Regex("^${Regex.escape(bookTitle)}\\s*", RegexOption.IGNORE_CASE)
-            text = titlePattern.replace(text, "") // Remove first occurrence
-            text = titlePattern.replace(text, "") // Remove possible second occurrence
-            text = text.trim()
+        return buildTextPreview(plainText, progression, pair?.ebookTitle)
+    }
+
+    /**
+     * Cache-only, synchronous counterpart to [extractTextPreview].
+     *
+     * [savePosition]'s FullSave capture (issue #61/#40 fix 2) must run
+     * synchronously on the calling thread — no `lifecycleScope.launch`, so a
+     * fast close can't cancel it before `saveReaderPosition` is even called —
+     * which means it cannot parse a chapter that isn't already sitting in
+     * [chapterTextCache] (parsing needs Jsoup + resource IO on a background
+     * dispatcher). On a cache miss this logs and returns an empty preview
+     * rather than blocking the main thread to parse; the chapter index and
+     * locator still describe where the reader is.
+     */
+    private fun extractTextPreviewFromCache(chapterIndex: Int, progression: Double): String {
+        val plainText = chapterTextCache[chapterIndex]
+        if (plainText == null) {
+            Log.w(TAG, "extractTextPreviewFromCache: chapter $chapterIndex not cached, using empty preview")
+            return ""
         }
-        return text
+        return buildTextPreview(plainText, progression, pair?.ebookTitle)
     }
 
     /** Spine index [locator] points at, or -1 if it matches no reading-order item. */
@@ -766,20 +808,37 @@ class ReaderActivity : AppCompatActivity() {
     /**
      * Book-level progress (0-100) for the UserProgress record, matching the
      * scale the web reader writes. Uses Readium's totalProgression when the
-     * publication provides one, else the cached chapter lengths.
+     * publication provides one; otherwise falls back to the precomputed
+     * chapter lengths ONLY if that background computation has already
+     * finished (`isCompleted`) — [savePosition]'s capture must not suspend to
+     * await it (issue #61/#40 fix 2), so an in-flight computation is treated
+     * the same as no chapter-length data at all: the percent is omitted
+     * (null) rather than blocking, and the server keeps whatever it has.
      */
-    private suspend fun bookPercentFor(locator: Locator, chapterIndex: Int): Float? =
-        bookProgressPercent(
+    private fun bookPercentFor(locator: Locator, chapterIndex: Int): Float? {
+        val deferred = chapterLengthsDeferred
+        val lengths = if (deferred != null && deferred.isCompleted) deferred.getCompleted() else LongArray(0)
+        return bookProgressPercent(
             totalProgression = locator.locations.totalProgression,
-            chapterLengths = chapterLengthsDeferred?.await() ?: LongArray(0),
+            chapterLengths = lengths,
             spineIndex = chapterIndex,
             chapterProgression = locator.locations.progression ?: 0.0,
         )
+    }
 
     private fun savePosition(locator: Locator) {
         pair ?: return
-        val verdict = savePolicy.verdictForSave()
-        Log.d(TAG, "savePosition: verdict=$verdict")
+        val pub = publication ?: return
+        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
+        val progression = locator.locations.progression ?: 0.0
+        // The hard safety net (issue #61/#40 fix 1b): an Unresolved restore
+        // sitting at spine 0 must not FullSave even if userNavigated was
+        // (mis)set, since there's no per-emission signal that reliably tells
+        // a settle emission apart from a real page-turn. See
+        // PositionSavePolicy.verdictForSave.
+        val atStartOfBook = isAtStartOfBook(chapterIndex, progression)
+        val verdict = savePolicy.verdictForSave(atStartOfBook)
+        Log.d(TAG, "savePosition: verdict=$verdict atStartOfBook=$atStartOfBook")
 
         if (verdict == PositionSavePolicy.SaveVerdict.LocalMetadataOnly) {
             // The restore hasn't resolved yet, so this locator is the ladder's
@@ -803,46 +862,35 @@ class ReaderActivity : AppCompatActivity() {
         // Inject selection tracker on every page turn (content may have changed).
         // Called on the main thread before the coroutine, so WebView access is safe.
         injectSelectionTracker()
-        lifecycleScope.launch {
-            try {
-                val pub = publication ?: return@launch
-                val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
-                val progression = locator.locations.progression ?: 0.0
-                val textPreview = extractTextPreview(chapterIndex, progression)
-                val locatorJson = locator.toJSON().toString()
 
-                // A sync-map match upgrades the anchor to a sentence and its
-                // audio position. A miss is not a failure: the chapter and the
-                // preview still describe where the reader is, and the other
-                // clients can resolve from them. Resolving this needs only a
-                // DB read (no publication/navigator access), so — like
-                // everything else here — it happens before handoff.
-                val syncPoint = if (sentenceSyncPending) null
-                    else repository.getSyncPointForEpubText(pairId, chapterIndex, textPreview)
-
-                // Snapshot everything the save needs, then hand off. The save
-                // itself runs on the repository's app-scoped coroutine (see
-                // saveReaderPosition) so activity teardown — this call is
-                // itself running inside lifecycleScope — can't cancel it
-                // mid-write; the snapshot exists so that detached coroutine
-                // never has to touch the publication, navigator, or WebView.
-                val snapshot = ReaderPositionSnapshot(
-                    pairId = pairId,
-                    chapterIndex = syncPoint?.epubChapter ?: chapterIndex,
-                    epubSentenceIndex = syncPoint?.epubSentenceIndex,
-                    locatorJson = locatorJson,
-                    textPreview = textPreview,
-                    progressPercent = bookPercentFor(locator, chapterIndex),
-                    audioPositionMs = syncPoint?.audioStartMs,
-                    capturedAtMillis = System.currentTimeMillis(),
-                )
-                repository.saveReaderPosition(snapshot)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Error saving position", e)
-            }
-        }
+        // Everything from here down is synchronous, main-thread-cheap, and
+        // runs BEFORE any coroutine boundary (issue #61/#40 fix 2). The old
+        // code ran this whole capture inside lifecycleScope.launch with the
+        // Room write at the very end, so a fast close cancelled it at the
+        // first suspension point — repository.saveReaderPosition was never
+        // even called, and nothing was written; onDestroy's
+        // publication?.close() could also degrade an in-flight capture's
+        // preview to "". Capturing synchronously means the snapshot is
+        // complete before savePosition returns, so activity teardown
+        // afterward can't lose it — the handoff to saveReaderPosition (which
+        // itself now resolves the sync-point match on the repository's own
+        // appScope) is the only thing that crosses a coroutine boundary.
+        val textPreview = extractTextPreviewFromCache(chapterIndex, progression)
+        val locatorJson = locator.toJSON().toString()
+        val snapshot = ReaderPositionSnapshot(
+            pairId = pairId,
+            chapterIndex = chapterIndex,
+            locatorJson = locatorJson,
+            textPreview = textPreview,
+            progressPercent = bookPercentFor(locator, chapterIndex),
+            capturedAtMillis = System.currentTimeMillis(),
+            // A manual audio-sync write is already in flight for this page
+            // (see syncSelectedTextToAudio) — resolving a sync-point match
+            // here too could overwrite that fresher, deliberately-chosen
+            // audio position with a stale automatic guess.
+            skipSyncPointLookup = sentenceSyncPending,
+        )
+        repository.saveReaderPosition(snapshot)
     }
 
     // ============ Manual Sync ============
