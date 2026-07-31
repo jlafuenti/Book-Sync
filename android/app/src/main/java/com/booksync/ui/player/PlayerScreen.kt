@@ -67,9 +67,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
+
+/**
+ * How long the player waits for the server's position before falling back to
+ * the local cache. Long enough for a normal request, short enough that an
+ * unreachable server doesn't visibly delay playback.
+ */
+private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Represents a chapter marker in an M4B audiobook.
@@ -264,8 +273,16 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
-        // Load local bookmark immediately — don't wait for server
+        // Pull the server's position first, then let the local flow below apply
+        // it. The refresh used to run *after* the seek, so a position set on
+        // another device consistently arrived too late to be used — the same
+        // bug the reader had. Bounded so an unreachable server delays the seek
+        // by at most a moment before falling back to the local cache.
         viewModelScope.launch {
+            withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                repository.refreshBookmark(pairId)
+            } ?: Log.w("PlayerViewModel", "server position not available in time — using local cache")
+
             repository.getBookmarkFlow(pairId).collect { bm ->
                 bm?.audioPositionMs?.let { pos ->
                     Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")
@@ -289,11 +306,6 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         }
-        // Refresh from server in background — won't block local bookmark loading
-        viewModelScope.launch {
-            repository.refreshBookmark(pairId)
-        }
-
         } // end else (non-standalone)
 
         connectToService()

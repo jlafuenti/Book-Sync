@@ -2,14 +2,18 @@
 Cross-device position contract (issues #40, #61).
 
 `epub_chapter` + `epub_sentence_index` is the portable anchor. `epub_locator`
-(Readium, Android) and `epub_cfi` (epub.js, web) are *device-local hints*: a
-client may only trust one if it arrived with the same write that set the
-current anchor. The server enforces that by clearing a stored hint whenever an
-ebook-source write moves the position without supplying a replacement.
+(Readium, Android) and `epub_cfi` (epub.js, web) are *device-local hints*.
 
-Without this, reading on web (which never sends a locator) leaves the phone's
-stale locator in place and Android reopens at the wrong page — and vice versa
-for `epub_cfi` once Android starts writing progress.
+A hint is only meaningful while it still matches the anchor — but the server
+must never enforce that by **deleting** it. An earlier revision did, clearing
+the locator whenever an ebook-source write moved the anchor without supplying
+one. The Android reader treated the resulting "no locator" as "no position",
+opened at the title page, and its autosave wrote chapter 0 over a real
+position. Freshness is tracked by tagging a hint with the anchor it was
+captured at; a stale hint is ignored, never destroyed.
+
+These tests pin the preservation rules. The tagging itself lives in
+`position_hints` (see test_position_sync.py).
 """
 
 from tests.factories import make_book_pair
@@ -24,11 +28,16 @@ async def _put_bookmark(client, user, auth_header, pair_id, **body):
     )
 
 
-async def test_ebook_write_without_locator_clears_stale_locator(
+async def test_ebook_write_without_locator_preserves_the_stored_locator(
     client, make_user, auth_header, db
 ):
-    """The web reader sends chapter/sentence but no locator. The phone's old
-    locator must not survive that write."""
+    """The web reader sends chapter/sentence but no locator. That must leave
+    the phone's locator alone.
+
+    This is the regression that lost a real position: clearing it here left the
+    Android reader with no position to restore, so it opened at page one and
+    then persisted chapter 0.
+    """
     pair = await make_book_pair(db)
     user = await make_user(username="reader")
 
@@ -45,11 +54,11 @@ async def test_ebook_write_without_locator_clears_stale_locator(
         source="ebook", epub_chapter=5, epub_sentence_index=1,
     )
     assert moved.status_code == 200, moved.text
-    assert moved.json()["epub_locator"] is None
-    assert moved.json()["locator_audio_ms"] is None
+    assert moved.json()["epub_locator"] == LOCATOR
+    assert moved.json()["locator_audio_ms"] == 12000
 
     got = await client.get(f"/api/sync/bookmark/{pair.id}", headers=auth_header(user))
-    assert got.json()["epub_locator"] is None
+    assert got.json()["epub_locator"] == LOCATOR
 
 
 async def test_audiobook_write_without_locator_preserves_locator(
@@ -131,27 +140,29 @@ async def test_locator_audio_ms_round_trips(client, make_user, auth_header, db):
     assert got.json()["locator_audio_ms"] == 42000
 
 
-async def test_ebook_progress_write_without_cfi_clears_stale_cfi(
+async def test_ebook_progress_write_without_cfi_preserves_the_stored_cfi(
     client, make_user, auth_header, db
 ):
     """Android writes ebook progress with chapter/percent and no CFI (#61).
-    The web reader must not then restore the stale CFI."""
+    Android cannot produce a CFI, so clearing the web reader's would leave web
+    with nothing precise to restore from — the same failure as the locator."""
     pair = await make_book_pair(db)
     user = await make_user(username="reader")
     url = f"/api/sync/progress/ebook/{pair.ebook_id}"
+    cfi = "epubcfi(/6/4!/4/2/2/1:12)"
 
     seeded = await client.put(url, headers=auth_header(user), json={
-        "book_pair_id": pair.id, "epub_cfi": "epubcfi(/6/4!/4/2/2/1:12)",
+        "book_pair_id": pair.id, "epub_cfi": cfi,
         "epub_chapter": 1, "epub_progress_percent": 10.0,
     })
     assert seeded.status_code == 200, seeded.text
-    assert seeded.json()["epub_cfi"] is not None
+    assert seeded.json()["epub_cfi"] == cfi
 
     moved = await client.put(url, headers=auth_header(user), json={
         "book_pair_id": pair.id, "epub_chapter": 6, "epub_progress_percent": 55.0,
     })
     assert moved.status_code == 200, moved.text
-    assert moved.json()["epub_cfi"] is None
+    assert moved.json()["epub_cfi"] == cfi
 
 
 async def test_progress_write_at_same_position_preserves_cfi(

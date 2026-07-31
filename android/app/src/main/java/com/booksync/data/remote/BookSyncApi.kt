@@ -106,6 +106,26 @@ interface BookSyncApi {
         @Query("limit") limit: Int = 50
     ): List<BookmarkLogResponse>
 
+    // ============ Canonical position ============
+
+    // Response<T> so callers can tell 204 ("never opened") from 200. That
+    // distinction matters: a position at chapter 0 and no position at all are
+    // different things, and conflating them is how a failed restore came to
+    // overwrite a real position.
+    @GET("api/sync/position/{scope}/{id}")
+    suspend fun getPosition(
+        @Path("scope") scope: String,
+        @Path("id") id: Int,
+    ): Response<PositionResponse>
+
+    // See updateBookmark above — same Response<T> rationale for 409 detection.
+    @PUT("api/sync/position/{scope}/{id}")
+    suspend fun updatePosition(
+        @Path("scope") scope: String,
+        @Path("id") id: Int,
+        @Body update: PositionUpdateRequest,
+    ): Response<PositionResponse>
+
     // ============ User Progress ============
 
     @GET("api/sync/progress/{mediaType}/{mediaId}")

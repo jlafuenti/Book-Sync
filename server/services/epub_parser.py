@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import nltk
@@ -76,14 +75,21 @@ def _split_into_sentences(text: str) -> List[str]:
 
 def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
     """
-    Build the ordered EpubSentence list from a list of HTML/XHTML document
-    strings already in reading order. Shared by the ebooklib path and the
-    zip+OPF fallback path so both produce identical output.
+    Build the ordered EpubSentence list from the spine's document strings.
+
+    [documents] must be aligned 1:1 with the EPUB spine — one entry per
+    itemref, in spine order, with "" for anything unreadable. The list index
+    IS the chapter number.
+
+    That alignment is the whole point: both readers position themselves by
+    spine index (epub.js `book.spine.items`, Readium `publication.readingOrder`),
+    so a chapter number only means something to them if it is one. An earlier
+    version incremented its own counter and skipped documents that produced no
+    sentences, which silently shifted every chapter after the first blank page.
     """
     sentences: List[EpubSentence] = []
-    chapter_index = 0
 
-    for content in documents:
+    for spine_index, content in enumerate(documents):
         text = _extract_text_from_html(content)
 
         if not text.strip():
@@ -104,26 +110,47 @@ def _build_sentences_from_documents(documents: List[str]) -> List[EpubSentence]:
 
         for sent_index, sent_text in enumerate(chapter_sentences):
             sentences.append(EpubSentence(
-                chapter=chapter_index,
+                chapter=spine_index,
                 sentence_index=sent_index,
                 text=sent_text,
                 chapter_title=chapter_title,
             ))
 
-        chapter_index += 1
-
     return sentences
+
+
+def old_chapter_to_spine_index(documents: List[str]) -> List[int]:
+    """
+    Remap table from the pre-spine-index chapter numbering to spine indices.
+
+    Old chapter N was "the Nth document that produced sentences", so entry N of
+    the returned list is that document's true spine index. Used by the
+    migration to re-base stored sync points without re-running alignment.
+    """
+    mapping: List[int] = []
+    for spine_index, content in enumerate(documents):
+        text = _extract_text_from_html(content)
+        if not text.strip():
+            continue
+        if not _split_into_sentences(text):
+            continue
+        mapping.append(spine_index)
+    return mapping
 
 
 def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
     """
     Read an EPUB's content documents in spine order WITHOUT ebooklib.
 
-    ebooklib (0.18.x) crashes on some otherwise-valid EPUBs — notably Google
-    Books EPUB2 files whose `toc.ncx` won't parse (`_parse_ncx` raises
-    'NoneType has no attribute find', and `ignore_ncx` is forced off when there
-    is no EPUB3 nav document). This walks container.xml -> OPF -> manifest/spine
-    directly, which is immune to the NCX bug. Namespace-agnostic via local-name().
+    Returns one entry per spine itemref, in spine order, with "" for any item
+    that can't be read or isn't a content document. **The list index is the
+    spine index** — entries are never dropped, because dropping one would shift
+    every chapter after it away from what the readers use.
+
+    This is the primary path: it walks container.xml -> OPF -> manifest/spine
+    directly, which is both spine-accurate and immune to the ebooklib NCX bug
+    (0.18.x crashes on some valid EPUB2 files whose `toc.ncx` won't parse).
+    Namespace-agnostic via local-name().
     """
     import zipfile
     from lxml import etree
@@ -152,6 +179,8 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
         for sid in spine_ids:
             href = manifest.get(sid)
             if not href or not href.lower().split("#")[0].endswith((".xhtml", ".html", ".htm")):
+                # Still a spine slot as far as the readers are concerned.
+                documents.append("")
                 continue
             # Resolve href relative to the OPF directory (zip uses forward slashes).
             full = href if not opf_dir else f"{opf_dir}/{href}"
@@ -159,9 +188,32 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
             try:
                 raw = z.read(full)
             except KeyError:
+                documents.append("")
                 continue
             documents.append(raw.decode("utf-8", errors="ignore"))
 
+    return documents
+
+
+def _extract_epub_documents_via_ebooklib(epub_path: str) -> List[str]:
+    """
+    Fallback extractor, also spine-aligned.
+
+    Walks `book.spine` (itemref order) rather than
+    `get_items_of_type(ITEM_DOCUMENT)`, which yields *manifest* order and so
+    can't produce spine indices at all.
+    """
+    book = epub.read_epub(epub_path)
+    documents: List[str] = []
+    for idref, *_ in book.spine:
+        item = book.get_item_with_id(idref)
+        if item is None:
+            documents.append("")
+            continue
+        try:
+            documents.append(item.get_content().decode("utf-8", errors="ignore"))
+        except Exception:
+            documents.append("")
     return documents
 
 
@@ -177,22 +229,19 @@ def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
     """
     logger.info(f"Parsing EPUB: {epub_path}")
 
+    # The zip+OPF spine walk is primary: it is spine-accurate by construction
+    # and immune to ebooklib's NCX crash. ebooklib is the fallback for archives
+    # the direct walk can't make sense of.
     try:
-        book = epub.read_epub(epub_path)
-        documents = [
-            item.get_content().decode("utf-8", errors="ignore")
-            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
-        ]
+        documents = _extract_epub_documents_via_zip(epub_path)
     except Exception as e:
-        # ebooklib is brittle (e.g. crashes on Google Books EPUB2 NCX). Fall back
-        # to a direct zip+OPF spine walk before giving up.
-        logger.warning(f"ebooklib failed on '{epub_path}' ({e}); trying zip+OPF fallback")
+        logger.warning(f"zip+OPF walk failed on '{epub_path}' ({e}); trying ebooklib")
         try:
-            documents = _extract_epub_documents_via_zip(epub_path)
+            documents = _extract_epub_documents_via_ebooklib(epub_path)
         except Exception as fallback_err:
             raise RuntimeError(
                 f"Failed to open EPUB '{epub_path}': {e} "
-                f"(zip fallback also failed: {fallback_err})"
+                f"(ebooklib fallback also failed: {fallback_err})"
             ) from e
 
     sentences = _build_sentences_from_documents(documents)
