@@ -12,7 +12,7 @@ next write re-seeded `user_progress` from the still-present bookmark and
 
 from sqlalchemy import select
 
-from models.bookmark import Bookmark, PositionHint
+from models.bookmark import Bookmark, BookmarkLog, PositionHint
 from models.progress import UserProgress
 from tests.factories import make_book_pair
 
@@ -58,6 +58,10 @@ async def _all_progress(db, user_id):
     return (await db.execute(
         select(UserProgress).where(UserProgress.user_id == user_id)
     )).scalars().all()
+
+
+async def _all_bookmark_logs(db):
+    return (await db.execute(select(BookmarkLog))).scalars().all()
 
 
 async def test_reset_deletes_the_canonical_bookmark_its_hints_and_progress(
@@ -204,3 +208,47 @@ async def test_a_fresh_write_after_reset_starts_a_brand_new_record(
     ebook_rows = [r for r in progress.json() if r["media_type"] == "ebook"]
     assert len(ebook_rows) == 1
     assert ebook_rows[0]["epub_progress_percent"] == 0.5
+
+
+async def test_reset_succeeds_when_the_bookmark_has_log_entries(
+    client, make_user, auth_header, db
+):
+    """Pins the ORM-delete cascade against `Bookmark.logs`.
+
+    The reset endpoint loads each `Bookmark` as an ORM instance and calls
+    `db.delete(bookmark)` specifically so `cascade="all, delete-orphan"` fires
+    for its `hints` relationship (a bulk `DELETE` statement would bypass ORM
+    cascades and orphan child rows). `logs` is declared with the same
+    cascade — this test writes a position with `append_to_log=True` so a
+    `BookmarkLog` row actually exists, then resets, to confirm that cascade
+    fires cleanly for `logs` too rather than tripping a lazy-load error under
+    the async ORM or leaving orphaned log rows behind.
+    """
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, epub_progress_percent=30.0,
+        hint={"kind": "readium_locator", "value": LOCATOR},
+        captured_at="2026-07-30T10:00:00Z",
+        append_to_log=True,
+    )
+    assert put.status_code == 200, put.text
+
+    # A second write (also logged) so there's more than one log entry.
+    put2 = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=13, epub_progress_percent=32.0,
+        captured_at="2026-07-30T11:00:00Z",
+        append_to_log=True,
+    )
+    assert put2.status_code == 200, put2.text
+
+    assert len(await _all_bookmark_logs(db)) >= 1
+
+    resp = await _reset(client, user, auth_header, pair.id)
+    assert resp.status_code == 200, resp.text
+
+    assert await _all_bookmarks(db, user.id) == []
+    assert await _all_bookmark_logs(db) == []

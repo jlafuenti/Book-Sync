@@ -47,7 +47,7 @@ class UpdateBookmarkMetadataTest {
     )
 
     @Test
-    fun `stamps source and updatedAt but leaves anchors untouched`() = runTest {
+    fun `stamps source but leaves anchors untouched`() = runTest {
         val existing = BookmarkEntity(
             bookPairId = 42,
             source = "audiobook",
@@ -71,6 +71,32 @@ class UpdateBookmarkMetadataTest {
         assertEquals(54_000, saved.captured.audioPositionMs)
         assertEquals("{\"href\":\"ch39.xhtml\"}", saved.captured.epubLocator)
         assertEquals(54_000, saved.captured.locatorAudioMs)
+    }
+
+    @Test
+    fun `does not bump updatedAt or capturedAt on an existing row`() = runTest {
+        // Issue #61/#40 fix 5: bumping updatedAt here used to make
+        // refreshBookmark think this local row was newer than it really is,
+        // which blocks pulling a genuinely newer position from another
+        // device on the next open. Only `source` should change.
+        val existing = BookmarkEntity(
+            bookPairId = 42,
+            source = "audiobook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            audioPositionMs = 54_000,
+            updatedAt = "1000",
+            capturedAt = "2026-01-01T00:00:00",
+        )
+        coEvery { bookmarkDao.getBookmark(42) } returns existing
+
+        val saved = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
+
+        repository().updateBookmarkMetadata(42, source = "ebook")
+
+        assertEquals("1000", saved.captured.updatedAt)
+        assertEquals("2026-01-01T00:00:00", saved.captured.capturedAt)
     }
 
     @Test

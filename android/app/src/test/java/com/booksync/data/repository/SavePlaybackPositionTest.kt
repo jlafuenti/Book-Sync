@@ -115,6 +115,26 @@ class SavePlaybackPositionTest {
     }
 
     @Test
+    fun `claimFormat=false with NO existing local row escalates to a claim (issue 61-40 fix 4)`() = runTest {
+        // A first-ever write has no stored `source` to preserve. Omitting it
+        // here would leave the server's new-row default ("ebook") standing
+        // while this device's local fallback below stamps "audiobook" —
+        // permanent routing disagreement from write #1. The user did just
+        // play this book, so this one write escalates to a claim.
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
+            Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = false)
+
+        assertEquals("audiobook", sentRequest.captured.source)
+        assertEquals("audiobook", savedBookmark.captured.source)
+    }
+
+    @Test
     fun `claimFormat=false falls back to the legacy endpoint without stamping source there either`() = runTest {
         val existing = BookmarkEntity(
             bookPairId = 42, source = "ebook", epubChapter = 5, epubSentenceIndex = 1,

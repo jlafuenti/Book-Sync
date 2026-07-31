@@ -190,6 +190,13 @@ interface BookmarkDao {
     @Query("UPDATE bookmarks SET syncedToServer = 0 WHERE bookPairId = :pairId")
     suspend fun markUnsynced(pairId: Int)
 
+    // Companion to markUnsynced: saveReaderPosition writes the initial row
+    // unsynced (so a crash between the Room write and the PUT doesn't leave a
+    // row falsely claiming to be synced), then calls this once the canonical
+    // PUT actually succeeds (issue #61/#40 fix 5).
+    @Query("UPDATE bookmarks SET syncedToServer = 1 WHERE bookPairId = :pairId")
+    suspend fun markSynced(pairId: Int)
+
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
     suspend fun updateLocator(pairId: Int, locatorJson: String)
 
@@ -240,6 +247,14 @@ interface UserProgressDao {
 
     @Query("UPDATE user_progress SET syncedToServer = 0 WHERE mediaType = :mediaType AND mediaId = :mediaId")
     suspend fun markUnsynced(mediaType: String, mediaId: Int)
+
+    // A pair-level progress reset (issue #61/#40 fix 3) must remove these rows
+    // too — otherwise a stale, unsynced local row can be picked up by
+    // syncAllBookmarksAndProgress/processPendingSync and pushed back to the
+    // server, resurrecting the position the reset was supposed to have
+    // cleared.
+    @Query("DELETE FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun deleteProgress(mediaType: String, mediaId: Int)
 
     @Query("SELECT * FROM user_progress WHERE syncedToServer = 0")
     suspend fun getUnsyncedProgress(): List<UserProgressEntity>

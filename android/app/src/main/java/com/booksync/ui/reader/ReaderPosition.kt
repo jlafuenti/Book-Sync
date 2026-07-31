@@ -60,3 +60,83 @@ internal fun bookProgressPercent(
     val within = chapterLengths[spineIndex] * chapterProgression.coerceIn(0.0, 1.0)
     return ((before + within) / total * 100).coerceIn(0.0, 100.0).toFloat()
 }
+
+/** Epsilon used by [isProgrammaticEcho] to compare progression values. */
+internal const val PROGRAMMATIC_ECHO_EPSILON = 0.001
+
+/**
+ * Whether a navigator locator emission is Readium's programmatic echo of the
+ * last position the code displayed on purpose (the initial restored locator,
+ * or a `navigator.go(...)` call such as `goToProgress`) rather than a real
+ * user page-turn (issue #61/#40 fix 1).
+ *
+ * Readium's `currentLocator` StateFlow emits a SECOND time right after any
+ * programmatic display settles in the WebView — same href, a computed
+ * `progression` that may differ trivially from what was requested (or be
+ * entirely absent on either side) — with no user input involved at all. The
+ * old code counted only the very first emission as "not navigation"
+ * (`awaitingRestoreLocator`, a single-shot flag never reset on tracker
+ * re-entry); that settle emission slipped through as the "first real"
+ * emission and got misread as [PositionSavePolicy.onUserNavigation], which
+ * could upgrade an [PositionSavePolicy.RestoreOutcome.Unresolved] restore to
+ * [PositionSavePolicy.SaveVerdict.FullSave] and write spine 0 over a real
+ * server position on the next save.
+ *
+ * [targetHref] is the href of the last programmatic target; null means
+ * nothing has been displayed programmatically yet (that case is NOT an
+ * echo — there is nothing to compare against). Progression is treated as
+ * matching whenever either side is null: a locator carrying no progression
+ * information has nothing to disagree with the target on.
+ */
+internal fun isProgrammaticEcho(
+    targetHref: String?,
+    targetProgression: Double?,
+    emittedHref: String,
+    emittedProgression: Double?,
+    epsilon: Double = PROGRAMMATIC_ECHO_EPSILON,
+): Boolean {
+    if (targetHref == null || targetHref != emittedHref) return false
+    if (targetProgression == null || emittedProgression == null) return true
+    return kotlin.math.abs(emittedProgression - targetProgression) < epsilon
+}
+
+/**
+ * Whether a position is still "start of book" — spine 0 and effectively no
+ * progression into it. Backs [PositionSavePolicy.verdictForSave]'s
+ * `atStartOfBook` safety net (issue #61/#40 fix 1b): an unresolved restore
+ * displays the start, and no per-emission signal reliably tells a real
+ * page-turn apart from Readium's settle emission — but whether the reader
+ * has actually moved off the start is trustworthy either way.
+ */
+internal fun isAtStartOfBook(spineIndex: Int, progression: Double?): Boolean =
+    spineIndex == 0 && (progression ?: 0.0) < 0.01
+
+/**
+ * Extract a display-ready text preview window from a chapter's plain text
+ * around [progression], stripping chapter headings and a leading book title.
+ *
+ * Pulled out as a pure function so `ReaderActivity`'s cache-only,
+ * synchronous preview lookup (issue #61/#40 fix 2 — the reader-position
+ * capture must not touch Jsoup/IO on the save path) is unit-testable without
+ * an Android runtime or a Readium Publication, same as everything else here.
+ */
+internal fun buildTextPreview(plainText: String, progression: Double, bookTitle: String?): String {
+    val charIndex = (plainText.length * progression).toInt()
+    val startIndex = maxOf(0, charIndex - 20)
+    val endIndex = minOf(charIndex + 200, plainText.length)
+    // Extract a focused window, strip chapter headings.
+    // Handle "CHAPTER N, Title CHAPTER N" pattern (Jsoup has no newlines).
+    var text = plainText.substring(startIndex, endIndex)
+        .replace(Regex("(?i)^chapter\\s+\\d+.{0,120}?chapter\\s+\\d+\\s*"), "")
+        .replace(Regex("(?i)^chapter\\s+\\d+[,.]?\\s*"), "")
+        .replace(Regex("(?i)^prologue[,.]?\\s*"), "")
+        .trim()
+    // Strip book title from start (Jsoup includes <title> text at top of chapter).
+    if (!bookTitle.isNullOrEmpty()) {
+        val titlePattern = Regex("^${Regex.escape(bookTitle)}\\s*", RegexOption.IGNORE_CASE)
+        text = titlePattern.replace(text, "") // Remove first occurrence
+        text = titlePattern.replace(text, "") // Remove possible second occurrence
+        text = text.trim()
+    }
+    return text
+}

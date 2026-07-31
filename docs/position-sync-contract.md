@@ -100,9 +100,13 @@ Every save produces one of two verdicts — there is no "suppress everything":
   current position the truth). Writes the whole position: local row first,
   then the server.
 - **`LocalMetadataOnly`** — the restore is *unresolved* (a non-empty ladder
-  where no rung landed). Only the local row's `source`/`updatedAt` are
-  stamped, so open-target routing still follows the session; anchor fields
-  are left untouched locally and nothing goes to the server. Without this
+  where no rung landed). Only the local row's `source` is stamped, so
+  open-target routing still follows the session; anchor fields are left
+  untouched locally and nothing goes to the server. As a hard backstop, an
+  unresolved session still sitting at the start of the book stays
+  `LocalMetadataOnly` even if navigation was detected — no navigation signal
+  is trustworthy enough to let a start-of-book write replace a real anchor,
+  and a genuine forward page-turn moves off the start anyway. Without this
   split, a failed restore sitting on page one either got persisted over a
   real position (no gate) or suppressed even the local write, so the app
   kept reopening the other format (gate too wide — the original §4 bug).

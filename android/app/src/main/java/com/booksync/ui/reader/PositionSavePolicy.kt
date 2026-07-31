@@ -66,11 +66,37 @@ class PositionSavePolicy {
         userNavigated = true
     }
 
-    /** What the next save call should do. */
-    fun verdictForSave(): SaveVerdict =
-        if (outcome != RestoreOutcome.Unresolved || userNavigated) {
+    /**
+     * What the next save call should do.
+     *
+     * [atStartOfBook] is the hard safety net (issue #61/#40 fix 1b): Readium's
+     * `currentLocator` StateFlow emits a second time right after the initial
+     * (restored) locator is displayed — a "settle" emission carrying a
+     * computed `totalProgression`/position but reflecting no user input at
+     * all. If that emission is ever misread as [onUserNavigation] (echo
+     * detection in `ReaderActivity` is the primary defense, but is not
+     * airtight against every way Readium might emit), an [RestoreOutcome.Unresolved]
+     * session must still refuse [SaveVerdict.FullSave] as long as the
+     * displayed position is still start-of-book — writing spine 0 over a real
+     * server position is exactly the chapter-0 data-loss bug this whole
+     * redesign exists to fix. There is no per-emission signal that reliably
+     * tells "the user turned a page" apart from "the navigator settled after
+     * being told where to sit"; the one thing that IS trustworthy is whether
+     * the displayed position actually moved off the start. A genuine forward
+     * page-turn moves [atStartOfBook] to false on its own, which re-enables
+     * FullSave — so this only ever suppresses the false positive, never a
+     * real page-turn. [RestoreOutcome.Landed] and [RestoreOutcome.Unread] are
+     * unaffected: this only ever downgrades an [RestoreOutcome.Unresolved]
+     * verdict that [userNavigated] would otherwise have upgraded.
+     */
+    fun verdictForSave(atStartOfBook: Boolean): SaveVerdict {
+        if (outcome == RestoreOutcome.Unresolved && atStartOfBook) {
+            return SaveVerdict.LocalMetadataOnly
+        }
+        return if (outcome != RestoreOutcome.Unresolved || userNavigated) {
             SaveVerdict.FullSave
         } else {
             SaveVerdict.LocalMetadataOnly
         }
+    }
 }
