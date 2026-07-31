@@ -303,6 +303,133 @@ async def test_legacy_bookmark_get_still_returns_the_mirror_columns(
     assert legacy.json()["epub_locator"] == LOCATOR
 
 
+# ---------- source claiming (issue: background writes re-stamping source) ----------
+
+async def test_a_background_write_without_source_keeps_the_stored_source(
+    client, make_user, auth_header, db
+):
+    """Only a foreground, user-initiated write claims the format. A background
+    player save (service teardown, Android Auto heartbeat) must be able to
+    move the position without re-stamping `source` — that re-stamp is the
+    production bug this test pins."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="ebook", epub_chapter=12, epub_progress_percent=30.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+
+    background = await _put(
+        client, user, auth_header, "pair", pair.id,
+        source=None, audio_position_ms=900000,
+        captured_at="2026-07-30T11:00:00Z",
+    )
+    assert background.status_code == 200, background.text
+    assert background.json()["source"] == "ebook"
+    assert background.json()["audio_position_ms"] == 900000
+
+
+async def test_first_ever_write_with_no_source_serializes_cleanly(
+    client, make_user, auth_header, db
+):
+    """A brand-new row created by a source-less write must not break the
+    response serializer — whatever the model default ends up being."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id,
+        source=None, audio_position_ms=5000,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.status_code == 200, put.text
+
+    got = await _get(client, user, auth_header, "pair", pair.id)
+    assert got.status_code == 200
+    assert got.json()["audio_position_ms"] == 5000
+
+
+async def test_an_explicit_later_claim_still_updates_source(
+    client, make_user, auth_header, db
+):
+    """Omission means "leave alone" — it must not mean "can never be
+    claimed". A write that does carry a source still updates it."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="ebook", epub_chapter=12, captured_at="2026-07-30T10:00:00Z",
+    )
+    claimed = await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="audiobook", audio_position_ms=42000,
+        captured_at="2026-07-30T11:00:00Z",
+    )
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["source"] == "audiobook"
+
+
+async def test_a_background_write_with_no_source_can_still_append_to_the_log(
+    client, make_user, auth_header, db
+):
+    """A background save at a session boundary (pause/stop) sets
+    `append_to_log=True` but may carry no `source` — the log row's `source`
+    column is NOT NULL with no default, so this must fall back to the
+    bookmark's resolved (kept) source rather than trying to insert None."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="audiobook", audio_position_ms=1000,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+
+    boundary = await _put(
+        client, user, auth_header, "pair", pair.id,
+        source=None, audio_position_ms=900000, append_to_log=True,
+        captured_at="2026-07-30T11:00:00Z",
+    )
+    assert boundary.status_code == 200, boundary.text
+    assert boundary.json()["source"] == "audiobook"
+
+    log = await client.get(
+        f"/api/sync/bookmark/{pair.id}/log", headers=auth_header(user))
+    assert log.status_code == 200
+    assert len(log.json()) == 1
+    assert log.json()[0]["source"] == "audiobook"
+
+
+async def test_legacy_progress_put_without_source_does_not_clobber_the_stored_source(
+    client, make_user, auth_header, db
+):
+    """The legacy `/progress/{media_type}/{media_id}` adapter has no `source`
+    field on its request body at all — every write through it used to
+    synthesize one from the URL's media_type, so a background audiobook
+    player save silently re-stamped `source=audiobook` even mid-read."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="ebook", epub_chapter=12, captured_at="2026-07-30T10:00:00Z",
+    )
+
+    legacy = await client.put(
+        f"/api/sync/progress/audiobook/{pair.audiobook_id}",
+        headers=auth_header(user),
+        json={"audio_position_ms": 900000, "captured_at": "2026-07-30T11:00:00Z"},
+    )
+    assert legacy.status_code == 200, legacy.text
+
+    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert after["source"] == "ebook"
+    assert after["audio_position_ms"] == 900000
+
+
 async def test_the_write_response_includes_the_hint_it_just_stored(
     client, make_user, auth_header, db
 ):
