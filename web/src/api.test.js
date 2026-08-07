@@ -722,3 +722,67 @@ describe('testAbsConnection()', () => {
         )
     })
 })
+
+describe('off-hours transcription window (issue #106)', () => {
+    it('runQueueItemNow POSTs to the item run-now endpoint', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: 7, force_run: true }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { runQueueItemNow } = await import('./api')
+        const result = await runQueueItemNow(7)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/transcription/queue/7/run-now',
+            expect.objectContaining({ method: 'POST' }),
+        )
+        expect(result).toEqual({ id: 7, force_run: true })
+    })
+
+    it('runQueueItemNow surfaces the server-provided reason on failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400, json: async () => ({ detail: 'Cannot run a cancelled item' }),
+        }))
+
+        const { runQueueItemNow } = await import('./api')
+        await expect(runQueueItemNow(7)).rejects.toThrow('Cannot run a cancelled item')
+    })
+
+    it('getOffHoursStatus fetches the window state', async () => {
+        const payload = { enabled: true, open: false, start: '01:00', end: '07:00', timezone: 'UTC' }
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => payload })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getOffHoursStatus } = await import('./api')
+
+        expect(await getOffHoursStatus()).toEqual(payload)
+        expect(fetchMock).toHaveBeenCalledWith('/api/transcription/offhours', expect.anything())
+    })
+
+    it('getOffHoursStatus throws when the endpoint is unavailable', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { getOffHoursStatus } = await import('./api')
+        await expect(getOffHoursStatus()).rejects.toThrow('Failed to fetch off-hours status')
+    })
+
+    it('updateSettings surfaces a validation detail instead of a generic message', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 400,
+            json: async () => ({ detail: 'Off-hours window start and end must differ' }),
+        }))
+
+        const { updateSettings } = await import('./api')
+        await expect(updateSettings({ transcription_offhours_start: '07:00' }))
+            .rejects.toThrow('Off-hours window start and end must differ')
+    })
+
+    it('updateSettings returns the saved settings on success', async () => {
+        const saved = { transcription_offhours_enabled: true }
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => saved }))
+
+        const { updateSettings } = await import('./api')
+        expect(await updateSettings(saved)).toEqual(saved)
+    })
+})

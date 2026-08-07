@@ -5,6 +5,20 @@ A singleton background service that processes transcription queue items
 one at a time, using the configured transcription provider.
 
 Started at application lifespan and runs as an asyncio background task.
+
+Off-hours window (issue #106)
+-----------------------------
+Work is accepted around the clock but only *dispatched* while the configured
+window is open — the transcription worker's GPU is shared with a
+latency-sensitive voice pipeline the rest of the day. Two tasks cooperate:
+
+* ``_queue_loop`` claims work, and refuses to claim anything outside the window
+  unless the item carries a "Run now" override (``force_run``).
+* ``_offhours_watcher`` ticks independently, because ``_queue_loop`` spends
+  hours inside a single ``await`` and cannot notice the window closing under a
+  running job. When it does, it asks the provider to pause at its next
+  checkpoint; the item goes back to ``pending`` with its progress intact and
+  resumes from that checkpoint when the window reopens.
 """
 
 import asyncio
@@ -19,14 +33,40 @@ from sqlalchemy.orm import selectinload
 from database import async_session
 from models.transcription_queue import TranscriptionQueueItem
 from models.book import BookPair, PairStatus
+from services import offhours
 
 logger = logging.getLogger("queue-manager")
 
 # Cancellation flag — set of queue item IDs that should be cancelled
 _cancel_requested: set = set()
 
-# Reference to the running background task
+# Pause flag — queue item IDs the off-hours watcher has asked to stop. Only
+# used to keep the watcher from re-asking every tick; the pause itself is
+# enacted by the provider returning early.
+_pause_requested: set = set()
+
+# Item IDs claimed with a checkpoint already waiting on the worker. Lets the
+# pipeline skip work that was already done on the first pass.
+_resuming_items: set = set()
+
+# The provider running the current job, and that job's item id. Pause and
+# unload requests have to reach the provider actually in use.
+_active_provider = None
+_active_item_id: Optional[int] = None
+
+# Reference to the running background tasks
 _queue_task: Optional[asyncio.Task] = None
+_offhours_task: Optional[asyncio.Task] = None
+
+# Poll cadence when there's nothing to do and the window is open.
+IDLE_POLL_SECONDS = 5
+# Cadence of the off-hours watchdog, and the cap on the idle sleep so a window
+# opening is noticed within a minute.
+OFFHOURS_TICK_SECONDS = 60
+
+# Set once per closed window after the worker has been told to drop its model,
+# so we ask once rather than every tick. Cleared when the window reopens.
+_resources_released = False
 
 
 async def add_to_queue(pair_ids: list[int]) -> list[TranscriptionQueueItem]:
@@ -78,7 +118,15 @@ async def add_to_queue(pair_ids: list[int]) -> list[TranscriptionQueueItem]:
 
 
 async def cancel_item(item_id: int) -> bool:
-    """Request cancellation of a queue item."""
+    """
+    Request cancellation of a queue item.
+
+    Works regardless of the off-hours window: a job waiting for the window to
+    open, or paused mid-transcription, can always be cancelled.
+    """
+    was_paused = False
+    pair_id = None
+
     async with async_session() as db:
         result = await db.execute(
             select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
@@ -87,20 +135,52 @@ async def cancel_item(item_id: int) -> bool:
         if not item:
             return False
 
+        pair_id = item.book_pair_id
+
         if item.status == "in_progress":
             _cancel_requested.add(item_id)
             item.status = "cancelled"
             item.message = "Cancellation requested"
             await db.commit()
-            return True
         elif item.status == "pending":
+            was_paused = item.paused_at is not None
             item.status = "cancelled"
             item.message = "Cancelled by user"
             item.completed_at = datetime.datetime.utcnow()
+            item.paused_at = None
             await db.commit()
-            return True
+        else:
+            return False
 
-    return False
+    # A paused item left a checkpoint — and the retained audio for it — on the
+    # transcription worker. Nothing will ever resume it now, so reclaim that
+    # disk rather than waiting out the worker's 48h sweep.
+    if was_paused:
+        await _discard_remote_checkpoint(pair_id)
+
+    return True
+
+
+async def _discard_remote_checkpoint(pair_id: int) -> None:
+    """Best-effort cleanup of a cancelled job's partial progress on the worker."""
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(BookPair)
+                .options(selectinload(BookPair.audiobook))
+                .where(BookPair.id == pair_id)
+            )
+            pair = result.scalar_one_or_none()
+            if not pair or not pair.audiobook:
+                return
+            audio_path = pair.audiobook.file_path
+
+        from services.transcription_providers import get_transcription_provider
+
+        provider = await get_transcription_provider()
+        await provider.discard_checkpoint(audio_path)
+    except Exception as e:
+        logger.debug(f"Could not discard remote checkpoint for pair {pair_id}: {e}")
 
 
 async def remove_item(item_id: int) -> bool:
@@ -176,46 +256,97 @@ async def get_queue_item_for_pair(pair_id: int) -> Optional[TranscriptionQueueIt
 # Background processing loop
 # ---------------------------------------------------------------------------
 
+async def _mark_pending_items_waiting(db, reason: str) -> None:
+    """
+    Explain the wait on every queue item the closed window is holding back.
+
+    Only writes rows whose message actually changes — this runs on every idle
+    tick, and a no-op UPDATE per item per minute is pure noise.
+    """
+    result = await db.execute(
+        select(TranscriptionQueueItem).where(
+            TranscriptionQueueItem.status == "pending",
+            TranscriptionQueueItem.force_run.is_(False),
+        )
+    )
+    changed = False
+    for item in result.scalars().all():
+        if item.message != reason:
+            item.message = reason
+            changed = True
+    if changed:
+        await db.commit()
+
+
 async def _process_next_item():
     """
     Pull the next pending item and process it through the transcription pipeline.
     """
+    global _active_item_id, _active_provider
+
+    config = await offhours.load_config()
+    window_open, wait_reason = offhours.dispatch_allowed(config)
+
     async with async_session() as db:
-        # Get the highest-priority pending item
+        # Get the highest-priority pending item. Items holding a checkpoint
+        # (paused_at set) sort first so a half-transcribed book finishes before
+        # a fresh one starts — its partial work is sitting on the worker and is
+        # what the next window should be spent on.
+        stmt = select(TranscriptionQueueItem).where(
+            TranscriptionQueueItem.status == "pending"
+        )
+        if not window_open:
+            # Outside the window only "Run now" items are eligible.
+            stmt = stmt.where(TranscriptionQueueItem.force_run.is_(True))
+
         result = await db.execute(
-            select(TranscriptionQueueItem)
-            .where(TranscriptionQueueItem.status == "pending")
-            .order_by(
+            stmt.order_by(
+                TranscriptionQueueItem.paused_at.is_(None).asc(),
                 TranscriptionQueueItem.priority.asc(),
                 TranscriptionQueueItem.created_at.asc(),
-            )
-            .limit(1)
+            ).limit(1)
         )
         item = result.scalar_one_or_none()
         if not item:
+            if not window_open:
+                await _mark_pending_items_waiting(db, wait_reason)
             return False  # Nothing to process
 
         item_id = item.id
         pair_id = item.book_pair_id
+        resuming = item.paused_at is not None
 
         # Mark as in_progress
         item.status = "in_progress"
+        item.paused_at = None
         if item.started_at is None:
             item.started_at = datetime.datetime.utcnow()
-        item.message = "Starting transcription..."
+        item.message = "Resuming transcription..." if resuming else "Starting transcription..."
         # We don't overwrite progress to 0.0 either, to preserve it on restart
         if item.progress is None:
             item.progress = 0.0
         await db.commit()
 
-    logger.info(f"Processing queue item {item_id} (pair {pair_id})")
+    logger.info(
+        f"{'Resuming' if resuming else 'Processing'} queue item {item_id} (pair {pair_id})"
+    )
+    _active_item_id = item_id
+    if resuming:
+        _resuming_items.add(item_id)
 
     try:
         await _run_transcription_pipeline(item_id, pair_id)
     except Exception as e:
         # Check if the error is exactly about provider availability.
-        from services.transcription_providers.base import ProviderUnavailableError
-        if isinstance(e, ProviderUnavailableError):
+        from services.transcription_providers.base import (
+            ProviderUnavailableError,
+            TranscriptionPaused,
+        )
+        if isinstance(e, TranscriptionPaused):
+            # Not a failure — the provider stopped at a checkpoint because the
+            # window closed. Re-pend with progress intact and no retry burned.
+            await _mark_item_paused(item_id, e, config)
+        elif isinstance(e, ProviderUnavailableError):
             async with async_session() as db:
                 result = await db.execute(
                     select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
@@ -279,8 +410,78 @@ async def _process_next_item():
 
     finally:
         _cancel_requested.discard(item_id)
+        _pause_requested.discard(item_id)
+        _resuming_items.discard(item_id)
+        _active_item_id = None
+        _active_provider = None
 
     return True  # We processed something
+
+
+async def _mark_item_paused(item_id: int, exc, config) -> None:
+    """
+    Re-pend a job the provider stopped at a checkpoint.
+
+    Deliberately leaves ``progress``, ``started_at`` and ``retry_count`` alone:
+    the work is banked on the worker, this isn't a restart, and a pause must
+    never eat into the provider-unavailable retry budget.
+    """
+    opens = offhours.format_hhmm(config.start) if config.enabled else "the next window"
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
+        )
+        item = result.scalar_one_or_none()
+        if item:
+            item.status = "pending"
+            item.paused_at = datetime.datetime.utcnow()
+            item.message = f"Paused for off-hours — resumes at {opens}"
+            await db.commit()
+
+    logger.info(
+        f"Queue item {item_id} paused at {exc.completed_through_sec}s of audio; "
+        f"will resume from the worker's checkpoint at {opens}"
+    )
+
+    # The window is closed and nothing else will start, so let the worker drop
+    # its model weights now rather than waiting out its idle timer.
+    if _active_provider is not None:
+        try:
+            await _active_provider.release_resources()
+        except Exception as e:  # pragma: no cover — best-effort housekeeping
+            logger.debug(f"Could not release provider resources after pause: {e}")
+
+
+async def pause_active_job() -> bool:
+    """
+    Ask the running job's provider to stop at its next safe point.
+
+    Returns False when there's nothing running, when the provider has already
+    been asked, or when the backend can't pause at all (local Whisper) — in
+    that last case the job simply runs to completion, which is fine because it
+    isn't competing for the remote worker's GPU.
+    """
+    item_id = _active_item_id
+    provider = _active_provider
+    if item_id is None or provider is None:
+        return False
+    if item_id in _pause_requested:
+        return True  # already asked; don't nag the worker every tick
+
+    if not await provider.request_pause():
+        logger.info(
+            f"Provider {provider.name()} cannot pause — letting queue item "
+            f"{item_id} run to completion despite the closed window."
+        )
+        _pause_requested.add(item_id)  # don't retry every tick either
+        return False
+
+    _pause_requested.add(item_id)
+    logger.info(f"Requested pause of queue item {item_id} (off-hours window closed)")
+    await _update_queue_item(
+        item_id, message="Off-hours window closed — pausing at the next checkpoint..."
+    )
+    return True
 
 
 async def _update_queue_item(item_id: int, **kwargs):
@@ -294,6 +495,51 @@ async def _update_queue_item(item_id: int, **kwargs):
             for key, value in kwargs.items():
                 setattr(item, key, value)
             await db.commit()
+
+
+async def _run_integrity_gates(
+    item_id: int, audiobook_path: str, ebook_path: str, resuming: bool
+) -> None:
+    """
+    Validate the source audio and ebook are readable before doing any work.
+
+    A corrupt/incomplete import can never be transcribed, so fail fast with a
+    clear, non-retriable error rather than uploading ~GBs to the remote worker
+    and burning retries on it. The ebook is checked here too because extraction
+    otherwise happens only *after* transcription, so a DRM-encrypted ebook
+    would waste a multi-hour job before failing.
+
+    Skipped when resuming a paused job: the very same bytes passed these gates
+    when the job first started, and the audio check decodes the whole file —
+    minutes of CPU on a multi-GB audiobook, every time the window reopens.
+    """
+    import asyncio as _asyncio
+
+    from services.audio_integrity import check_audio_integrity
+    from services.ebook_integrity import check_ebook_integrity
+    from services.transcription_providers.base import TranscriptionError
+
+    if resuming:
+        logger.info(
+            f"Queue item {item_id}: resuming — skipping integrity gates "
+            f"(already passed before the pause)"
+        )
+        return
+
+    await _update_queue_item(item_id, progress=0.01, message="Checking audio integrity...")
+    ok, detail = await _asyncio.to_thread(check_audio_integrity, audiobook_path)
+    if not ok:
+        raise TranscriptionError(
+            f"Audio failed integrity check — corrupt or incomplete source file, "
+            f"re-import required. {audiobook_path}: {detail}"
+        )
+
+    await _update_queue_item(item_id, progress=0.015, message="Checking ebook integrity...")
+    ok_e, detail_e = await _asyncio.to_thread(check_ebook_integrity, ebook_path)
+    if not ok_e:
+        raise TranscriptionError(
+            f"Ebook failed integrity check — {detail_e}. {ebook_path}"
+        )
 
 
 async def _run_transcription_pipeline(item_id: int, pair_id: int):
@@ -321,31 +567,10 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         ebook_path = pair.ebook.file_path
         audiobook_path = pair.audiobook.file_path
 
-    # Step 0: Audio integrity gate. Validate the source audio is fully decodable
-    # BEFORE doing any work (including before reusing a cached transcript). A
-    # corrupt/incomplete import (truncated container, corrupt media stream) can
-    # never be transcribed, so fail fast with a clear, non-retriable error rather
-    # than uploading ~GBs to the remote server and burning retries on it.
-    from services.audio_integrity import check_audio_integrity
-    from services.ebook_integrity import check_ebook_integrity
-    from services.transcription_providers.base import TranscriptionError
-    await _update_queue_item(item_id, progress=0.01, message="Checking audio integrity...")
-    ok, detail = await _asyncio.to_thread(check_audio_integrity, audiobook_path)
-    if not ok:
-        raise TranscriptionError(
-            f"Audio failed integrity check — corrupt or incomplete source file, "
-            f"re-import required. {audiobook_path}: {detail}"
-        )
-
-    # Also validate the ebook up front. Extraction otherwise happens only AFTER
-    # transcription (Step 2), so a DRM-encrypted/unreadable ebook would waste a
-    # multi-hour transcription before failing. Fail fast here instead.
-    await _update_queue_item(item_id, progress=0.015, message="Checking ebook integrity...")
-    ok_e, detail_e = await _asyncio.to_thread(check_ebook_integrity, ebook_path)
-    if not ok_e:
-        raise TranscriptionError(
-            f"Ebook failed integrity check — {detail_e}. {ebook_path}"
-        )
+    # Step 0: integrity gates (skipped when resuming — see the helper).
+    await _run_integrity_gates(
+        item_id, audiobook_path, ebook_path, resuming=item_id in _resuming_items
+    )
 
     # Step 1: Transcription (or load from cache)
     # Transcript is persisted immediately after completion, linked to the audio file.
@@ -382,6 +607,10 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         from services.transcription_providers import get_transcription_provider
 
         provider = await get_transcription_provider()
+        # Publish the provider so the off-hours watcher can reach *this* one
+        # with a pause/unload request while the job is running.
+        global _active_provider
+        _active_provider = provider
         await _update_queue_item(item_id, message=f"Transcribing via {provider.name()}...")
 
         # Capture event loop reference for thread-safe progress updates
@@ -500,6 +729,21 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     logger.info(f"Queue item {item_id} (pair {pair_id}) completed successfully")
 
 
+async def _idle_sleep_seconds() -> float:
+    """
+    How long to wait before looking for work again.
+
+    Outside the off-hours window there is nothing to find, so back off to the
+    watchdog cadence instead of hammering the DB every 5s for hours — but never
+    sleep past the window opening.
+    """
+    config = await offhours.load_config()
+    wait = offhours.seconds_until_open(config)
+    if wait <= 0:
+        return IDLE_POLL_SECONDS
+    return min(OFFHOURS_TICK_SECONDS, wait)
+
+
 async def _queue_loop():
     """
     Main background loop: continuously checks for pending items and processes them.
@@ -512,7 +756,7 @@ async def _queue_loop():
             processed = await _process_next_item()
             if not processed:
                 # No items to process — sleep before checking again
-                await asyncio.sleep(5)
+                await asyncio.sleep(await _idle_sleep_seconds())
         except asyncio.CancelledError:
             logger.info("Queue manager shutting down")
             break
@@ -521,10 +765,79 @@ async def _queue_loop():
             await asyncio.sleep(10)  # Back off on errors
 
 
+async def _offhours_tick() -> None:
+    """
+    One pass of the off-hours watchdog.
+
+    ``_queue_loop`` can sit inside a single multi-hour ``await``, so it is
+    structurally unable to notice the window closing under a running job. This
+    runs on its own task to do exactly that.
+    """
+    global _resources_released
+
+    config = await offhours.load_config()
+    if not config.enabled or offhours.is_open(config):
+        _resources_released = False
+        return
+
+    if _active_item_id is not None:
+        # A "Run now" item is exempt: the user asked for it explicitly, so it
+        # keeps running until it finishes.
+        if await _item_is_forced(_active_item_id):
+            return
+        await pause_active_job()
+        return
+
+    # Nothing running and the window is shut — have the worker drop its model
+    # so it isn't holding GPU memory hostage all day. Once per closed window.
+    if not _resources_released:
+        _resources_released = True
+        await _release_worker_resources()
+
+
+async def _item_is_forced(item_id: int) -> bool:
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranscriptionQueueItem.force_run).where(
+                TranscriptionQueueItem.id == item_id
+            )
+        )
+        return bool(result.scalar_one_or_none())
+
+
+async def _release_worker_resources() -> None:
+    """Ask the configured provider to free its model weights. Best effort."""
+    try:
+        from services.transcription_providers import get_transcription_provider
+
+        provider = await get_transcription_provider()
+        await provider.release_resources()
+        logger.info("Off-hours window closed — asked the transcription worker to unload")
+    except Exception as e:
+        logger.debug(f"Could not release transcription worker resources: {e}")
+
+
+async def _offhours_watcher():  # pragma: no cover — asyncio task plumbing
+    """Background task wrapper around :func:`_offhours_tick`."""
+    while True:
+        try:
+            await asyncio.sleep(OFFHOURS_TICK_SECONDS)
+            await _offhours_tick()
+        except asyncio.CancelledError:
+            logger.info("Off-hours watcher shutting down")
+            break
+        except Exception as e:
+            logger.error(f"Off-hours watcher error: {e}", exc_info=True)
+
+
 async def reset_stale_items():
     """
     On startup, reset any in_progress items back to pending
     (they were interrupted by a server restart).
+
+    ``progress`` is deliberately preserved: the transcription worker keeps its
+    own on-disk checkpoint, so the next attempt resumes from where this one got
+    to. Zeroing the bar would report a restart that isn't going to happen.
     """
     async with async_session() as db:
         result = await db.execute(
@@ -537,7 +850,6 @@ async def reset_stale_items():
             logger.warning(f"Resetting {len(stale)} stale in_progress queue item(s) to pending")
             for item in stale:
                 item.status = "pending"
-                item.progress = 0.0
                 item.message = "Requeued after server restart"
                 item.started_at = None
             await db.commit()
@@ -545,22 +857,25 @@ async def reset_stale_items():
 
 async def start_queue_manager():
     """Start the background queue processing loop."""
-    global _queue_task
+    global _queue_task, _offhours_task
 
     await reset_stale_items()
 
     _queue_task = asyncio.create_task(_queue_loop())
+    _offhours_task = asyncio.create_task(_offhours_watcher())
     logger.info("Queue manager background task created")
 
 
 async def stop_queue_manager():
     """Stop the background queue processing loop."""
-    global _queue_task
-    if _queue_task:
-        _queue_task.cancel()
-        try:
-            await _queue_task
-        except asyncio.CancelledError:
-            pass
-        _queue_task = None
-        logger.info("Queue manager stopped")
+    global _queue_task, _offhours_task
+    for name, task in (("queue", _queue_task), ("off-hours watcher", _offhours_task)):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            logger.info(f"Queue manager {name} task stopped")
+    _queue_task = None
+    _offhours_task = None

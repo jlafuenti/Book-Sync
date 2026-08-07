@@ -32,3 +32,8 @@ slowapi==0.1.9
 audible==0.10.0
 audible-cli>=0.3.0,<1.0
 cryptography==43.0.1
+# zoneinfo needs an IANA database. Linux images usually ship one, Windows never
+# does, and python:*-slim can't be relied on — pin it so the off-hours
+# transcription window (services/offhours.py) resolves zones identically
+# everywhere.
+tzdata==2024.2

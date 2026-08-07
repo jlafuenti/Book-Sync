@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
     getDiskUsage, getSettings, updateSettings, testRemoteConnection,
@@ -246,6 +246,36 @@ function SettingsSection() {
 
 const SECRET_PLACEHOLDER = '********'
 
+// The browser knows the full IANA list; fall back to a short hand-picked set on
+// engines without Intl.supportedValuesOf. UTC is always offered because it's the
+// server-side default.
+function listTimezones() {
+    try {
+        const zones = Intl.supportedValuesOf('timeZone')
+        if (zones?.length) return ['UTC', ...zones.filter(z => z !== 'UTC')]
+    } catch { /* older engine — fall through */ }
+    return ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver',
+        'America/Los_Angeles', 'Europe/London', 'Europe/Berlin']
+}
+
+// Since #106 the Jetson loads its model on the first job and releases it when
+// idle, so "not loaded" means "resting", not "broken". Older workers don't send
+// model_state — fall back to the plain boolean for those.
+function describeModelState({ model_state, model_loaded }) {
+    if (model_state === 'unloaded') return 'released (loads on next job)'
+    if (model_state === 'loading') return 'loading…'
+    if (model_state === 'loaded') return 'loaded'
+    return model_loaded ? 'loaded' : 'not loaded'
+}
+
+function browserTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    } catch {
+        return 'UTC'
+    }
+}
+
 /* ── TranscriptionSettingsSection ─────────────────────────────────── */
 export function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
@@ -254,6 +284,11 @@ export function TranscriptionSettingsSection() {
     const [remoteTimeout, setRemoteTimeout] = useState(7200)
     const [autoTranscribe, setAutoTranscribe] = useState(false)
     const [whisperModel, setWhisperModel] = useState('medium')
+    const [offhoursEnabled, setOffhoursEnabled] = useState(false)
+    const [offhoursStart, setOffhoursStart] = useState('01:00')
+    const [offhoursEnd, setOffhoursEnd] = useState('07:00')
+    const [offhoursTz, setOffhoursTz] = useState('UTC')
+    const timezoneOptions = useMemo(listTimezones, [])
     const [loading, setLoading] = useState(false)
     const [msg, setMsg] = useState(null)
     const [testResult, setTestResult] = useState(null)
@@ -273,6 +308,15 @@ export function TranscriptionSettingsSection() {
             if (s.transcription_remote_timeout !== undefined) setRemoteTimeout(s.transcription_remote_timeout)
             if (s.auto_transcribe_enabled !== undefined) setAutoTranscribe(s.auto_transcribe_enabled)
             if (s.whisper_model) setWhisperModel(s.whisper_model)
+            if (s.transcription_offhours_enabled !== undefined) setOffhoursEnabled(s.transcription_offhours_enabled)
+            if (s.transcription_offhours_start) setOffhoursStart(s.transcription_offhours_start)
+            if (s.transcription_offhours_end) setOffhoursEnd(s.transcription_offhours_end)
+            // The server's default is UTC. If nobody has configured the window
+            // yet, pre-select the browser's zone instead — almost always what
+            // the admin means, and it makes the times on screen read correctly.
+            const storedTz = s.transcription_offhours_timezone
+            const neverConfigured = !s.transcription_offhours_enabled && (!storedTz || storedTz === 'UTC')
+            setOffhoursTz(neverConfigured ? browserTimezone() : storedTz)
         } catch (err) { console.error(err) }
     }
 
@@ -287,9 +331,17 @@ export function TranscriptionSettingsSection() {
                 transcription_remote_timeout: parseInt(remoteTimeout) || 7200,
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
+                transcription_offhours_enabled: offhoursEnabled,
+                transcription_offhours_start: offhoursStart,
+                transcription_offhours_end: offhoursEnd,
+                transcription_offhours_timezone: offhoursTz,
             })
             setMsg({ type: 'success', text: 'Saved' })
-        } catch (err) { setMsg({ type: 'error', text: 'Failed to save' }) }
+        } catch (err) {
+            // The server rejects an invalid window (bad time, equal bounds,
+            // unknown zone) with a 400 — surface that instead of a generic failure.
+            setMsg({ type: 'error', text: err?.message ? `Failed to save: ${err.message}` : 'Failed to save' })
+        }
         finally { setLoading(false) }
     }
 
@@ -319,7 +371,7 @@ export function TranscriptionSettingsSection() {
             const keyToSend = remoteKey === SECRET_PLACEHOLDER ? '' : remoteKey
             const r = await testRemoteConnection(remoteUrl, keyToSend)
             setTestResult(r.success === true
-                ? { success: true, text: `✅ Connected! GPU: ${r.gpu_name || 'None'}, Model: ${r.model_loaded ? 'Loaded' : 'Not Loaded'}` }
+                ? { success: true, text: `✅ Connected! GPU: ${r.gpu_name || 'None'}, Model: ${describeModelState(r)}` }
                 : { success: false, text: '❌ Server responded but not healthy' })
         } catch (err) { setTestResult({ success: false, text: `❌ ${err.message}` }) }
         finally { setIsTesting(false) }
@@ -404,6 +456,52 @@ export function TranscriptionSettingsSection() {
                     <p className="system-form-toggle-hint">Auto-queue newly matched pairs during library scans.</p>
                 </div>
             </div>
+
+            {/* ── Off-hours scheduling (issue #106) ── */}
+            <div className="system-form-toggle">
+                <input type="checkbox" id="offhoursToggle" checked={offhoursEnabled}
+                    onChange={e => setOffhoursEnabled(e.target.checked)} />
+                <div>
+                    <label htmlFor="offhoursToggle" className="system-form-toggle-label">Only transcribe during off-hours</label>
+                    <p className="system-form-toggle-hint">
+                        Jobs are still queued any time, but only start inside the window below.
+                    </p>
+                </div>
+            </div>
+            {offhoursEnabled && (
+                <div style={{ paddingLeft: 28, borderLeft: '2px solid var(--border)', marginBottom: 12 }}>
+                    <div className="system-form-row">
+                        <label className="system-form-label" htmlFor="offhoursStart">Window</label>
+                        <div className="system-form-inline">
+                            <input type="time" id="offhoursStart" className="input" value={offhoursStart}
+                                onChange={e => setOffhoursStart(e.target.value)} style={{ width: 130 }} />
+                            <span style={{ alignSelf: 'center' }}>to</span>
+                            <input type="time" id="offhoursEnd" className="input" value={offhoursEnd}
+                                onChange={e => setOffhoursEnd(e.target.value)} style={{ width: 130 }} />
+                        </div>
+                        <p className="system-form-hint">
+                            A window whose end is earlier than its start crosses midnight (e.g. 22:00 to 06:00).
+                        </p>
+                    </div>
+                    <div className="system-form-row" style={{ marginTop: 12 }}>
+                        <label className="system-form-label" htmlFor="offhoursTz">Timezone</label>
+                        <select id="offhoursTz" className="input" value={offhoursTz}
+                            onChange={e => setOffhoursTz(e.target.value)} style={{ maxWidth: 320 }}>
+                            {timezoneOptions.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                        </select>
+                        <p className="system-form-hint">
+                            The server has no timezone of its own, so the window is interpreted in this
+                            one — including across daylight-saving changes.
+                        </p>
+                    </div>
+                    <p className="system-form-hint" style={{ marginTop: 10 }}>
+                        A job still running when the window closes pauses at its next checkpoint
+                        (within about 15 minutes) and resumes from that point next window — no work is
+                        redone. Use "Run now" on the queue page to start something immediately. Local
+                        Whisper can't pause, so a job that fell back to it runs to completion.
+                    </p>
+                </div>
+            )}
             {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
             <button className="btn btn-primary" onClick={handleSave} disabled={loading}>{loading ? 'Saving…' : 'Save'}</button>
         </>
