@@ -465,9 +465,26 @@ class QueueItemResponse(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    # Off-hours window (issue #106): force_run marks a "Run now" override,
+    # paused_at marks an item holding a resumable checkpoint on the worker.
+    force_run: bool = False
+    paused_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class OffHoursStatusResponse(BaseModel):
+    """Current state of the off-hours transcription window."""
+
+    enabled: bool
+    open: bool
+    start: str
+    end: str
+    timezone: str
+    # Null when the window is disabled.
+    opens_at: Optional[datetime] = None
+    closes_at: Optional[datetime] = None
 
 
 class QueueAddRequest(BaseModel):

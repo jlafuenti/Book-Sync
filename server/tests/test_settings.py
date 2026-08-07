@@ -526,3 +526,111 @@ async def test_test_abs_requires_a_token(make_client, make_user, auth_header, en
         )
     assert r.status_code == 400
     assert "token" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Off-hours transcription window (issue #106)
+# ---------------------------------------------------------------------------
+
+async def test_test_remote_passes_through_the_workers_model_state(
+    make_client, make_user, auth_header, enc_key, monkeypatch
+):
+    """Since #106 an unloaded model is the idle resting state, so the UI needs
+    the worker's own wording rather than inferring a fault from a boolean."""
+    admin = await make_user(username="admin1", role="admin")
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "gpu_available": True, "gpu_name": "Orin",
+            "model_loaded": False, "model_state": "unloaded",
+        })
+
+    _patch_jetson_transport(monkeypatch, _handler)
+
+    async with make_client(settings_router.router) as c:
+        r = await c.get(
+            "/api/settings/test-remote",
+            params={"url": "http://fake-jetson:9000", "key": "k"},
+            headers=auth_header(admin),
+        )
+
+    body = r.json()
+    assert body["success"] is True
+    assert body["model_state"] == "unloaded"
+
+
+async def test_offhours_defaults_are_exposed_and_disabled(make_client, make_user, auth_header):
+    """Default off => transcription behaves exactly as it did before #106."""
+    user = await make_user(username="u", role="user")
+    async with make_client(settings_router.router) as c:
+        body = (await c.get("/api/settings/", headers=auth_header(user))).json()
+    assert body["transcription_offhours_enabled"] is False
+    assert body["transcription_offhours_start"] == "01:00"
+    assert body["transcription_offhours_end"] == "07:00"
+    assert body["transcription_offhours_timezone"] == "UTC"
+
+
+async def test_offhours_window_round_trips(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin), json={
+            "transcription_offhours_enabled": True,
+            "transcription_offhours_start": "22:00",
+            "transcription_offhours_end": "06:00",
+            "transcription_offhours_timezone": "America/New_York",
+        })
+        assert put.status_code == 200
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    assert body["transcription_offhours_enabled"] is True
+    assert body["transcription_offhours_start"] == "22:00"
+    assert body["transcription_offhours_end"] == "06:00"
+    assert body["transcription_offhours_timezone"] == "America/New_York"
+
+
+@pytest.mark.parametrize("patch,expect_in_detail", [
+    ({"transcription_offhours_start": "25:00"}, "hh:mm"),
+    ({"transcription_offhours_end": "half past"}, "hh:mm"),
+    ({"transcription_offhours_timezone": "Mars/Olympus_Mons"}, "timezone"),
+    ({"transcription_offhours_start": "03:00", "transcription_offhours_end": "03:00"}, "differ"),
+])
+async def test_offhours_invalid_window_rejected_with_400(
+    make_client, make_user, auth_header, patch, expect_in_detail
+):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put("/api/settings/", headers=auth_header(admin), json=patch)
+    assert r.status_code == 400
+    assert expect_in_detail in r.json()["detail"].lower()
+
+
+async def test_offhours_partial_update_checked_against_stored_end(
+    make_client, make_user, auth_header
+):
+    """Changing only `start` to match the persisted `end` must still 400 —
+    otherwise a two-step edit produces an ambiguous zero-width window."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        ok = await c.put("/api/settings/", headers=auth_header(admin), json={
+            "transcription_offhours_start": "01:00",
+            "transcription_offhours_end": "07:00",
+        })
+        assert ok.status_code == 200
+        r = await c.put("/api/settings/", headers=auth_header(admin),
+                        json={"transcription_offhours_start": "07:00"})
+    assert r.status_code == 400
+
+
+async def test_offhours_invalid_window_is_not_persisted(make_client, make_user, auth_header):
+    """A rejected PUT must leave every key untouched, including valid siblings
+    sent in the same body."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put("/api/settings/", headers=auth_header(admin), json={
+            "whisper_model": "large",
+            "transcription_offhours_start": "nope",
+        })
+        assert r.status_code == 400
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+    assert body["whisper_model"] == "medium"
+    assert body["transcription_offhours_start"] == "01:00"

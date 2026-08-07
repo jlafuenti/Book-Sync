@@ -73,6 +73,7 @@ services:
       - WHISPER_COMPUTE_TYPE=float16
       - WHISPER_DEVICE=cuda
       - VAD_FILTER=true # Reduces hallucinations on silence
+      - MODEL_IDLE_UNLOAD_MIN=30 # Release the model after 30 idle minutes (0 = never)
     deploy:
       resources:
         reservations:
@@ -87,11 +88,13 @@ services:
    ```bash
    docker-compose up -d
    ```
-2. Monitor the logs to ensure the model loaded onto the GPU properly:
+2. Monitor the logs:
    ```bash
    docker-compose logs -f
    ```
-   You should see `float16` and `cuda` mentioned in the startup logs.
+   Startup no longer loads the model — you should see
+   `Model will be loaded on demand and released after 30 idle minutes`. The
+   `float16`/`cuda` load line appears when the first transcription arrives.
 
 ## 5. Network Configuration
 Ensure the Jetson Orin Nano has a static IP address on your local network (e.g., via your router's DHCP reservation).
@@ -112,7 +115,21 @@ curl http://<JETSON-IP-ADDRESS>:9000/v1/health
 curl -F "audio_file=@test.mp3" http://<JETSON-IP-ADDRESS>:9000/v1/transcribe
 ```
 
-## 7. Monitoring
+## 7. Sharing the GPU with another service
+
+If this Orin also runs something latency-sensitive (a voice assistant's STT, say),
+transcription can be confined to a nightly window — see the "Sharing the GPU" section
+of `jetson/README.md` and BookSync → Settings → Transcription → **Only transcribe during
+off-hours**. Two mechanics matter operationally:
+
+- The worker holds **no** GPU memory while idle (`MODEL_IDLE_UNLOAD_MIN`), so
+  `/v1/health` reporting `model_state: "unloaded"` is the healthy resting state.
+- A job still running when the window closes pauses at its next chunk boundary and
+  resumes from that checkpoint next window. The paused job's source audio is parked in
+  `/tmp/booksync_checkpoints` until it resumes, completes, is cancelled, or ages out
+  after 48 hours — budget roughly one audiobook of disk there.
+
+## 8. Monitoring
 To keep an eye on hardware usage (especially GPU RAM and temperature) during long audiobook transcriptions, use `jtop`.
 ```bash
 sudo pip3 install -U jetson-stats
