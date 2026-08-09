@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { getTranscriptionQueue, getQueueHistory, removeFromQueue, cancelTranscription, updateQueuePriority } from '../api'
+import {
+    getTranscriptionQueue, getQueueHistory, removeFromQueue, cancelTranscription,
+    updateQueuePriority, runQueueItemNow, getOffHoursStatus,
+} from '../api'
 import { useAuth } from '../contexts/AuthContext'
 
 function TranscriptionQueuePage() {
     const { hasMinRole } = useAuth()
     const canManageQueue = hasMinRole('admin')
+    const [offHours, setOffHours] = useState(null)
     const [queue, setQueue] = useState([])
     const [history, setHistory] = useState([])
     const [loading, setLoading] = useState(true)
@@ -27,6 +31,16 @@ function TranscriptionQueuePage() {
         }
     }
 
+    // The off-hours window explains why a queue can be full and idle (#106).
+    // Failing to read it must not blank the page — the queue itself still works.
+    const loadOffHours = async () => {
+        try {
+            setOffHours(await getOffHoursStatus())
+        } catch {
+            setOffHours(null)
+        }
+    }
+
     const loadHistory = async () => {
         setHistoryLoading(true)
         try {
@@ -41,6 +55,7 @@ function TranscriptionQueuePage() {
 
     useEffect(() => {
         loadQueue()
+        loadOffHours()
 
         // Poll as long as there are active items
         pollingRef.current = setInterval(loadQueue, 3000)
@@ -76,6 +91,15 @@ function TranscriptionQueuePage() {
         }
     }
 
+    const handleRunNow = async (itemId) => {
+        try {
+            await runQueueItemNow(itemId)
+            await Promise.all([loadQueue(), loadOffHours()])
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
     const handleMovePriority = async (itemId, direction) => {
         const item = queue.find(q => q.id === itemId)
         if (!item) return
@@ -105,9 +129,11 @@ function TranscriptionQueuePage() {
 
     const formatDate = (dateStr) => {
         if (!dateStr) return '—'
-        // Append Z to correctly parse as UTC since backend sends naive datetime strings
-        const str = dateStr.endsWith('Z') ? dateStr : `${dateStr}Z`
-        return new Date(str).toLocaleString()
+        // Queue timestamps are naive UTC (the DB columns are tz-less), so they
+        // need a Z. The off-hours window's opens_at/closes_at already carry an
+        // offset — stamping a Z on those would produce an Invalid Date.
+        const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(dateStr)
+        return new Date(hasZone ? dateStr : `${dateStr}Z`).toLocaleString()
     }
 
     const getStatusBadge = (status) => {
@@ -189,6 +215,18 @@ function TranscriptionQueuePage() {
             </div>
 
             {error && <div className="alert alert-error">⚠️ {error}</div>}
+
+            {/* Off-hours window banner (#106) */}
+            {offHours?.enabled && (
+                <div className={`alert ${offHours.open ? 'alert-success' : 'alert-info'}`}>
+                    {offHours.open
+                        ? <>🌙 Off-hours scheduling is on — the queue is running now and closes
+                            at {offHours.end} {offHours.timezone}.</>
+                        : <>🌙 Off-hours scheduling is on — queued books wait until {offHours.start} {offHours.timezone}
+                            {offHours.opens_at ? ` (${formatDate(offHours.opens_at)})` : ''}. Use
+                            "Run now" to start one immediately.</>}
+                </div>
+            )}
 
             {/* Tab Buttons */}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
@@ -342,6 +380,26 @@ function TranscriptionQueuePage() {
                                                 <div>
                                                     <div style={{ fontWeight: 600 }}>
                                                         {item.book_title || `Pair #${item.book_pair_id}`}
+                                                        {item.paused_at && (
+                                                            <span style={{
+                                                                marginLeft: '8px', fontSize: '0.7rem', fontWeight: 700,
+                                                                padding: '2px 8px', borderRadius: '10px',
+                                                                backgroundColor: '#e3f2fd', color: '#1565c0',
+                                                                border: '1px solid #bbdefb',
+                                                            }}>
+                                                                ⏸ Paused — {((item.progress || 0) * 100).toFixed(0)}% done
+                                                            </span>
+                                                        )}
+                                                        {item.force_run && !item.paused_at && (
+                                                            <span style={{
+                                                                marginLeft: '8px', fontSize: '0.7rem', fontWeight: 700,
+                                                                padding: '2px 8px', borderRadius: '10px',
+                                                                backgroundColor: '#fff3e0', color: '#e65100',
+                                                                border: '1px solid #ffe0b2',
+                                                            }}>
+                                                                ⚡ Running next
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                                         Priority: {item.priority} · Added: {formatDate(item.created_at)}
@@ -351,11 +409,26 @@ function TranscriptionQueuePage() {
                                                             </span>
                                                         )}
                                                     </div>
+                                                    {item.message && (
+                                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                                            {item.message}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
 
                                             {canManageQueue && (
                                                 <div style={{ display: 'flex', gap: '4px' }}>
+                                                    {offHours?.enabled && !offHours.open && !item.force_run && (
+                                                        <button
+                                                            className="btn btn-secondary btn-sm"
+                                                            onClick={() => handleRunNow(item.id)}
+                                                            title="Start this book now, ignoring the off-hours window"
+                                                            style={{ padding: '4px 10px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                                        >
+                                                            ⚡ Run now
+                                                        </button>
+                                                    )}
                                                     <button
                                                         className="btn btn-secondary btn-sm"
                                                         onClick={() => handleMovePriority(item.id, 'up')}

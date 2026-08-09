@@ -12,6 +12,7 @@ from services.transcription_providers.base import (
     TranscriptionProvider,
     ProviderUnavailableError,
     TranscriptionError,
+    TranscriptionPaused,
 )
 from services.transcription_providers.local import LocalWhisperProvider
 from services.transcription_providers.remote import RemoteWhisperProvider
@@ -22,6 +23,7 @@ __all__ = [
     "TranscriptionProvider",
     "ProviderUnavailableError",
     "TranscriptionError",
+    "TranscriptionPaused",
     "LocalWhisperProvider",
     "RemoteWhisperProvider",
     "get_transcription_provider",
@@ -114,6 +116,9 @@ class FallbackProvider(TranscriptionProvider):
             if remote_url else None
         )
         self._local = LocalWhisperProvider()
+        # Which provider actually ran the current job. Pause/unload requests
+        # have to reach *that* one, not whichever we'd pick if asked afresh.
+        self._selected = None
 
     async def transcribe(self, audio_path, progress_callback=None):
         # Try remote first (if configured)
@@ -122,9 +127,15 @@ class FallbackProvider(TranscriptionProvider):
                 is_up = await self._remote.is_available()
                 if is_up:
                     logger.info("Remote provider is available — using it")
+                    self._selected = self._remote
                     return await self._remote.transcribe(audio_path, progress_callback)
                 else:
                     logger.warning("Remote provider health check failed — falling back to local")
+            except TranscriptionPaused:
+                # Not a failure. The remote stopped at a checkpoint because the
+                # off-hours window closed; falling back to local here would redo
+                # hours of already-completed work. Let the queue re-pend it.
+                raise
             except ProviderUnavailableError as e:
                 logger.warning(f"Remote provider unavailable: {e} — falling back to local")
             except Exception as e:
@@ -134,7 +145,23 @@ class FallbackProvider(TranscriptionProvider):
 
         # Fallback to local
         logger.info("Using local Whisper as fallback")
+        self._selected = self._local
         return await self._local.transcribe(audio_path, progress_callback)
+
+    async def request_pause(self) -> bool:
+        """Delegate to the provider that's actually running the job."""
+        target = self._selected or self._remote
+        return await target.request_pause() if target else False
+
+    async def release_resources(self) -> None:
+        # Always ask the remote to unload: it owns the GPU memory the off-hours
+        # window exists to free, whether or not it ran the last job.
+        if self._remote:
+            await self._remote.release_resources()
+
+    async def discard_checkpoint(self, audio_path: str) -> None:
+        if self._remote:
+            await self._remote.discard_checkpoint(audio_path)
 
     async def is_available(self) -> bool:
         """Available if either remote or local is available."""

@@ -10,6 +10,8 @@ Features:
 - Adaptive chunk sizing with automatic OoM recovery
 - Checkpoint system for resuming interrupted transcriptions
 - Preemptive memory management via CT2 model reload
+- Lazy model load + idle unload, so the GPU isn't held while idle (issue #106)
+- Cooperative pause at a chunk boundary, retaining the audio for a free resume
 """
 
 import asyncio
@@ -29,6 +31,7 @@ from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import uvicorn
 
 import nltk
@@ -47,6 +50,14 @@ WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 VAD_FILTER = os.environ.get("VAD_FILTER", "true").lower() in ("true", "1", "yes")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))
+
+# Minutes of inactivity after which the Whisper weights (~4GB of unified memory
+# on an Orin Nano 8GB) are released. The model reloads on the next job, which
+# costs tens of seconds — irrelevant for multi-hour batch work, and it hands
+# the memory back to whatever else shares this GPU. 0 disables unloading and
+# restores the old always-resident behaviour.
+MODEL_IDLE_UNLOAD_MIN = int(os.environ.get("MODEL_IDLE_UNLOAD_MIN", "30"))
+IDLE_CHECK_INTERVAL_SEC = 60
 
 # Shared secret required on every /v1/* request (Authorization: Bearer <key>).
 # Anyone who can reach this port can submit transcription jobs and read cached
@@ -108,18 +119,38 @@ class JobStatus:
     current_file: Optional[str] = None  # filename being transcribed
 
 
+class PausedAtCheckpoint(Exception):
+    """Raised internally when the chunk loop stops on a pause request."""
+
+    def __init__(self, completed_through_sec: int):
+        super().__init__(f"Paused at {completed_through_sec}s")
+        self.completed_through_sec = completed_through_sec
+
+
 # Thread-safe global job status (only one job runs at a time)
 _job_status = JobStatus()
 _job_lock = threading.Lock()
+
+# Set by POST /v1/pause. The chunk loop checks it between chunks and stops
+# cleanly, leaving a checkpoint (and the audio) behind for a free resume.
+_pause_event = threading.Event()
 
 # Store recent transcription results for 24 hours to allow re-attachment
 _recent_results = {}
 _results_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
-# Model loading
+# Model loading / unloading
 # ---------------------------------------------------------------------------
 model = None
+
+# "unloaded" | "loading" | "loaded" — reported by /v1/health so a client can
+# tell "idle, weights released" apart from "broken".
+_model_state = "unloaded"
+_model_lock = threading.RLock()
+
+# Wall-clock of the last transcription activity, for the idle-unload timer.
+_last_activity = time.time()
 
 
 def load_model():
@@ -139,6 +170,92 @@ def load_model():
     )
     elapsed = time.time() - start
     logger.info(f"Model loaded in {elapsed:.1f}s")
+
+
+def ensure_model_loaded() -> None:
+    """
+    Load the model if it isn't resident. Called at the start of every job
+    rather than at startup, so an idle server holds no GPU memory (#106).
+    """
+    global _model_state
+    with _model_lock:
+        if model is not None:
+            return
+        _model_state = "loading"
+        try:
+            load_model()
+        except Exception:
+            _model_state = "unloaded"
+            raise
+        _model_state = "loaded"
+
+
+def unload_model() -> bool:
+    """
+    Release the model weights and hand the memory back.
+
+    Unlike :func:`_reload_ct2_model` (which flushes the allocator and
+    immediately reloads), this drops the Python object too. Returns True if
+    something was actually released.
+    """
+    global model, _model_state
+    with _model_lock:
+        if model is None:
+            return False
+        logger.info("Unloading Whisper model to release GPU memory...")
+        mem_before = _read_sys_mem_mb()
+        try:
+            model.model.unload_model()
+        except Exception as e:
+            logger.warning(f"CT2 unload_model() failed (dropping the reference anyway): {e}")
+        model = None
+        _model_state = "unloaded"
+        gc.collect()
+        mem_after = _read_sys_mem_mb()
+        logger.info(
+            f"Model unloaded — sys avail={mem_after.get('MemAvailable', '?')}MB "
+            f"(+{mem_after.get('MemAvailable', 0) - mem_before.get('MemAvailable', 0)}MB)"
+        )
+        return True
+
+
+def _mark_activity() -> None:
+    global _last_activity
+    _last_activity = time.time()
+
+
+def _should_unload_idle(now: float, last_activity: float, job_active: bool,
+                        model_loaded: bool, idle_minutes: int) -> bool:
+    """Pure decision half of the idle-unload timer, so it can be unit tested."""
+    if idle_minutes <= 0:      # 0 = never unload (pre-#106 behaviour)
+        return False
+    if job_active or not model_loaded:
+        return False
+    return (now - last_activity) >= idle_minutes * 60
+
+
+def maybe_unload_idle() -> bool:
+    """Unload the model if it has been idle long enough. Returns True if it did."""
+    with _job_lock:
+        job_active = _job_status.active
+    if not _should_unload_idle(
+        time.time(), _last_activity, job_active, model is not None, MODEL_IDLE_UNLOAD_MIN
+    ):
+        return False
+    logger.info(
+        f"No transcription activity for {MODEL_IDLE_UNLOAD_MIN} minutes — "
+        f"releasing the model."
+    )
+    return unload_model()
+
+
+def _idle_unload_loop() -> None:  # pragma: no cover — thread plumbing
+    while True:
+        time.sleep(IDLE_CHECK_INTERVAL_SEC)
+        try:
+            maybe_unload_idle()
+        except Exception as e:
+            logger.warning(f"Idle-unload check failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -229,17 +346,42 @@ def _shrink_chunk_size(current_chunk_size: int) -> Optional[int]:
 # Checkpoint system — preserves progress across OoM failures
 # ---------------------------------------------------------------------------
 
+def _checkpoint_key_for(filename: str, file_size: int) -> str:
+    """
+    Stable checkpoint key from original filename + byte size.
+
+    The client sends those two values rather than a hash, so this derivation
+    lives here only and can change without a lockstep deploy of both sides.
+    """
+    return hashlib.sha256(f"{filename}:{file_size}".encode()).hexdigest()[:16]
+
+
 def _checkpoint_key(audio_path: str, filename: str) -> str:
-    """Generate a stable checkpoint key from original filename + file size."""
-    file_size = os.path.getsize(audio_path)
-    key = f"{filename}:{file_size}"
-    return hashlib.sha256(key.encode()).hexdigest()[:16]
+    """Checkpoint key for an audio file already on disk here."""
+    return _checkpoint_key_for(filename, os.path.getsize(audio_path))
+
+
+def _checkpoint_path_for(filename: str, file_size: int) -> str:
+    """Checkpoint file path for a job identified by filename + size."""
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    return os.path.join(CHECKPOINT_DIR, _checkpoint_key_for(filename, file_size) + ".json")
 
 
 def _checkpoint_path(audio_path: str, filename: str) -> str:
     """Get the checkpoint file path for a given audio file."""
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     return os.path.join(CHECKPOINT_DIR, _checkpoint_key(audio_path, filename) + ".json")
+
+
+def _retained_audio_path(ckpt_path: str) -> str:
+    """
+    Where a paused job's audio is parked, beside its checkpoint.
+
+    Keeping it means resuming costs one small JSON request instead of pushing
+    the whole audiobook back over the network. The 48h checkpoint sweep
+    reclaims the space if nothing ever resumes.
+    """
+    return ckpt_path[: -len(".json")] + ".audio"
 
 
 def _save_checkpoint(
@@ -281,16 +423,38 @@ def _load_checkpoint(ckpt_path: str) -> Optional[dict]:
 
 
 def _delete_checkpoint(ckpt_path: str) -> None:
-    """Delete a checkpoint file after successful completion."""
+    """Delete a checkpoint and any audio retained for it."""
+    for path in (ckpt_path, _retained_audio_path(ckpt_path)):
+        try:
+            os.unlink(path)
+            logger.info(f"  Deleted checkpoint file: {path}")
+        except OSError:
+            pass
+
+
+def _retain_audio(ckpt_path: str, audio_path: str) -> bool:
+    """
+    Park the job's audio next to its checkpoint so a resume needs no upload.
+
+    Moves rather than copies — the source is the request's temp upload, which
+    is about to be deleted, and a multi-GB copy on the Orin is not free.
+    ``shutil.move`` handles the cross-filesystem case. Returns True if the
+    audio is in place afterwards.
+    """
+    retained = _retained_audio_path(ckpt_path)
+    if os.path.abspath(audio_path) == os.path.abspath(retained):
+        return True  # already resuming from the retained copy
     try:
-        os.unlink(ckpt_path)
-        logger.info(f"  Deleted checkpoint: {ckpt_path}")
-    except OSError:
-        pass
+        shutil.move(audio_path, retained)
+        logger.info(f"  Retained audio for resume: {retained}")
+        return True
+    except OSError as e:
+        logger.warning(f"  Could not retain audio for resume (will need re-upload): {e}")
+        return False
 
 
 def _cleanup_old_checkpoints(max_age_hours: int = 48) -> None:
-    """Remove checkpoint files older than max_age_hours."""
+    """Remove checkpoint files — and any retained audio — older than max_age_hours."""
     if not os.path.isdir(CHECKPOINT_DIR):
         return
     now = time.time()
@@ -452,7 +616,20 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
         _job_status.message = "Initializing..."
         _job_status.started_at = start_time
 
+    # A pause request that arrived while nothing was running must not stop the
+    # job we're about to start.
+    _pause_event.clear()
+    _mark_activity()
+
     try:
+        # Load on demand — an idle server holds no GPU memory (#106). The first
+        # job after an unload pays tens of seconds, which is nothing against a
+        # multi-hour transcription.
+        if model is None:
+            with _job_lock:
+                _job_status.message = "Loading model..."
+        ensure_model_loaded()
+
         total_duration = _get_audio_duration(audio_path)
         logger.info(f"  Audio duration: {total_duration:.1f}s")
 
@@ -484,6 +661,16 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
 
         # --- Adaptive chunk loop ---
         while start_sec < int(total_duration) + 1:
+            # 0. Pause request? A chunk boundary is the only lossless place to
+            # stop: everything before it is already in the checkpoint, and the
+            # chunk we'd start now would be thrown away.
+            if _pause_event.is_set():
+                _save_checkpoint(
+                    ckpt_path, total_duration, start_sec,
+                    current_chunk_size, all_sentences,
+                )
+                raise PausedAtCheckpoint(start_sec)
+
             # 1. Pre-chunk memory check
             mem = _read_sys_mem_mb()
             avail_mb = mem.get("MemAvailable", 9999)
@@ -652,6 +839,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
             _job_status.progress = 1.0
             _job_status.message = "Complete"
             _job_status.active = False
+        _mark_activity()
 
         result = {
             "sentences": [asdict(s) for s in all_sentences],
@@ -673,17 +861,57 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
 
         return result
 
+    except PausedAtCheckpoint as paused:
+        # Not a failure. Progress through `completed_through_sec` is on disk and
+        # the audio is parked beside it, so the client can resume with a single
+        # small request once its window reopens.
+        audio_retained = _retain_audio(ckpt_path, audio_path)
+        fraction = (
+            min(paused.completed_through_sec / total_duration, 1.0)
+            if total_duration else 0.0
+        )
+        logger.info(
+            f"Paused {original_filename} at {paused.completed_through_sec}s of "
+            f"{total_duration:.0f}s ({len(all_sentences)} sentences banked)."
+        )
+
+        with _job_lock:
+            _job_status.active = False
+            _job_status.progress = round(fraction, 3)
+            _job_status.message = (
+                f"Paused at {_format_duration(paused.completed_through_sec)}"
+            )
+        _pause_event.clear()
+        _mark_activity()
+
+        # Free the GPU immediately — releasing it is the entire point of pausing.
+        unload_model()
+
+        # Deliberately NOT cached in _recent_results: a partial transcript
+        # served from /v1/result would be indistinguishable from a finished one
+        # and would silently truncate the book.
+        return {
+            "status": "paused",
+            "completed_through_sec": paused.completed_through_sec,
+            "progress": round(fraction, 3),
+            "sentences_so_far": len(all_sentences),
+            "duration_seconds": round(total_duration, 2),
+            "audio_retained": audio_retained,
+        }
+
     except Exception as e:
         logger.error(f"Transcription failed: {e}", exc_info=True)
         with _job_lock:
             _job_status.active = False
             _job_status.progress = 0.0
             _job_status.message = f"Error: {str(e)}"
+        _mark_activity()
 
         # Reload model to recover memory for next job.
         # Checkpoint is preserved so next attempt can resume.
-        logger.info("  Reloading CT2 model after failure to reset allocator state...")
-        _reload_ct2_model()
+        if model is not None:
+            logger.info("  Reloading CT2 model after failure to reset allocator state...")
+            _reload_ct2_model()
         raise
 
 
@@ -725,9 +953,21 @@ def verify_api_key(authorization: str = Header(default="")) -> None:
 
 @app.on_event("startup")
 def startup_event():
-    """Load the Whisper model into GPU memory when the server starts."""
-    load_model()
+    """
+    Prepare to serve. The model is deliberately *not* loaded here (#106) —
+    it loads on the first job and is released again after
+    MODEL_IDLE_UNLOAD_MIN, so an idle server leaves the GPU to whatever else
+    shares it.
+    """
     _cleanup_old_checkpoints()
+    if MODEL_IDLE_UNLOAD_MIN > 0:
+        threading.Thread(target=_idle_unload_loop, daemon=True).start()
+        logger.info(
+            f"Model will be loaded on demand and released after "
+            f"{MODEL_IDLE_UNLOAD_MIN} idle minutes."
+        )
+    else:
+        logger.info("MODEL_IDLE_UNLOAD_MIN=0 — model stays resident once loaded.")
 
 
 @app.get("/v1/health", dependencies=[Depends(verify_api_key)])
@@ -754,7 +994,11 @@ def health():
         "vad_filter": VAD_FILTER,
         "gpu_available": gpu_available,
         "gpu_name": gpu_name,
+        # An unloaded model is the normal idle state since #106, not a fault —
+        # `status` is what tells you whether this server is usable.
         "model_loaded": model is not None,
+        "model_state": _model_state,
+        "idle_unload_minutes": MODEL_IDLE_UNLOAD_MIN,
     }
 
 
@@ -770,15 +1014,175 @@ def get_status():
             "instance_id": INSTANCE_ID,
         }
 
+def _active_job_conflict(requested_file: str, client_ip: str = "unknown"):
+    """
+    Return a 409 JSONResponse if another transcription is already running.
+
+    Shared by /v1/transcribe and /v1/transcribe/resume — only one job may run
+    at a time, and the body tells the client exactly what is holding the slot
+    so it can decide between waiting and re-attaching.
+    """
+    with _job_lock:
+        if not _job_status.active:
+            return None
+
+        running_for = ""
+        if _job_status.started_at:
+            elapsed = time.time() - _job_status.started_at
+            hours = int(elapsed) // 3600
+            mins = (int(elapsed) % 3600) // 60
+            running_for = f"{hours}h {mins}m" if hours else f"{mins}m"
+
+        current_file = _job_status.current_file
+        progress = _job_status.progress
+        message = _job_status.message
+
+    logger.warning(
+        f"409 Conflict: Rejected transcribe request for '{requested_file}' "
+        f"from {client_ip}. Currently transcribing '{current_file}' "
+        f"({message}, running for {running_for})."
+    )
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": "A transcription is already in progress.",
+            "instance_id": INSTANCE_ID,
+            "current_job": {
+                "file": current_file,
+                "progress": progress,
+                "message": message,
+                "running_for": running_for,
+            },
+        },
+    )
+
+
 @app.get("/v1/result/{filename}", dependencies=[Depends(verify_api_key)])
 def get_result(filename: str):
-    """Get the cached result of a completed transcription job."""
+    """
+    Get the cached result of a **completed** transcription job.
+
+    Paused jobs are never cached here — a partial transcript served from this
+    route is indistinguishable from a finished one and would silently truncate
+    the book. Use /v1/checkpoint to ask about partial progress.
+    """
     with _results_lock:
         if filename in _recent_results:
             result, timestamp = _recent_results[filename]
             return JSONResponse(status_code=200, content=result)
 
     raise HTTPException(status_code=404, detail="Result not found or expired")
+
+
+# ---------------------------------------------------------------------------
+# Off-hours control surface (issue #106)
+# ---------------------------------------------------------------------------
+
+class ResumeRequest(BaseModel):
+    """Identity of a paused job: the original filename and its byte size."""
+
+    filename: str
+    size: int
+
+
+@app.post("/v1/pause", dependencies=[Depends(verify_api_key)])
+def request_pause():
+    """
+    Ask the running job to stop at its next chunk boundary.
+
+    Idempotent, and a no-op when nothing is running — the flag is cleared at
+    the start of every job so it can't leak into the next one.
+    """
+    with _job_lock:
+        active = _job_status.active
+        current_file = _job_status.current_file
+
+    if not active:
+        return {"paused_requested": False, "detail": "No transcription is running."}
+
+    _pause_event.set()
+    logger.info(f"Pause requested for '{current_file}' — will stop at the next chunk.")
+    return {"paused_requested": True, "current_file": current_file}
+
+
+@app.post("/v1/unload", dependencies=[Depends(verify_api_key)])
+def unload():
+    """Release the model weights now. Refuses while a job is running."""
+    with _job_lock:
+        if _job_status.active:
+            return {
+                "unloaded": False,
+                "model_state": _model_state,
+                "detail": "A transcription is running — pause it first.",
+            }
+
+    unloaded = unload_model()
+    return {"unloaded": unloaded, "model_state": _model_state}
+
+
+@app.get("/v1/checkpoint", dependencies=[Depends(verify_api_key)])
+def get_checkpoint(filename: str, size: int):
+    """Report any saved partial progress for a job, and whether its audio is here."""
+    ckpt_path = _checkpoint_path_for(filename, size)
+    ckpt = _load_checkpoint(ckpt_path)
+    if not ckpt:
+        return {"exists": False}
+
+    total = ckpt.get("total_duration") or 0
+    completed = ckpt.get("completed_through_sec", 0)
+    return {
+        "exists": True,
+        "completed_through_sec": completed,
+        "progress": round(min(completed / total, 1.0), 3) if total else 0.0,
+        "sentences": len(ckpt.get("sentences", [])),
+        "audio_retained": os.path.exists(_retained_audio_path(ckpt_path)),
+    }
+
+
+@app.delete("/v1/checkpoint", dependencies=[Depends(verify_api_key)])
+def delete_checkpoint(filename: str, size: int):
+    """Drop a job's saved progress and retained audio (the client cancelled it)."""
+    ckpt_path = _checkpoint_path_for(filename, size)
+    existed = os.path.exists(ckpt_path) or os.path.exists(_retained_audio_path(ckpt_path))
+    _delete_checkpoint(ckpt_path)
+    return {"deleted": existed}
+
+
+@app.post("/v1/transcribe/resume", dependencies=[Depends(verify_api_key)])
+async def transcribe_resume(body: ResumeRequest):
+    """
+    Continue a paused job from the audio retained here — no re-upload.
+
+    404 means the audio is gone (swept, or never retained); the client should
+    fall back to POST /v1/transcribe, which still picks the checkpoint up.
+    """
+    ckpt_path = _checkpoint_path_for(body.filename, body.size)
+    audio_path = _retained_audio_path(ckpt_path)
+    if not os.path.exists(ckpt_path) or not os.path.exists(audio_path):
+        raise HTTPException(
+            status_code=404,
+            detail="No retained audio for this file — upload it again.",
+        )
+
+    conflict = _active_job_conflict(body.filename)
+    if conflict is not None:
+        return conflict
+
+    with _job_lock:
+        _job_status.current_file = body.filename
+
+    logger.info(f"Resuming {body.filename} from retained audio at {audio_path}")
+    try:
+        # Note: no temp-file cleanup here. The audio belongs to the checkpoint
+        # and is removed by _delete_checkpoint on completion (or by the 48h
+        # sweep if this job never finishes).
+        result = await asyncio.to_thread(_transcribe_file, audio_path, body.filename)
+        return JSONResponse(content=result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resume endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])
@@ -793,37 +1197,12 @@ async def transcribe(request: Request, audio_file: UploadFile = File(...)):
     in progress, this endpoint returns HTTP 409.
     """
 
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded yet")
-
-    with _job_lock:
-        if _job_status.active:
-            running_for = ""
-            if _job_status.started_at:
-                elapsed = time.time() - _job_status.started_at
-                hours = int(elapsed) // 3600
-                mins = (int(elapsed) % 3600) // 60
-                running_for = f"{hours}h {mins}m" if hours else f"{mins}m"
-
-            client_ip = request.client.host if request and request.client else "unknown"
-            logger.warning(
-                f"409 Conflict: Rejected transcribe request for '{audio_file.filename}' "
-                f"from {client_ip}. Currently transcribing '{_job_status.current_file}' "
-                f"({_job_status.message}, running for {running_for})."
-            )
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "detail": "A transcription is already in progress.",
-                    "instance_id": INSTANCE_ID,
-                    "current_job": {
-                        "file": _job_status.current_file,
-                        "progress": _job_status.progress,
-                        "message": _job_status.message,
-                        "running_for": running_for,
-                    },
-                },
-            )
+    # The model is loaded on demand inside _transcribe_file (#106): an unloaded
+    # model is the idle resting state, not a reason to reject work.
+    client_ip = request.client.host if request and request.client else "unknown"
+    conflict = _active_job_conflict(audio_file.filename, client_ip)
+    if conflict is not None:
+        return conflict
 
     # Save uploaded file to a temp location
     suffix = os.path.splitext(audio_file.filename or "audio.mp3")[1]

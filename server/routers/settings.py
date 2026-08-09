@@ -8,6 +8,7 @@ from database import get_db
 from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
+from services import offhours
 from services.url_safety import assert_safe_url, UnsafeUrlError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -39,6 +40,13 @@ DEFAULT_SETTINGS = {
     "transcription_remote_timeout": 86400,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium",
+    # Off-hours transcription window (issue #106) — owned by services/offhours.py.
+    # Defaults must match offhours.DEFAULTS. Disabled by default so transcription
+    # keeps dispatching 24/7 until an admin opts in.
+    "transcription_offhours_enabled": False,
+    "transcription_offhours_start": "01:00",
+    "transcription_offhours_end": "07:00",
+    "transcription_offhours_timezone": "UTC",
     "abs_enabled": False,
     "abs_url": "",
     "abs_api_token": "",
@@ -105,6 +113,20 @@ async def update_settings(
     _: User = Depends(get_admin_user)
 ):
     """Update system settings."""
+    # Validate the off-hours window up front, against the values already on
+    # file — a partial edit ("just move the start time") can still produce an
+    # ambiguous start == end window. Raising here means a rejected PUT writes
+    # nothing at all, including the valid keys sent alongside it.
+    if set(offhours.DEFAULTS) & set(new_settings):
+        stored_rows = await db.execute(
+            select(SystemSetting).where(SystemSetting.key.in_(tuple(offhours.DEFAULTS)))
+        )
+        stored = {s.key: s.value for s in stored_rows.scalars().all()}
+        try:
+            offhours.validate_settings(new_settings, stored=stored)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     for key, value in new_settings.items():
         # Route abs_api_token through the encrypted credential store. An empty
         # string clears the credential; the placeholder means "leave unchanged"
@@ -301,7 +323,11 @@ async def test_remote_connection(
                 "success": True,
                 "gpu_available": data.get("gpu_available", False),
                 "gpu_name": data.get("gpu_name"),
-                "model_loaded": data.get("model_loaded", False)
+                "model_loaded": data.get("model_loaded", False),
+                # Since #106 the worker loads on demand and unloads when idle,
+                # so "not loaded" is a resting state rather than a fault. Older
+                # workers don't send this — the UI falls back to model_loaded.
+                "model_state": data.get("model_state"),
             }
     except httpx.RequestError as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {str(e)}")

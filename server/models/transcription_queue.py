@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 import datetime
 
@@ -28,7 +28,19 @@ class TranscriptionQueueItem(Base):
     
     # Number of times this item has been retried due to provider unavailability
     retry_count = Column(Integer, default=0, nullable=False)
-    
+
+    # "Run now" override (issue #106): dispatch this item even when the
+    # off-hours window is closed. Sticky for the life of the item, so a job
+    # forced at 14:00 also isn't paused when the window would have closed.
+    force_run = Column(Boolean, default=False, server_default="false", nullable=False)
+
+    # Set when a running job was paused at a chunk boundary because the
+    # off-hours window closed. Doubles as the marker for "a resumable
+    # checkpoint is waiting on the transcription worker": paused items are
+    # re-dispatched ahead of fresh ones so a half-done book finishes first.
+    paused_at = Column(DateTime, nullable=True)
+
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

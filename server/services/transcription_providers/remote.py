@@ -17,6 +17,7 @@ from services.transcription_providers.base import (
     TranscriptionProvider,
     ProviderUnavailableError,
     TranscriptionError,
+    TranscriptionPaused,
 )
 from services.transcription import TranscribedSentence
 
@@ -90,6 +91,64 @@ class RemoteWhisperProvider(TranscriptionProvider):
                 except httpx.RequestError as e:
                     logger.debug(f"Status poll error while waiting: {e}")
 
+    def _checkpoint_params(self, audio_path: str) -> dict:
+        """Identity of a job on the worker: original filename + byte size.
+
+        Matches the worker's own checkpoint key derivation, but we send the two
+        raw values rather than a hash so the formula lives in exactly one place
+        (jetson/server.py) and can change without a lockstep deploy.
+        """
+        return {
+            "filename": os.path.basename(audio_path),
+            "size": os.path.getsize(audio_path),
+        }
+
+    async def _probe_checkpoint(self, audio_path: str) -> dict:
+        """
+        Ask the worker whether it holds resumable progress for this file.
+
+        Purely an optimisation, so every failure mode — an older worker with no
+        such route, a transport error, malformed JSON — degrades to "no
+        checkpoint" and the normal upload path. The worker resumes from its own
+        checkpoint after a re-upload anyway; skipping the probe only costs
+        bandwidth.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.remote_url}/v1/checkpoint",
+                    params=self._checkpoint_params(audio_path),
+                    timeout=10.0,
+                    headers=self._headers,
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("exists"):
+                    return data
+        except (httpx.RequestError, ValueError) as e:
+            logger.debug(f"Checkpoint probe failed (will upload normally): {e}")
+        return {}
+
+    @staticmethod
+    def _paused_payload(data) -> Optional[dict]:
+        """Return the payload if the worker reported a pause rather than a result."""
+        if isinstance(data, dict) and data.get("status") == "paused":
+            return data
+        return None
+
+    @staticmethod
+    def _raise_paused(data: dict, filename: str) -> None:
+        completed = data.get("completed_through_sec", 0)
+        logger.info(
+            f"Remote worker paused {filename} at {completed}s "
+            f"({data.get('progress', 0)*100:.0f}%) — progress is checkpointed."
+        )
+        raise TranscriptionPaused(
+            f"Transcription of {filename} paused at {completed}s of audio",
+            completed_through_sec=completed,
+            progress=data.get("progress", 0.0),
+        )
+
     async def transcribe(
         self,
         audio_path: str,
@@ -125,6 +184,19 @@ class RemoteWhisperProvider(TranscriptionProvider):
         except httpx.RequestError as e:
             logger.debug(f"Pre-flight cached result check failed (will proceed with upload): {e}")
 
+        # Second pre-flight: a job paused for the off-hours window (#106) leaves
+        # a checkpoint on the worker, and the worker keeps the audio alongside
+        # it. When both are there we resume with a small JSON call instead of
+        # pushing multiple GB back over the wire.
+        checkpoint = await self._probe_checkpoint(audio_path)
+        use_resume = bool(checkpoint.get("audio_retained"))
+        if checkpoint:
+            logger.info(
+                f"Remote worker holds a checkpoint for {filename} at "
+                f"{checkpoint.get('completed_through_sec', 0)}s "
+                f"({'resuming in place' if use_resume else 'audio gone — re-uploading'})."
+            )
+
         # Start the polling background task if a callback is provided
         stop_polling = asyncio.Event()
         poll_task = None
@@ -134,24 +206,43 @@ class RemoteWhisperProvider(TranscriptionProvider):
         try:
             data = None
             for _attempt in range(10):
+                attempt_label = f" (attempt {_attempt + 1})" if _attempt > 0 else ""
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    with open(audio_path, "rb") as f:
-                        attempt_label = f" (attempt {_attempt + 1})" if _attempt > 0 else ""
-                        logger.info(f"Sending POST /v1/transcribe request{attempt_label}...")
-                        files = {"audio_file": (filename, f, "audio/mpeg")}
-
-                        try:
+                    try:
+                        if use_resume:
+                            logger.info(
+                                f"Sending POST /v1/transcribe/resume request{attempt_label} "
+                                f"(no upload — worker still holds the audio)..."
+                            )
                             response = await client.post(
-                                f"{self.remote_url}/v1/transcribe",
-                                files=files,
+                                f"{self.remote_url}/v1/transcribe/resume",
+                                json=self._checkpoint_params(audio_path),
                                 headers=self._headers,
                             )
-                        except httpx.ConnectError as e:
-                            raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
-                        except httpx.ReadTimeout as e:
-                            raise ProviderUnavailableError(f"Remote transcription timed out after {self.timeout}s: {e}")
-                        except httpx.RequestError as e:
-                            raise ProviderUnavailableError(f"HTTP request error: {e}")
+                        else:
+                            logger.info(f"Sending POST /v1/transcribe request{attempt_label}...")
+                            with open(audio_path, "rb") as f:
+                                response = await client.post(
+                                    f"{self.remote_url}/v1/transcribe",
+                                    files={"audio_file": (filename, f, "audio/mpeg")},
+                                    headers=self._headers,
+                                )
+                    except httpx.ConnectError as e:
+                        raise ProviderUnavailableError(f"Connection to remote server failed: {e}")
+                    except httpx.ReadTimeout as e:
+                        raise ProviderUnavailableError(f"Remote transcription timed out after {self.timeout}s: {e}")
+                    except httpx.RequestError as e:
+                        raise ProviderUnavailableError(f"HTTP request error: {e}")
+
+                # The retained audio vanished between the probe and the request
+                # (e.g. the worker's /tmp was swept). Fall back to uploading —
+                # the checkpoint itself still shortcuts the work.
+                if use_resume and response.status_code == 404:
+                    logger.info(
+                        f"Worker no longer has the audio for {filename} — uploading it again."
+                    )
+                    use_resume = False
+                    continue
 
                 # Handle response codes
                 if response.status_code == 409:
@@ -226,6 +317,18 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         if result_resp.status_code == 200:
                             data = result_resp.json()
                         else:
+                            # No result, and the job is no longer active. If the
+                            # worker holds a checkpoint, it paused for the
+                            # off-hours window rather than failing — re-pend the
+                            # item instead of erroring the book out.
+                            paused_state = await self._probe_checkpoint(audio_path)
+                            if paused_state:
+                                self._raise_paused(
+                                    {"progress": paused_state.get("progress", 0.0),
+                                     "completed_through_sec": paused_state.get(
+                                         "completed_through_sec", 0)},
+                                    filename,
+                                )
                             raise TranscriptionError(
                                 f"Failed to fetch cached transcription result: "
                                 f"{result_resp.status_code} - {result_resp.text}"
@@ -276,6 +379,12 @@ class RemoteWhisperProvider(TranscriptionProvider):
                     "Remote server remained busy after 10 upload attempts."
                 )
 
+            # A pause is a 200 carrying no sentences — the worker stopped at a
+            # chunk boundary with its progress checkpointed (#106).
+            paused = self._paused_payload(data)
+            if paused:
+                self._raise_paused(paused, filename)
+
             # Parse successful response
             sentences_data = data.get("sentences", [])
 
@@ -300,7 +409,15 @@ class RemoteWhisperProvider(TranscriptionProvider):
                 await poll_task
 
     async def is_available(self) -> bool:
-        """Check if the remote server is reachable by hitting /v1/health."""
+        """
+        Check if the remote server is reachable and healthy.
+
+        Deliberately does **not** require ``model_loaded``: since #106 the
+        worker loads its model on the first job and unloads it after an idle
+        period, so an unloaded model is the normal resting state, not a fault.
+        Gating on it would send every job to the local fallback — which isn't
+        installed in the production image.
+        """
         if not self.remote_url:
             return False
 
@@ -309,12 +426,60 @@ class RemoteWhisperProvider(TranscriptionProvider):
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(f"{self.remote_url}/v1/health", headers=self._headers)
                 if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("model_loaded", False)
+                    return resp.json().get("status") == "healthy"
                 return False
         except Exception as e:
             logger.debug(f"Remote provider health check failed: {e}")
             return False
+
+    async def request_pause(self) -> bool:
+        """Ask the worker to stop at its next chunk boundary and checkpoint."""
+        if not self.remote_url:
+            return False
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.remote_url}/v1/pause", timeout=10.0, headers=self._headers
+                )
+            return resp.status_code == 200
+        except httpx.RequestError as e:
+            logger.warning(f"Could not request pause on remote worker: {e}")
+            return False
+
+    async def release_resources(self) -> None:
+        """Ask the worker to drop its model weights now (frees ~4GB on the Orin)."""
+        if not self.remote_url:
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{self.remote_url}/v1/unload", timeout=30.0, headers=self._headers
+                )
+        except httpx.RequestError as e:
+            # Best effort: the worker's own idle timer is the backstop.
+            logger.debug(f"Could not ask remote worker to unload: {e}")
+
+    async def discard_checkpoint(self, audio_path: str) -> None:
+        """Drop the worker's saved progress and retained audio for this file."""
+        if not self.remote_url:
+            return
+        try:
+            params = self._checkpoint_params(audio_path)
+        except OSError as e:
+            # The local audio is gone, so we can't derive the key. The worker's
+            # 48h checkpoint sweep will collect it.
+            logger.debug(f"Could not derive checkpoint key for {audio_path}: {e}")
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.delete(
+                    f"{self.remote_url}/v1/checkpoint",
+                    params=params,
+                    timeout=10.0,
+                    headers=self._headers,
+                )
+        except httpx.RequestError as e:
+            logger.debug(f"Could not discard remote checkpoint: {e}")
 
     def name(self) -> str:
         return f"Remote Whisper ({self.remote_url})"

@@ -200,6 +200,90 @@ describe('TranscriptionSettingsSection', () => {
 
         expect(await screen.findByText(/Connection failed: timeout/)).toBeInTheDocument()
     })
+
+    it('describes an idle-unloaded model as resting rather than broken', async () => {
+        // The Jetson releases its weights when idle (#106) — "Not Loaded" would
+        // read as a fault for what is the normal daytime state.
+        testRemoteConnectionMock.mockResolvedValue({
+            success: true, gpu_name: 'Orin', model_loaded: false, model_state: 'unloaded',
+        })
+        render(<TranscriptionSettingsSection />)
+        await screen.findByPlaceholderText(KEY_PLACEHOLDER_TEXT)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+        expect(await screen.findByText(/loads on next job/)).toBeInTheDocument()
+    })
+
+    /* ── Off-hours scheduling window (issue #106) ── */
+
+    it('hides the window fields until off-hours scheduling is enabled', async () => {
+        render(<TranscriptionSettingsSection />)
+        await screen.findByPlaceholderText(KEY_PLACEHOLDER_TEXT)
+
+        expect(screen.queryByLabelText('Window')).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByLabelText('Only transcribe during off-hours'))
+
+        expect(await screen.findByLabelText('Window')).toBeInTheDocument()
+        expect(screen.getByLabelText('Timezone')).toBeInTheDocument()
+    })
+
+    it('loads a saved window', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({
+            transcription_offhours_enabled: true,
+            transcription_offhours_start: '22:00',
+            transcription_offhours_end: '06:00',
+            transcription_offhours_timezone: 'America/New_York',
+        }))
+        render(<TranscriptionSettingsSection />)
+
+        const start = await screen.findByLabelText('Window')
+        await waitFor(() => expect(start).toHaveValue('22:00'))
+        expect(screen.getByLabelText('Timezone')).toHaveValue('America/New_York')
+    })
+
+    it('saves the window alongside the rest of the transcription settings', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({
+            transcription_offhours_enabled: true,
+            transcription_offhours_start: '01:00',
+            transcription_offhours_end: '07:00',
+            transcription_offhours_timezone: 'UTC',
+        }))
+        render(<TranscriptionSettingsSection />)
+        await screen.findByLabelText('Window')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                transcription_offhours_enabled: true,
+                transcription_offhours_start: '01:00',
+                transcription_offhours_end: '07:00',
+                transcription_offhours_timezone: 'UTC',
+            })
+        ))
+    })
+
+    it("explains that a job in flight pauses and resumes rather than restarting", async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ transcription_offhours_enabled: true }))
+        render(<TranscriptionSettingsSection />)
+
+        expect(await screen.findByText(/resumes from that point next window/)).toBeInTheDocument()
+    })
+
+    it("surfaces the server's reason when it rejects an invalid window", async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ transcription_offhours_enabled: true }))
+        updateSettingsMock.mockRejectedValue(
+            new Error('Off-hours window start and end must differ')
+        )
+        render(<TranscriptionSettingsSection />)
+        await screen.findByLabelText('Window')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(await screen.findByText(/start and end must differ/)).toBeInTheDocument()
+    })
 })
 
 describe('ABSSettingsSection', () => {

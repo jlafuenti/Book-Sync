@@ -10,7 +10,10 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from services.transcription_providers.base import ProviderUnavailableError
+from services.transcription_providers.base import (
+    ProviderUnavailableError,
+    TranscriptionPaused,
+)
 from services.transcription_providers.remote import RemoteWhisperProvider
 
 
@@ -49,6 +52,9 @@ async def test_reattach_detects_restart_and_raises_retriable_error(tmp_path):
             # visibly restarted, which is a guaranteed 404.
             result_endpoint_calls += 1
             return _json_response(404, {"detail": "Result not found or expired"})
+
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
 
         if request.url.path == "/v1/transcribe":
             return _json_response(
@@ -111,6 +117,8 @@ async def test_sends_bearer_token_on_every_request_when_api_key_configured(tmp_p
         seen_auth_headers.append(request.headers.get("authorization"))
         if request.url.path == "/v1/result/book.m4b":
             return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
         if request.url.path == "/v1/transcribe":
             return _json_response(
                 200, {"sentences": [], "duration_seconds": 1.0, "processing_time_seconds": 0.1}
@@ -139,6 +147,8 @@ async def test_omits_authorization_header_when_no_api_key_configured(tmp_path):
         seen_auth_headers.append(request.headers.get("authorization"))
         if request.url.path == "/v1/result/book.m4b":
             return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
         if request.url.path == "/v1/transcribe":
             return _json_response(
                 200, {"sentences": [], "duration_seconds": 1.0, "processing_time_seconds": 0.1}
@@ -152,3 +162,223 @@ async def test_omits_authorization_header_when_no_api_key_configured(tmp_path):
 
     assert seen_auth_headers, "expected at least one request to be made"
     assert all(h is None for h in seen_auth_headers)
+
+
+# ---------------------------------------------------------------------------
+# Off-hours pause / resume / unload (issue #106)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_is_available_ignores_whether_the_model_is_loaded():
+    """The worker lazy-loads and idle-unloads its model (#106). Treating
+    `model_loaded: false` as unhealthy would divert every job to the local
+    fallback — which isn't even installed in the production image."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/health"
+        return _json_response(200, {"status": "healthy", "model_loaded": False,
+                                    "model_state": "unloaded"})
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        assert await provider.is_available() is True
+
+
+@pytest.mark.asyncio
+async def test_is_available_false_when_worker_reports_unhealthy():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _json_response(200, {"status": "degraded"})
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        assert await provider.is_available() is False
+
+
+@pytest.mark.asyncio
+async def test_paused_response_raises_transcription_paused(tmp_path):
+    """A paused job is not a failure: the queue re-pends it with progress intact."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _json_response(200, {
+                "status": "paused",
+                "completed_through_sec": 1800,
+                "progress": 0.25,
+            })
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(TranscriptionPaused) as exc:
+            await provider.transcribe(str(audio_file))
+
+    assert exc.value.completed_through_sec == 1800
+    assert exc.value.progress == 0.25
+
+
+@pytest.mark.asyncio
+async def test_resumes_from_retained_audio_without_re_uploading(tmp_path):
+    """When the worker still holds the audio for a paused job, resuming must
+    not push the whole file over the wire again."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            assert request.url.params["filename"] == "book.m4b"
+            assert request.url.params["size"] == str(audio_file.stat().st_size)
+            return _json_response(200, {
+                "exists": True, "completed_through_sec": 1800,
+                "progress": 0.25, "audio_retained": True,
+            })
+        if request.url.path == "/v1/transcribe/resume":
+            return _json_response(200, {
+                "sentences": [{"text": "Hello.", "start_ms": 0, "end_ms": 900}],
+                "duration_seconds": 7200.0, "processing_time_seconds": 12.0,
+            })
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        sentences = await provider.transcribe(str(audio_file))
+
+    assert [s.text for s in sentences] == ["Hello."]
+    assert "/v1/transcribe/resume" in calls
+    assert "/v1/transcribe" not in calls, "resume must not re-upload the audio"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_upload_when_worker_dropped_the_audio(tmp_path):
+    """Checkpoint survives but the retained audio doesn't (e.g. /tmp was
+    cleared) — upload again; the worker still resumes from its checkpoint."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {
+                "exists": True, "completed_through_sec": 1800,
+                "progress": 0.25, "audio_retained": False,
+            })
+        if request.url.path == "/v1/transcribe":
+            return _json_response(
+                200, {"sentences": [], "duration_seconds": 1.0, "processing_time_seconds": 0.1}
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.transcribe(str(audio_file))
+
+    assert "/v1/transcribe" in calls
+    assert "/v1/transcribe/resume" not in calls
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_preflight_failure_does_not_block_transcription(tmp_path):
+    """The checkpoint probe is an optimisation. An older worker without the
+    endpoint (404), or a flaky one, must not stop the job."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(404, {"detail": "Not Found"})
+        if request.url.path == "/v1/transcribe":
+            return _json_response(
+                200, {"sentences": [], "duration_seconds": 1.0, "processing_time_seconds": 0.1}
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        assert await provider.transcribe(str(audio_file)) == []
+
+
+@pytest.mark.asyncio
+async def test_request_pause_posts_to_the_worker():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.headers.get("authorization")))
+        return _json_response(200, {"paused_requested": True})
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        assert await provider.request_pause() is True
+
+    assert seen == [("POST", "/v1/pause", "Bearer k")]
+
+
+@pytest.mark.asyncio
+async def test_request_pause_returns_false_when_worker_unreachable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        assert await provider.request_pause() is False
+
+
+@pytest.mark.asyncio
+async def test_release_resources_asks_the_worker_to_unload():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return _json_response(200, {"model_state": "unloaded"})
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.release_resources()
+
+    assert seen == [("POST", "/v1/unload")]
+
+
+@pytest.mark.asyncio
+async def test_release_resources_swallows_transport_errors():
+    """Best-effort housekeeping — an unreachable worker must not raise into
+    the queue's watchdog tick."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.release_resources()  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_discard_checkpoint_deletes_remote_state(tmp_path):
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, dict(request.url.params)))
+        return _json_response(200, {"deleted": True})
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.discard_checkpoint(str(audio_file))
+
+    assert seen == [(
+        "DELETE", "/v1/checkpoint",
+        {"filename": "book.m4b", "size": str(audio_file.stat().st_size)},
+    )]
