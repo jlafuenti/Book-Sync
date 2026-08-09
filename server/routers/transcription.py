@@ -10,6 +10,8 @@ Endpoints:
   POST /queue/batch         — Add multiple pairs to the queue
   DELETE /queue/{item_id}   — Remove a queue item
   PUT  /queue/{item_id}/priority — Change priority of a queue item
+  POST /queue/{item_id}/run-now  — Dispatch now, bypassing the off-hours window
+  GET  /offhours            — Current off-hours window state (#106)
 """
 
 import asyncio
@@ -28,6 +30,7 @@ from models.transcription_queue import TranscriptionQueueItem
 from schemas import (
     TranscriptionStatusResponse,
     SyncMapTextUpdate,
+    OffHoursStatusResponse,
     QueueItemResponse,
     QueueAddRequest,
     QueuePriorityUpdate,
@@ -187,6 +190,8 @@ async def get_queue(
             created_at=item.created_at,
             started_at=item.started_at,
             completed_at=item.completed_at,
+            force_run=bool(item.force_run),
+            paused_at=item.paused_at,
         ))
 
     return responses
@@ -223,6 +228,8 @@ async def batch_add_to_queue(
             message=item.message,
             retry_count=item.retry_count or 0,
             created_at=item.created_at,
+            force_run=bool(item.force_run),
+            paused_at=item.paused_at,
         ))
 
     return responses
@@ -259,6 +266,65 @@ async def update_queue_priority(
             detail="Cannot update priority. Item may not exist or is not in pending state.",
         )
     return {"status": "updated", "priority": body.priority}
+
+
+@router.post("/queue/{item_id}/run-now", response_model=QueueItemResponse)
+async def run_queue_item_now(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """
+    Dispatch a queued item immediately, ignoring the off-hours window (#106).
+
+    The override is sticky: a job started this way also isn't paused when the
+    window would otherwise have closed under it.
+    """
+    result = await db.execute(
+        select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+    if item.status not in ("pending", "in_progress"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot run a {item.status} item — only queued items can be started.",
+        )
+
+    item.force_run = True
+    if item.status == "pending":
+        item.message = "Starting now (off-hours window bypassed)"
+    await db.commit()
+    await db.refresh(item)
+
+    pair_result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook))
+        .where(BookPair.id == item.book_pair_id)
+    )
+    return _queue_item_to_response(item, pair_result.scalar_one_or_none())
+
+
+@router.get("/offhours", response_model=OffHoursStatusResponse)
+async def get_offhours_status(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Current off-hours window state, for the queue page's banner."""
+    from services import offhours
+
+    config = await offhours.load_config(db)
+    is_open = offhours.is_open(config)
+    return OffHoursStatusResponse(
+        enabled=config.enabled,
+        open=is_open,
+        start=offhours.format_hhmm(config.start),
+        end=offhours.format_hhmm(config.end),
+        timezone=config.tz.key,
+        opens_at=offhours.next_open(config) if config.enabled and not is_open else None,
+        closes_at=offhours.next_close(config) if config.enabled and is_open else None,
+    )
 
 
 @router.get("/queue/history", response_model=List[QueueItemResponse])
@@ -304,6 +370,8 @@ async def get_queue_history(
             created_at=item.created_at,
             started_at=item.started_at,
             completed_at=item.completed_at,
+            force_run=bool(item.force_run),
+            paused_at=item.paused_at,
         ))
 
     return responses
@@ -442,14 +510,27 @@ async def reset_stale_transcriptions():
     """
     On startup, find any book pairs that are stuck in 'transcribing'
     state (likely due to a server crash/restart) and reset them.
+
+    A pair whose queue item is still live (pending or in_progress) is *not*
+    stale — the queue manager requeues those itself. This matters most for a
+    job paused for the off-hours window (#106), which legitimately sits in
+    `transcribing` for hours: erroring it here would contradict a queue item
+    that is about to resume from its checkpoint.
     """
     from services.transcription import logger
 
     async with async_session() as db:
+        live_pairs = await db.execute(
+            select(TranscriptionQueueItem.book_pair_id).where(
+                TranscriptionQueueItem.status.in_(["pending", "in_progress"])
+            )
+        )
+        queued_pair_ids = set(live_pairs.scalars().all())
+
         result = await db.execute(
             select(BookPair).where(BookPair.status == PairStatus.TRANSCRIBING)
         )
-        stale_pairs = result.scalars().all()
+        stale_pairs = [p for p in result.scalars().all() if p.id not in queued_pair_ids]
 
         if stale_pairs:
             logger.warning(
@@ -484,7 +565,10 @@ def _queue_item_to_response(
         progress=item.progress,
         message=item.message,
         error_message=item.error_message,
+        retry_count=item.retry_count or 0,
         created_at=item.created_at,
         started_at=item.started_at,
         completed_at=item.completed_at,
+        force_run=bool(item.force_run),
+        paused_at=item.paused_at,
     )

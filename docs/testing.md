@@ -298,18 +298,21 @@ will fail it spuriously. Only the full `koverVerifyDebug` is the gate.
 
 ## Jetson (`jetson/`)
 
-`jetson/test_server.py` covers the shared-secret auth guard and the oversized-chunk
-decision logic (`_is_chunk_oversized` / `_shrink_chunk_size` in `jetson/server.py`).
-It **is wired into CI** (`.github/workflows/jetson-tests.yml`, path-filtered to
-`jetson/**`) — `jetson/conftest.py` stubs `nltk` and `faster_whisper` in `sys.modules`
-so the suite runs with only `fastapi`/`uvicorn`/`pytest` installed, no GPU or network
-access needed. Run it locally with:
+`jetson/test_server.py` covers the shared-secret auth guard, the oversized-chunk
+decision logic (`_is_chunk_oversized` / `_shrink_chunk_size` in `jetson/server.py`),
+and the off-hours control surface from #106: lazy model load, the idle-unload decision
+table, and the pause → checkpoint → resume cycle. It **is wired into CI**
+(`.github/workflows/jetson-tests.yml`, path-filtered to `jetson/**`) —
+`jetson/conftest.py` stubs `nltk` and `faster_whisper` in `sys.modules` so the suite
+runs with only `fastapi`/`uvicorn`/`httpx`/`pytest` installed, no GPU or network access
+needed. Since #106 the startup event no longer loads the model, so `TestClient` is
+usable here; `_transcribe_file` is driven with a fake model plus stubbed ffmpeg helpers
+(`_get_audio_duration`, `load_audio_chunk`). Run it locally with:
 
 ```bash
 cd jetson && python -m pytest test_server.py -v
 ```
 
-The rest of the transcription pipeline (actual ffmpeg chunk loading, faster-whisper
-transcription, checkpointing) still has no automated test — that needs real audio and
-a GPU, which is out of scope for this suite. The client-side instance_id retry logic is
+Real ffmpeg chunk loading and real faster-whisper transcription still have no automated
+test — those need real audio and a GPU, which is out of scope for this suite. The client-side instance_id retry logic is
 covered in `server/tests/test_remote_transcription_provider.py`.

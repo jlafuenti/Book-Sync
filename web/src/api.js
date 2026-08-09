@@ -488,6 +488,22 @@ export async function getQueueHistory(limit = 50, offset = 0) {
     return resp.json();
 }
 
+// Dispatch a queued item immediately, ignoring the off-hours window (#106).
+export async function runQueueItemNow(itemId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}/run-now`, {
+        method: 'POST',
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to start item');
+    return resp.json();
+}
+
+// Current off-hours window state, for the queue page banner.
+export async function getOffHoursStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/offhours`);
+    if (!resp.ok) throw new Error('Failed to fetch off-hours status');
+    return resp.json();
+}
+
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {
@@ -772,8 +788,10 @@ export async function updateSettings(settings) {
         },
         body: JSON.stringify(settings),
     });
-    if (!resp.ok) throw new Error('Failed to update settings');
-    return resp.json();
+    // Surface the server's `detail` — settings validation (e.g. an invalid
+    // off-hours window) explains exactly what's wrong, and a generic message
+    // would throw that away.
+    return _jsonOrThrow(resp, 'Failed to update settings');
 }
 
 export async function testRemoteConnection(url, key = '') {

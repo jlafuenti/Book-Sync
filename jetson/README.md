@@ -80,7 +80,36 @@ BookSync → Settings → Transcription:
 - **Remote Server API Key**: the same value from step 3 (already filled in if you generated it
   from the UI).
 - Click **Test Connection** — it should report the GPU and model status. A `401`/authentication
-  error here means the two keys don't match.
+  error here means the two keys don't match. **"Model: Not Loaded" is normal** — see below.
+
+## Sharing the GPU (issue #106)
+
+This worker is built to coexist with another GPU tenant (e.g. Home Assistant's voice
+pipeline) on the Orin's 8GB of unified memory:
+
+- **The model loads on the first job, not at startup**, and is released again after
+  `MODEL_IDLE_UNLOAD_MIN` idle minutes (default 30; `0` keeps it resident forever, the
+  pre-#106 behaviour). An idle worker therefore reports `model_state: "unloaded"` on
+  `/v1/health` and holds no GPU memory. That is healthy, not broken — the main server's
+  availability check looks at `status`, not `model_loaded`.
+- **A running job can be paused at a chunk boundary.** BookSync posts `/v1/pause` when its
+  off-hours window closes; the worker finishes the chunk it's on (≤ ~15 minutes of audio),
+  writes a checkpoint, parks the source audio next to it, unloads the model, and answers
+  the transcription request with `{"status": "paused", ...}` instead of a transcript.
+- **Resuming costs no upload.** `POST /v1/transcribe/resume` continues from the retained
+  audio; BookSync falls back to a normal upload if the file has been swept. Either way the
+  checkpoint means no audio is transcribed twice.
+- Nothing partial is ever served from `/v1/result/{filename}` — a truncated transcript is
+  indistinguishable from a complete one to the client, so paused jobs stay out of that cache.
+
+Turn the schedule itself on in BookSync → Settings → Transcription → **Only transcribe
+during off-hours**.
+
+To watch the memory actually come back:
+
+```bash
+watch -n 5 'free -h; curl -s -H "Authorization: Bearer $TRANSCRIPTION_API_KEY" localhost:9000/v1/health | jq .model_state'
+```
 
 ## Troubleshooting
 
