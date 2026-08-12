@@ -184,6 +184,66 @@ def test_existing_bookmarks_survive_locator_audio_ms_migration():
     assert row.locator_audio_ms is None
 
 
+def test_duplicate_user_progress_rows_are_deduped_then_constrained():
+    """0006 must survive a database that already carries the duplicate (#64).
+
+    Creating the unique index first would abort the whole migration — and every
+    long-lived database is a candidate, because the old `GET /progress` INSERTed
+    on a miss. The survivor must be the newest row, carrying whatever `epub_cfi`
+    the group had, and the index must actually bite afterwards.
+    """
+    from alembic import command
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+
+    command.downgrade(cfg, "base")
+    command.upgrade(cfg, "0005_offhours_queue")
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO users (username, email, hashed_password, is_admin, is_active, created_at) "
+            "VALUES ('racer', 'racer@example.com', 'x', false, true, now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/e.epub', 'epub', now())"
+        ))
+        # The two rows the race left: 3ms apart, and the CFI on the *older* one.
+        for chapter, cfi, offset in ((3, "epubcfi(/6/4!/4/2)", "4 milliseconds"),
+                                     (9, None, "1 millisecond")):
+            conn.execute(
+                text(
+                    "INSERT INTO user_progress "
+                    "(user_id, ebook_id, media_type, epub_chapter, epub_cfi, "
+                    " is_completed, updated_at) "
+                    "SELECT (SELECT id FROM users WHERE username='racer'), "
+                    "       (SELECT id FROM ebooks LIMIT 1), 'EBOOK', :ch, :cfi, "
+                    "       false, now() - CAST(:off AS interval)"
+                ),
+                {"ch": chapter, "cfi": cfi, "off": offset},
+            )
+
+    command.upgrade(cfg, "head")
+
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "SELECT epub_chapter, epub_cfi FROM user_progress"
+        )).all()
+    assert len(rows) == 1
+    assert rows[0].epub_chapter == 9
+    assert rows[0].epub_cfi == "epubcfi(/6/4!/4/2)"
+
+    with pytest.raises(Exception):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO user_progress "
+                "(user_id, ebook_id, media_type, is_completed, updated_at) "
+                "SELECT (SELECT id FROM users WHERE username='racer'), "
+                "       (SELECT id FROM ebooks LIMIT 1), 'EBOOK', false, now()"
+            ))
+
+
 def test_no_model_migration_drift():
     """The migrations and the ORM models must stay in sync (the drift gate).
 
