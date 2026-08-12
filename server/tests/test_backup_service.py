@@ -14,6 +14,7 @@ import pytest
 from config import settings
 from models.settings import SystemSetting
 from services import backup_service as bs
+from utils import utcnow
 
 
 def _touch_backup(bdir, bid, *, covers=True, label=None, mtime=None):
@@ -234,7 +235,6 @@ def test_dump_path_for_download(monkeypatch, tmp_path):
 
 # ── scheduler tick ─────────────────────────────────────────────────────────
 
-import datetime as _dt
 
 
 async def test_tick_takes_baseline_when_empty(monkeypatch, tmp_path, create_seams):
@@ -252,24 +252,24 @@ async def test_tick_creates_scheduled_at_hour(monkeypatch, tmp_path, create_seam
     monkeypatch.setattr(settings, "covers_dir", str(tmp_path / "src"))
     (tmp_path / "src").mkdir()
     _touch_backup(tmp_path, "2020-01-01")  # not a fresh deploy
-    db.add(SystemSetting(key="backup_hour", value=str(_dt.datetime.utcnow().hour)))
+    db.add(SystemSetting(key="backup_hour", value=str(utcnow().hour)))
     await db.commit()
 
     await bs._tick()
 
-    today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+    today = utcnow().strftime("%Y-%m-%d")
     assert (tmp_path / f"booksync-db-{today}.dump").exists()
 
 
 async def test_tick_skips_off_hour(monkeypatch, tmp_path, create_seams, db):
     monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
     _touch_backup(tmp_path, "2020-01-01")
-    db.add(SystemSetting(key="backup_hour", value=str((_dt.datetime.utcnow().hour + 1) % 24)))
+    db.add(SystemSetting(key="backup_hour", value=str((utcnow().hour + 1) % 24)))
     await db.commit()
 
     await bs._tick()
 
-    today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+    today = utcnow().strftime("%Y-%m-%d")
     assert not (tmp_path / f"booksync-db-{today}.dump").exists()
 
 

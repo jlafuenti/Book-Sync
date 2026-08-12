@@ -7,6 +7,7 @@ from sqlalchemy import String, DateTime, Integer, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
+from utils import utcnow
 
 
 class AuditLog(Base):
@@ -23,7 +24,7 @@ class AuditLog(Base):
     details: Mapped[str] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True
+        DateTime, default=utcnow, nullable=False, index=True
     )
 
     def __repr__(self) -> str:

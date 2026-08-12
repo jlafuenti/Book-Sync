@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+from utils import utcnow
 
 # Portable JSON everywhere, but real JSONB on Postgres so fresh databases built
 # from these models match the production schema (which the old boot-time ALTER
@@ -40,7 +41,7 @@ class EBook(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=True)
     format: Mapped[str] = mapped_column(String(10), default="epub")  # epub, pdf, etc.
     uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, nullable=False
     )
     series: Mapped[str] = mapped_column(String(500), nullable=True)
     series_index: Mapped[float] = mapped_column(Float, nullable=True)
@@ -97,7 +98,7 @@ class AudioBook(Base):
     metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
     metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
     uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, nullable=False
     )
 
     # Extended metadata fields

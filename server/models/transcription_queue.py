@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 import datetime
 
 from database import Base
+from utils import utcnow
 
 class TranscriptionQueueItem(Base):
     __tablename__ = "transcription_queue"
@@ -41,7 +42,7 @@ class TranscriptionQueueItem(Base):
     paused_at = Column(DateTime, nullable=True)
 
 
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     

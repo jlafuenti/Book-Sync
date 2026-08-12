@@ -11,6 +11,7 @@ from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+from utils import utcnow
 
 
 class SyncMap(Base):
@@ -30,7 +31,7 @@ class SyncMap(Base):
     total_sentences: Mapped[int] = mapped_column(Integer, default=0)
     total_chapters: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, nullable=False
     )
 
     # Relationships
