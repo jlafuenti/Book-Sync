@@ -1,7 +1,14 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updateProgress, updateBookmark, getAccessToken, sendPositionKeepalive, getDeviceId, getDeviceName } from '../api'
+import { getAudiobookStreamUrl, updatePosition, getAccessToken, sendPositionKeepalive, getDeviceId, getDeviceName } from '../api'
 
 const AudioPlayerContext = createContext(null)
+
+// Where a player save goes. A paired audiobook shares one record with its
+// ebook, so the reader and the player can't drift apart; an unpaired one gets
+// its own standalone record.
+function positionTarget(audiobook) {
+    return audiobook?.pairId ? ['pair', audiobook.pairId] : ['audiobook', audiobook.id]
+}
 
 // Write a history-log entry every 30 min of continuous playback (in addition
 // to pause / stop / ended boundaries). Keeps the Session History panel clean —
@@ -48,7 +55,7 @@ export function AudioPlayerProvider({ children }) {
     // id -- e.g. this device's retried/out-of-order write bouncing off itself.
     const [staleConflict, setStaleConflict] = useState(null)
 
-    // Attach to every updateProgress/updateBookmark call as `.then(handleConflict)`.
+    // Attach to every updatePosition call as `.then(handleConflict)`.
     // Passes the result through unchanged so it stays chainable.
     const handleConflict = useCallback((result) => {
         if (result && result.rejected && result.device_id && result.device_id !== getDeviceId()) {
@@ -80,27 +87,21 @@ export function AudioPlayerProvider({ children }) {
             // already uses the ref for the same reason.
             const ab = currentAudiobookRef.current
             if (ab) {
-                const capturedAt = new Date().toISOString()
-                updateProgress('audiobook', ab.id, {
+                // ONE write: completion, final position, and the "finished"
+                // history entry travel together. As two writes they were
+                // adjudicated separately, so the completion flag could land
+                // while the position was rejected as stale (or vice versa).
+                const [scope, id] = positionTarget(ab)
+                updatePosition(scope, id, {
+                    source: 'audiobook',
                     is_completed: true,
+                    audio_position_ms: audio ? Math.floor(audio.currentTime * 1000) : undefined,
+                    append_to_log: true,
                     device_id: getDeviceId(),
                     device_name: getDeviceName(),
-                    captured_at: capturedAt,
+                    captured_at: new Date().toISOString(),
                 }).then(handleConflict).catch(() => {})
-                // Log a "finished" history entry so the audiobook's last session
-                // is visible in Session History.
-                if (ab.pairId && audio) {
-                    const posMs = Math.floor(audio.currentTime * 1000)
-                    updateBookmark(ab.pairId, {
-                        source: 'audiobook',
-                        audio_position_ms: posMs,
-                        append_to_log: true,
-                        device_id: getDeviceId(),
-                        device_name: getDeviceName(),
-                        captured_at: capturedAt,
-                    }).then(handleConflict).catch(() => {})
-                    lastLogTimeRef.current = Date.now()
-                }
+                lastLogTimeRef.current = Date.now()
             }
         }
 
@@ -178,30 +179,19 @@ export function AudioPlayerProvider({ children }) {
             saveIntervalRef.current = setInterval(() => {
                 const audio = audioRef.current
                 if (audio && currentAudiobook) {
-                    const posMs = Math.floor(audio.currentTime * 1000)
-                    const capturedAt = new Date().toISOString()
-                    // UserProgress heartbeat — untouched, doesn't feed the history view.
-                    updateProgress('audiobook', currentAudiobook.id, {
-                        audio_position_ms: posMs,
-                        book_pair_id: currentAudiobook.pairId || undefined,
+                    // One write per tick; flip append_to_log only when the
+                    // 30-min continuous-playback threshold has been crossed.
+                    const shouldLog = Date.now() - lastLogTimeRef.current >= LOG_INTERVAL_MS
+                    if (shouldLog) lastLogTimeRef.current = Date.now()
+                    const [scope, id] = positionTarget(currentAudiobook)
+                    updatePosition(scope, id, {
+                        source: 'audiobook',
+                        audio_position_ms: Math.floor(audio.currentTime * 1000),
+                        append_to_log: shouldLog,
                         device_id: getDeviceId(),
                         device_name: getDeviceName(),
-                        captured_at: capturedAt,
+                        captured_at: new Date().toISOString(),
                     }).then(handleConflict).catch(() => {})
-                    if (currentAudiobook.pairId) {
-                        // One heartbeat per tick; flip append_to_log only when the
-                        // 30-min continuous-playback threshold has been crossed.
-                        const shouldLog = Date.now() - lastLogTimeRef.current >= LOG_INTERVAL_MS
-                        if (shouldLog) lastLogTimeRef.current = Date.now()
-                        updateBookmark(currentAudiobook.pairId, {
-                            source: 'audiobook',
-                            audio_position_ms: posMs,
-                            append_to_log: shouldLog,
-                            device_id: getDeviceId(),
-                            device_name: getDeviceName(),
-                            captured_at: capturedAt,
-                        }).then(handleConflict).catch(() => {})
-                    }
                 }
             }, 5000)
         }
@@ -219,19 +209,18 @@ export function AudioPlayerProvider({ children }) {
     // claimFormat = was actually playing at this instant (product rule: a
     // save only claims `source` when playing, or triggered by an explicit
     // user command — this teardown is neither when the player is paused/idle
-    // in the background). Uses the canonical position endpoint rather than
-    // the legacy bookmark one specifically so `source` can be omitted here —
-    // `BookmarkUpdate.source` is required, `PositionUpdate.source` is not.
+    // in the background). `PositionUpdate.source` is optional precisely so
+    // this save can move the position without re-claiming the format.
     useEffect(() => {
         const onUnload = () => {
             const audio = audioRef.current
             const ab = currentAudiobookRef.current
-            if (!ab?.pairId || !audio) return
-            const posMs = Math.floor(audio.currentTime * 1000)
+            if (!ab || !audio) return
             const claimFormat = playingRef.current
-            sendPositionKeepalive('pair', ab.pairId, {
+            const [scope, id] = positionTarget(ab)
+            sendPositionKeepalive(scope, id, {
                 source: claimFormat ? 'audiobook' : undefined,
-                audio_position_ms: posMs,
+                audio_position_ms: Math.floor(audio.currentTime * 1000),
                 append_to_log: true,
                 device_id: getDeviceId(),
                 device_name: getDeviceName(),
@@ -292,26 +281,16 @@ export function AudioPlayerProvider({ children }) {
         // Save position immediately on pause. Pause is a session boundary —
         // log a history entry and reset the 30-min continuous-playback timer.
         if (currentAudiobook && audioRef.current) {
-            const posMs = Math.floor(audioRef.current.currentTime * 1000)
-            const capturedAt = new Date().toISOString()
-            updateProgress('audiobook', currentAudiobook.id, {
-                audio_position_ms: posMs,
-                book_pair_id: currentAudiobook.pairId || undefined,
+            const [scope, id] = positionTarget(currentAudiobook)
+            updatePosition(scope, id, {
+                source: 'audiobook',
+                audio_position_ms: Math.floor(audioRef.current.currentTime * 1000),
+                append_to_log: true,
                 device_id: getDeviceId(),
                 device_name: getDeviceName(),
-                captured_at: capturedAt,
+                captured_at: new Date().toISOString(),
             }).then(handleConflict).catch(() => {})
-            if (currentAudiobook.pairId) {
-                updateBookmark(currentAudiobook.pairId, {
-                    source: 'audiobook',
-                    audio_position_ms: posMs,
-                    append_to_log: true,
-                    device_id: getDeviceId(),
-                    device_name: getDeviceName(),
-                    captured_at: capturedAt,
-                }).then(handleConflict).catch(() => {})
-                lastLogTimeRef.current = Date.now()
-            }
+            lastLogTimeRef.current = Date.now()
         }
     }, [currentAudiobook, handleConflict])
 

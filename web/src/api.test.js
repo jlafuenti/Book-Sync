@@ -456,109 +456,29 @@ describe('getDeviceName()', () => {
     })
 })
 
-describe('updateBookmark()', () => {
-    it('sends device_id, device_name, and captured_at in the payload', async () => {
+describe('resetPosition()', () => {
+    it('DELETEs the scoped position endpoint', async () => {
         localStorage.setItem('tandem_token', 'access-1')
         const fetchMock = vi.fn().mockResolvedValue({
-            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
+            ok: true, status: 200, json: async () => ({ status: 'ok' }),
         })
         vi.stubGlobal('fetch', fetchMock)
 
-        const { updateBookmark } = await import('./api')
-        await updateBookmark(5, {
-            source: 'audiobook',
-            audio_position_ms: 1000,
-            device_id: 'device-abc',
-            device_name: 'Web · Chrome',
-            captured_at: '2026-07-20T12:00:00.000Z',
-        })
+        const { resetPosition } = await import('./api')
+        const result = await resetPosition('ebook', 7)
 
-        const [, options] = fetchMock.mock.calls[0]
-        const sentBody = JSON.parse(options.body)
-        expect(sentBody).toMatchObject({
-            device_id: 'device-abc',
-            device_name: 'Web · Chrome',
-            captured_at: '2026-07-20T12:00:00.000Z',
-        })
+        const [url, options] = fetchMock.mock.calls[0]
+        expect(url).toContain('/sync/position/ebook/7')
+        expect(options.method).toBe('DELETE')
+        expect(result).toEqual({ status: 'ok' })
     })
 
-    it('returns the parsed body unchanged (no rejected marker) on a normal 200', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
-        }))
-
-        const { updateBookmark } = await import('./api')
-        const result = await updateBookmark(5, { source: 'audiobook', audio_position_ms: 1000 })
-
-        expect(result).toEqual({ audio_position_ms: 1000 })
-        expect(result.rejected).toBeUndefined()
-    })
-
-    it('returns { rejected: true, ...serverState } on 409 instead of throwing', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: false, status: 409, json: async () => ({ audio_position_ms: 5000, device_name: 'Phone' }),
-        }))
-
-        const { updateBookmark } = await import('./api')
-        const result = await updateBookmark(5, { source: 'audiobook', audio_position_ms: 1000 })
-
-        expect(result).toEqual({ audio_position_ms: 5000, device_name: 'Phone', rejected: true })
-    })
-
-    it('still throws on a genuine server error (not 409)', async () => {
+    it('throws on a server error', async () => {
         localStorage.setItem('tandem_token', 'access-1')
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
 
-        const { updateBookmark } = await import('./api')
-        await expect(updateBookmark(5, { source: 'audiobook' })).rejects.toThrow('Failed to update bookmark')
-    })
-})
-
-describe('updateProgress()', () => {
-    it('sends device_id, device_name, and captured_at in the payload', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        const fetchMock = vi.fn().mockResolvedValue({
-            ok: true, status: 200, json: async () => ({ audio_position_ms: 1000 }),
-        })
-        vi.stubGlobal('fetch', fetchMock)
-
-        const { updateProgress } = await import('./api')
-        await updateProgress('audiobook', 7, {
-            audio_position_ms: 1000,
-            device_id: 'device-abc',
-            device_name: 'Web · Chrome',
-            captured_at: '2026-07-20T12:00:00.000Z',
-        })
-
-        const [, options] = fetchMock.mock.calls[0]
-        const sentBody = JSON.parse(options.body)
-        expect(sentBody).toMatchObject({
-            device_id: 'device-abc',
-            device_name: 'Web · Chrome',
-            captured_at: '2026-07-20T12:00:00.000Z',
-        })
-    })
-
-    it('returns { rejected: true, ...serverState } on 409 instead of throwing', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: false, status: 409, json: async () => ({ audio_position_ms: 5000 }),
-        }))
-
-        const { updateProgress } = await import('./api')
-        const result = await updateProgress('audiobook', 7, { audio_position_ms: 1000 })
-
-        expect(result).toEqual({ audio_position_ms: 5000, rejected: true })
-    })
-
-    it('still throws on a genuine server error (not 409)', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
-
-        const { updateProgress } = await import('./api')
-        await expect(updateProgress('audiobook', 7, {})).rejects.toThrow('Failed to update progress')
+        const { resetPosition } = await import('./api')
+        await expect(resetPosition('ebook', 7)).rejects.toThrow('Failed to reset position')
     })
 })
 

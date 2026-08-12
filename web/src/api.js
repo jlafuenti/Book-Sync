@@ -609,23 +609,8 @@ export async function getProgress(mediaType, mediaId) {
     return resp.json();
 }
 
-export async function updateProgress(mediaType, mediaId, progressData) {
-    const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`, {
-        method: 'PUT',
-        body: JSON.stringify(progressData),
-    });
-    // A 409 means the write carried a `captured_at` older than what the server
-    // already has — an expected outcome of a stale/out-of-order device write,
-    // not an error. The body is the current authoritative ProgressResponse; the
-    // write was NOT applied. Mark it so callers can distinguish this from a
-    // normal save without treating it as a thrown error.
-    if (resp.status === 409) {
-        const body = await resp.json();
-        return Object.assign(body, { rejected: true });
-    }
-    if (!resp.ok) throw new Error('Failed to update progress');
-    return resp.json();
-}
+// There is no `updateProgress` — `user_progress` is a read-only projection of
+// the canonical record (issue #102). Write with `updatePosition` below.
 
 export async function resetPairProgress(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress/pair/${pairId}`, {
@@ -637,7 +622,7 @@ export async function resetPairProgress(pairId) {
 
 // ============ Canonical position ============
 //
-// One record per book, written atomically. Replaces the pair of
+// One record per book, written atomically. Replaced the pair of
 // updateProgress + updateBookmark calls, which were adjudicated separately —
 // either could be rejected while the other applied, leaving the two rows
 // describing different positions with nothing to reconcile them.
@@ -671,28 +656,26 @@ export async function updatePosition(scope, id, position) {
     return resp.json();
 }
 
-// ============ Bookmarks ============
-
-export async function getBookmark(pairId) {
-    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`);
-    if (!resp.ok) throw new Error('Failed to fetch bookmark');
-    return resp.json();
-}
-
-export async function updateBookmark(pairId, data) {
-    const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
+/**
+ * Clear the user's position for a scope — the canonical reset.
+ *
+ * Standalone (unpaired) media had no reset endpoint, so this used to be faked
+ * by PUTting zeros through the legacy progress adapter. That left the
+ * canonical record in place for the next write to resurrect, which is how
+ * "Reset Progress" silently un-reset itself.
+ */
+export async function resetPosition(scope, id) {
+    const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`, {
+        method: 'DELETE',
     });
-    // See the matching comment in updateProgress: a 409 is an expected
-    // "rejected — server state is newer" result, not an error.
-    if (resp.status === 409) {
-        const body = await resp.json();
-        return Object.assign(body, { rejected: true });
-    }
-    if (!resp.ok) throw new Error('Failed to update bookmark');
+    if (!resp.ok) throw new Error('Failed to reset position');
     return resp.json();
 }
+
+// ============ Bookmarks ============
+//
+// Only the history log remains — the bookmark GET/PUT went with the legacy
+// adapters (issue #102). Read and write positions with getPosition/updatePosition.
 
 export async function getBookmarkLog(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}/log`);
@@ -701,7 +684,7 @@ export async function getBookmarkLog(pairId) {
 }
 
 /**
- * Fire-and-forget bookmark update that survives page unload.
+ * Fire-and-forget position update that survives page unload.
  *
  * Used by AudioPlayerContext's `beforeunload` / `pagehide` handler to log a
  * final "stop" history entry when the user closes the tab. A regular fetch
@@ -710,34 +693,14 @@ export async function getBookmarkLog(pairId) {
  *
  * Not awaited — errors are swallowed because there is no UI context left to
  * surface them in. Silent failure is acceptable: the last 5-second heartbeat
- * save kept `Bookmark.audio_position_ms` fresh, so at worst we lose the
- * history-log entry, not the resume position.
- */
-export function sendBookmarkKeepalive(pairId, data) {
-    if (!accessToken) return;
-    try {
-        fetch(`${API_BASE}/sync/bookmark/${pairId}`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${accessToken}`,
-            },
-            body: JSON.stringify(data),
-            keepalive: true,
-        });
-    } catch {}
-}
-
-/**
- * Same as [sendBookmarkKeepalive] but against the canonical position endpoint
- * rather than the legacy bookmark one. Used for the audio player's tab-close
- * save, which must be able to OMIT `source` when the player wasn't actively
- * playing at unload (product rule: a save only claims the format when
- * playing or triggered by an explicit user command — see
- * AudioPlayerContext's `onUnload`). The legacy bookmark endpoint's `source`
- * is required, so it can't express "leave the format alone"; the canonical
- * `PositionUpdate` schema treats an omitted `source` as "keep whatever is
- * stored" (server `schemas.PositionUpdate`).
+ * save kept the position fresh, so at worst we lose the history-log entry,
+ * not the resume position.
+ *
+ * It must be able to OMIT `source` when the player wasn't actively playing at
+ * unload (product rule: a save only claims the format when playing or
+ * triggered by an explicit user command — see AudioPlayerContext's
+ * `onUnload`). `PositionUpdate` treats an omitted `source` as "keep whatever
+ * is stored" (server `schemas.PositionUpdate`).
  */
 export function sendPositionKeepalive(scope, id, data) {
     if (!accessToken) return;

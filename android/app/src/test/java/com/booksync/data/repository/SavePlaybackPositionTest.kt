@@ -4,7 +4,6 @@ import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.BookmarkResponse
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
@@ -135,7 +134,7 @@ class SavePlaybackPositionTest {
     }
 
     @Test
-    fun `claimFormat=false falls back to the legacy endpoint without stamping source there either`() = runTest {
+    fun `claimFormat=false does not stamp source on the offline retry path either`() = runTest {
         val existing = BookmarkEntity(
             bookPairId = 42, source = "ebook", epubChapter = 5, epubSentenceIndex = 1,
             audioPositionMs = 1_000, updatedAt = "1000",
@@ -143,8 +142,6 @@ class SavePlaybackPositionTest {
         coEvery { bookmarkDao.getBookmark(42) } returns existing
         coEvery { api.updatePosition("pair", 42, any()) } returns
             Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
-        coEvery { api.updateBookmark(any(), any()) } returns
-            Response.success(mockk<BookmarkResponse>(relaxed = true))
 
         val savedBookmark = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, getPairs, updateProgress, resetPairProgress, getProgress, getBookmark, updateBookmark, getAccessToken, getDeviceId, getDeviceName } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updatePosition, resetPairProgress, resetPosition, getProgress, getPosition, getAccessToken, getDeviceId, getDeviceName } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
@@ -121,7 +121,6 @@ function ContinuePage() {
                     audiobookId: pairInfo.audiobookId,
                     ebookProgress: ebookProg ? {
                         percent: ebookProg.epub_progress_percent || 0,
-                        cfi: ebookProg.epub_cfi || null,
                         chapter: ebookProg.epub_chapter || 0,
                     } : null,
                     audioProgress: audioProg ? {
@@ -158,13 +157,13 @@ function ContinuePage() {
     const handleMarkComplete = async (item) => {
         setMenuOpen(null)
         try {
+            // One write for a pair: both halves share a single canonical
+            // record, so the two per-media writes this replaced could be
+            // adjudicated separately and leave the book half-complete.
             if (item.itemType === 'pair') {
-                await Promise.all([
-                    item.ebookId ? updateProgress('ebook', item.ebookId, { is_completed: true, ...deviceMeta() }).catch(() => {}) : null,
-                    item.audiobookId ? updateProgress('audiobook', item.audiobookId, { is_completed: true, ...deviceMeta() }).catch(() => {}) : null,
-                ].filter(Boolean))
+                await updatePosition('pair', item.book_pair_id, { is_completed: true, ...deviceMeta() })
             } else {
-                await updateProgress(item.itemType, item.mediaId, { is_completed: true, ...deviceMeta() })
+                await updatePosition(item.itemType, item.mediaId, { is_completed: true, ...deviceMeta() })
             }
             setItems(prev => prev.filter(i => i.itemId !== item.itemId))
         } catch (err) {
@@ -175,22 +174,14 @@ function ContinuePage() {
     const handleResetProgress = async (item) => {
         setMenuOpen(null)
         try {
+            // Scope-level DELETE removes the canonical bookmark + hints +
+            // user_progress server-side. The old per-leg zero-write left the
+            // bookmark in place, which re-seeded progress right back (issue:
+            // reset buttons not actually resetting).
             if (item.itemType === 'pair') {
-                // Pair-level DELETE removes the canonical bookmark + hints +
-                // user_progress server-side. The old per-leg zero-write left
-                // the bookmark in place, which re-seeded progress right back
-                // (issue: reset buttons not actually resetting).
                 await resetPairProgress(item.book_pair_id)
-            } else if (item.itemType === 'ebook') {
-                await updateProgress('ebook', item.mediaId, {
-                    is_completed: false, ...deviceMeta(),
-                    epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
-                })
             } else {
-                await updateProgress('audiobook', item.mediaId, {
-                    is_completed: false, ...deviceMeta(),
-                    audio_position_ms: 0,
-                })
+                await resetPosition(item.itemType, item.mediaId)
             }
             setItems(prev => prev.filter(i => i.itemId !== item.itemId))
         } catch (err) {
@@ -200,12 +191,13 @@ function ContinuePage() {
 
     // --- Navigation helpers ---
 
-    const openReader = (ebookId, pairId, cfi, chapter, title, audiobookId) => {
+    // No CFI is threaded through: EbookReader fetches the canonical position
+    // itself at open, which is fresher than any snapshot this page holds.
+    const openReader = (ebookId, pairId, chapter, title, audiobookId) => {
         const audiobook = mediaLookup.audiobooks[audiobookId] || null
         setReaderOpen({
             ebookId,
             pairId: pairId || null,
-            cfi: cfi || null,
             chapter: chapter || null,
             title,
             pairedAudiobookId: audiobookId || null,
@@ -224,13 +216,13 @@ function ContinuePage() {
         if (item.itemType === 'pair') {
             if (item.lastFormat === 'ebook' && item.ebookId) {
                 const eb = item.ebookProgress
-                openReader(item.ebookId, item.book_pair_id, eb?.cfi, eb?.chapter, item.book.title, item.audiobookId)
+                openReader(item.ebookId, item.book_pair_id, eb?.chapter, item.book.title, item.audiobookId)
             } else if (item.audiobookId) {
                 openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
             }
         } else if (item.itemType === 'ebook') {
             if (item.book.format === 'epub') {
-                openReader(item.mediaId, item.book_pair_id, item.epub_cfi, item.epub_chapter, item.book.title, null)
+                openReader(item.mediaId, item.book_pair_id, item.epub_chapter, item.book.title, null)
             } else {
                 navigate(`/book/ebook/${item.mediaId}`)
             }
@@ -243,9 +235,9 @@ function ContinuePage() {
         setMenuOpen(null)
         if (item.itemType === 'pair') {
             const eb = item.ebookProgress
-            openReader(item.ebookId, item.book_pair_id, eb?.cfi, eb?.chapter, item.book.title, item.audiobookId)
+            openReader(item.ebookId, item.book_pair_id, eb?.chapter, item.book.title, item.audiobookId)
         } else if (item.itemType === 'ebook') {
-            openReader(item.mediaId, item.book_pair_id, item.epub_cfi, item.epub_chapter, item.book.title, null)
+            openReader(item.mediaId, item.book_pair_id, item.epub_chapter, item.book.title, null)
         }
     }
 
@@ -274,16 +266,15 @@ function ContinuePage() {
             <EbookReader
                 ebookId={readerOpen.ebookId}
                 pairId={readerOpen.pairId}
-                initialCfi={readerOpen.cfi || null}
-                initialChapter={!readerOpen.cfi && readerOpen.chapter != null && readerOpen.chapter >= 0 ? readerOpen.chapter : null}
+                initialChapter={readerOpen.chapter != null && readerOpen.chapter >= 0 ? readerOpen.chapter : null}
                 initialTextPreview={readerOpen.textPreview || null}
                 bookTitle={readerOpen.title}
                 onClose={() => { setReaderOpen(null); loadData() }}
                 onSwitchToAudio={readerOpen.pairedAudiobookId ? async () => {
                     console.log(`[ContinuePage] onSwitchToAudio: pairId=${readerOpen.pairId}, audiobookId=${readerOpen.pairedAudiobookId}`)
-                    const bm = await getBookmark(readerOpen.pairId).catch(() => null)
-                    console.log(`[ContinuePage] bookmark:`, bm)
-                    let audioPositionMs = bm?.audio_position_ms || 0
+                    const pos = await getPosition('pair', readerOpen.pairId).catch(() => null)
+                    console.log(`[ContinuePage] position:`, pos)
+                    let audioPositionMs = pos?.audio_position_ms || 0
                     if (!audioPositionMs) {
                         const prog = await getProgress('audiobook', readerOpen.pairedAudiobookId).catch(() => null)
                         console.log(`[ContinuePage] fallback progress:`, prog)
@@ -305,19 +296,19 @@ function ContinuePage() {
                     console.log(`[ContinuePage] onSwitchToEbook: pairId=${pairId}, ebookId=${audioPlayer.pairedEbookId}, audioTime=${audioPlayer.currentTime}s`)
                     audioPlayer.pause()
                     const posMs = Math.floor(audioPlayer.currentTime * 1000)
-                    console.log(`[ContinuePage] updating bookmark: audioPos=${posMs}ms`)
-                    await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(e => console.warn('updateBookmark failed:', e))
-                    const bm = await getBookmark(pairId).catch(e => { console.warn('getBookmark failed:', e); return null })
-                    console.log(`[ContinuePage] bookmark after update:`, bm)
+                    console.log(`[ContinuePage] updating position: audioPos=${posMs}ms`)
+                    const pos = await updatePosition('pair', pairId, {
+                        source: 'audiobook', audio_position_ms: posMs, ...deviceMeta(),
+                    }).catch(e => { console.warn('updatePosition failed:', e); return null })
+                    console.log(`[ContinuePage] position after update:`, pos)
                     setPlayerOpen(false)
                     const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
-                    const chapter = bm?.epub_chapter ?? null
-                    const textPreview = bm?.epub_text_preview ?? null
+                    const chapter = pos?.epub_chapter ?? null
+                    const textPreview = pos?.epub_text_preview ?? null
                     console.log(`[ContinuePage] opening ebook at chapter=${chapter}, textPreview='${textPreview?.substring(0, 60)}', ebookId=${audioPlayer.pairedEbookId}`)
                     setReaderOpen({
                         ebookId: audioPlayer.pairedEbookId,
                         pairId,
-                        cfi: null,
                         chapter,
                         textPreview,
                         title: ebookBook?.title || 'Reading',

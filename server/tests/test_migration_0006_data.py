@@ -14,6 +14,14 @@ Three things have to hold:
    the web reader's precise restore hint; dropping it silently demotes the
    reader to a coarser rung of the restore ladder.
 3. Rows that were never duplicated are left completely alone.
+
+`user_progress.epub_cfi` no longer exists at head — migration 0007 dropped it
+(issue #102) — but 0006 still runs against databases that are at 0006, where it
+does. So these tests rebuild the *contemporary* shape: `_add_epub_cfi_column`
+puts the column back on the SQLite table the conftest built from today's ORM,
+and rows are inserted with raw SQL rather than the ORM, which no longer has the
+attribute. Testing 0006 against a post-0007 table would be testing a schema the
+migration can never encounter.
 """
 
 import importlib.util
@@ -38,6 +46,37 @@ def _load_migration():
     return module
 
 
+async def _add_epub_cfi_column(db):
+    """Restore the pre-0007 `user_progress` shape this migration runs against."""
+    await db.execute(text("ALTER TABLE user_progress ADD COLUMN epub_cfi VARCHAR(500)"))
+
+
+async def _insert(db, *, user_id, media_type, updated_at, ebook_id=None,
+                  audiobook_id=None, epub_chapter=None, epub_cfi=None,
+                  audio_position_ms=None):
+    """Insert a `user_progress` row including `epub_cfi` (raw SQL — the ORM
+    model no longer carries that column)."""
+    await db.execute(
+        text(
+            "INSERT INTO user_progress "
+            "(user_id, media_type, ebook_id, audiobook_id, epub_cfi, epub_chapter, "
+            " audio_position_ms, is_completed, updated_at) "
+            "VALUES (:user_id, :media_type, :ebook_id, :audiobook_id, :epub_cfi, "
+            "        :epub_chapter, :audio_position_ms, 0, :updated_at)"
+        ),
+        {
+            "user_id": user_id,
+            "media_type": media_type.name,
+            "ebook_id": ebook_id,
+            "audiobook_id": audiobook_id,
+            "epub_cfi": epub_cfi,
+            "epub_chapter": epub_chapter,
+            "audio_position_ms": audio_position_ms,
+            "updated_at": updated_at,
+        },
+    )
+
+
 async def _dedupe(db):
     migration = _load_migration()
     await db.run_sync(lambda conn: migration.dedupe_user_progress(conn))
@@ -58,14 +97,13 @@ async def test_only_the_newest_duplicate_survives(db, make_user):
     pair = await make_book_pair(db)
 
     await suspend_user_progress_uniqueness(db)
-    db.add_all([
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=3, is_completed=False,
-                     updated_at=datetime(2026, 7, 5, 22, 19, 38)),
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=9, is_completed=False,
-                     updated_at=datetime(2026, 7, 5, 22, 19, 39)),
-    ])
+    await _add_epub_cfi_column(db)
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=3,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 38))
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=9,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 39))
     await db.commit()
 
     await _dedupe(db)
@@ -82,6 +120,7 @@ async def test_identical_updated_at_is_broken_by_id(db, make_user):
     stamp = datetime(2026, 7, 5, 22, 19, 38)
 
     await suspend_user_progress_uniqueness(db)
+    await _add_epub_cfi_column(db)
     db.add_all([
         UserProgress(user_id=user.id, media_type=ProgressType.AUDIOBOOK,
                      audiobook_id=pair.audiobook_id, audio_position_ms=1000,
@@ -108,14 +147,13 @@ async def test_a_cfi_on_the_losing_row_is_salvaged(db, make_user):
     cfi = "epubcfi(/6/4!/4/2/2/1:12)"
 
     await suspend_user_progress_uniqueness(db)
-    db.add_all([
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=3, epub_cfi=cfi,
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 38)),
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=9, epub_cfi=None,
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 39)),
-    ])
+    await _add_epub_cfi_column(db)
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=3, epub_cfi=cfi,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 38))
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=9, epub_cfi=None,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 39))
     await db.commit()
 
     await _dedupe(db)
@@ -132,14 +170,13 @@ async def test_the_survivors_own_cfi_is_not_overwritten(db, make_user):
     pair = await make_book_pair(db)
 
     await suspend_user_progress_uniqueness(db)
-    db.add_all([
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_cfi="epubcfi(/old)",
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 38)),
-        UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_cfi="epubcfi(/new)",
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 39)),
-    ])
+    await _add_epub_cfi_column(db)
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_cfi="epubcfi(/old)",
+                  updated_at=datetime(2026, 7, 5, 22, 19, 38))
+    await _insert(db, user_id=user.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_cfi="epubcfi(/new)",
+                  updated_at=datetime(2026, 7, 5, 22, 19, 39))
     await db.commit()
 
     await _dedupe(db)
@@ -155,17 +192,16 @@ async def test_unduplicated_rows_are_untouched(db, make_user):
     bob = await make_user(username="bob")
     pair = await make_book_pair(db)
 
-    db.add_all([
-        UserProgress(user_id=alice.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=1, epub_cfi="epubcfi(/a)",
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 38)),
-        UserProgress(user_id=bob.id, media_type=ProgressType.EBOOK,
-                     ebook_id=pair.ebook_id, epub_chapter=2, epub_cfi=None,
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 39)),
-        UserProgress(user_id=alice.id, media_type=ProgressType.AUDIOBOOK,
-                     audiobook_id=pair.audiobook_id, audio_position_ms=500,
-                     is_completed=False, updated_at=datetime(2026, 7, 5, 22, 19, 40)),
-    ])
+    await _add_epub_cfi_column(db)
+    await _insert(db, user_id=alice.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=1, epub_cfi="epubcfi(/a)",
+                  updated_at=datetime(2026, 7, 5, 22, 19, 38))
+    await _insert(db, user_id=bob.id, media_type=ProgressType.EBOOK,
+                  ebook_id=pair.ebook_id, epub_chapter=2, epub_cfi=None,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 39))
+    await _insert(db, user_id=alice.id, media_type=ProgressType.AUDIOBOOK,
+                  audiobook_id=pair.audiobook_id, audio_position_ms=500,
+                  updated_at=datetime(2026, 7, 5, 22, 19, 40))
     await db.commit()
 
     await _dedupe(db)

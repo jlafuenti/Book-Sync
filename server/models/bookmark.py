@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+from utils import utcnow
 
 
 class HintKind(str, enum.Enum):
@@ -85,14 +86,13 @@ class Bookmark(Base):
     # Audio position (in milliseconds)
     audio_position_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
-    # Legacy mirrors of the current-anchor position hint, kept so installed
-    # app builds that predate `position_hints` keep resuming. New code reads
-    # and writes `hints`; these are written as a projection of it.
-    epub_locator: Mapped[str] = mapped_column(Text, nullable=True)
-    locator_audio_ms: Mapped[int] = mapped_column(Integer, nullable=True)
+    # Precise per-device positions live in `hints` (`position_hints`). They used
+    # to be mirrored into `epub_locator` / `locator_audio_ms` columns here for
+    # app builds that predated that table; those are dropped (issue #102,
+    # migration 0007).
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
@@ -166,7 +166,7 @@ class BookmarkLog(Base):
     new_audio_position_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
     changed_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, nullable=False
     )
 
     # Device attribution + client-captured event time, copied from the
@@ -219,7 +219,7 @@ class PositionHint(Base):
 
     captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
 
     bookmark = relationship("Bookmark", back_populates="hints")

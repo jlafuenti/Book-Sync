@@ -6,9 +6,9 @@ A client save used to be two independent PUTs — the bookmark and the progress
 row — each with its own staleness check. Either could be accepted while the
 other was rejected, leaving two records describing different positions for the
 same book with nothing to reconcile them; and the two readers each restored
-from a different one. This module is the single write path. The legacy
-endpoints are adapters over it, so an old app build and a new one converge on
-the same row instead of fighting over two.
+from a different one. This module is the single write path — every client
+writes through `PUT /position/{scope}/{ident}`, and `user_progress` is only a
+projection this module maintains.
 """
 
 from dataclasses import dataclass
@@ -24,17 +24,17 @@ from models.book import AudioBook, BookPair, EBook
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource, HintKind, PositionHint
 from models.progress import ProgressType, UserProgress
 from schemas import PositionScope
+from utils import utcnow
 
 
 class PositionScopeError(ValueError):
     """The scope/id doesn't identify anything."""
 
 
-# Hints are keyed by device. A client old enough not to send `device_id` still
-# has a position worth keeping, so its hints land here rather than being
-# dropped. Anonymous writers share this key — no worse than the single shared
-# locator column they were written against, and they stop sharing the moment
-# the client starts identifying itself.
+# Hints are keyed by device. A client that doesn't send `device_id` still has a
+# position worth keeping, so its hints land here rather than being dropped.
+# Anonymous writers share this key, and stop sharing the moment the client
+# starts identifying itself.
 UNATTRIBUTED_DEVICE_ID = "unattributed"
 
 
@@ -121,10 +121,10 @@ async def read_position(
 ) -> Optional[Bookmark]:
     """The canonical record, or None.
 
-    Deliberately never creates. The old `GET /bookmark/{pair}` invented a
-    chapter-0 row on a miss, which made "does this user have a position?"
-    unanswerable — and a fabricated chapter 0 is indistinguishable from a real
-    one at the start of a book.
+    Deliberately never creates. The since-removed `GET /bookmark/{pair}`
+    invented a chapter-0 row on a miss, which made "does this user have a
+    position?" unanswerable — and a fabricated chapter 0 is indistinguishable
+    from a real one at the start of a book.
 
     [refresh] forces the loaded state to be overwritten from the database. The
     session runs `expire_on_commit=False`, so re-reading an already-loaded
@@ -171,8 +171,8 @@ async def _upsert_hint(
     """Store a device's precise position against the anchor it belongs to.
 
     One row per (bookmark, device, kind), so devices never overwrite each
-    other's — they used to share a single column, and whoever wrote last
-    destroyed the others' precision.
+    other's — they used to share a single `bookmarks.epub_locator` column, and
+    whoever wrote last destroyed the others' precision.
     """
     existing = (await db.execute(
         select(PositionHint).where(
@@ -187,14 +187,14 @@ async def _upsert_hint(
             bookmark_id=bookmark.id, device_id=device_id, hint_kind=kind,
             hint_value=value, anchor_revision=bookmark.anchor_revision,
             audio_position_ms=audio_position_ms, captured_at=captured_at,
-            updated_at=datetime.utcnow(),
+            updated_at=utcnow(),
         ))
     else:
         existing.hint_value = value
         existing.anchor_revision = bookmark.anchor_revision
         existing.audio_position_ms = audio_position_ms
         existing.captured_at = captured_at
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = utcnow()
 
 
 async def latest_progress_row(
@@ -260,38 +260,13 @@ async def _sync_derived_progress(
         if media_type == ProgressType.EBOOK:
             row.epub_chapter = bookmark.epub_chapter
             row.epub_progress_percent = bookmark.epub_progress_percent
-            # epub_cfi stays a mirror of the web hint; see _mirror_legacy_columns.
         else:
             row.audio_position_ms = bookmark.audio_position_ms
         row.is_completed = bookmark.is_completed
         row.captured_at = bookmark.captured_at
         row.device_id = bookmark.device_id
         row.device_name = bookmark.device_name
-        row.updated_at = datetime.utcnow()
-
-
-async def _mirror_legacy_columns(db: AsyncSession, bookmark: Bookmark, ref: ScopeRef,
-                                 user_id: int) -> None:
-    """Keep `bookmarks.epub_locator` / `user_progress.epub_cfi` in step with the
-    current-anchor hints, so app builds that predate `position_hints` still
-    resume. Dropped once no old build is in the field.
-    """
-    hints = (await db.execute(
-        select(PositionHint).where(PositionHint.bookmark_id == bookmark.id)
-    )).scalars().all()
-    current = [h for h in hints if h.anchor_revision == bookmark.anchor_revision]
-
-    locator = next((h for h in current if h.hint_kind == HintKind.READIUM_LOCATOR), None)
-    if locator is not None:
-        bookmark.epub_locator = locator.hint_value
-        bookmark.locator_audio_ms = locator.audio_position_ms
-
-    cfi = next((h for h in current if h.hint_kind == HintKind.EPUBJS_CFI), None)
-    if cfi is not None and ref.ebook_id is not None:
-        row = await latest_progress_row(
-            db, user_id, ProgressType.EBOOK, ref.ebook_id)
-        if row is not None:
-            row.epub_cfi = cfi.hint_value
+        row.updated_at = utcnow()
 
 
 async def apply_position(
@@ -309,7 +284,7 @@ async def apply_position(
     if bookmark is not None and is_stale(update.captured_at, bookmark.captured_at):
         return bookmark, False
 
-    stamped = update.captured_at or datetime.utcnow()
+    stamped = update.captured_at or utcnow()
 
     if bookmark is None:
         new_fields = dict(
@@ -366,8 +341,8 @@ async def apply_position(
     if update.device_name is not None:
         bookmark.device_name = update.device_name
     bookmark.captured_at = stamped
-    bookmark.updated_at = datetime.utcnow()
-    bookmark.synced_at = datetime.utcnow()
+    bookmark.updated_at = utcnow()
+    bookmark.synced_at = utcnow()
 
     # Bump before storing the hint, so the hint records the anchor it actually
     # belongs to. That tag is the entire staleness mechanism.
@@ -402,7 +377,6 @@ async def apply_position(
 
     await db.flush()
     await _sync_derived_progress(db, user_id, ref, bookmark)
-    await _mirror_legacy_columns(db, bookmark, ref, user_id)
 
     if commit:
         await db.commit()

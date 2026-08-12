@@ -3,9 +3,9 @@ Cross-language request-body contract test (issue #46, Phase 2).
 
 The Android client hand-writes DTOs that must line up with the server's Pydantic
 request models. When they drift, fields get silently dropped (Pydantic ignores
-unknown request fields) — exactly what happened with `epub_locator`. This test
-parses the Kotlin `@Serializable` request DTOs and asserts every field the client
-sends exists on the mapped server model.
+unknown request fields) — exactly what happened with the precise EPUB locator
+(issue #40). This test parses the Kotlin `@Serializable` request DTOs and
+asserts every field the client sends exists on the mapped server model.
 
 Only request bodies are checked (responses tolerate extra/missing fields via
 kotlinx `ignoreUnknownKeys`). The mapping is curated on purpose.
@@ -18,10 +18,10 @@ import pytest
 
 from schemas import (
     BookPairCreate,
-    BookmarkResponse,
-    BookmarkUpdate,
     PasswordChange,
-    ProgressUpdate,
+    PositionHintPayload,
+    PositionHintResponse,
+    PositionUpdate,
     TokenRefresh,
     UserCreate,
     UserLogin,
@@ -43,8 +43,8 @@ REQUEST_MAP = {
     "PasswordChangeRequest": PasswordChange,
     "UpdateMeRequest": UserUpdateRequest,
     "CreatePairRequest": BookPairCreate,
-    "BookmarkUpdateRequest": BookmarkUpdate,
-    "ProgressUpdateRequest": ProgressUpdate,
+    "PositionUpdateRequest": PositionUpdate,
+    "PositionHintDto": PositionHintPayload,
 }
 
 
@@ -86,15 +86,17 @@ def test_all_mapped_request_dtos_exist(kotlin_dtos):
     assert not missing, f"Mapped Kotlin request DTOs not found in ApiDtos.kt: {missing}"
 
 
-@pytest.mark.parametrize("model", [BookmarkUpdate, BookmarkResponse],
+@pytest.mark.parametrize("model", [PositionHintPayload, PositionHintResponse],
                          ids=["request", "response"])
 def test_precise_position_fields_are_pinned(model):
-    """`epub_locator` was dropped once already (issue #40); `locator_audio_ms`
-    is its audio anchor and is just as easy to lose. Both must survive on the
-    request *and* response side, or exact cross-device resume silently
-    degrades with no test failing."""
+    """The precise locator was dropped from the wire once already (issue #40)
+    and its audio anchor is just as easy to lose. It now travels as a position
+    hint rather than the `epub_locator`/`locator_audio_ms` columns (issue
+    #102), so pin the hint's shape on the request *and* response side — without
+    `value` + `audio_position_ms` surviving both, exact cross-device resume
+    silently degrades with no test failing."""
     fields = set(model.model_fields.keys())
-    assert {"epub_locator", "locator_audio_ms"} <= fields
+    assert {"kind", "value", "audio_position_ms"} <= fields
 
 
 @pytest.mark.parametrize("kotlin_name,model", REQUEST_MAP.items(), ids=list(REQUEST_MAP))

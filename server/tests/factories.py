@@ -24,6 +24,24 @@ async def suspend_user_progress_uniqueness(db):
     await db.execute(text("DROP INDEX ux_user_progress_user_audiobook"))
 
 
+async def make_ebook(db, *, title="E", filename="e.epub"):
+    """Create a standalone (unpaired) EBook and return it."""
+    eb = EBook(title=title, filename=filename, file_path=f"/x/{filename}")
+    db.add(eb)
+    await db.commit()
+    await db.refresh(eb)
+    return eb
+
+
+async def make_audiobook(db, *, title="A", filename="a.m4b"):
+    """Create a standalone (unpaired) AudioBook and return it."""
+    ab = AudioBook(title=title, filename=filename, file_path=f"/x/{filename}")
+    db.add(ab)
+    await db.commit()
+    await db.refresh(ab)
+    return ab
+
+
 async def make_book_pair(db, status=PairStatus.SYNCED, *,
                          ebook_title="E", audiobook_title="A"):
     """Create an EBook + AudioBook + BookPair and return the committed pair."""

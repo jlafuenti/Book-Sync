@@ -86,9 +86,10 @@ async def test_repeated_first_gets_create_nothing_and_a_put_then_creates_one(
     assert second.status_code == 204
     assert await _count(db, UserProgress) == 0
 
-    written = await client.put(url, headers=headers, json={
-        "book_pair_id": pair.id, "epub_chapter": 4, "epub_progress_percent": 40.0,
-    })
+    written = await client.put(
+        f"/api/sync/position/pair/{pair.id}", headers=headers,
+        json={"source": "ebook", "epub_chapter": 4, "epub_progress_percent": 40.0},
+    )
     assert written.status_code == 200, written.text
 
     # The pair-scoped write projects onto both halves of the pair — one row each,
@@ -161,7 +162,7 @@ async def test_duplicate_user_progress_rows_are_rejected(db, make_user):
 # ------------------------------------------------------- first-write races
 
 
-async def test_racing_first_bookmark_writes_converge_on_one_row(
+async def test_racing_first_position_writes_converge_on_one_row(
     client, make_user, auth_header, db, monkeypatch
 ):
     """A first write that misses the row another transaction just inserted must
@@ -170,14 +171,14 @@ async def test_racing_first_bookmark_writes_converge_on_one_row(
     user = await make_user(username="reader")
     headers = auth_header(user)
 
-    seeded = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    seeded = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 1, "epub_sentence_index": 2,
     })
     assert seeded.status_code == 200, seeded.text
 
     _one_shot_none(monkeypatch, "read_position")
 
-    raced = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    raced = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 7, "epub_sentence_index": 3,
     })
     assert raced.status_code == 200, raced.text
@@ -194,14 +195,14 @@ async def test_racing_first_progress_projections_converge_on_one_row(
     user = await make_user(username="reader")
     headers = auth_header(user)
 
-    seeded = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    seeded = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 1, "epub_sentence_index": 2,
     })
     assert seeded.status_code == 200, seeded.text
 
     _one_shot_none(monkeypatch, "latest_progress_row")
 
-    raced = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    raced = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 7, "epub_sentence_index": 3,
     })
     assert raced.status_code == 200, raced.text
@@ -230,7 +231,7 @@ async def test_a_stale_write_that_loses_the_race_is_still_rejected(
     newer = datetime(2026, 3, 1, 12, 0, 0)
     older = newer - timedelta(hours=1)
 
-    seeded = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    seeded = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 5, "epub_sentence_index": 1,
         "captured_at": newer.isoformat(),
     })
@@ -238,7 +239,7 @@ async def test_a_stale_write_that_loses_the_race_is_still_rejected(
 
     _one_shot_none(monkeypatch, "read_position")
 
-    raced = await client.put(f"/api/sync/bookmark/{pair.id}", headers=headers, json={
+    raced = await client.put(f"/api/sync/position/pair/{pair.id}", headers=headers, json={
         "source": "ebook", "epub_chapter": 0, "epub_sentence_index": 0,
         "captured_at": older.isoformat(),
     })

@@ -5,18 +5,18 @@ import ContinuePage from './ContinuePage'
 
 const {
     getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock,
-    updateProgressMock, resetPairProgressMock, getProgressMock, getBookmarkMock, updateBookmarkMock,
+    updatePositionMock, resetPairProgressMock, resetPositionMock, getProgressMock, getPositionMock,
     getAccessTokenMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAllProgressMock: vi.fn(),
     getEbooksMock: vi.fn(),
     getAudiobooksMock: vi.fn(),
     getPairsMock: vi.fn(),
-    updateProgressMock: vi.fn(),
+    updatePositionMock: vi.fn(),
     resetPairProgressMock: vi.fn(),
+    resetPositionMock: vi.fn(),
     getProgressMock: vi.fn(),
-    getBookmarkMock: vi.fn(),
-    updateBookmarkMock: vi.fn(),
+    getPositionMock: vi.fn(),
     getAccessTokenMock: vi.fn(() => 'token'),
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
@@ -27,11 +27,11 @@ vi.mock('../api', () => ({
     getEbooks: getEbooksMock,
     getAudiobooks: getAudiobooksMock,
     getPairs: getPairsMock,
-    updateProgress: updateProgressMock,
+    updatePosition: updatePositionMock,
     resetPairProgress: resetPairProgressMock,
+    resetPosition: resetPositionMock,
     getProgress: getProgressMock,
-    getBookmark: getBookmarkMock,
-    updateBookmark: updateBookmarkMock,
+    getPosition: getPositionMock,
     getAccessToken: getAccessTokenMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
@@ -56,11 +56,11 @@ beforeEach(() => {
     getEbooksMock.mockReset().mockResolvedValue([])
     getAudiobooksMock.mockReset().mockResolvedValue([])
     getPairsMock.mockReset().mockResolvedValue([])
-    updateProgressMock.mockReset().mockResolvedValue({})
+    updatePositionMock.mockReset().mockResolvedValue({})
     resetPairProgressMock.mockReset().mockResolvedValue({})
     getProgressMock.mockReset().mockResolvedValue(null)
-    getBookmarkMock.mockReset().mockResolvedValue(null)
-    updateBookmarkMock.mockReset().mockResolvedValue({})
+    getPositionMock.mockReset().mockResolvedValue(null)
+    resetPositionMock.mockReset().mockResolvedValue({ status: 'ok' })
     getAccessTokenMock.mockReset().mockReturnValue('token')
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
@@ -99,19 +99,20 @@ describe('ContinuePage device attribution (issue #54)', () => {
         return card
     }
 
-    it('sends device_id/device_name/captured_at for both legs of a paired Mark Complete', async () => {
+    it('marks a pair complete with one canonical write carrying the device fields', async () => {
         setupLibrary()
         renderPage()
 
         const card = await openMenu('Pair Ebook')
         fireEvent.click(within(card).getByText('Mark Complete'))
 
-        await waitFor(() => expect(updateProgressMock).toHaveBeenCalledWith('ebook', 10, expect.objectContaining({
+        // ONE write for the pair: both halves share a single canonical record,
+        // so the two per-media writes this replaced could be adjudicated
+        // separately and leave the book half-complete.
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith('pair', 100, expect.objectContaining({
             is_completed: true, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
         })))
-        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 20, expect.objectContaining({
-            is_completed: true, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
-        }))
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
     })
 
     it('sends device fields for a standalone (non-pair) Mark Complete', async () => {
@@ -121,13 +122,13 @@ describe('ContinuePage device attribution (issue #54)', () => {
         const card = await openMenu('Ebook A')
         fireEvent.click(within(card).getByText('Mark Complete'))
 
-        await waitFor(() => expect(updateProgressMock).toHaveBeenCalledWith('ebook', 11, expect.objectContaining({
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith('ebook', 11, expect.objectContaining({
             is_completed: true, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
         })))
     })
 
     it('calls the pair-level DELETE for a paired Reset Progress instead of zero-writing each leg', async () => {
-        // The old per-leg updateProgress zero-write left the canonical
+        // The old per-leg zero-write left the canonical
         // bookmark in place, which re-seeded progress right back (issue:
         // reset buttons not actually resetting). The pair-scoped DELETE
         // removes the bookmark + hints + progress rows server-side.
@@ -138,33 +139,29 @@ describe('ContinuePage device attribution (issue #54)', () => {
         fireEvent.click(within(card).getByText('Reset Progress'))
 
         await waitFor(() => expect(resetPairProgressMock).toHaveBeenCalledWith(100))
-        expect(updateProgressMock).not.toHaveBeenCalledWith('ebook', 10, expect.anything())
-        expect(updateProgressMock).not.toHaveBeenCalledWith('audiobook', 20, expect.anything())
+        expect(updatePositionMock).not.toHaveBeenCalled()
+        expect(resetPositionMock).not.toHaveBeenCalled()
     })
 
-    it('sends device fields for a standalone ebook Reset Progress', async () => {
+    it('resets a standalone ebook with the scoped DELETE, not a zero-write', async () => {
         setupLibrary()
         renderPage()
 
         const card = await openMenu('Ebook A')
         fireEvent.click(within(card).getByText('Reset Progress'))
 
-        await waitFor(() => expect(updateProgressMock).toHaveBeenCalledWith('ebook', 11, expect.objectContaining({
-            is_completed: false, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
-            epub_progress_percent: 0, epub_cfi: '', epub_chapter: 0,
-        })))
+        await waitFor(() => expect(resetPositionMock).toHaveBeenCalledWith('ebook', 11))
+        expect(updatePositionMock).not.toHaveBeenCalled()
     })
 
-    it('sends device fields for a standalone audiobook Reset Progress', async () => {
+    it('resets a standalone audiobook with the scoped DELETE, not a zero-write', async () => {
         setupLibrary()
         renderPage()
 
         const card = await openMenu('Audiobook A')
         fireEvent.click(within(card).getByText('Reset Progress'))
 
-        await waitFor(() => expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 21, expect.objectContaining({
-            is_completed: false, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
-            audio_position_ms: 0,
-        })))
+        await waitFor(() => expect(resetPositionMock).toHaveBeenCalledWith('audiobook', 21))
+        expect(updatePositionMock).not.toHaveBeenCalled()
     })
 })
