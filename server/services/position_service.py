@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +36,33 @@ class PositionScopeError(ValueError):
 # locator column they were written against, and they stop sharing the moment
 # the client starts identifying itself.
 UNATTRIBUTED_DEVICE_ID = "unattributed"
+
+
+async def _insert_or_reread(db: AsyncSession, row, reread):
+    """Insert [row], or hand back whatever a racing transaction inserted first.
+
+    Both position tables now carry partial unique indexes (issue #64), which is
+    what makes the duplicate impossible — but it also turns the losing side of a
+    concurrent *first write* into an `IntegrityError`. Read-then-insert cannot be
+    made race-free in the application, so the insert is attempted inside a
+    savepoint and the loser simply re-reads the winner's row and applies on top.
+    Without the savepoint the failed flush would poison the whole transaction.
+
+    Returns the row that is actually in the database.
+    """
+    savepoint = await db.begin_nested()
+    try:
+        db.add(row)
+        await db.flush()
+    except IntegrityError:
+        # The rollback detaches [row] from the session for us.
+        await savepoint.rollback()
+        won = await reread()
+        if won is None:
+            # The conflict wasn't the one we're recovering from; don't swallow it.
+            raise
+        return won
+    return row
 
 
 @dataclass
@@ -174,12 +202,13 @@ async def latest_progress_row(
 ) -> Optional[UserProgress]:
     """The newest `user_progress` row for a media item, tolerating duplicates.
 
-    `user_progress` has no unique constraint, and the old `GET /progress`
-    created rows with flush-but-no-commit — two concurrent reads could leave
-    two rows for the same media. `scalar_one_or_none()` raises
-    `MultipleResultsFound` on those, so a book that hit the race became
-    unwritable. Ordering and taking the newest keeps it working; the extra
-    rows are inert.
+    Duplicates are now prevented at the schema level — `ux_user_progress_user_ebook`
+    / `_user_audiobook` (issue #64) — and migration 0006 dedupes any a database
+    already carries. This stays as the safety net for a database that has not
+    been migrated yet: `scalar_one_or_none()` raises `MultipleResultsFound` on
+    two rows, which made a book that hit the old race permanently unreadable and
+    unwritable. Ordering and taking the newest keeps it working; the extra rows
+    are inert.
     """
     id_col = (UserProgress.ebook_id if media_type == ProgressType.EBOOK
               else UserProgress.audiobook_id)
@@ -214,13 +243,18 @@ async def _sync_derived_progress(
         row = await latest_progress_row(db, user_id, media_type, media_id)
 
         if row is None:
-            row = UserProgress(user_id=user_id, media_type=media_type,
-                               is_completed=False)
+            fresh = UserProgress(user_id=user_id, media_type=media_type,
+                                 is_completed=False)
             if media_type == ProgressType.EBOOK:
-                row.ebook_id = media_id
+                fresh.ebook_id = media_id
             else:
-                row.audiobook_id = media_id
-            db.add(row)
+                fresh.audiobook_id = media_id
+            # Same race as the canonical row above, one layer down.
+            row = await _insert_or_reread(
+                db, fresh,
+                lambda mt=media_type, mid=media_id: latest_progress_row(
+                    db, user_id, mt, mid),
+            )
 
         row.book_pair_id = ref.book_pair_id
         if media_type == ProgressType.EBOOK:
@@ -291,9 +325,17 @@ async def apply_position(
         # must not hand SQLAlchemy an explicit None to insert.
         if update.source is not None:
             new_fields["source"] = update.source
-        bookmark = Bookmark(**new_fields)
-        db.add(bookmark)
-        await db.flush()
+        # A concurrent first write may already have inserted this row; take
+        # theirs and apply on top rather than 500ing on the unique index.
+        bookmark = await _insert_or_reread(
+            db, Bookmark(**new_fields),
+            lambda: read_position(db, user_id, ref, refresh=True),
+        )
+        # If we lost the race, the row now in hand is the winner's and has never
+        # been staleness-checked. A newly inserted row has captured_at=None, so
+        # this is a no-op on the ordinary path.
+        if is_stale(update.captured_at, bookmark.captured_at):
+            return bookmark, False
 
     before_anchor = _anchor_of(bookmark)
     prev = (bookmark.epub_chapter, bookmark.epub_sentence_index,

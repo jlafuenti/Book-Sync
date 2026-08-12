@@ -600,6 +600,11 @@ export async function getAllProgress() {
 
 export async function getProgress(mediaType, mediaId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress/${mediaType}/${mediaId}`);
+    // 204 = this user has no recorded position for this media. The endpoint used
+    // to INSERT a blank row on a miss and answer 200 with it, which is how one
+    // book could end up with two rows and 500 forever after (issue #64). There
+    // is no body to parse now — null is the position, not an error.
+    if (resp.status === 204) return null;
     if (!resp.ok) throw new Error('Failed to fetch progress');
     return resp.json();
 }

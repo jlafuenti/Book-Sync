@@ -29,7 +29,7 @@ from models.book import BookPair
 from models.bookmark import Bookmark, BookmarkSource
 from models.progress import ProgressType, UserProgress
 from models.sync_map import SyncMap, SyncPoint
-from tests.factories import make_book_pair
+from tests.factories import make_book_pair, suspend_user_progress_uniqueness
 
 _MIGRATION = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -263,6 +263,9 @@ async def test_duplicate_progress_rows_yield_one_canonical_row(db, make_user):
     user = await make_user(username="reader")
     pair = await make_book_pair(db)
 
+    # 0006 is what finally makes this state impossible; 0004 only had to survive
+    # it. Drop the index to seed the database as it actually was at 0004.
+    await suspend_user_progress_uniqueness(db)
     db.add_all([
         UserProgress(
             user_id=user.id, media_type=ProgressType.EBOOK, ebook_id=pair.ebook_id,

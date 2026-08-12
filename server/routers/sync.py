@@ -273,43 +273,32 @@ async def get_all_progress(
     return result.scalars().all()
 
 
-@router.get("/progress/{media_type}/{media_id}", response_model=ProgressResponse)
+@router.get(
+    "/progress/{media_type}/{media_id}",
+    response_model=ProgressResponse,
+    responses={204: {"description": "No progress recorded for this media"}},
+)
 async def get_progress(
     media_type: ProgressType,
     media_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get the user's progress for a specific piece of media."""
-    query = select(UserProgress).where(
-        UserProgress.user_id == current_user.id,
-        UserProgress.media_type == media_type
-    )
-    
-    if media_type == ProgressType.EBOOK:
-        query = query.where(UserProgress.ebook_id == media_id)
-    else:
-        query = query.where(UserProgress.audiobook_id == media_id)
-        
-    result = await db.execute(query)
-    progress = result.scalar_one_or_none()
-    
-    if not progress:
-        # Create an empty progress record to return
-        progress_data = {
-            "user_id": current_user.id,
-            "media_type": media_type,
-            "is_completed": False
-        }
-        if media_type == ProgressType.EBOOK:
-            progress_data["ebook_id"] = media_id
-        else:
-            progress_data["audiobook_id"] = media_id
-            
-        progress = UserProgress(**progress_data)
-        db.add(progress)
-        await db.flush()
-        await db.refresh(progress)
+    """The user's progress for a piece of media, or 204 when there is none.
+
+    Never creates a row — same contract as the canonical `GET /position`. This
+    endpoint used to INSERT on a miss, so two clients opening the same book at
+    once each left a row behind and every subsequent read of that media raised
+    `MultipleResultsFound` (issue #64).
+
+    Read via `latest_progress_row` rather than `scalar_one_or_none()` so a
+    database that hit that race *before* the unique index landed still answers
+    instead of 500ing; migration 0006 dedupes it.
+    """
+    progress = await latest_progress_row(db, current_user.id, media_type, media_id)
+
+    if progress is None:
+        return Response(status_code=204)
 
     return progress
 
