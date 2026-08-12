@@ -161,46 +161,10 @@ data class SyncMapResponse(
 )
 
 // ============ Bookmark ============
-
-@Serializable
-data class BookmarkUpdateRequest(
-    val source: String,
-    val epub_chapter: Int? = null,
-    val epub_sentence_index: Int? = null,
-    val audio_position_ms: Int? = null,
-    val epub_locator: String? = null,
-    // Audio position the locator was captured at; travels with it so a second
-    // device can judge whether the locator is still usable (issue #40).
-    val locator_audio_ms: Int? = null,
-    // When false (default), server updates the bookmark but does NOT append
-    // a BookmarkLog row. Clients set true only on pause / stop / 30-min
-    // boundaries. Mirrors server BookmarkUpdate.append_to_log.
-    val append_to_log: Boolean = false,
-    // Multi-device conflict resolution (issue #54). When captured_at is provided
-    // and older than what's stored, the server rejects the write with HTTP 409
-    // instead of applying it. Omitting captured_at preserves legacy last-write-wins.
-    val captured_at: String? = null,
-    val device_id: String? = null,
-    val device_name: String? = null
-)
-
-@Serializable
-data class BookmarkResponse(
-    val id: Int,
-    val user_id: Int,
-    val book_pair_id: Int,
-    val source: String,
-    val epub_chapter: Int? = null,
-    val epub_sentence_index: Int? = null,
-    val audio_position_ms: Int? = null,
-    val epub_locator: String? = null,
-    val locator_audio_ms: Int? = null,
-    val updated_at: String,
-    val synced_at: String? = null,
-    val device_id: String? = null,
-    val device_name: String? = null,
-    val captured_at: String? = null
-)
+//
+// Only the history log has its own DTO. Position writes and reads use
+// PositionUpdateRequest/PositionResponse below — the bookmark and progress
+// request/response pair went with the legacy adapters (issue #102).
 
 @Serializable
 data class BookmarkLogResponse(
@@ -218,44 +182,9 @@ data class BookmarkLogResponse(
     val captured_at: String? = null
 )
 
-// ============ User Progress ============
-
-@Serializable
-data class ProgressUpdateRequest(
-    val book_pair_id: Int? = null,
-    val epub_cfi: String? = null,
-    val epub_chapter: Int? = null,
-    val epub_progress_percent: Float? = null,
-    val audio_position_ms: Int? = null,
-    val is_completed: Boolean? = null,
-    val device_id: String? = null,
-    val device_name: String? = null,
-    // See BookmarkUpdateRequest.captured_at — same multi-device conflict contract.
-    val captured_at: String? = null
-)
-
-@Serializable
-data class ProgressResponse(
-    val id: Int,
-    val user_id: Int,
-    val media_type: String,
-    val book_pair_id: Int? = null,
-    val ebook_id: Int? = null,
-    val audiobook_id: Int? = null,
-    val epub_cfi: String? = null,
-    val epub_chapter: Int? = null,
-    val epub_progress_percent: Float? = null,
-    val audio_position_ms: Int? = null,
-    val is_completed: Boolean,
-    val updated_at: String,
-    val device_id: String? = null,
-    val device_name: String? = null,
-    val captured_at: String? = null
-)
-
 // ============ Canonical position ============
 //
-// One record per book, written atomically. Replaces the pair of
+// One record per book, written atomically. Replaced the pair of
 // updateBookmark + updateProgress calls, which the server adjudicated
 // separately — either could be rejected while the other applied, leaving two
 // records describing different positions with nothing to reconcile them.

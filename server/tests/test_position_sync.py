@@ -2,14 +2,15 @@
 The canonical position endpoint: one record, one staleness verdict, one
 transaction.
 
-Previously a client save was two independent PUTs — `/sync/bookmark/{pair}` and
-`/sync/progress/{type}/{id}` — adjudicated separately, so one could be accepted
-while the other was rejected and the two rows would then describe different
-positions for the same book, forever. Nothing reconciled them, and the two
-readers each restored from a different one.
+A client save used to be two independent PUTs — the since-removed
+`/sync/bookmark/{pair}` and `/sync/progress/{type}/{id}` (issue #102) —
+adjudicated separately, so one could be accepted while the other was rejected
+and the two rows would then describe different positions for the same book,
+forever. Nothing reconciled them, and the two readers each restored from a
+different one.
 """
 
-from tests.factories import make_book_pair, make_sync_map
+from tests.factories import make_book_pair
 
 LOCATOR = '{"href":"ch12.xhtml","locations":{"progression":0.4}}'
 CFI = "epubcfi(/6/26!/4/2/2/1:0)"
@@ -259,50 +260,6 @@ async def test_standalone_ebook_gets_a_canonical_record(
     assert got.json()["epub_chapter"] == 4
 
 
-# ---------- legacy adapters ----------
-
-async def test_legacy_bookmark_put_writes_the_same_canonical_record(
-    client, make_user, auth_header, db
-):
-    """Installed app builds keep working, and an old phone and a new one
-    converge on one row instead of fighting over two."""
-    pair = await make_book_pair(db)
-    await make_sync_map(db, book_pair_id=pair.id)
-    user = await make_user(username="reader")
-
-    legacy = await client.put(
-        f"/api/sync/bookmark/{pair.id}", headers=auth_header(user),
-        json={"source": "ebook", "epub_chapter": 1, "epub_sentence_index": 0,
-              "epub_locator": LOCATOR, "device_id": "old-phone",
-              "captured_at": "2026-07-30T10:00:00Z"},
-    )
-    assert legacy.status_code == 200, legacy.text
-
-    canonical = await _get(client, user, auth_header, "pair", pair.id)
-    assert canonical.status_code == 200
-    body = canonical.json()
-    assert body["epub_chapter"] == 1
-    assert [h["value"] for h in body["hints"]] == [LOCATOR]
-
-
-async def test_legacy_bookmark_get_still_returns_the_mirror_columns(
-    client, make_user, auth_header, db
-):
-    pair = await make_book_pair(db)
-    user = await make_user(username="reader")
-
-    await _put(
-        client, user, auth_header, "pair", pair.id,
-        epub_chapter=12, hint={"kind": "readium_locator", "value": LOCATOR},
-        captured_at="2026-07-30T10:00:00Z",
-    )
-
-    legacy = await client.get(
-        f"/api/sync/bookmark/{pair.id}", headers=auth_header(user))
-    assert legacy.status_code == 200
-    assert legacy.json()["epub_locator"] == LOCATOR
-
-
 # ---------- source claiming (issue: background writes re-stamping source) ----------
 
 async def test_a_background_write_without_source_keeps_the_stored_source(
@@ -401,33 +358,6 @@ async def test_a_background_write_with_no_source_can_still_append_to_the_log(
     assert log.status_code == 200
     assert len(log.json()) == 1
     assert log.json()[0]["source"] == "audiobook"
-
-
-async def test_legacy_progress_put_without_source_does_not_clobber_the_stored_source(
-    client, make_user, auth_header, db
-):
-    """The legacy `/progress/{media_type}/{media_id}` adapter has no `source`
-    field on its request body at all — every write through it used to
-    synthesize one from the URL's media_type, so a background audiobook
-    player save silently re-stamped `source=audiobook` even mid-read."""
-    pair = await make_book_pair(db)
-    user = await make_user(username="reader")
-
-    await _put(
-        client, user, auth_header, "pair", pair.id,
-        source="ebook", epub_chapter=12, captured_at="2026-07-30T10:00:00Z",
-    )
-
-    legacy = await client.put(
-        f"/api/sync/progress/audiobook/{pair.audiobook_id}",
-        headers=auth_header(user),
-        json={"audio_position_ms": 900000, "captured_at": "2026-07-30T11:00:00Z"},
-    )
-    assert legacy.status_code == 200, legacy.text
-
-    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
-    assert after["source"] == "ebook"
-    assert after["audio_position_ms"] == 900000
 
 
 async def test_the_write_response_includes_the_hint_it_just_stored(

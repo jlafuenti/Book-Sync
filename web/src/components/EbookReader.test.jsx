@@ -84,7 +84,6 @@ async function setupReader(bodyText) {
         <EbookReader
             ebookId={7}
             pairId={42}
-            initialCfi={null}
             initialChapter={null}
             initialTextPreview={null}
             bookTitle="Test Book"
@@ -237,7 +236,7 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
         render(
             <EbookReader
                 ebookId={7} pairId={42}
-                initialCfi={null} initialChapter={null} initialTextPreview={null}
+                initialChapter={null} initialTextPreview={null}
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )
@@ -280,7 +279,7 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
         render(
             <EbookReader
                 ebookId={7} pairId={42}
-                initialCfi={null} initialChapter={null} initialTextPreview={null}
+                initialChapter={null} initialTextPreview={null}
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )
@@ -297,35 +296,20 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
         expect(updatePositionMock).not.toHaveBeenCalled()
     })
 
-    it('falls back to the props-supplied CFI when the position fetch fails (offline)', async () => {
+    it('falls back to the chapter prop when the position fetch fails (offline)', async () => {
         // loadBook()'s getPosition(...).catch() must synthesize a usable
-        // fallback position from the initial* props rather than leaving the
-        // reader with nothing to restore from.
+        // fallback position from the initialChapter prop rather than leaving
+        // the reader with nothing to restore from. No CFI is threaded through
+        // any more (issue #102): callers used to read one from the
+        // `user_progress.epub_cfi` mirror column, which no longer exists, and
+        // a page-load snapshot was staler than this fetch anyway.
         getPositionMock.mockRejectedValue(new Error('offline'))
         const { book, rendition } = makeFakeBook(LONG_TEXT)
         ePubMock.mockReturnValue(book)
         render(
             <EbookReader
                 ebookId={7} pairId={42}
-                initialCfi="cfi-prop" initialChapter={0} initialTextPreview="some preview text"
-                bookTitle="Test Book" onClose={vi.fn()}
-            />
-        )
-
-        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('cfi-prop'))
-    })
-
-    it('builds an empty hints array in the offline fallback when there is no initialCfi prop', async () => {
-        // Same offline fallback, but only a chapter prop is available -- the
-        // synthesized position must omit the epub_cfi hint entirely (`: []`)
-        // rather than push a hint with an undefined value.
-        getPositionMock.mockRejectedValue(new Error('offline'))
-        const { book, rendition } = makeFakeBook(LONG_TEXT)
-        ePubMock.mockReturnValue(book)
-        render(
-            <EbookReader
-                ebookId={7} pairId={42}
-                initialCfi={null} initialChapter={0} initialTextPreview={null}
+                initialChapter={0} initialTextPreview={null}
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )
@@ -341,7 +325,7 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
         render(
             <EbookReader
                 ebookId={7} pairId={42}
-                initialCfi={null} initialChapter={null} initialTextPreview={null}
+                initialChapter={null} initialTextPreview={null}
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )
@@ -487,7 +471,7 @@ describe('EbookReader — initial text-nav pass', () => {
         render(
             <EbookReader
                 ebookId={7} pairId={42}
-                initialCfi={null} initialChapter={null} initialTextPreview="hi"
+                initialChapter={null} initialTextPreview="hi"
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )

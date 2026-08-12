@@ -173,7 +173,9 @@ def test_existing_bookmarks_survive_locator_audio_ms_migration():
             "(SELECT id FROM book_pairs LIMIT 1), 'EBOOK', 3, 7, '{\"href\":\"/ch3\"}', now()"
         ))
 
-    command.upgrade(cfg, "head")
+    # Stop at 0003 rather than head: 0007 later drops both columns (issue
+    # #102), so head is not the revision whose behaviour this pins.
+    command.upgrade(cfg, "0003_bookmark_locator_audio")
 
     with engine.begin() as conn:
         row = conn.execute(text(
@@ -182,6 +184,88 @@ def test_existing_bookmarks_survive_locator_audio_ms_migration():
     assert row.epub_chapter == 3
     assert row.epub_locator == '{"href":"/ch3"}'
     assert row.locator_audio_ms is None
+
+    # ...and the rest of the chain still applies on top of that row.
+    command.upgrade(cfg, "head")
+    with engine.begin() as conn:
+        assert conn.execute(text(
+            "SELECT epub_chapter FROM bookmarks"
+        )).one().epub_chapter == 3
+
+
+def test_0007_drops_the_legacy_mirror_columns_and_keeps_the_hints():
+    """0007 removes the mirror columns but must not touch `position_hints` —
+    0004 backfilled the hints *from* those columns, so the hints are the copy
+    that has to survive (issue #102)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+
+    command.downgrade(cfg, "base")
+    command.upgrade(cfg, "0006_user_progress_unique")
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO users (username, email, hashed_password, is_admin, is_active, created_at) "
+            "VALUES ('mirror', 'mirror@example.com', 'x', false, true, now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/e.epub', 'epub', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO audiobooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('A', 'a.m4b', '/x/a.m4b', 'm4b', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO book_pairs (ebook_id, audiobook_id, status) "
+            "SELECT (SELECT id FROM ebooks LIMIT 1), (SELECT id FROM audiobooks LIMIT 1), 'UNMATCHED'"
+        ))
+        conn.execute(text(
+            "INSERT INTO bookmarks (user_id, book_pair_id, source, epub_chapter, "
+            "epub_locator, locator_audio_ms, anchor_revision, is_completed, updated_at) "
+            "SELECT (SELECT id FROM users WHERE username='mirror'), "
+            "(SELECT id FROM book_pairs LIMIT 1), 'EBOOK', 3, '{\"href\":\"/ch3\"}', "
+            "12000, 1, false, now()"
+        ))
+        conn.execute(text(
+            "INSERT INTO position_hints (bookmark_id, device_id, hint_kind, hint_value, "
+            "anchor_revision, audio_position_ms, updated_at) "
+            "SELECT (SELECT id FROM bookmarks LIMIT 1), 'pixel', 'READIUM_LOCATOR', "
+            "'{\"href\":\"/ch3\"}', 1, 12000, now()"
+        ))
+
+    command.upgrade(cfg, "head")
+
+    with engine.begin() as conn:
+        columns = {r.column_name for r in conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name IN ('bookmarks', 'user_progress')"
+        )).all()}
+        assert "epub_locator" not in columns
+        assert "locator_audio_ms" not in columns
+        assert "epub_cfi" not in columns
+
+        # The bookmark and its hint are untouched.
+        assert conn.execute(text(
+            "SELECT epub_chapter FROM bookmarks"
+        )).one().epub_chapter == 3
+        hint = conn.execute(text(
+            "SELECT hint_value, audio_position_ms FROM position_hints"
+        )).one()
+        assert hint.hint_value == '{"href":"/ch3"}'
+        assert hint.audio_position_ms == 12000
+
+    # The downgrade puts the columns back (empty) rather than erroring.
+    command.downgrade(cfg, "0006_user_progress_unique")
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT epub_locator, locator_audio_ms FROM bookmarks"
+        )).one()
+        assert row.epub_locator is None
+        assert row.locator_audio_ms is None
+    command.upgrade(cfg, "head")
 
 
 def test_duplicate_user_progress_rows_are_deduped_then_constrained():
@@ -224,7 +308,9 @@ def test_duplicate_user_progress_rows_are_deduped_then_constrained():
                 {"ch": chapter, "cfi": cfi, "off": offset},
             )
 
-    command.upgrade(cfg, "head")
+    # Stop at 0006: 0007 later drops `epub_cfi` (issue #102), so the salvage
+    # this test is about is only observable at the revision that performs it.
+    command.upgrade(cfg, "0006_user_progress_unique")
 
     with engine.begin() as conn:
         rows = conn.execute(text(
@@ -233,6 +319,8 @@ def test_duplicate_user_progress_rows_are_deduped_then_constrained():
     assert len(rows) == 1
     assert rows[0].epub_chapter == 9
     assert rows[0].epub_cfi == "epubcfi(/6/4!/4/2)"
+
+    command.upgrade(cfg, "head")
 
     with pytest.raises(Exception):
         with engine.begin() as conn:
