@@ -34,6 +34,7 @@ from database import async_session
 from models.transcription_queue import TranscriptionQueueItem
 from models.book import BookPair, PairStatus
 from services import offhours
+from utils import utcnow
 
 logger = logging.getLogger("queue-manager")
 
@@ -146,7 +147,7 @@ async def cancel_item(item_id: int) -> bool:
             was_paused = item.paused_at is not None
             item.status = "cancelled"
             item.message = "Cancelled by user"
-            item.completed_at = datetime.datetime.utcnow()
+            item.completed_at = utcnow()
             item.paused_at = None
             await db.commit()
         else:
@@ -320,7 +321,7 @@ async def _process_next_item():
         item.status = "in_progress"
         item.paused_at = None
         if item.started_at is None:
-            item.started_at = datetime.datetime.utcnow()
+            item.started_at = utcnow()
         item.message = "Resuming transcription..." if resuming else "Starting transcription..."
         # We don't overwrite progress to 0.0 either, to preserve it on restart
         if item.progress is None:
@@ -362,7 +363,7 @@ async def _process_next_item():
                         item.status = "failed"
                         item.error_message = f"Failed after {item.retry_count} retries: {str(e)}"
                         item.message = f"Failed after {item.retry_count} retries"
-                        item.completed_at = datetime.datetime.utcnow()
+                        item.completed_at = utcnow()
                         await db.commit()
 
                         # Also update the BookPair status
@@ -396,7 +397,7 @@ async def _process_next_item():
                     item.status = "failed"
                     item.error_message = str(e)
                     item.message = f"Failed: {str(e)[:200]}"
-                    item.completed_at = datetime.datetime.utcnow()
+                    item.completed_at = utcnow()
                     await db.commit()
 
                 # Also update the BookPair status
@@ -434,7 +435,7 @@ async def _mark_item_paused(item_id: int, exc, config) -> None:
         item = result.scalar_one_or_none()
         if item:
             item.status = "pending"
-            item.paused_at = datetime.datetime.utcnow()
+            item.paused_at = utcnow()
             item.message = f"Paused for off-hours — resumes at {opens}"
             await db.commit()
 
@@ -600,7 +601,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         # Check cancellation
         if item_id in _cancel_requested:
             await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                      completed_at=datetime.datetime.utcnow())
+                                      completed_at=utcnow())
             return
 
         from services.transcription import _format_duration
@@ -647,7 +648,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         # Check cancellation
         if item_id in _cancel_requested:
             await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                      completed_at=datetime.datetime.utcnow())
+                                      completed_at=utcnow())
             return
 
         # Persist transcript immediately — before any EPUB work — so it is never lost
@@ -696,7 +697,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # Check cancellation
     if item_id in _cancel_requested:
         await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                  completed_at=datetime.datetime.utcnow())
+                                  completed_at=utcnow())
         return
 
     # Step 3: Align texts
@@ -715,7 +716,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         pair = result.scalar_one_or_none()
         if pair:
             pair.status = PairStatus.SYNCED
-            pair.synced_at = datetime.datetime.utcnow()
+            pair.synced_at = utcnow()
         await db.commit()
 
     # Mark queue item complete
@@ -724,7 +725,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         status="completed",
         progress=1.0,
         message="Sync complete!",
-        completed_at=datetime.datetime.utcnow(),
+        completed_at=utcnow(),
     )
     logger.info(f"Queue item {item_id} (pair {pair_id}) completed successfully")
 
