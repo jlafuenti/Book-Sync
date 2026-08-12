@@ -4,7 +4,9 @@ User progress models for tracking reading/listening positions across devices.
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, Enum, ForeignKey, Boolean, Float
+from sqlalchemy import (
+    Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -60,6 +62,28 @@ class UserProgress(Base):
     # resolve conflicts alongside captured_at.
     device_id: Mapped[str] = mapped_column(String(200), nullable=True)
     device_name: Mapped[str] = mapped_column(String(200), nullable=True)
+
+    # One projection row per user per media item (issue #64). Without this the
+    # duplicate was only *assumed* not to exist: two concurrent first reads each
+    # inserted one, and every later `scalar_one_or_none()` on that media raised
+    # `MultipleResultsFound` — a permanent 500 on one book until a row was
+    # deleted by hand.
+    #
+    # Predicates are written as SQL text so they render identically on Postgres
+    # (production) and SQLite (tests), matching the `Bookmark` indexes. The enum
+    # is stored by member *name*, hence 'EBOOK' / 'AUDIOBOOK'.
+    __table_args__ = (
+        Index(
+            "ux_user_progress_user_ebook", "user_id", "ebook_id", unique=True,
+            sqlite_where=text("media_type = 'EBOOK' AND ebook_id IS NOT NULL"),
+            postgresql_where=text("media_type = 'EBOOK' AND ebook_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_user_progress_user_audiobook", "user_id", "audiobook_id", unique=True,
+            sqlite_where=text("media_type = 'AUDIOBOOK' AND audiobook_id IS NOT NULL"),
+            postgresql_where=text("media_type = 'AUDIOBOOK' AND audiobook_id IS NOT NULL"),
+        ),
+    )
 
     def __repr__(self) -> str:
         return f"<UserProgress(user={self.user_id}, type={self.media_type})>"

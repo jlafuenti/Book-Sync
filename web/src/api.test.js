@@ -786,3 +786,35 @@ describe('off-hours transcription window (issue #106)', () => {
         expect(await updateSettings(saved)).toEqual(saved)
     })
 })
+
+describe('getProgress()', () => {
+    // The endpoint used to be get-or-create: reading a book you had never
+    // opened INSERTed a row, and two clients doing it at once left two — after
+    // which that one book 500ed forever (issue #64). It is read-only now and
+    // answers 204 when there is nothing to report.
+    it('resolves to null on 204 instead of trying to parse an empty body', async () => {
+        const json = vi.fn()
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 204, json }))
+
+        const { getProgress } = await import('./api')
+        expect(await getProgress('ebook', 7)).toBeNull()
+        expect(json).not.toHaveBeenCalled()
+    })
+
+    it('returns the parsed progress when there is one', async () => {
+        const progress = { id: 3, epub_chapter: 4, audio_position_ms: 1000 }
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => progress,
+        }))
+
+        const { getProgress } = await import('./api')
+        expect(await getProgress('ebook', 7)).toEqual(progress)
+    })
+
+    it('still throws on a real failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+
+        const { getProgress } = await import('./api')
+        await expect(getProgress('ebook', 7)).rejects.toThrow('Failed to fetch progress')
+    })
+})

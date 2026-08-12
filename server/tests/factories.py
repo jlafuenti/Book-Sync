@@ -6,8 +6,22 @@ re-implementing seeding per test file. (User creation lives in the `make_user`
 fixture in conftest.py.)
 """
 
+from sqlalchemy import text
+
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
+
+
+async def suspend_user_progress_uniqueness(db):
+    """Drop the `user_progress` unique indexes for this test's schema.
+
+    Lets a test reproduce the pre-#64 state — two rows for the same
+    (user, media), left by the old GET-creates-a-row race — which the indexes
+    now make unrepresentable. The schema is rebuilt per test, so this affects
+    nothing else.
+    """
+    await db.execute(text("DROP INDEX ux_user_progress_user_ebook"))
+    await db.execute(text("DROP INDEX ux_user_progress_user_audiobook"))
 
 
 async def make_book_pair(db, status=PairStatus.SYNCED, *,

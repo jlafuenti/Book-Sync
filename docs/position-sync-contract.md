@@ -149,6 +149,29 @@ their hints, and the `user_progress` projection, in one transaction. After it,
 The "hints are never deleted" rule above governs position **writes**; an
 explicit user reset is the one sanctioned deletion path.
 
+## Reads never create
+
+Every position GET is side-effect free. `GET /api/sync/position/{scope}/{id}` and
+`GET /api/sync/progress/{type}/{id}` both answer **204** when the user has no
+position for that media; `GET /api/sync/bookmark/{pair}` answers 200 with an
+unsaved start-of-book response, purely for app builds that predate the canonical
+endpoint.
+
+> Why: the progress GET used to INSERT on a miss. Two clients opening the same
+> book at the same moment each left a row behind, and every later read *and*
+> write for that media then raised `MultipleResultsFound` — that one book 500ed
+> forever until a row was deleted by hand (issue #64). A fabricated chapter 0 is
+> also indistinguishable from a real position at the start of a book, which makes
+> "has this user read any of this?" unanswerable and gives a failed restore
+> something to overwrite.
+
+The schema now enforces what the code assumed: partial unique indexes on
+`bookmarks` (`ux_bookmarks_user_pair` / `_user_ebook` / `_user_audiobook`) and on
+`user_progress` (`ux_user_progress_user_ebook` / `_user_audiobook`). Because a
+read-then-insert cannot be made race-free in the application, the write path
+attempts its insert inside a savepoint and, on conflict, re-reads the row the
+racing transaction won and applies on top of it.
+
 ## Percent scale
 
 `epub_progress_percent` is **0–100** on the wire. epub.js reports 0–1
