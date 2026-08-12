@@ -38,18 +38,43 @@ vi.mock('../api', () => ({
 }))
 
 // Isolate ContinuePage from its heavier children -- EbookReader pulls in
-// epubjs and isn't relevant to the device-attribution logic under test.
-vi.mock('../contexts/AudioPlayerContext', () => ({
-    useAudioPlayer: () => ({
-        play: vi.fn(),
-        pause: vi.fn(),
-        currentAudiobook: null,
-        pairedEbookId: null,
-        currentTime: 0,
-    }),
+// epubjs. The overlays still surface the props the page hands them, so the
+// reader/player handoff can be driven without rendering either for real.
+// `player` is mutable so a test can put the page in "audiobook playing" state.
+const player = vi.hoisted(() => ({
+    play: vi.fn(),
+    pause: vi.fn(),
+    currentAudiobook: null,
+    pairedEbookId: null,
+    currentTime: 0,
 }))
-vi.mock('../components/EbookReader', () => ({ default: () => null }))
-vi.mock('../components/AudioPlayer', () => ({ AudioPlayerView: () => null }))
+
+vi.mock('../contexts/AudioPlayerContext', () => ({
+    useAudioPlayer: () => player,
+}))
+vi.mock('../components/EbookReader', () => ({
+    default: (props) => (
+        <div
+            data-testid="reader"
+            data-ebook-id={String(props.ebookId)}
+            data-chapter={String(props.initialChapter)}
+            data-preview={String(props.initialTextPreview)}
+        >
+            {props.onSwitchToAudio && (
+                <button onClick={props.onSwitchToAudio}>to-audio</button>
+            )}
+        </div>
+    ),
+}))
+vi.mock('../components/AudioPlayer', () => ({
+    AudioPlayerView: (props) => (
+        <div data-testid="player">
+            {props.onSwitchToEbook && (
+                <button onClick={() => props.onSwitchToEbook(100)}>to-ebook</button>
+            )}
+        </div>
+    ),
+}))
 
 beforeEach(() => {
     getAllProgressMock.mockReset().mockResolvedValue([])
@@ -62,6 +87,11 @@ beforeEach(() => {
     getPositionMock.mockReset().mockResolvedValue(null)
     resetPositionMock.mockReset().mockResolvedValue({ status: 'ok' })
     getAccessTokenMock.mockReset().mockReturnValue('token')
+    player.play.mockReset()
+    player.pause.mockReset()
+    player.currentAudiobook = null
+    player.pairedEbookId = null
+    player.currentTime = 0
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
 })
@@ -163,5 +193,114 @@ describe('ContinuePage device attribution (issue #54)', () => {
 
         await waitFor(() => expect(resetPositionMock).toHaveBeenCalledWith('audiobook', 21))
         expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+})
+
+describe('ContinuePage reader/player handoff', () => {
+    // These paths used to read a legacy bookmark and a `user_progress.epub_cfi`
+    // snapshot; both are gone (issue #102). What matters now: the handoff goes
+    // through the canonical position endpoint, and the reader is handed the
+    // portable anchor rather than a CFI.
+
+    function setupPair() {
+        getEbooksMock.mockResolvedValue([{ id: 10, title: 'Pair Ebook', cover_path: null }])
+        getAudiobooksMock.mockResolvedValue([
+            { id: 20, title: 'Pair Audiobook', cover_path: null, duration_seconds: 3600 },
+        ])
+        getPairsMock.mockResolvedValue([{ id: 100, ebook: { id: 10 }, audiobook: { id: 20 } }])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 10, epub_progress_percent: 20,
+              epub_chapter: 7, book_pair_id: 100, is_completed: false,
+              updated_at: '2024-01-02T00:00:00Z' },
+            { id: 2, media_type: 'audiobook', audiobook_id: 20, audio_position_ms: 500,
+              book_pair_id: 100, is_completed: false, updated_at: '2024-01-01T00:00:00Z' },
+        ])
+    }
+
+    async function chooseFromTheMenu(label) {
+        const titleEl = await screen.findByText('Pair Ebook')
+        const card = titleEl.closest('.continue-card')
+        fireEvent.click(card.querySelector('.continue-card-menu'))
+        fireEvent.click(within(card).getByText(label))
+    }
+
+    async function openTheReader() {
+        render(<MemoryRouter><ContinuePage /></MemoryRouter>)
+        await chooseFromTheMenu('Continue Reading')
+        return await screen.findByTestId('reader')
+    }
+
+    it('opens the reader on the stored chapter and hands it no CFI', async () => {
+        setupPair()
+        const reader = await openTheReader()
+
+        expect(reader).toHaveAttribute('data-ebook-id', '10')
+        expect(reader).toHaveAttribute('data-chapter', '7')
+    })
+
+    it('switching to audio takes the audio anchor from the canonical record', async () => {
+        setupPair()
+        getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 100))
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            20, expect.anything(), 42000, 10))
+        expect(getProgressMock).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the progress projection when the record has no audio position', async () => {
+        setupPair()
+        getPositionMock.mockResolvedValue({ audio_position_ms: 0 })
+        getProgressMock.mockResolvedValue({ audio_position_ms: 9000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 20))
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            20, expect.anything(), 9000, 10))
+    })
+
+    it('switching to the ebook saves the audio position and opens at the returned anchor', async () => {
+        setupPair()
+        player.currentAudiobook = { id: 20, title: 'Pair Audiobook' }
+        player.pairedEbookId = 10
+        player.currentTime = 12.7
+        updatePositionMock.mockResolvedValue({ epub_chapter: 4, epub_text_preview: 'a line' })
+
+        render(<MemoryRouter><ContinuePage /></MemoryRouter>)
+        await chooseFromTheMenu('Continue Listening')
+        fireEvent.click(await screen.findByText('to-ebook'))
+
+        expect(player.pause).toHaveBeenCalled()
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith(
+            'pair', 100, expect.objectContaining({
+                source: 'audiobook',
+                audio_position_ms: 12700,
+                device_id: 'device-abc',
+                captured_at: expect.any(String),
+            })))
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader).toHaveAttribute('data-chapter', '4')
+        expect(reader).toHaveAttribute('data-preview', 'a line')
+    })
+
+    it('still opens the reader when the position save fails offline', async () => {
+        setupPair()
+        player.currentAudiobook = { id: 20, title: 'Pair Audiobook' }
+        player.pairedEbookId = 10
+        player.currentTime = 5
+        updatePositionMock.mockRejectedValue(new Error('offline'))
+
+        render(<MemoryRouter><ContinuePage /></MemoryRouter>)
+        await chooseFromTheMenu('Continue Listening')
+        fireEvent.click(await screen.findByText('to-ebook'))
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader).toHaveAttribute('data-chapter', 'null')
     })
 })

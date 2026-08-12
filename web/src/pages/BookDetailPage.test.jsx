@@ -6,9 +6,11 @@ import BookDetailPage from './BookDetailPage'
 // Isolate BookDetailPage from its heavier children/deps so this test only
 // exercises the enrich-from-ABS toast logic.
 const {
+    getEbookMock,
     getAudiobookMock, getSettingsMock, enrichAudiobookFromAbsMock, getProgressMock, getPositionMock,
     updatePositionMock, resetPairProgressMock, resetPositionMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
+    getEbookMock: vi.fn(),
     getAudiobookMock: vi.fn(),
     getSettingsMock: vi.fn(),
     enrichAudiobookFromAbsMock: vi.fn(),
@@ -22,7 +24,7 @@ const {
 }))
 
 vi.mock('../api', () => ({
-    getEbook: vi.fn(),
+    getEbook: getEbookMock,
     getAudiobook: getAudiobookMock,
     updateEbookMetadata: vi.fn(),
     updateAudiobookMetadata: vi.fn(),
@@ -40,11 +42,37 @@ vi.mock('../api', () => ({
 
 vi.mock('react-markdown', () => ({ default: ({ children }) => <div>{children}</div> }))
 vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
-vi.mock('../components/EbookReader', () => ({ default: () => null }))
-vi.mock('../components/AudioPlayer', () => ({ AudioPlayerView: () => null }))
+// The overlays surface the props the page hands them, so the reader/player
+// handoff can be driven without rendering either for real. `player` is mutable
+// so a test can put the page in "audiobook playing" state.
+const player = vi.hoisted(() => ({
+    play: vi.fn(),
+    pause: vi.fn(),
+    currentAudiobook: null,
+    currentTime: 0,
+}))
+
+vi.mock('../components/EbookReader', () => ({
+    default: (props) => (
+        <div data-testid="reader" data-chapter={String(props.initialChapter)}>
+            {props.onSwitchToAudio && (
+                <button onClick={props.onSwitchToAudio}>to-audio</button>
+            )}
+        </div>
+    ),
+}))
+vi.mock('../components/AudioPlayer', () => ({
+    AudioPlayerView: (props) => (
+        <div data-testid="player">
+            {props.onSwitchToEbook && (
+                <button onClick={() => props.onSwitchToEbook(77, 900)}>to-ebook</button>
+            )}
+        </div>
+    ),
+}))
 vi.mock('../components/CoverImg', () => ({ default: () => null }))
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
-vi.mock('../contexts/AudioPlayerContext', () => ({ useAudioPlayer: () => ({ play: vi.fn() }) }))
+vi.mock('../contexts/AudioPlayerContext', () => ({ useAudioPlayer: () => player }))
 
 function renderPage() {
     return render(
@@ -57,6 +85,11 @@ function renderPage() {
 }
 
 beforeEach(() => {
+    getEbookMock.mockReset()
+    player.play.mockReset()
+    player.pause.mockReset()
+    player.currentAudiobook = null
+    player.currentTime = 0
     getAudiobookMock.mockReset().mockResolvedValue({
         id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr', cover_path: null,
     })
@@ -147,5 +180,81 @@ describe('BookDetailPage progress actions (issue #54 device attribution)', () =>
         await waitFor(() => expect(resetPairProgressMock).toHaveBeenCalledWith(77))
         expect(resetPositionMock).not.toHaveBeenCalled()
         expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+})
+
+describe('BookDetailPage reader/player handoff', () => {
+    // Both directions used to go through the legacy bookmark endpoint; they
+    // now read and write the canonical record (issue #102).
+
+    function renderEbookPage() {
+        getEbookMock.mockResolvedValue({
+            id: 900, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr',
+            cover_path: null, format: 'epub', pair_id: 77,
+            paired_with: { id: 1538, title: 'Antiagon Fire (audio)' },
+        })
+        return render(
+            <MemoryRouter initialEntries={['/book/ebook/900']}>
+                <Routes>
+                    <Route path="/book/:type/:id" element={<BookDetailPage />} />
+                </Routes>
+            </MemoryRouter>
+        )
+    }
+
+    async function openTheReader() {
+        renderEbookPage()
+        fireEvent.click(await screen.findByRole('button', { name: /^Read$/ }))
+        return await screen.findByTestId('reader')
+    }
+
+    it('switching to audio takes the audio anchor from the canonical record', async () => {
+        getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 77))
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            1538, expect.anything(), 42000, 900))
+    })
+
+    it('falls back to the progress projection when the record has no audio position', async () => {
+        getPositionMock.mockResolvedValue({ audio_position_ms: 0 })
+        getProgressMock.mockResolvedValue({ audio_position_ms: 9000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 1538))
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            1538, expect.anything(), 9000, 900))
+    })
+
+    it('switching to the ebook saves the audio position and opens at the returned chapter', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr',
+            cover_path: null, pair_id: 77, paired_with: { id: 900, title: 'Antiagon Fire' },
+        })
+        player.currentAudiobook = { id: 1538, title: 'Antiagon Fire' }
+        player.currentTime = 12.7
+        updatePositionMock.mockResolvedValue({ epub_chapter: 4 })
+
+        renderPage()
+        fireEvent.click(await screen.findByRole('button', { name: /Listen/ }))
+        fireEvent.click(await screen.findByText('to-ebook'))
+
+        expect(player.pause).toHaveBeenCalled()
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith(
+            'pair', 77, expect.objectContaining({
+                source: 'audiobook',
+                audio_position_ms: 12700,
+                device_id: 'device-abc',
+                device_name: 'Web · Chrome',
+                captured_at: expect.any(String),
+            })))
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader).toHaveAttribute('data-chapter', '4')
     })
 })
