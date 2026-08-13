@@ -62,6 +62,27 @@ class SyncWiringTest {
                 "online, rather than waiting up to 15 minutes for the periodic run.",
             app.any { it.contains("SyncWorker.triggerImmediateSync") },
         )
+        assertTrue(
+            "The immediate sync must hang off NetworkMonitor.isOnline, not fire " +
+                "unconditionally at startup: an unconditional call races the " +
+                "periodic run that also starts then, and the two replay the whole " +
+                "queue twice over.",
+            app.any { it.contains("networkMonitor.isOnline") },
+        )
+    }
+
+    @Test
+    fun `draining the offline queue is serialised`() {
+        val repo = codeLines(source("com/booksync/data/repository/BookSyncRepository.kt"))
+
+        // SyncWorker (periodic + connectivity-triggered) and LibraryViewModel can
+        // all call processPendingSync at once, and each reads the whole queue up
+        // front. Observed on a device: 713 replays of a 366-row queue.
+        assertTrue(
+            "processPendingSync must hold pendingSyncMutex for its whole body, or " +
+                "concurrent callers replay the same rows against the server.",
+            repo.any { it.contains("suspend fun processPendingSync() = pendingSyncMutex.withLock") },
+        )
     }
 
     @Test

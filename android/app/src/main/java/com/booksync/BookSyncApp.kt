@@ -10,9 +10,15 @@ import androidx.work.Configuration
 import coil.Coil
 import coil.ImageLoader
 import com.booksync.data.sync.SyncWorker
+import com.booksync.data.util.NetworkMonitor
 import com.booksync.diagnostics.DiagnosticLogger
 import com.google.android.gms.cast.framework.CastContext
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import javax.inject.Inject
 
@@ -37,6 +43,12 @@ class BookSyncApp : Application(), Configuration.Provider {
      *  authenticated cover images from /api/files/covers/{filename}. */
     @Inject
     lateinit var okHttpClient: OkHttpClient
+
+    @Inject
+    lateinit var networkMonitor: NetworkMonitor
+
+    /** Lives as long as the process — this observer must outlive every screen. */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
@@ -68,19 +80,30 @@ class BookSyncApp : Application(), Configuration.Provider {
 
         // Drain the offline write queue (`pending_sync`).
         //
-        // Both calls were previously absent, so nothing ever scheduled
-        // SyncWorker: the queue only drained if the user happened to open the
-        // Library screen (LibraryViewModel's own processPendingSync call).
-        // Reconnecting did not flush it, and neither did relaunching — verified
-        // on a device, where 14 queued writes survived both and then replayed
-        // the instant the Library tab was opened.
-        //
-        // Both requests carry a NetworkType.CONNECTED constraint, so WorkManager
-        // holds them until the device is actually online: the one-shot covers
-        // "came back from offline", the periodic one is the safety net for a
-        // queue that outlives this process.
+        // Neither scheduler was called before, so nothing ever ran SyncWorker:
+        // the queue only drained if the user happened to open the Library
+        // screen (LibraryViewModel's own processPendingSync call). Reconnecting
+        // did not flush it, and neither did relaunching — verified on a device,
+        // where 366 writes from a morning's listening away from the LAN sat
+        // queued until the Library tab was opened.
         SyncWorker.enqueuePeriodicSync(this)
-        SyncWorker.triggerImmediateSync(this)
+
+        // ...and drain as soon as the device is actually reachable again, which
+        // is the case the periodic run handles badly: getting home mid-session
+        // would otherwise wait up to 15 minutes.
+        //
+        // `isOnline` is a StateFlow, so this also fires once at startup when
+        // already online. That is intentional — but it means two runs can
+        // overlap, which is why `processPendingSync` holds a mutex. Enqueuing
+        // both unconditionally at startup without that guard made the two
+        // workers replay the same 366-row queue twice over.
+        appScope.launch {
+            // StateFlow already conflates duplicates, so this yields the
+            // current value (if online) and then each offline -> online edge.
+            networkMonitor.isOnline
+                .filter { online -> online }
+                .collect { SyncWorker.triggerImmediateSync(this@BookSyncApp) }
+        }
 
         // Initialize Cast SDK here so it's ready whether the app is launched by the user
         // or by Android Auto starting the media service directly.
