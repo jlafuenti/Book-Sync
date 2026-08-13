@@ -5,39 +5,6 @@ import { planRestore } from '../lib/positionLadder'
 import './EbookReader.css'
 
 /**
- * What to hand `rendition.display()` on open, or null for "start of book".
- *
- * Cross-device position contract (issue #40): `epub_chapter` is the portable
- * anchor every client writes; an epub.js CFI is a hint only the web reader can
- * produce. Android writes progress with chapter + percent and
- * no CFI (issue #61), so a stored CFI can be left over from a much earlier
- * position — displaying it would reopen the book at the wrong page. Trust the
- * CFI only when it resolves to the anchor chapter.
- *
- * A CFI the spine can't resolve isn't *proven* stale, so it's still used —
- * that's the pre-existing behaviour and the anchor may itself be absent.
- */
-export function resolveInitialDisplayTarget(book, initialCfi, initialChapter) {
-    const chapterHref =
-        initialChapter != null && initialChapter >= 0 && book?.spine?.items?.[initialChapter]
-            ? book.spine.items[initialChapter].href
-            : null
-
-    if (!initialCfi) return chapterHref
-
-    if (chapterHref !== null) {
-        let cfiIndex = null
-        try {
-            cfiIndex = book.spine.get(initialCfi)?.index ?? null
-        } catch {
-            cfiIndex = null
-        }
-        if (cfiIndex !== null && cfiIndex !== initialChapter) return chapterHref
-    }
-    return initialCfi
-}
-
-/**
  * Walk the restore ladder, taking the first step that actually lands.
  *
  * Returns true when the reader is at a position the record describes, false
