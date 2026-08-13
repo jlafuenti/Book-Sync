@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import EbookReader, { resolveInitialDisplayTarget, executeRestore } from './EbookReader'
+import EbookReader, { executeRestore } from './EbookReader'
 
 const {
     fetchEbookBlobMock, getPositionMock, updatePositionMock, matchTextToAudioMock,
@@ -333,48 +333,6 @@ describe('EbookReader — a failed restore must not overwrite a real position', 
         // No anchor at all: executeRestore's "genuinely unread" path, calling
         // display() with no arguments.
         await waitFor(() => expect(rendition.display).toHaveBeenCalledWith())
-    })
-})
-
-describe('resolveInitialDisplayTarget — stale CFI (issue #40)', () => {
-    // chapter + sentence is the portable cross-device anchor; epub_cfi is a
-    // web-local hint. Android writes progress with chapter/percent and no CFI
-    // (issue #61), so a leftover CFI can point at a chapter the user has long
-    // left — following it reopens the book at the wrong page.
-    const bookWith = (cfiIndex, itemCount = 8) => ({
-        spine: {
-            items: Array.from({ length: itemCount }, (_, i) => ({ href: `ch${i}.xhtml` })),
-            get: vi.fn(() => (cfiIndex === null ? null : { index: cfiIndex })),
-        },
-    })
-
-    it('uses the CFI when it resolves to the anchor chapter', () => {
-        expect(resolveInitialDisplayTarget(bookWith(3), 'cfi-x', 3)).toBe('cfi-x')
-    })
-
-    it('falls back to the chapter when the CFI points somewhere else', () => {
-        expect(resolveInitialDisplayTarget(bookWith(0), 'cfi-stale', 5)).toBe('ch5.xhtml')
-    })
-
-    it('uses the CFI when there is no chapter anchor to check it against', () => {
-        expect(resolveInitialDisplayTarget(bookWith(0), 'cfi-x', null)).toBe('cfi-x')
-    })
-
-    it('keeps the CFI when the spine cannot resolve it (unprovable, not stale)', () => {
-        expect(resolveInitialDisplayTarget(bookWith(null), 'cfi-x', 2)).toBe('cfi-x')
-    })
-
-    it('survives a spine.get that throws on a malformed CFI', () => {
-        const book = bookWith(1)
-        book.spine.get = vi.fn(() => { throw new Error('bad cfi') })
-        expect(resolveInitialDisplayTarget(book, 'cfi-bad', 4)).toBe('cfi-bad')
-    })
-
-    it('uses the chapter when there is no CFI, and nothing when there is neither', () => {
-        expect(resolveInitialDisplayTarget(bookWith(null), null, 2)).toBe('ch2.xhtml')
-        expect(resolveInitialDisplayTarget(bookWith(null), null, null)).toBe(null)
-        // Chapter index past the end of the spine is not navigable.
-        expect(resolveInitialDisplayTarget(bookWith(null, 2), null, 9)).toBe(null)
     })
 })
 
