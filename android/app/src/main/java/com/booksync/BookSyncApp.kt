@@ -9,6 +9,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil.Coil
 import coil.ImageLoader
+import com.booksync.data.sync.SyncWorker
 import com.booksync.diagnostics.DiagnosticLogger
 import com.google.android.gms.cast.framework.CastContext
 import dagger.hilt.android.HiltAndroidApp
@@ -64,6 +65,22 @@ class BookSyncApp : Application(), Configuration.Provider {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(channel)
         }
+
+        // Drain the offline write queue (`pending_sync`).
+        //
+        // Both calls were previously absent, so nothing ever scheduled
+        // SyncWorker: the queue only drained if the user happened to open the
+        // Library screen (LibraryViewModel's own processPendingSync call).
+        // Reconnecting did not flush it, and neither did relaunching — verified
+        // on a device, where 14 queued writes survived both and then replayed
+        // the instant the Library tab was opened.
+        //
+        // Both requests carry a NetworkType.CONNECTED constraint, so WorkManager
+        // holds them until the device is actually online: the one-shot covers
+        // "came back from offline", the periodic one is the safety net for a
+        // queue that outlives this process.
+        SyncWorker.enqueuePeriodicSync(this)
+        SyncWorker.triggerImmediateSync(this)
 
         // Initialize Cast SDK here so it's ready whether the app is launched by the user
         // or by Android Auto starting the media service directly.
