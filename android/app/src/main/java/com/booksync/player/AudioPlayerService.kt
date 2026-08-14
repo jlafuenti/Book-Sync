@@ -114,11 +114,12 @@ class AudioPlayerService : MediaLibraryService() {
     private var exoPlayer: Player? = null
     private var sleepTimerJob: Job? = null
     private var autoPositionSaveJob: Job? = null
-    // Last time we wrote a history-log entry (appendToLog=true). Updated on pause,
+    // When the next continuous-playback history entry is due. Advanced on pause,
     // track-end, service destroy, cast session transitions, and the 30-min tick.
     // Only advanced while isPlaying (the polling loop only runs then), so pauses
-    // naturally freeze the 30-min clock.
-    private var lastAutoLogTimeMs = 0L
+    // naturally freeze the clock. See [ContinuousPlaybackLog] for why this is a
+    // seeded object rather than a `0L` long.
+    private val continuousPlaybackLog = ContinuousPlaybackLog(AUTO_LOG_INTERVAL_MS)
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
@@ -821,7 +822,7 @@ class AudioPlayerService : MediaLibraryService() {
         val posMs = player.currentPosition.toInt()
         if (posMs <= 0) return
 
-        if (appendToLog) lastAutoLogTimeMs = System.currentTimeMillis()
+        if (appendToLog) continuousPlaybackLog.onLogged(System.currentTimeMillis())
 
         serviceScope.launch {
             try {
@@ -852,8 +853,18 @@ class AudioPlayerService : MediaLibraryService() {
         }
     }
 
+    /**
+     * The one periodic position save in the app.
+     *
+     * Driven by `onIsPlayingChanged`, so it covers every source of playback —
+     * the phone UI, Android Auto, and Cast alike. `PlayerViewModel` used to run
+     * an identical 5-second loop of its own whenever the player screen was
+     * open, which doubled the server write volume and made the app's two
+     * near-simultaneous writes race each other into 409s in `apply_position`.
+     */
     private fun startAutoPositionSave() {
         autoPositionSaveJob?.cancel()
+        continuousPlaybackLog.onPlaybackStarted(System.currentTimeMillis())
         autoPositionSaveJob = serviceScope.launch {
             while (true) {
                 delay(AUTO_SAVE_INTERVAL_MS)
@@ -866,7 +877,7 @@ class AudioPlayerService : MediaLibraryService() {
                 // and reset the timer. Only reached while isPlaying (the loop is
                 // torn down by stopAutoPositionSave on pause), so pauses freeze
                 // the clock automatically.
-                if (System.currentTimeMillis() - lastAutoLogTimeMs >= AUTO_LOG_INTERVAL_MS) {
+                if (continuousPlaybackLog.isDue(System.currentTimeMillis())) {
                     saveCurrentPositionForAuto(appendToLog = true, claimFormat = true)
                 }
             }
