@@ -129,6 +129,16 @@ interface BookSyncApi {
     @DELETE("api/sync/progress/pair/{pairId}")
     suspend fun resetPairProgress(@Path("pairId") pairId: Int): Response<Unit>
 
+    // Scoped true reset for standalone (unpaired) media (issue #103): deletes
+    // the canonical bookmark + hints + progress projection so GET /position
+    // answers 204 ("unread") again, instead of the legacy zero-write's
+    // 200-with-zeros. Scope is "ebook" or "audiobook".
+    @DELETE("api/sync/position/{scope}/{id}")
+    suspend fun resetPosition(
+        @Path("scope") scope: String,
+        @Path("id") id: Int,
+    ): Response<Unit>
+
     // ============ Transcription ============
 
     /** Add a book pair to the transcription queue (user-role endpoint). */

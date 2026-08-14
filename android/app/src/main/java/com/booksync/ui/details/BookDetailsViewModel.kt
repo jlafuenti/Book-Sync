@@ -321,16 +321,21 @@ class BookDetailsViewModel @Inject constructor(
     fun resetProgress() {
         val ui = uiState.value
         runSafely {
-            when {
-                // Paired: delete the canonical bookmark + progress server-side
-                // and clear the matching local caches, rather than pinning
-                // both legs at 0 with the legacy per-media write (which left
-                // the old bookmark in place to silently re-seed progress).
-                ui.pair != null -> repository.resetPairProgress(ui.pair.id)
-                ui.ebook != null     -> repository.resetMediaProgress("ebook", ui.ebook.id)
-                ui.audiobook != null -> repository.resetMediaProgress("audiobook", ui.audiobook.id)
+            // Both paths delete the canonical bookmark + progress server-side
+            // and clear the matching local caches (pair-scoped DELETE for a
+            // pair, scoped position DELETE for a standalone — issue #103),
+            // rather than pinning positions at 0 with the legacy per-media
+            // write (which left the old bookmark in place to silently re-seed
+            // progress). Both refuse to touch local state when the server
+            // can't be reached and return false — tell the user the truth
+            // instead of claiming a reset that didn't happen.
+            val ok = when {
+                ui.pair != null      -> repository.resetPairProgress(ui.pair.id)
+                ui.ebook != null     -> repository.resetStandaloneProgress("ebook", ui.ebook.id)
+                ui.audiobook != null -> repository.resetStandaloneProgress("audiobook", ui.audiobook.id)
+                else -> return@runSafely
             }
-            _snack.value = "Progress reset"
+            _snack.value = if (ok) "Progress reset" else "Reset failed — check connection"
         }
     }
 

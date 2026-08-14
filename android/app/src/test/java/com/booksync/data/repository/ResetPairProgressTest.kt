@@ -21,7 +21,7 @@ import retrofit2.Response
 
 /**
  * [BookSyncRepository.resetPairProgress] backs "Reset Progress" for a paired
- * book. The legacy [BookSyncRepository.resetMediaProgress] only zero-writes
+ * book. The legacy `resetMediaProgress` (removed in issue #103) only zero-wrote
  * `user_progress` per media item and leaves the canonical Bookmark row in
  * place — the next sync (or even the next local open) re-seeds progress
  * right back from it, so the reset silently un-resets itself. This calls the

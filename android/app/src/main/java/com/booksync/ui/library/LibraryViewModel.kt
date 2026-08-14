@@ -412,8 +412,8 @@ class LibraryViewModel @Inject constructor(
     fun resetProgress(pair: BookPairEntity)       = runSafely {
         repository.resetPairProgress(pair.id)
     }
-    fun resetProgressEbook(id: Int)               = runSafely { repository.resetMediaProgress("ebook", id) }
-    fun resetProgressAudiobook(id: Int)           = runSafely { repository.resetMediaProgress("audiobook", id) }
+    fun resetProgressEbook(id: Int)               = runSafely { repository.resetStandaloneProgress("ebook", id) }
+    fun resetProgressAudiobook(id: Int)           = runSafely { repository.resetStandaloneProgress("audiobook", id) }
 
     // --- Actions (series batch) --------------------------------------------
     //

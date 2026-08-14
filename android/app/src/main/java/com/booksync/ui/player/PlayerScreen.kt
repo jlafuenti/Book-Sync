@@ -796,9 +796,9 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             val standalone = _standaloneAudio.value
             if (standalone != null) {
-                // No pair to delete server-side for standalone audio — the
-                // server's reset DELETE is pair-scoped only.
-                repository.resetMediaProgress("audiobook", standalone.id)
+                // Scoped DELETE — a true reset for standalone audio too
+                // (issue #103). No-op locally if the server is unreachable.
+                repository.resetStandaloneProgress("audiobook", standalone.id)
                 return@launch
             }
             val p = _pair.value ?: return@launch
