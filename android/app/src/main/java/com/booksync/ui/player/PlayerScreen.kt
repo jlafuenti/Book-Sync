@@ -221,16 +221,12 @@ class PlayerViewModel @Inject constructor(
     private var positionPollingJob: kotlinx.coroutines.Job? = null
     private var savedPositionFromBookmark: Long = 0L
     private var bookmarkLoaded = false
-    private var lastSaveTimeMs = 0L
-    // Last time we wrote a history-log entry (appendToLog=true). Updated whenever
-    // a pause / stop / 30-min-tick save fires, so the 30-min timer resets on any
-    // meaningful boundary. Only advanced while isPlaying, so pauses freeze it.
-    private var lastLogTimeMs = 0L
     private var pendingSeekPosition: Long = -1L  // Seek deferred until player is ready
-    private val SAVE_INTERVAL_MS = 5000L  // Save bookmark every 5 seconds
-    // Write a history-log entry every 30 min of continuous playback (in addition
-    // to pause/stop boundaries). Caps a 1-hour session to ~2 log entries.
-    private val LOG_INTERVAL_MS = 30 * 60 * 1000L
+    // No heartbeat or 30-min-tick state here: AudioPlayerService owns the one
+    // periodic save and the continuous-playback timer that goes with it (see
+    // [ContinuousPlaybackLog]). This screen only saves at boundaries it can
+    // recognise and the service cannot — a deliberate pause, or switching to
+    // the reader.
     private var chaptersLoaded = false
 
     companion object {
@@ -506,22 +502,16 @@ class PlayerViewModel @Inject constructor(
                         loadChaptersFromService(ctrl)
                     }
 
-                    // Heartbeat: save position every 5s while playing (NO history
-                    // entry — just keeps Bookmark fresh so a crash doesn't lose
-                    // more than a few seconds of listening). claimFormat=true:
-                    // this only ever fires while ctrl.isPlaying is true.
-                    val now = System.currentTimeMillis()
-                    if (ctrl.isPlaying && (now - lastSaveTimeMs >= SAVE_INTERVAL_MS)) {
-                        lastSaveTimeMs = now
-                        saveBookmark(appendToLog = false, claimFormat = true)
-                    }
-                    // 30-min continuous-playback log tick: writes a history entry.
-                    // Only advances lastLogTimeMs while playing, so pauses freeze
-                    // the timer; any pause/stop that logs also resets it.
-                    // claimFormat=true: only fires while ctrl.isPlaying is true.
-                    if (ctrl.isPlaying && (now - lastLogTimeMs >= LOG_INTERVAL_MS)) {
-                        saveBookmark(appendToLog = true, claimFormat = true)
-                    }
+                    // No heartbeat or 30-min tick here: AudioPlayerService owns
+                    // the one periodic save (see its startAutoPositionSave).
+                    // This screen used to run an identical 5-second loop, so
+                    // whenever the player was open every tick produced TWO
+                    // server writes — doubling write volume and the offline
+                    // queue, and making the app's own two near-simultaneous
+                    // writes race into 409s in the server's apply_position.
+                    // The service loop is driven by onIsPlayingChanged, so it
+                    // covers this screen's playback too.
+                    //
                     // Pause → log this as a session boundary. This is the phone
                     // screen's own pause detection (as opposed to
                     // AudioPlayerService's, which also serves Android Auto and
@@ -725,7 +715,6 @@ class PlayerViewModel @Inject constructor(
      *   silently inheriting whatever the last one happened to use.
      */
     private fun saveBookmark(appendToLog: Boolean = false, claimFormat: Boolean) {
-        if (appendToLog) lastLogTimeMs = System.currentTimeMillis()
         if (isStandalone) {
             // Standalone audiobooks track progress locally only (no pair-linked bookmark)
             val audio = _standaloneAudio.value ?: return

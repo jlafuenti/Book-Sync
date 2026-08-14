@@ -19,6 +19,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -56,6 +58,18 @@ class BookSyncRepository @Inject constructor(
     /** This device's stable id / display name, for position attribution. */
     val deviceId: String get() = deviceIdManager.deviceId
     val deviceName: String get() = deviceIdManager.deviceName
+
+    /**
+     * Serialises [processPendingSync]. Two callers can legitimately fire at
+     * once — `SyncWorker` (periodic and connectivity-triggered) and
+     * `LibraryViewModel` when the screen opens — and each reads the whole
+     * queue up front. Without this they replay the same rows concurrently:
+     * observed on a device as 713 replays of a 366-row queue, doubling server
+     * writes and leaving the record briefly holding an older row's position
+     * while the two streams interleaved. The second caller now waits, then
+     * finds the queue already empty.
+     */
+    private val pendingSyncMutex = Mutex()
 
     /**
      * Application-scoped — outlives any Activity's `lifecycleScope`. The
@@ -1489,7 +1503,7 @@ class BookSyncRepository @Inject constructor(
      * replay as a fresh, most-recent write. On 409 the item is dropped (it lost — no
      * retry) and the server's authoritative state is adopted locally.
      */
-    suspend fun processPendingSync() {
+    suspend fun processPendingSync() = pendingSyncMutex.withLock {
         val pendingBookmarks = pendingSyncDao.getAllPending()
         if (pendingBookmarks.isNotEmpty()) log("processPendingSync — ${pendingBookmarks.size} pending bookmarks")
         for (sync in pendingBookmarks) {
