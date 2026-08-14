@@ -146,6 +146,9 @@ class ReaderActivity : AppCompatActivity() {
      */
     private val savePolicy = PositionSavePolicy()
 
+    /** Drops the redundant second write every reader exit used to make. */
+    private val duplicatePositionFilter = DuplicatePositionFilter()
+
     /**
      * The href + progression of the last locator the code displayed
      * programmatically — the initial restored locator, or a `navigator.go(...)`
@@ -859,6 +862,19 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
 
+        val locatorJson = locator.toJSON().toString()
+
+        // Every exit from the reader saves twice: switchToAudio / the toolbar
+        // back button / the home item each call saveCurrentPosition() and then
+        // finish(), and finish() runs onPause(), which saves again. Both calls
+        // are wanted — the explicit one captures synchronously so a fast close
+        // can't cancel it, and onPause covers the exits that never make an
+        // explicit call — so the redundant repeat is dropped here instead.
+        if (!duplicatePositionFilter.shouldWrite("$chapterIndex@$locatorJson")) {
+            Log.d(TAG, "savePosition: identical to the previous write, skipping")
+            return
+        }
+
         // Inject selection tracker on every page turn (content may have changed).
         // Called on the main thread before the coroutine, so WebView access is safe.
         injectSelectionTracker()
@@ -876,7 +892,6 @@ class ReaderActivity : AppCompatActivity() {
         // itself now resolves the sync-point match on the repository's own
         // appScope) is the only thing that crosses a coroutine boundary.
         val textPreview = extractTextPreviewFromCache(chapterIndex, progression)
-        val locatorJson = locator.toJSON().toString()
         val snapshot = ReaderPositionSnapshot(
             pairId = pairId,
             chapterIndex = chapterIndex,
