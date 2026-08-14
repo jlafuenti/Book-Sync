@@ -58,7 +58,9 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
             <button onClick={() => player.togglePlayPause()}>toggle</button>
             <button onClick={() => player.skipBackward()}>skip-back</button>
             <button onClick={() => player.skipForward()}>skip-fwd</button>
+            <button onClick={() => player.setSpeed(1.25)}>set-speed</button>
             <button onClick={() => player.clearStaleConflict()}>clear-conflict</button>
+            <div data-testid="speed">{player.speed}</div>
             <div data-testid="stale-conflict">
                 {player.staleConflict ? `${player.staleConflict.deviceName}|${player.staleConflict.position}` : ''}
             </div>
@@ -67,6 +69,7 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
 }
 
 beforeEach(() => {
+    localStorage.clear()
     audioInstances = []
     vi.stubGlobal('Audio', vi.fn(function () {
         const el = new MockAudio()
@@ -78,6 +81,46 @@ beforeEach(() => {
     sendPositionKeepaliveMock.mockReset()
     getDeviceIdMock.mockReset().mockReturnValue('device-123')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
+})
+
+// Issue #57: playback speed used to be React state only — every page load
+// reset to 1×. It persists in localStorage under tandem_player_speed now.
+describe('AudioPlayerProvider speed persistence', () => {
+    it('restores the persisted speed on mount and applies it to the audio element', async () => {
+        localStorage.setItem('tandem_player_speed', '1.5')
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+
+        expect(screen.getByTestId('speed').textContent).toBe('1.5')
+        expect(audioInstances[0].playbackRate).toBe(1.5)
+
+        // A new load applies the restored speed too (play() sets it on src swap).
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        expect(audioInstances[0].playbackRate).toBe(1.5)
+    })
+
+    it('persists speed changes to localStorage', () => {
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('set-speed'))
+
+        expect(audioInstances[0].playbackRate).toBe(1.25)
+        expect(localStorage.getItem('tandem_player_speed')).toBe('1.25')
+    })
+
+    it('falls back to 1x when the stored value is garbage', () => {
+        localStorage.setItem('tandem_player_speed', 'not-a-number')
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+
+        expect(screen.getByTestId('speed').textContent).toBe('1')
+        expect(audioInstances[0].playbackRate).toBe(1)
+    })
+
+    it('falls back to 1x when the stored value is out of range', () => {
+        localStorage.setItem('tandem_player_speed', '99')
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+
+        expect(screen.getByTestId('speed').textContent).toBe('1')
+    })
 })
 
 describe('AudioPlayerProvider play()', () => {
