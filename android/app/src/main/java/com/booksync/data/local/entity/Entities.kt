@@ -27,6 +27,12 @@ data class BookPairEntity(
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
     val syncMapDownloaded: Boolean = false,
+    // `sync_maps.version` of the points currently in the `sync_points` table for
+    // this pair (issue #55). Re-transcription rebuilds the server's map with new
+    // audio timestamps, so a cache that doesn't match is not merely out of date
+    // — it converts positions to seconds that no longer exist. Null means the
+    // version was never recorded (pre-v18 cache, or nothing downloaded).
+    val syncMapVersion: Int? = null,
     // Audiobook cover filename as served by /api/files/covers/{filename}.
     // Populated from AudioBookResponse.cover_path on library sync.
     val audiobookCoverPath: String? = null,

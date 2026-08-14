@@ -1433,7 +1433,11 @@ async def list_pairs(
     """List all book pairs (matched ebook + audiobook)."""
     result = await db.execute(
         select(BookPair)
-        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
+        # `sync_map` is eager-loaded purely so `sync_map_version` can be
+        # reported here — this is the listing Android's `refreshPairs` polls,
+        # and it is how a client learns its cached sync points went stale.
+        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook),
+                 selectinload(BookPair.sync_map))
         .join(BookPair.ebook)
         .order_by(EBook.author.nulls_last(), EBook.series.nulls_last(), EBook.series_index.nulls_last(), EBook.title)
     )

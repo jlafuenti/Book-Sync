@@ -189,6 +189,11 @@ class BookPairResponse(BaseModel):
     matched_at: Optional[datetime]
     synced_at: Optional[datetime]
     acknowledged: bool = False
+    # The live sync-map version, so a client caching sync points can spot a
+    # re-transcription cheaply (issue #55). Null means *unknown* — either the
+    # pair has no map, or this endpoint didn't eager-load it (see
+    # `BookPair.sync_map_version`) — so a client must not drop its cache on null.
+    sync_map_version: Optional[int] = None
 
     class Config:
         from_attributes = True

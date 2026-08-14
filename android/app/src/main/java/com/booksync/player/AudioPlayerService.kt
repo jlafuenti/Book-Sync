@@ -1335,6 +1335,14 @@ class AudioPlayerService : MediaLibraryService() {
         withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
             repository.refreshBookmark(pairId)
         } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
+
+        // Re-fetch the sync map if a re-transcription invalidated the cached one
+        // (issue #55) — the synced-page display converts through these points,
+        // and a stale cache resolves to audio timestamps that no longer exist.
+        // Bounded like the position pull above: playback must not wait on it.
+        withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+            repository.ensureSyncMapCached(pairId)
+        } ?: Log.w(TAG, "resume: sync map not available in time — using local cache")
     }
 
     private suspend fun resolveMediaItem(mediaId: String): MediaItem? {
