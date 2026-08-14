@@ -37,6 +37,7 @@ from sqlalchemy import select
 from config import settings
 from database import async_session
 from models.settings import SystemSetting
+from utils import utcnow
 
 logger = logging.getLogger("backup-service")
 
@@ -263,7 +264,7 @@ def prune(config: BackupConfig) -> list[str]:
 async def create_backup(manual: bool, label: Optional[str] = None) -> dict:
     """Dump the DB (+ covers snapshot) into a new backup and return its list item."""
     _backups_dir().mkdir(parents=True, exist_ok=True)
-    now = datetime.utcnow()
+    now = utcnow()
     backup_id = now.strftime("%Y-%m-%d_%H%M%S") + "-manual" if manual else now.strftime("%Y-%m-%d")
 
     dump = _dump_path(backup_id)
@@ -415,7 +416,7 @@ async def _tick() -> None:
         await _safe_create_and_prune(config)
         return
 
-    now = datetime.utcnow()
+    now = utcnow()
     today_exists = _dump_path(now.strftime("%Y-%m-%d")).is_file()
     if _should_run_scheduled(now.hour, config, today_exists):
         await _safe_create_and_prune(config)

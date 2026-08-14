@@ -5,39 +5,6 @@ import { planRestore } from '../lib/positionLadder'
 import './EbookReader.css'
 
 /**
- * What to hand `rendition.display()` on open, or null for "start of book".
- *
- * Cross-device position contract (issue #40): `epub_chapter` is the portable
- * anchor every client writes; `epub_cfi` is an epub.js-only hint that only the
- * web reader can produce. Android writes progress with chapter + percent and
- * no CFI (issue #61), so a stored CFI can be left over from a much earlier
- * position — displaying it would reopen the book at the wrong page. Trust the
- * CFI only when it resolves to the anchor chapter.
- *
- * A CFI the spine can't resolve isn't *proven* stale, so it's still used —
- * that's the pre-existing behaviour and the anchor may itself be absent.
- */
-export function resolveInitialDisplayTarget(book, initialCfi, initialChapter) {
-    const chapterHref =
-        initialChapter != null && initialChapter >= 0 && book?.spine?.items?.[initialChapter]
-            ? book.spine.items[initialChapter].href
-            : null
-
-    if (!initialCfi) return chapterHref
-
-    if (chapterHref !== null) {
-        let cfiIndex = null
-        try {
-            cfiIndex = book.spine.get(initialCfi)?.index ?? null
-        } catch {
-            cfiIndex = null
-        }
-        if (cfiIndex !== null && cfiIndex !== initialChapter) return chapterHref
-    }
-    return initialCfi
-}
-
-/**
  * Walk the restore ladder, taking the first step that actually lands.
  *
  * Returns true when the reader is at a position the record describes, false
@@ -80,7 +47,7 @@ export async function executeRestore(book, rendition, steps) {
     return false
 }
 
-function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
+function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
     const viewerRef = useRef(null)
     const bookRef = useRef(null)
     const renditionRef = useRef(null)
@@ -90,7 +57,7 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     const [error, setError] = useState(null)
     const [toc, setToc] = useState([])
     const [showToc, setShowToc] = useState(false)
-    const [currentCfi, setCurrentCfi] = useState(initialCfi)
+    const [currentCfi, setCurrentCfi] = useState(null)
     const [progressPercent, setProgressPercent] = useState(0)
     const [currentChapter, setCurrentChapter] = useState('')
     const [fontSize, setFontSize] = useState(100)
@@ -101,11 +68,10 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
     // genuinely different device. { cfi, deviceName }. Only cleared via the
     // explicit "Jump" click below -- never auto-navigated.
     //
-    // A rejected updateBookmark(...) call (fix for a review finding on Task
-    // 3) sets this same state with `cfi: null` -- BookmarkResponse has no
-    // navigable epub_cfi field, so there's no jump target, only a passive
-    // "Dismiss"-only notice. Never overwrites an already-showing jump-capable
-    // (cfi-bearing) conflict with a lesser message-only one.
+    // A rejection whose authoritative record carries no epub.js CFI hint sets
+    // this same state with `cfi: null` -- there's no jump target then, only a
+    // passive "Dismiss"-only notice. Never overwrites an already-showing
+    // jump-capable (cfi-bearing) conflict with a lesser message-only one.
     const [staleConflict, setStaleConflict] = useState(null)
     const currentSpineIndexRef = useRef(initialChapter ?? 0)
     // Tracks progression (0-1) within the current chapter, updated on each page turn
@@ -320,16 +286,17 @@ function EbookReader({ ebookId, pairId, initialCfi, initialChapter, initialTextP
                 const scope = pairId ? 'pair' : 'ebook'
                 const position = await getPosition(scope, pairId || ebookId).catch(e => {
                     console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
-                    // Offline: fall back to whatever the caller passed in.
-                    return initialCfi || initialChapter != null
+                    // Offline: fall back to the portable anchor the caller
+                    // passed in. No CFI hint is threaded through any more —
+                    // callers used to pass one read from `user_progress.epub_cfi`,
+                    // a mirror column that no longer exists (issue #102), and a
+                    // page-load snapshot was staler than this fetch anyway.
+                    return initialChapter != null
                         ? {
                             anchor_revision: 0,
-                            epub_chapter: initialChapter ?? undefined,
+                            epub_chapter: initialChapter,
                             epub_text_preview: initialTextPreview || undefined,
-                            hints: initialCfi
-                                ? [{ kind: 'epubjs_cfi', device_id: getDeviceId(),
-                                     value: initialCfi, anchor_revision: 0 }]
-                                : [],
+                            hints: [],
                         }
                         : null
                 })

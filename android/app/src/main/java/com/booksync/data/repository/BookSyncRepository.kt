@@ -605,27 +605,25 @@ class BookSyncRepository @Inject constructor(
 
     /** Refresh the bookmark from the server, respecting unsynced local data. */
     suspend fun refreshBookmark(pairId: Int) {
-        try {
-            val remote = api.getBookmark(pairId)
-            val existing = bookmarkDao.getBookmark(pairId)
+        // A 204 (never opened) and an unreachable server both come back null —
+        // in either case there is nothing to pull and the local cache stands.
+        val remote = fetchPosition("pair", pairId).position ?: return
+        val existing = bookmarkDao.getBookmark(pairId)
 
-            // Never overwrite unsynced local data — offline progress must survive
-            if (existing != null && !existing.syncedToServer) {
-                log("refreshBookmark pair=$pairId: local has unsynced changes, skipping server pull")
-                return
-            }
+        // Never overwrite unsynced local data — offline progress must survive
+        if (existing != null && !existing.syncedToServer) {
+            log("refreshBookmark pair=$pairId: local has unsynced changes, skipping server pull")
+            return
+        }
 
-            // Only pull if server is newer or no local data exists
-            val remoteTs = parseSyncTimestamp(remote.updated_at)
-            val localTs = parseSyncTimestamp(existing?.updatedAt)
+        // Only pull if server is newer or no local data exists
+        val remoteTs = parseSyncTimestamp(remote.updated_at)
+        val localTs = parseSyncTimestamp(existing?.updatedAt)
 
-            if (existing == null || remoteTs >= localTs) {
-                bookmarkDao.upsertBookmark(remote.toEntity(existing))
-            } else {
-                log("refreshBookmark pair=$pairId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
-            }
-        } catch (e: Exception) {
-            logW("refreshBookmark offline — using local cache (${e.message})")
+        if (existing == null || remoteTs >= localTs) {
+            bookmarkDao.upsertBookmark(remote.toBookmarkEntity(pairId, existing))
+        } else {
+            log("refreshBookmark pair=$pairId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
         }
     }
 
@@ -679,21 +677,31 @@ class BookSyncRepository @Inject constructor(
     }
 
     /**
-     * Sends [entity]'s current state to `PUT /api/sync/bookmark/{pairId}`, always attaching
+     * Sends [entity]'s current state to `PUT /api/sync/position/pair/{pairId}`, always attaching
      * this device's identity and the position's true local capture time (never "now" — see
      * [capturedAtIsoFromMillis]/[toCapturedAtIso]) so a stale offline replay is rejected by the
      * server instead of clobbering a newer write from another device.
+     *
+     * The Readium locator travels as a position hint keyed by this device, so
+     * another device's precise position is never overwritten by ours — it used
+     * to be a single shared `epub_locator` column (issue #102).
      */
     private suspend fun pushBookmark(pairId: Int, entity: BookmarkEntity, appendToLog: Boolean): PushOutcome {
-        val response = api.updateBookmark(
+        val response = api.updatePosition(
+            "pair",
             pairId,
-            BookmarkUpdateRequest(
+            PositionUpdateRequest(
                 source = entity.source,
                 epub_chapter = entity.epubChapter,
                 epub_sentence_index = entity.epubSentenceIndex,
                 audio_position_ms = entity.audioPositionMs,
-                epub_locator = entity.epubLocator,
-                locator_audio_ms = entity.locatorAudioMs,
+                hint = entity.epubLocator?.let {
+                    PositionHintDto(
+                        kind = HINT_READIUM_LOCATOR,
+                        value = it,
+                        audio_position_ms = entity.locatorAudioMs,
+                    )
+                },
                 append_to_log = appendToLog,
                 device_id = deviceIdManager.deviceId,
                 device_name = deviceIdManager.deviceName,
@@ -706,9 +714,9 @@ class BookSyncRepository @Inject constructor(
                 PushOutcome.SYNCED
             }
             response.code() == 409 -> {
-                val serverState = parseConflictBody<BookmarkResponse>(response.errorBody()?.string())
+                val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                 if (serverState != null) {
-                    bookmarkDao.upsertBookmark(serverState.toEntity(entity))
+                    bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(pairId, entity))
                     logW("pushBookmark pair=$pairId: 409 — this write lost, adopted server state")
                 } else {
                     logE("pushBookmark pair=$pairId: 409 but could not parse server state")
@@ -722,14 +730,21 @@ class BookSyncRepository @Inject constructor(
         }
     }
 
-    /** Same contract as [pushBookmark] but for `PUT /api/sync/progress/{mediaType}/{mediaId}`. */
+    /**
+     * Same contract as [pushBookmark] but scoped to a single medium —
+     * `PUT /api/sync/position/{ebook|audiobook}/{mediaId}`.
+     *
+     * `source` is deliberately null: this is a progress-shaped write with no
+     * claim about which format the user is in, and the server treats an
+     * omitted `source` as "keep whatever is stored". Sending one here is how a
+     * background audiobook save used to re-stamp `source=audiobook` mid-read.
+     */
     private suspend fun pushProgress(mediaType: String, mediaId: Int, entity: UserProgressEntity): PushOutcome {
-        val response = api.updateProgress(
+        val response = api.updatePosition(
             mediaType,
             mediaId,
-            ProgressUpdateRequest(
-                book_pair_id = entity.bookPairId,
-                epub_cfi = entity.epubCfi,
+            PositionUpdateRequest(
+                source = null,
                 epub_chapter = entity.epubChapter,
                 epub_progress_percent = entity.epubProgressPercent,
                 audio_position_ms = entity.audioPositionMs,
@@ -745,9 +760,10 @@ class BookSyncRepository @Inject constructor(
                 PushOutcome.SYNCED
             }
             response.code() == 409 -> {
-                val serverState = parseConflictBody<ProgressResponse>(response.errorBody()?.string())
+                val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                 if (serverState != null) {
-                    userProgressDao.upsertProgress(serverState.toEntity(mediaType, mediaId))
+                    userProgressDao.upsertProgress(
+                        serverState.toProgressEntity(mediaType, mediaId, entity))
                     logW("pushProgress $mediaType/$mediaId: 409 — this write lost, adopted server state")
                 } else {
                     logE("pushProgress $mediaType/$mediaId: 409 but could not parse server state")
@@ -871,8 +887,8 @@ class BookSyncRepository @Inject constructor(
                 device_name = deviceName,
             ),
         )
-        // Room stays warm for offline opens; only fall back to the legacy push
-        // when the canonical write didn't get through.
+        // Room stays warm for offline opens; only issue a second push when the
+        // canonical write above didn't get through.
         updateBookmark(
             pairId = pairId,
             source = "audiobook",
@@ -933,8 +949,8 @@ class BookSyncRepository @Inject constructor(
         // the very thing the canonical endpoint exists to remove.
         pushToServer: Boolean = true,
         // When false, [source] is NOT written — the merged row (and every
-        // downstream use of it: the BookmarkLog entry, the legacy
-        // BookmarkUpdateRequest, the pending_sync retry row) keeps whatever
+        // downstream use of it: the BookmarkLog entry, the retry push, the
+        // pending_sync row) keeps whatever
         // `source` is already stored, only falling back to [source] when no
         // bookmark exists yet at all. Backs `savePlaybackPosition`'s
         // `claimFormat=false` path: the position still needs to move, but a
@@ -1313,26 +1329,16 @@ class BookSyncRepository @Inject constructor(
     fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?> =
         userProgressDao.getProgressFlow(mediaType, mediaId)
 
-    /** Refresh progress from the server */
+    /** Refresh progress from the server's canonical record for this medium. */
     suspend fun refreshProgress(mediaType: String, mediaId: Int) {
         try {
-            val remote = api.getProgress(mediaType, mediaId)
+            val remote = fetchPosition(mediaType, mediaId).position ?: return
+            val existing = userProgressDao.getProgress(mediaType, mediaId)
             userProgressDao.upsertProgress(
-                UserProgressEntity(
-                    mediaType = remote.media_type,
-                    mediaId = if (remote.media_type == "ebook") remote.ebook_id ?: 0 else remote.audiobook_id ?: 0,
-                    bookPairId = remote.book_pair_id,
-                    epubCfi = remote.epub_cfi,
-                    epubChapter = remote.epub_chapter,
-                    epubProgressPercent = remote.epub_progress_percent,
-                    audioPositionMs = remote.audio_position_ms,
-                    isCompleted = remote.is_completed,
-                    updatedAt = System.currentTimeMillis(), // We ignore the remote string date for simpler local sorting
-                    deviceId = remote.device_id,
-                    deviceName = remote.device_name,
-                    capturedAt = remote.captured_at,
-                    syncedToServer = true
-                )
+                // `updatedAt` is deliberately local wall-clock rather than the
+                // remote string: it only orders the local Continue list.
+                remote.toProgressEntity(mediaType, mediaId, existing)
+                    .copy(updatedAt = System.currentTimeMillis())
             )
         } catch (_: Exception) {
             // Offline - use local cache
@@ -1406,13 +1412,18 @@ class BookSyncRepository @Inject constructor(
         for (pair in pairs) {
             // --- Bookmark ---
             try {
-                val remote = api.getBookmark(pair.id)
+                // Null covers both "never opened" (204) and "unreachable" — an
+                // unsynced local row is still worth pushing in the first case,
+                // and the push simply fails in the second, so both are handled
+                // by falling through to the local-wins branch.
+                val remote = fetchPosition("pair", pair.id).position
                 val local = bookmarkDao.getBookmark(pair.id)
                 // Prefer captured_at (the true on-device capture moment) over updated_at
                 // (a bookkeeping timestamp) whenever the server/local row provides one —
                 // now that the server never re-stamps a rejected stale write with "now",
                 // this comparison is reliable (issue #54).
-                val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+                val remoteTs = if (remote != null)
+                    parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
                 val localTs  = if (local != null) parseSyncTimestamp(preferCapturedAt(local.capturedAt, local.updatedAt)) else 0L
 
                 when {
@@ -1422,8 +1433,9 @@ class BookSyncRepository @Inject constructor(
                         pushBookmark(pair.id, local, appendToLog = false)
                         log("syncBookmark pair=${pair.id}: pushed unsynced local")
                     }
+                    remote == null -> { /* nothing on the server, nothing unsynced here */ }
                     local == null || remoteTs > localTs -> {
-                        bookmarkDao.upsertBookmark(remote.toEntity(local))
+                        bookmarkDao.upsertBookmark(remote.toBookmarkEntity(pair.id, local))
                         log("syncBookmark pair=${pair.id}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
@@ -1435,9 +1447,10 @@ class BookSyncRepository @Inject constructor(
 
             // --- Audiobook progress ---
             try {
-                val remote = api.getProgress("audiobook", pair.audiobookId)
+                val remote = fetchPosition("audiobook", pair.audiobookId).position
                 val local  = userProgressDao.getProgress("audiobook", pair.audiobookId)
-                val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+                val remoteTs = if (remote != null)
+                    parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
                 val localTs  = if (local != null) {
                     local.capturedAt?.let { parseSyncTimestamp(it) } ?: local.updatedAt
                 } else 0L
@@ -1448,8 +1461,10 @@ class BookSyncRepository @Inject constructor(
                         pushProgress("audiobook", pair.audiobookId, local)
                         log("syncProgress audiobook=${pair.audiobookId}: pushed unsynced local")
                     }
+                    remote == null -> { /* nothing on the server, nothing unsynced here */ }
                     local == null || remoteTs > localTs -> {
-                        userProgressDao.upsertProgress(remote.toEntity("audiobook", pair.audiobookId))
+                        userProgressDao.upsertProgress(
+                            remote.toProgressEntity("audiobook", pair.audiobookId, local))
                         log("syncProgress audiobook=${pair.audiobookId}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
@@ -1479,15 +1494,21 @@ class BookSyncRepository @Inject constructor(
         if (pendingBookmarks.isNotEmpty()) log("processPendingSync — ${pendingBookmarks.size} pending bookmarks")
         for (sync in pendingBookmarks) {
             try {
-                val response = api.updateBookmark(
+                val response = api.updatePosition(
+                    "pair",
                     sync.bookPairId,
-                    BookmarkUpdateRequest(
+                    PositionUpdateRequest(
                         source = sync.source,
                         epub_chapter = sync.epubChapter,
                         epub_sentence_index = sync.epubSentenceIndex,
                         audio_position_ms = sync.audioPositionMs,
-                        epub_locator = sync.epubLocator,
-                        locator_audio_ms = sync.locatorAudioMs,
+                        hint = sync.epubLocator?.let {
+                            PositionHintDto(
+                                kind = HINT_READIUM_LOCATOR,
+                                value = it,
+                                audio_position_ms = sync.locatorAudioMs,
+                            )
+                        },
                         append_to_log = sync.appendToLog,
                         device_id = deviceIdManager.deviceId,
                         device_name = deviceIdManager.deviceName,
@@ -1500,9 +1521,10 @@ class BookSyncRepository @Inject constructor(
                         log("processPendingSync — bookmark pairId=${sync.bookPairId} synced")
                     }
                     response.code() == 409 -> {
-                        val serverState = parseConflictBody<BookmarkResponse>(response.errorBody()?.string())
+                        val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                         if (serverState != null) {
-                            bookmarkDao.upsertBookmark(serverState.toEntity(bookmarkDao.getBookmark(sync.bookPairId)))
+                            bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(
+                                sync.bookPairId, bookmarkDao.getBookmark(sync.bookPairId)))
                         }
                         pendingSyncDao.delete(sync)
                         logW("processPendingSync — bookmark pairId=${sync.bookPairId} lost to a newer write (409) — dropped, adopted server state")
@@ -1606,12 +1628,23 @@ internal fun toCapturedAtIso(ts: String?): String? {
 internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
     if (!capturedAt.isNullOrBlank()) capturedAt else updatedAt
 
-// ============ Bookmark/Progress response -> entity mappers ============
+// ============ Position response -> entity mappers ============
 
 /**
- * Maps a server [BookmarkResponse] — a normal 200 body, or the authoritative state returned
+ * The Readium locator this response currently vouches for, if any.
+ *
+ * Only a hint tagged `current` counts: a stale one describes a page the anchor
+ * has since moved away from. It is deliberately not *deleted* server-side —
+ * its own device makes it current again by re-capturing — but adopting it here
+ * would restore to the wrong page.
+ */
+internal fun PositionResponse.currentLocatorHint(): PositionHintResponse? =
+    hints.firstOrNull { it.kind == HINT_READIUM_LOCATOR && it.current }
+
+/**
+ * Maps a server [PositionResponse] — a normal 200 body, or the authoritative state returned
  * in a 409 conflict body — onto a local [BookmarkEntity]. [previous] supplies
- * the Readium locator when the server returns none.
+ * the Readium locator when the response carries no current one.
  *
  * A previous revision dropped the local locator on an ebook-source response
  * with no locator, to match a server rule that cleared it. Both halves are
@@ -1619,33 +1652,46 @@ internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
  * the reader with nothing to restore from, which is how a real position got
  * overwritten with chapter 0. A hint's freshness is judged by the anchor it
  * was captured at, not by deleting it.
+ *
+ * [pairId] comes from the request context: a standalone-scoped response has a
+ * null `book_pair_id`, but the local table is keyed by pair.
  */
-internal fun BookmarkResponse.toEntity(previous: BookmarkEntity?) = BookmarkEntity(
-    bookPairId = book_pair_id,
-    source = source,
-    epubChapter = epub_chapter,
-    epubSentenceIndex = epub_sentence_index,
-    audioPositionMs = audio_position_ms,
-    epubLocator = epub_locator ?: previous?.epubLocator,
-    locatorAudioMs = if (epub_locator != null) locator_audio_ms else previous?.locatorAudioMs,
-    updatedAt = updated_at,
-    capturedAt = captured_at,
-    deviceId = device_id,
-    deviceName = device_name,
-    syncedToServer = true,
-)
+internal fun PositionResponse.toBookmarkEntity(pairId: Int, previous: BookmarkEntity?): BookmarkEntity {
+    val locator = currentLocatorHint()
+    return BookmarkEntity(
+        bookPairId = book_pair_id ?: pairId,
+        source = source,
+        epubChapter = epub_chapter,
+        epubSentenceIndex = epub_sentence_index,
+        audioPositionMs = audio_position_ms,
+        epubLocator = locator?.value ?: previous?.epubLocator,
+        locatorAudioMs = if (locator != null) locator.audio_position_ms else previous?.locatorAudioMs,
+        updatedAt = updated_at,
+        capturedAt = captured_at,
+        deviceId = device_id,
+        deviceName = device_name,
+        syncedToServer = true,
+    )
+}
 
 /**
- * Maps a server [ProgressResponse] — a normal 200 body, or the authoritative state returned
- * in a 409 conflict body — onto a local [UserProgressEntity]. [mediaType]/[mediaId] come from
- * the request context since the response alone doesn't always disambiguate which media the
- * progress belongs to (e.g. a standalone audiobook vs. one half of a pair).
+ * Maps a server [PositionResponse] onto a local [UserProgressEntity].
+ * [mediaType]/[mediaId] come from the request context since the response alone
+ * doesn't always disambiguate which media the progress belongs to (e.g. a
+ * standalone audiobook vs. one half of a pair).
+ *
+ * [previous] supplies `epubCfi`: that is the web reader's hint, which this
+ * device can neither produce nor judge, so an Android write must never blank
+ * it. It used to arrive as `user_progress.epub_cfi`, a server mirror column
+ * that no longer exists (issue #102).
  */
-internal fun ProgressResponse.toEntity(mediaType: String, mediaId: Int) = UserProgressEntity(
+internal fun PositionResponse.toProgressEntity(
+    mediaType: String, mediaId: Int, previous: UserProgressEntity? = null,
+) = UserProgressEntity(
     mediaType = mediaType,
     mediaId = mediaId,
     bookPairId = book_pair_id,
-    epubCfi = epub_cfi,
+    epubCfi = previous?.epubCfi,
     epubChapter = epub_chapter,
     epubProgressPercent = epub_progress_percent,
     audioPositionMs = audio_position_ms,

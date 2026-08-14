@@ -25,6 +25,7 @@ from sqlalchemy import select
 from database import async_session
 from models.import_source import ImportSource, ImportJob
 from services.import_sources import get_source, list_sources
+from utils import utcnow
 
 logger = logging.getLogger("import-scheduler")
 
@@ -51,7 +52,7 @@ async def _update_progress(source_key: str, current: int, total: int, title: str
 async def _run_sync(source_key: str, trigger: str) -> None:
     """Run one source.sync() and record an ImportJob."""
     source = get_source(source_key)
-    started = datetime.datetime.utcnow()
+    started = utcnow()
 
     async with async_session() as db:
         job = ImportJob(
@@ -84,7 +85,7 @@ async def _run_sync(source_key: str, trigger: str) -> None:
         logger.exception(f"[import-scheduler] {source_key} sync crashed: {e}")
         crash_error = str(e)
 
-    finished = datetime.datetime.utcnow()
+    finished = utcnow()
     async with async_session() as db:
         job_q = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
         job = job_q.scalar_one()
@@ -177,7 +178,7 @@ async def trigger_now(source_key: str) -> None:
 
 async def _due_sources() -> list[str]:
     """Return source_keys whose auto-sync is due."""
-    now = datetime.datetime.utcnow()
+    now = utcnow()
     due: list[str] = []
     async with async_session() as db:
         result = await db.execute(
@@ -255,7 +256,7 @@ async def reset_stale_running_sources() -> None:
         for j in result.scalars().all():
             j.status = "failed"
             j.error_message = j.error_message or "Interrupted by server restart"
-            j.finished_at = datetime.datetime.utcnow()
+            j.finished_at = utcnow()
         await db.commit()
 
 

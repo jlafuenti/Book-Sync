@@ -85,20 +85,10 @@ interface BookSyncApi {
     suspend fun getSyncMap(@Path("pairId") pairId: Int): SyncMapResponse
 
     // ============ Bookmark ============
-
-    @GET("api/sync/bookmark/{pairId}")
-    suspend fun getBookmark(@Path("pairId") pairId: Int): BookmarkResponse
-
-    // Response<T> (not the unwrapped body) so callers can detect HTTP 409 — the
-    // multi-device conflict-resolution contract (issue #54) returns the current
-    // authoritative server state with a 409 status when captured_at is stale,
-    // rather than a normal 200. A plain suspend return type would make Retrofit
-    // throw HttpException for that case, losing the response body.
-    @PUT("api/sync/bookmark/{pairId}")
-    suspend fun updateBookmark(
-        @Path("pairId") pairId: Int,
-        @Body update: BookmarkUpdateRequest
-    ): Response<BookmarkResponse>
+    //
+    // Only the history log is left here. The bookmark GET/PUT were adapters
+    // over the canonical position service and are gone (issue #102) — read and
+    // write positions through getPosition/updatePosition below.
 
     @GET("api/sync/bookmark/{pairId}/log")
     suspend fun getBookmarkLog(
@@ -118,7 +108,11 @@ interface BookSyncApi {
         @Path("id") id: Int,
     ): Response<PositionResponse>
 
-    // See updateBookmark above — same Response<T> rationale for 409 detection.
+    // Response<T> again, this time so callers can detect HTTP 409 — the
+    // multi-device conflict-resolution contract (issue #54) returns the current
+    // authoritative server state with a 409 status when captured_at is stale,
+    // rather than a normal 200. A plain suspend return type would make Retrofit
+    // throw HttpException for that case, losing the response body.
     @PUT("api/sync/position/{scope}/{id}")
     suspend fun updatePosition(
         @Path("scope") scope: String,
@@ -126,27 +120,12 @@ interface BookSyncApi {
         @Body update: PositionUpdateRequest,
     ): Response<PositionResponse>
 
-    // ============ User Progress ============
-
-    @GET("api/sync/progress/{mediaType}/{mediaId}")
-    suspend fun getProgress(
-        @Path("mediaType") mediaType: String,
-        @Path("mediaId") mediaId: Int
-    ): ProgressResponse
-
-    // See updateBookmark above — same Response<T> rationale for 409 detection.
-    @PUT("api/sync/progress/{mediaType}/{mediaId}")
-    suspend fun updateProgress(
-        @Path("mediaType") mediaType: String,
-        @Path("mediaId") mediaId: Int,
-        @Body update: ProgressUpdateRequest
-    ): Response<ProgressResponse>
-
     // Deletes the canonical bookmark (+ hints) and every user_progress row for
     // this pair, server-side. Used by "Reset Progress" for a paired book —
-    // the legacy per-media PUT-with-zeros only pinned position at 0 and left
-    // the old bookmark in place, which then re-seeded progress right back
-    // (issue: reset buttons not actually resetting).
+    // the per-media PUT-with-zeros this replaced only pinned position at 0 and
+    // left the old bookmark in place, which then re-seeded progress right back
+    // (issue: reset buttons not actually resetting). Aliases
+    // `DELETE /api/sync/position/pair/{id}`.
     @DELETE("api/sync/progress/pair/{pairId}")
     suspend fun resetPairProgress(@Path("pairId") pairId: Int): Response<Unit>
 

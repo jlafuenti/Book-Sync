@@ -125,7 +125,6 @@ class UpdateBookmarkMetadataTest {
         repo.updateBookmarkMetadata(42, source = "ebook")
 
         coVerify(exactly = 0) { pendingSyncDao.insert(any()) }
-        coVerify(exactly = 0) { api.updateBookmark(any(), any()) }
         coVerify(exactly = 0) { api.updatePosition(any(), any(), any()) }
     }
 

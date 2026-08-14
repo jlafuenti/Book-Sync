@@ -313,35 +313,11 @@ class SyncMapTextUpdate(BaseModel):
 
 # ============================================================
 # Bookmark Schemas
+#
+# The write-side `BookmarkUpdate`/`BookmarkResponse` pair is gone with the
+# legacy `PUT /sync/bookmark/{pair}` adapter (issue #102) — writes go through
+# `PositionUpdate` below. Only the history log still has its own schema.
 # ============================================================
-
-class BookmarkUpdate(BaseModel):
-    source: BookmarkSource
-    epub_chapter: Optional[int] = None
-    epub_sentence_index: Optional[int] = None
-    audio_position_ms: Optional[int] = None
-    # Precise client-side EPUB locator/CFI. Persisted and echoed back so the
-    # client can resume at the exact reading position.
-    epub_locator: Optional[str] = None
-    # Audio position the locator was captured at; travels with the locator.
-    locator_audio_ms: Optional[int] = None
-    # When False (default), the bookmark is updated but no BookmarkLog row is
-    # appended. Clients set this to True only on meaningful session boundaries:
-    # pause, stop (track ended, player closed, cast session ends), or every
-    # 30 minutes of continuous playback. Keeps the history tab scannable.
-    append_to_log: bool = False
-    # Conflict-resolution contract (issue #54): wall-clock time the client
-    # captured this position. Omitted by legacy clients, which preserves the
-    # old last-write-wins behavior (no staleness check is possible without it).
-    captured_at: Optional[datetime] = None
-    device_id: Optional[str] = None
-    device_name: Optional[str] = None
-
-    @field_validator("captured_at")
-    @classmethod
-    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
-        return _naive_utc(value)
-
 
 class TextMatchRequest(BaseModel):
     epub_text: str
@@ -353,27 +329,6 @@ class TextMatchResponse(BaseModel):
     epub_chapter: int
     epub_sentence_index: int
     preview: Optional[str] = None
-
-
-class BookmarkResponse(BaseModel):
-    id: int
-    user_id: int
-    book_pair_id: int
-    source: BookmarkSource
-    epub_chapter: Optional[int]
-    epub_sentence_index: Optional[int]
-    audio_position_ms: Optional[int]
-    epub_locator: Optional[str] = None
-    locator_audio_ms: Optional[int] = None
-    epub_text_preview: Optional[str] = None
-    updated_at: datetime
-    synced_at: Optional[datetime]
-    captured_at: Optional[datetime] = None
-    device_id: Optional[str] = None
-    device_name: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class BookmarkLogResponse(BaseModel):
@@ -400,24 +355,9 @@ class BookmarkLogResponse(BaseModel):
 
 from models.progress import ProgressType
 
-class ProgressUpdate(BaseModel):
-    book_pair_id: Optional[int] = None
-    epub_cfi: Optional[str] = None
-    epub_chapter: Optional[int] = None
-    epub_progress_percent: Optional[float] = None
-    audio_position_ms: Optional[int] = None
-    is_completed: Optional[bool] = None
-    device_id: Optional[str] = None
-    # Conflict-resolution contract (issue #54): wall-clock time the client
-    # captured this position. Omitted by legacy clients, which preserves the
-    # old last-write-wins behavior (no staleness check is possible without it).
-    captured_at: Optional[datetime] = None
-    device_name: Optional[str] = None
-
-    @field_validator("captured_at")
-    @classmethod
-    def _normalize_captured_at(cls, value: Optional[datetime]) -> Optional[datetime]:
-        return _naive_utc(value)
+# `user_progress` is a read-only projection of the canonical record now — there
+# is no `ProgressUpdate`, because the legacy `PUT /sync/progress/{type}/{id}`
+# adapter is gone (issue #102). Writes go through `PositionUpdate`.
 
 class ProgressResponse(BaseModel):
     id: int
@@ -426,7 +366,6 @@ class ProgressResponse(BaseModel):
     book_pair_id: Optional[int]
     ebook_id: Optional[int]
     audiobook_id: Optional[int]
-    epub_cfi: Optional[str]
     epub_chapter: Optional[int]
     epub_progress_percent: Optional[float]
     audio_position_ms: Optional[int]

@@ -7,6 +7,7 @@ from sqlalchemy import String, Text, DateTime, Integer, Boolean, LargeBinary
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
+from utils import utcnow
 
 
 class ImportSource(Base):
@@ -35,9 +36,9 @@ class ImportSource(Base):
     # Optional source-specific JSON config blob (e.g. Kobo desktop path).
     config: Mapped[str] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
 
 
@@ -49,7 +50,7 @@ class ImportSourceCredential(Base):
     source_key: Mapped[str] = mapped_column(String(50), primary_key=True)
     blob_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
 
 
@@ -62,7 +63,7 @@ class ImportJob(Base):
     source_key: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")  # running|succeeded|failed
     trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")  # manual|scheduled|upload
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     items_added: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     items_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

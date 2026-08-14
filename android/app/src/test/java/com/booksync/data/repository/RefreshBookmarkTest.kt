@@ -2,7 +2,8 @@ package com.booksync.data.repository
 
 import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.BookmarkResponse
+import com.booksync.data.remote.PositionHintResponse
+import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.local.dao.BookmarkDao
 import io.mockk.coEvery
@@ -12,8 +13,8 @@ import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
+import retrofit2.Response
 
 /**
  * [BookSyncRepository.refreshBookmark] is the pull half of cross-device
@@ -43,21 +44,28 @@ class RefreshBookmarkTest {
         json = Json { ignoreUnknownKeys = true },
     )
 
-    private fun serverBookmark(
+    private fun serverPosition(
         chapter: Int = 39,
         locator: String? = null,
         updatedAt: String = "2026-07-30T16:49:36Z",
-    ) = BookmarkResponse(
-        id = 339,
-        user_id = 1,
-        book_pair_id = 309,
-        source = "ebook",
-        epub_chapter = chapter,
-        epub_sentence_index = 0,
-        audio_position_ms = 0,
-        epub_locator = locator,
-        updated_at = updatedAt,
-        device_name = "Web · Firefox",
+    ) = Response.success(
+        PositionResponse(
+            scope = "pair",
+            book_pair_id = 309,
+            source = "ebook",
+            anchor_revision = 2,
+            epub_chapter = chapter,
+            epub_sentence_index = 0,
+            audio_position_ms = 0,
+            updated_at = updatedAt,
+            device_name = "Web · Firefox",
+            hints = locator?.let {
+                listOf(PositionHintResponse(
+                    kind = "readium_locator", device_id = "pixel", value = it,
+                    anchor_revision = 2, current = true,
+                ))
+            } ?: emptyList(),
+        )
     )
 
     private fun localBookmark(
@@ -82,7 +90,7 @@ class RefreshBookmarkTest {
         // The web reader moved the anchor to chapter 39. The new anchor must
         // land locally — without this pull the reader restores its own stale
         // page and never learns about the other device.
-        coEvery { api.getBookmark(309) } returns serverBookmark()
+        coEvery { api.getPosition("pair", 309) } returns serverPosition()
         coEvery { bookmarkDao.getBookmark(309) } returns localBookmark()
 
         val saved = slot<BookmarkEntity>()
@@ -102,7 +110,7 @@ class RefreshBookmarkTest {
     fun `keeps unsynced local writes instead of clobbering them with the server copy`() = runTest {
         // Offline reading must survive a refresh, so an unsynced local row wins
         // regardless of timestamps.
-        coEvery { api.getBookmark(309) } returns serverBookmark()
+        coEvery { api.getPosition("pair", 309) } returns serverPosition()
         coEvery { bookmarkDao.getBookmark(309) } returns localBookmark(synced = false)
 
         repository().refreshBookmark(309)
@@ -112,7 +120,7 @@ class RefreshBookmarkTest {
 
     @Test
     fun `keeps a newer local position over an older server one`() = runTest {
-        coEvery { api.getBookmark(309) } returns serverBookmark(
+        coEvery { api.getPosition("pair", 309) } returns serverPosition(
             updatedAt = "2026-07-30T16:00:00Z")
         coEvery { bookmarkDao.getBookmark(309) } returns localBookmark(
             updatedAt = java.time.Instant.parse("2026-07-30T16:49:00Z").toEpochMilli().toString())
@@ -124,7 +132,7 @@ class RefreshBookmarkTest {
 
     @Test
     fun `falls back to the local cache when the server is unreachable`() = runTest {
-        coEvery { api.getBookmark(309) } throws java.io.IOException("offline")
+        coEvery { api.getPosition("pair", 309) } throws java.io.IOException("offline")
         coEvery { bookmarkDao.getBookmark(309) } returns localBookmark()
 
         repository().refreshBookmark(309)  // must not throw

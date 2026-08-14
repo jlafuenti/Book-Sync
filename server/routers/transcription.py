@@ -36,6 +36,7 @@ from schemas import (
     QueuePriorityUpdate,
 )
 from routers.auth import get_current_user, get_admin_user, get_editor_user
+from utils import utcnow
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
 
@@ -490,7 +491,7 @@ async def realign_pair(
 
     await save_sync_map(db, pair_id, aligned)
     pair.status = PairStatus.SYNCED
-    pair.synced_at = datetime.datetime.utcnow()
+    pair.synced_at = utcnow()
     await db.commit()
 
     matched = sum(1 for p in aligned if p.confidence > 0)

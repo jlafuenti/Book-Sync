@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 
 from database import Base
+from utils import utcnow
 
 
 class LibraryCheckResult(Base):
@@ -37,7 +38,7 @@ class LibraryCheckResult(Base):
 
     ok = Column(Boolean, nullable=False, default=True)
     detail = Column(Text, nullable=True)
-    checked_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    checked_at = Column(DateTime, default=utcnow, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("item_type", "item_id", "check_type", name="uq_check_item_domain"),

@@ -3,12 +3,11 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { AudioPlayerProvider, useAudioPlayer } from './AudioPlayerContext'
 
 const {
-    getAudiobookStreamUrlMock, updateProgressMock, updateBookmarkMock,
+    getAudiobookStreamUrlMock, updatePositionMock,
     getAccessTokenMock, sendPositionKeepaliveMock, getDeviceIdMock, getDeviceNameMock,
 } = vi.hoisted(() => ({
     getAudiobookStreamUrlMock: vi.fn(),
-    updateProgressMock: vi.fn(),
-    updateBookmarkMock: vi.fn(),
+    updatePositionMock: vi.fn(),
     getAccessTokenMock: vi.fn(() => 'token'),
     sendPositionKeepaliveMock: vi.fn(),
     getDeviceIdMock: vi.fn(() => 'device-123'),
@@ -17,8 +16,7 @@ const {
 
 vi.mock('../api', () => ({
     getAudiobookStreamUrl: getAudiobookStreamUrlMock,
-    updateProgress: updateProgressMock,
-    updateBookmark: updateBookmarkMock,
+    updatePosition: updatePositionMock,
     getAccessToken: getAccessTokenMock,
     sendPositionKeepalive: sendPositionKeepaliveMock,
     getDeviceId: getDeviceIdMock,
@@ -73,8 +71,7 @@ beforeEach(() => {
         return el
     }))
     getAudiobookStreamUrlMock.mockReset().mockResolvedValue('/api/files/audiobook/7?token=first-token')
-    updateProgressMock.mockReset().mockResolvedValue({})
-    updateBookmarkMock.mockReset().mockResolvedValue({})
+    updatePositionMock.mockReset().mockResolvedValue({})
     sendPositionKeepaliveMock.mockReset()
     getDeviceIdMock.mockReset().mockReturnValue('device-123')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
@@ -154,7 +151,7 @@ describe('AudioPlayerProvider stream-error recovery', () => {
 })
 
 describe('AudioPlayerProvider heartbeat', () => {
-    it('includes device_id, device_name, and captured_at in the progress and bookmark heartbeat payloads', async () => {
+    it('writes ONE canonical position per tick, carrying device_id/device_name/captured_at', async () => {
         // Fake only setInterval/clearInterval so the 5s heartbeat tick can be
         // advanced deterministically. Everything else (Promise resolution,
         // testing-library's waitFor) keeps using real timers/microtasks.
@@ -177,12 +174,13 @@ describe('AudioPlayerProvider heartbeat', () => {
             audio.currentTime = 42
             act(() => { vi.advanceTimersByTime(5000) })
 
-            expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 7, expect.objectContaining({
-                device_id: 'device-123',
-                device_name: 'Web · Chrome',
-                captured_at: expect.any(String),
-            }))
-            expect(updateBookmarkMock).toHaveBeenCalledWith(99, expect.objectContaining({
+            // One write, not two. As a progress write plus a bookmark write
+            // they were adjudicated separately, so one could be accepted while
+            // the other was rejected and the rows then disagreed permanently.
+            expect(updatePositionMock).toHaveBeenCalledTimes(1)
+            expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+                source: 'audiobook',
+                audio_position_ms: 42000,
                 device_id: 'device-123',
                 device_name: 'Web · Chrome',
                 captured_at: expect.any(String),
@@ -196,9 +194,8 @@ describe('AudioPlayerProvider heartbeat', () => {
 describe('AudioPlayerProvider unload keepalive', () => {
     // Product rule (background saves must not hijack format routing): a
     // teardown save only claims `source` when the player was actually
-    // playing at that instant. The canonical position endpoint (not the
-    // legacy bookmark one) is used specifically because it can express
-    // "leave `source` alone" via omission.
+    // playing at that instant. `PositionUpdate.source` is optional
+    // specifically so this save can express "leave `source` alone".
     it('claims source=audiobook when still playing at unload', async () => {
         render(
             <AudioPlayerProvider>
@@ -260,7 +257,7 @@ describe('AudioPlayerProvider unload keepalive', () => {
 })
 
 describe('AudioPlayerProvider pause()', () => {
-    it('sends device_id, device_name, and captured_at with both the progress save and the bookmark log entry', async () => {
+    it('writes ONE canonical position carrying the log entry and device fields', async () => {
         render(
             <AudioPlayerProvider>
                 <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
@@ -277,13 +274,9 @@ describe('AudioPlayerProvider pause()', () => {
 
         fireEvent.click(screen.getByText('pause'))
 
-        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 7, expect.objectContaining({
-            audio_position_ms: 17000,
-            device_id: 'device-123',
-            device_name: 'Web · Chrome',
-            captured_at: expect.any(String),
-        }))
-        expect(updateBookmarkMock).toHaveBeenCalledWith(99, expect.objectContaining({
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+        expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+            source: 'audiobook',
             audio_position_ms: 17000,
             append_to_log: true,
             device_id: 'device-123',
@@ -295,7 +288,7 @@ describe('AudioPlayerProvider pause()', () => {
 
 describe('AudioPlayerProvider stale-conflict affordance (issue #54)', () => {
     it('sets staleConflict when a write is rejected by a genuinely different device', async () => {
-        updateProgressMock.mockResolvedValue({
+        updatePositionMock.mockResolvedValue({
             rejected: true,
             device_id: 'device-999',
             device_name: 'Phone',
@@ -322,7 +315,7 @@ describe('AudioPlayerProvider stale-conflict affordance (issue #54)', () => {
     })
 
     it('does not surface staleConflict when the rejection echoes this device\'s own id (a retried write)', async () => {
-        updateProgressMock.mockResolvedValue({
+        updatePositionMock.mockResolvedValue({
             rejected: true,
             device_id: 'device-123', // matches getDeviceIdMock's own id
             device_name: 'Web · Chrome',
@@ -345,12 +338,12 @@ describe('AudioPlayerProvider stale-conflict affordance (issue #54)', () => {
 
         fireEvent.click(screen.getByText('pause'))
 
-        await waitFor(() => expect(updateProgressMock).toHaveBeenCalled())
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
         expect(screen.getByTestId('stale-conflict').textContent).toBe('')
     })
 
     it('clearStaleConflict resets the state (e.g. after the user clicks Jump)', async () => {
-        updateProgressMock.mockResolvedValue({
+        updatePositionMock.mockResolvedValue({
             rejected: true,
             device_id: 'device-999',
             device_name: 'Phone',
@@ -380,7 +373,7 @@ describe('AudioPlayerProvider stale-conflict affordance (issue #54)', () => {
 })
 
 describe('AudioPlayerProvider onEnded', () => {
-    it('marks progress complete and logs a finished bookmark entry, both with device_id/device_name/captured_at', async () => {
+    it('marks complete, records the final position and logs the entry in ONE write', async () => {
         render(
             <AudioPlayerProvider>
                 <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
@@ -397,13 +390,12 @@ describe('AudioPlayerProvider onEnded', () => {
 
         act(() => audio.dispatchEvent(new Event('ended')))
 
-        expect(updateProgressMock).toHaveBeenCalledWith('audiobook', 7, expect.objectContaining({
+        // Completion and final position in one adjudication: as two writes the
+        // completion flag could land while the position was rejected as stale.
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+        expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+            source: 'audiobook',
             is_completed: true,
-            device_id: 'device-123',
-            device_name: 'Web · Chrome',
-            captured_at: expect.any(String),
-        }))
-        expect(updateBookmarkMock).toHaveBeenCalledWith(99, expect.objectContaining({
             audio_position_ms: 300000,
             append_to_log: true,
             device_id: 'device-123',

@@ -48,7 +48,7 @@ from schemas import (
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
-from utils import resolve_cover_url, safe_join
+from utils import resolve_cover_url, safe_join, utcnow
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/library", tags=["library"])
@@ -1269,7 +1269,7 @@ async def auto_match_books(db: AsyncSession) -> int:
                 ebook_id=ebook.id,
                 audiobook_id=best_match.id,
                 status=PairStatus.AUTO_MATCHED,
-                matched_at=datetime.utcnow(),
+                matched_at=utcnow(),
             )
             db.add(pair)
             matched_audiobook_ids.add(best_match.id)
@@ -1473,7 +1473,7 @@ async def create_pair(
         ebook_id=pair_data.ebook_id,
         audiobook_id=pair_data.audiobook_id,
         status=PairStatus.MANUAL_MATCHED,
-        matched_at=datetime.utcnow(),
+        matched_at=utcnow(),
     )
     db.add(pair)
     await db.flush()

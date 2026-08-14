@@ -21,6 +21,7 @@ from schemas import (
     PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
 from rate_limit import limiter
+from utils import utcnow
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -41,7 +42,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_token(data: dict, expires_delta: timedelta) -> str:
     """Create a JWT token with expiration."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + expires_delta
+    expire = utcnow() + expires_delta
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
