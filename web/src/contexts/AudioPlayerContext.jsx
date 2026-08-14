@@ -27,6 +27,20 @@ const LOG_INTERVAL_MS = 30 * 60 * 1000
 const SKIP_SECONDS = 30
 const RESUME_REWIND_SECONDS = 5
 
+// Playback speed persists across sessions (issue #57). Kept in localStorage —
+// device-local, like Android's SharedPreferences equivalent.
+const SPEED_STORAGE_KEY = 'tandem_player_speed'
+const MIN_SPEED = 0.5
+const MAX_SPEED = 3
+
+function loadStoredSpeed() {
+    const stored = parseFloat(localStorage.getItem(SPEED_STORAGE_KEY))
+    if (Number.isFinite(stored) && stored >= MIN_SPEED && stored <= MAX_SPEED) {
+        return stored
+    }
+    return 1
+}
+
 export function useAudioPlayer() {
     return useContext(AudioPlayerContext)
 }
@@ -58,7 +72,7 @@ export function AudioPlayerProvider({ children }) {
     const [playing, setPlaying] = useState(false)
     const [currentTime, setCurrentTime] = useState(0)
     const [duration, setDuration] = useState(0)
-    const [speed, setSpeedState] = useState(1)
+    const [speed, setSpeedState] = useState(loadStoredSpeed)
     const [sleepMinutes, setSleepMinutes] = useState(null)
     // Set when a bookmark/progress write comes back `rejected: true` (issue
     // #54 stale-write conflict) carrying a newer position from a genuinely
@@ -85,6 +99,9 @@ export function AudioPlayerProvider({ children }) {
     useEffect(() => {
         audioRef.current = new Audio()
         audioRef.current.preload = 'auto'
+        // Apply the restored speed to the element from the start; play() also
+        // re-applies it on every src swap.
+        audioRef.current.playbackRate = loadStoredSpeed()
 
         const audio = audioRef.current
         const onPlay = () => setPlaying(true)
@@ -129,13 +146,16 @@ export function AudioPlayerProvider({ children }) {
             try {
                 const wasPlaying = !audio.paused
                 const posSeconds = audio.currentTime
+                const rate = audio.playbackRate
                 const url = await getAudiobookStreamUrl(ab.id)
                 audio.src = url
                 audio.load()
                 const onCanPlay = () => {
                     // Exact position, no resume rewind: this is a transparent
-                    // token refresh, not a user resume (issue #42).
+                    // token refresh, not a user resume (issue #42). Same for
+                    // speed — load() may reset playbackRate to default.
                     audio.currentTime = posSeconds
+                    audio.playbackRate = rate
                     if (wasPlaying) audio.play()
                     audio.removeEventListener('canplay', onCanPlay)
                     recoveringStreamRef.current = false
@@ -350,6 +370,7 @@ export function AudioPlayerProvider({ children }) {
 
     const setSpeed = useCallback((rate) => {
         setSpeedState(rate)
+        localStorage.setItem(SPEED_STORAGE_KEY, String(rate))
         if (audioRef.current) {
             audioRef.current.playbackRate = rate
         }

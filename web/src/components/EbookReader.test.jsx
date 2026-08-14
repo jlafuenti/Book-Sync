@@ -38,14 +38,27 @@ vi.mock('epubjs', () => ({ default: ePubMock }))
  * `bookRef.current.epubcfi` is intentionally left undefined so the CFI-based
  * primary extraction path is skipped and the fallback always runs.
  */
+function makeFakeDoc(bodyText) {
+    // Minimal document double for the <style>-injection paths (font size,
+    // reader theme): createElement/appendChild/getElementById round-trip.
+    const byId = {}
+    return {
+        body: { innerText: bodyText },
+        head: { appendChild: vi.fn((el) => { byId[el.id] = el }) },
+        createElement: vi.fn(() => ({ id: '', textContent: '' })),
+        getElementById: vi.fn((id) => byId[id] || null),
+    }
+}
+
 function makeFakeBook(bodyText) {
     const handlers = {}
+    const doc = makeFakeDoc(bodyText)
     const rendition = {
         themes: { default: vi.fn() },
         hooks: { content: { register: vi.fn() } },
         on: vi.fn((event, cb) => { handlers[event] = cb }),
         display: vi.fn().mockResolvedValue(undefined),
-        getContents: vi.fn(() => [{ document: { body: { innerText: bodyText } } }]),
+        getContents: vi.fn(() => [{ document: doc }]),
         reportLocation: vi.fn(),
         prev: vi.fn(),
         next: vi.fn(),
@@ -58,10 +71,11 @@ function makeFakeBook(bodyText) {
         ready: Promise.resolve(),
         destroy: vi.fn(),
     }
-    return { book, rendition, handlers }
+    return { book, rendition, handlers, doc }
 }
 
 beforeEach(() => {
+    localStorage.clear()
     fetchEbookBlobMock.mockReset().mockResolvedValue(new ArrayBuffer(0))
     // Default: an unread book. That is the only state in which opening at the
     // start of the book is correct, and the only one where saving is allowed
@@ -77,7 +91,7 @@ beforeEach(() => {
 const LONG_TEXT = 'The quick brown fox jumps over the lazy dog and then runs away quickly into the forest without looking back at all.'
 
 async function setupReader(bodyText) {
-    const { book, rendition, handlers } = makeFakeBook(bodyText)
+    const { book, rendition, handlers, doc } = makeFakeBook(bodyText)
     ePubMock.mockReturnValue(book)
 
     render(
@@ -101,7 +115,7 @@ async function setupReader(bodyText) {
         })
     })
 
-    return { book, rendition }
+    return { book, rendition, doc }
 }
 
 describe('EbookReader doSave — one atomic write', () => {
@@ -414,6 +428,84 @@ describe('executeRestore — walks the ladder, landing on the first step that wo
 
         expect(landed).toBe(false)
         expect(rendition.display).toHaveBeenCalledWith()
+    })
+})
+
+// Issue #57: font size and reader theme used to be per-session React state
+// (and the theme a hardcoded copy of Blueprint). Both persist in localStorage
+// now, and the palette is injected as a #tandem-reader-theme <style> into the
+// epub iframe — the same mechanism as font size, since CSS variables on the
+// parent document never reach the iframe.
+describe('EbookReader — persisted display preferences', () => {
+    it('restores the persisted font size and persists changes', async () => {
+        localStorage.setItem('tandem_reader_font_size', '130')
+        const { doc } = await setupReader(LONG_TEXT)
+
+        fireEvent.click(screen.getByTitle('Increase font'))
+
+        await waitFor(() => {
+            const style = doc.getElementById('tandem-font-size')
+            expect(style).toBeTruthy()
+            expect(style.textContent).toContain('140%')
+        })
+        expect(localStorage.getItem('tandem_reader_font_size')).toBe('140')
+    })
+
+    it('defaults to 100% when the stored font size is garbage', async () => {
+        localStorage.setItem('tandem_reader_font_size', 'garbage')
+        const { doc } = await setupReader(LONG_TEXT)
+
+        fireEvent.click(screen.getByTitle('Increase font'))
+
+        await waitFor(() => {
+            expect(doc.getElementById('tandem-font-size').textContent).toContain('110%')
+        })
+    })
+
+    it('applies the persisted reader theme through the content hook', async () => {
+        // The content hook is what styles each chapter document as epub.js
+        // renders it — invoke the registered callbacks the way epub.js would.
+        localStorage.setItem('tandem_reader_theme', 'light')
+        const { rendition } = await setupReader(LONG_TEXT)
+
+        const freshDoc = makeFakeDoc(LONG_TEXT)
+        for (const [cb] of rendition.hooks.content.register.mock.calls) {
+            cb({ document: freshDoc })
+        }
+
+        const style = freshDoc.getElementById('tandem-reader-theme')
+        expect(style).toBeTruthy()
+        expect(style.textContent).toContain('#fafaf7')
+    })
+
+    it('switching reader theme restyles rendered content and persists the choice', async () => {
+        const { doc } = await setupReader(LONG_TEXT)
+
+        fireEvent.click(screen.getByTitle('Reader theme'))
+        fireEvent.click(screen.getByText('Sepia'))
+
+        await waitFor(() => {
+            const style = doc.getElementById('tandem-reader-theme')
+            expect(style).toBeTruthy()
+            expect(style.textContent).toContain('#f4ecd8')
+        })
+        expect(localStorage.getItem('tandem_reader_theme')).toBe('sepia')
+    })
+
+    it('match mode (the default) styles the iframe with the active app theme palette', async () => {
+        // No ThemeProvider is mounted in these tests, so the reader falls back
+        // to the default app theme — Blueprint's colors, via getReaderPalette.
+        const { rendition } = await setupReader(LONG_TEXT)
+
+        const freshDoc = makeFakeDoc(LONG_TEXT)
+        for (const [cb] of rendition.hooks.content.register.mock.calls) {
+            cb({ document: freshDoc })
+        }
+
+        const style = freshDoc.getElementById('tandem-reader-theme')
+        expect(style).toBeTruthy()
+        expect(style.textContent).toContain('#0f0f1a')
+        expect(style.textContent).toContain('#a78bfa')
     })
 })
 

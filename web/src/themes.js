@@ -129,6 +129,30 @@ export const THEMES = {
 export const DEFAULT_THEME = "blueprint"
 export const THEME_SLUGS = Object.keys(THEMES)
 
+// Reader display modes (issue #57). 'match' derives the epub iframe palette
+// from the active app theme; light/sepia/dark are fixed reading palettes
+// (mirroring Android's reader_display light/sepia/dark choice — all app
+// themes are dark, so these are the only way to read on a light page).
+export const READER_MODES = ["match", "light", "sepia", "dark"]
+
+const FIXED_READER_PALETTES = {
+  light: { background: "#fafaf7", text: "#1c1b22", link: "#6d28d9" },
+  sepia: { background: "#f4ecd8", text: "#5b4636", link: "#8b5e34" },
+  // The pre-#57 hardcoded reader palette, kept as an explicit choice.
+  dark: { background: "#0f0f1a", text: "#e8e8f0", link: "#a78bfa" },
+}
+
+export function getReaderPalette(mode, appThemeSlug) {
+  const fixed = FIXED_READER_PALETTES[mode]
+  if (fixed) return fixed
+  const vars = (THEMES[appThemeSlug] || THEMES[DEFAULT_THEME]).vars
+  return {
+    background: vars["--bg-primary"],
+    text: vars["--text-primary"],
+    link: vars["--accent-secondary"],
+  }
+}
+
 export function applyTheme(slug) {
   const theme = THEMES[slug] || THEMES[DEFAULT_THEME]
   const root = document.documentElement
