@@ -163,7 +163,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 
                     {/* Transport controls */}
                     <div className="audio-transport">
-                        <button onClick={() => player.skipBackward(15)} title="Back 15s">
+                        <button onClick={() => player.skipBackward()} title="Back 30s">
                             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />
                             </svg>
@@ -179,7 +179,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                                 </svg>
                             )}
                         </button>
-                        <button onClick={() => player.skipForward(30)} title="Forward 30s">
+                        <button onClick={() => player.skipForward()} title="Forward 30s">
                             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M11.5 8V4l5 4-5 4V8" /><path d="M5 12a7 7 0 1 0 7-7" />
                             </svg>
@@ -323,7 +323,7 @@ export function MiniPlayer({ onExpand }) {
             </div>
             <span className="mini-player-time">{formatTime(currentTime)}</span>
             <div className="mini-player-controls" onClick={e => e.stopPropagation()}>
-                <button onClick={() => player.skipBackward(15)} title="Back 15s">
+                <button onClick={() => player.skipBackward()} title="Back 30s">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />
                     </svg>
@@ -339,7 +339,7 @@ export function MiniPlayer({ onExpand }) {
                         </svg>
                     )}
                 </button>
-                <button onClick={() => player.skipForward(30)} title="Forward 30s">
+                <button onClick={() => player.skipForward()} title="Forward 30s">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M11.5 8V4l5 4-5 4V8" /><path d="M5 12a7 7 0 1 0 7-7" />
                     </svg>
