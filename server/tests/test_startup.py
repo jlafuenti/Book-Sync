@@ -142,3 +142,40 @@ async def test_lifespan_raises_when_cors_is_wildcard(monkeypatch):
     with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
         async with main.lifespan(app):
             pass
+
+
+async def test_lifespan_starts_and_stops_the_background_services(monkeypatch):
+    """The happy path: only the three refusal cases above were covered before.
+
+    Every long-running service is stubbed — the point is that startup reaches
+    `yield` and that shutdown stops all three in order, not that the schedulers
+    themselves work (they have their own tests).
+    """
+    pytest.importorskip("audible")
+    monkeypatch.setattr(settings, "app_env", "dev")
+
+    import main
+    from fastapi import FastAPI
+    from services import backup_service, import_scheduler
+    import services.queue_manager as queue_manager
+
+    calls: list[str] = []
+
+    def _record(name):
+        async def _stub(*args, **kwargs):
+            calls.append(name)
+        return _stub
+
+    monkeypatch.setattr(queue_manager, "start_queue_manager", _record("queue.start"))
+    monkeypatch.setattr(queue_manager, "stop_queue_manager", _record("queue.stop"))
+    monkeypatch.setattr(import_scheduler, "start", _record("scheduler.start"))
+    monkeypatch.setattr(import_scheduler, "stop", _record("scheduler.stop"))
+    monkeypatch.setattr(backup_service, "start", _record("backup.start"))
+    monkeypatch.setattr(backup_service, "stop", _record("backup.stop"))
+
+    app = FastAPI(lifespan=main.lifespan)
+    async with main.lifespan(app):
+        assert calls == ["queue.start", "scheduler.start", "backup.start"]
+
+    # Shutdown tears them down in reverse order of how they were brought up.
+    assert calls[3:] == ["backup.stop", "scheduler.stop", "queue.stop"]
