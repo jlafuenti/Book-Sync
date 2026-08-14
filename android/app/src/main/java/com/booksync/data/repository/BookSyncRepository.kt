@@ -237,23 +237,38 @@ class BookSyncRepository @Inject constructor(
         updateProgress(mediaType, mediaId, isCompleted = true)
     }
 
-    /** Reset progress for a media item (sets to 0, not completed). */
-    suspend fun resetMediaProgress(mediaType: String, mediaId: Int) {
-        updateProgress(
-            mediaType = mediaType,
-            mediaId = mediaId,
-            epubCfi = "",
-            epubChapter = 0,
-            epubProgressPercent = 0f,
-            audioPositionMs = 0,
-            isCompleted = false
-        )
+    /**
+     * Reset progress for a standalone (unpaired) ebook/audiobook (issue #103):
+     * `DELETE /api/sync/position/{scope}/{id}` removes the canonical bookmark
+     * (+ hints) and the progress projection server-side, so `GET /position`
+     * answers 204 ("unread") again — the legacy zero-write this replaces only
+     * pinned the position at 0 and left the bookmark in place to re-seed it.
+     *
+     * Same honesty contract as [resetPairProgress]: local cleanup only after
+     * the server DELETE succeeds; on failure/offline nothing changes locally
+     * and this returns `false` so the caller can tell the user the reset did
+     * not happen. Local `bookmarks` and `pending_sync` are pair-keyed, so the
+     * only local row to clear here is `user_progress`.
+     */
+    suspend fun resetStandaloneProgress(mediaType: String, mediaId: Int): Boolean {
+        val response = try {
+            api.resetPosition(mediaType, mediaId)
+        } catch (e: Exception) {
+            logW("resetStandaloneProgress $mediaType=$mediaId: offline (${e.message}) — leaving local state unchanged")
+            return false
+        }
+        if (!response.isSuccessful) {
+            logW("resetStandaloneProgress $mediaType=$mediaId: HTTP ${response.code()} — leaving local state unchanged")
+            return false
+        }
+        userProgressDao.deleteProgress(mediaType, mediaId)
+        return true
     }
 
     /**
      * Reset ALL progress for a paired book: deletes the canonical bookmark (+
      * hints) and every user_progress row on the server, then clears the
-     * matching local caches. [resetMediaProgress]'s legacy zero-write only
+     * matching local caches. The removed `resetMediaProgress` zero-write only
      * pins `epub_progress_percent`/`audio_position_ms` at 0 and leaves the
      * Bookmark row in place — the next sync (or even the next open) re-seeds
      * progress right back from it, so the reset silently un-resets itself
