@@ -1,5 +1,5 @@
 """
-BookSync Server — Main Application
+Tandem Server — Main Application
 
 FastAPI entry point that ties together all routers and initializes
 the database on startup.
@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
-    logger.info("BookSync server starting up...")
+    logger.info("Tandem server starting up...")
 
     # Fail fast on insecure defaults before touching the DB or minting tokens.
     check_jwt_secret(settings)
@@ -133,11 +133,11 @@ async def lifespan(app: FastAPI):
     await backup_service.stop()
     await import_scheduler.stop()
     await stop_queue_manager()
-    logger.info("BookSync server shutting down...")
+    logger.info("Tandem server shutting down...")
 
 
 app = FastAPI(
-    title="BookSync",
+    title="Tandem",
     description=(
         "Synchronize your reading position between ebooks and audiobooks. "
         "Seamlessly switch between reading and listening."
@@ -178,7 +178,7 @@ app.include_router(match.router, prefix="/api/library")
 async def root():
     """Health check / API info."""
     return {
-        "name": "BookSync",
+        "name": "Tandem",
         "version": "0.1.0",
         "status": "running",
         "docs": "/docs",

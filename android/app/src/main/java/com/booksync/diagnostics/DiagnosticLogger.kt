@@ -21,7 +21,7 @@ enum class LogChannel(
     val label: String
 ) {
     AUTO("diag_auto_end_ms", "auto_diagnostics.log", "Android Auto"),
-    APP("diag_app_end_ms",  "app_diagnostics.log",  "BookSync App")
+    APP("diag_app_end_ms",  "app_diagnostics.log",  "Tandem App")
 }
 
 @Singleton

@@ -31,7 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DEFAULT_SERVER_URL
+import com.booksync.data.remote.shouldExpandAdvanced
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.util.restartApp
@@ -59,7 +59,7 @@ class LoginViewModel @Inject constructor(
     val error = _error.asStateFlow()
 
     val currentServerUrl = serverUrlManager.serverUrlFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), DEFAULT_SERVER_URL)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
     fun login(username: String, password: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
@@ -96,7 +96,9 @@ fun LoginScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val currentServerUrl by viewModel.currentServerUrl.collectAsState()
-    var showAdvanced by remember { mutableStateOf(false) }
+    // With no server configured yet, the URL field is the only useful control on
+    // this screen — start expanded rather than hidden behind the toggle.
+    var showAdvanced by remember { mutableStateOf(shouldExpandAdvanced(currentServerUrl)) }
     var serverUrlEdit by remember(currentServerUrl) { mutableStateOf(currentServerUrl) }
     val context = LocalContext.current
 
@@ -190,7 +192,8 @@ fun LoginScreen(
             // Login Button
             Button(
                 onClick = { viewModel.login(username, password, onLoginSuccess) },
-                enabled = username.isNotBlank() && password.isNotBlank() && !isLoading,
+                enabled = username.isNotBlank() && password.isNotBlank() &&
+                    currentServerUrl.isNotBlank() && !isLoading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -241,7 +244,11 @@ fun LoginScreen(
                         Text("Save & Restart")
                     }
                     Text(
-                        text = "Saving restarts the app to apply the new server.",
+                        text = if (currentServerUrl.isBlank()) {
+                            "No server configured yet — enter your Tandem server URL to sign in."
+                        } else {
+                            "Saving restarts the app to apply the new server."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),

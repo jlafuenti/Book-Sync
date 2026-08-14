@@ -48,6 +48,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Without this, a host reboot leaves `server` down for good and `web` nginx
+    # crash-looping on a missing upstream (issue #105). Same for `db` below.
+    restart: unless-stopped
     # Uncomment below for GPU support:
     # deploy:
     #   resources:
@@ -72,6 +75,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   # Backups (issue #60) are owned by the `server` service itself — it runs the
   # nightly schedule, manual backups, restore, and pruning in-process. There is
