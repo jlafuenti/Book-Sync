@@ -36,9 +36,11 @@ _POINTS = [
 # ---------------------------------------------------------------------------
 
 def test_epub_to_audio_exact_match_applies_default_rewind():
-    # default_rewind_seconds is 10 -> 10_000 ms
-    assert settings.default_rewind_seconds == 10
-    assert epub_to_audio(_POINTS, 0, 1) == 25000 - 10000
+    # default_rewind_seconds is 5 -> 5_000 ms. Pinned so the server can't drift
+    # away from the clients' RESUME_REWIND (issue #42) unnoticed — see
+    # docs/position-sync-contract.md § Playback offsets.
+    assert settings.default_rewind_seconds == 5
+    assert epub_to_audio(_POINTS, 0, 1) == 25000 - 5000
 
 
 def test_epub_to_audio_custom_rewind_zero():
@@ -51,8 +53,8 @@ def test_epub_to_audio_closest_preceding_when_no_exact():
 
 
 def test_epub_to_audio_clamps_at_zero_on_rewind_underflow():
-    pts = [_P(0, 0, 5000)]
-    assert epub_to_audio(pts, 0, 0) == 0  # 5000 - 10000 -> clamped
+    pts = [_P(0, 0, 2000)]
+    assert epub_to_audio(pts, 0, 0) == 0  # 2000 - 5000 -> clamped
 
 
 def test_epub_to_audio_returns_zero_when_nothing_precedes():

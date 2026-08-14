@@ -285,14 +285,23 @@ class AudioPlayerService : MediaLibraryService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(10_000)
+            // Drives the notification's and Android Auto's rewind/fast-forward
+            // actions. Shared with the phone player's buttons via PlaybackOffsets
+            // so one gesture means one distance everywhere (issue #42).
+            .setSeekBackIncrementMs(PlaybackOffsets.SKIP_MS)
+            .setSeekForwardIncrementMs(PlaybackOffsets.SKIP_MS)
             .build()
         localPlayer.playbackParameters = localPlayer.playbackParameters.withSpeed(initialSpeed)
+        // Rewind-on-resume sits on the session player, not in a button handler, so
+        // it covers Android Auto / notification / headset / Bluetooth as well as the
+        // phone screen. Note the CastPlayer below is deliberately left unwrapped —
+        // see ResumeRewindPlayer's docs and switchToPlayer's `is CastPlayer` checks.
+        val resumeRewindPlayer = ResumeRewindPlayer(localPlayer)
         // Android Auto on some head units renders rewind/fast-forward buttons based on
         // SEEK_TO_PREVIOUS/SEEK_TO_NEXT rather than SEEK_BACK/SEEK_FORWARD.
-        // We wrap the player so those "track-style" commands behave like +/-10s seeking.
-        val androidAutoPlayer = AndroidAutoSeekMappingPlayer(localPlayer)
+        // We wrap the player so those "track-style" commands behave like seeking by
+        // PlaybackOffsets.SKIP_MS.
+        val androidAutoPlayer = AndroidAutoSeekMappingPlayer(resumeRewindPlayer)
         androidAutoPlayer.addListener(playerListener)
         exoPlayer = androidAutoPlayer
 
@@ -331,7 +340,8 @@ class AudioPlayerService : MediaLibraryService() {
      * Maps Android Auto "previous/next" controls to relative seek backward/forward.
      *
      * This lets head units that only advertise `COMMAND_SEEK_TO_PREVIOUS/NEXT` still get the
-     * expected rewind/fast-forward behavior (10s, driven by ExoPlayer's seek increment setup).
+     * expected rewind/fast-forward behavior ([PlaybackOffsets.SKIP_MS], driven by ExoPlayer's
+     * seek increment setup).
      */
     private class AndroidAutoSeekMappingPlayer(delegate: Player) : ForwardingPlayer(delegate) {
         override fun getAvailableCommands(): Player.Commands {

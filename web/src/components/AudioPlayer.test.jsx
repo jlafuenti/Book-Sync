@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { AudioPlayerView } from './AudioPlayer'
+import { AudioPlayerView, MiniPlayer } from './AudioPlayer'
 
 const {
     getAudiobookChaptersMock, getBookmarkLogMock, getAccessTokenMock, useAudioPlayerMock,
@@ -46,6 +46,37 @@ beforeEach(() => {
     getAudiobookChaptersMock.mockReset().mockResolvedValue([])
     getBookmarkLogMock.mockReset().mockResolvedValue([])
     getAccessTokenMock.mockReset().mockReturnValue('token')
+})
+
+// Issue #42: both transport buttons move 30 s, on the full player and the mini
+// player alike. The components pass no argument -- the context owns the number.
+describe('transport skip buttons', () => {
+    it('the full player skips 30s in both directions', async () => {
+        const skipForward = vi.fn()
+        const skipBackward = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({ skipForward, skipBackward }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        fireEvent.click(screen.getByTitle('Back 30s'))
+        fireEvent.click(screen.getByTitle('Forward 30s'))
+
+        expect(skipBackward).toHaveBeenCalledWith()
+        expect(skipForward).toHaveBeenCalledWith()
+    })
+
+    it('the mini player skips 30s in both directions', () => {
+        const skipForward = vi.fn()
+        const skipBackward = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({ skipForward, skipBackward, stop: vi.fn() }))
+        render(<MiniPlayer onExpand={vi.fn()} />)
+
+        fireEvent.click(screen.getByTitle('Back 30s'))
+        fireEvent.click(screen.getByTitle('Forward 30s'))
+
+        expect(skipBackward).toHaveBeenCalledWith()
+        expect(skipForward).toHaveBeenCalledWith()
+    })
 })
 
 describe('AudioPlayerView stale-conflict banner (issue #54)', () => {

@@ -15,6 +15,18 @@ function positionTarget(audiobook) {
 // a 1-hour uninterrupted session logs ~2 entries instead of ~720.
 const LOG_INTERVAL_MS = 30 * 60 * 1000
 
+// Playback offsets (issue #42). These two numbers are the web copy of a value
+// that must be identical on every surface -- Android's PlaybackOffsets and the
+// server's default_rewind_seconds carry the same ones. See
+// docs/position-sync-contract.md § Playback offsets before changing either.
+//
+// SKIP: both transport buttons, same in each direction.
+// RESUME_REWIND: picking up mid-word after a pause is hard to follow, so a
+// resume backs up a few seconds first. Also the size of the text->audio
+// handoff jump on Android.
+const SKIP_SECONDS = 30
+const RESUME_REWIND_SECONDS = 5
+
 export function useAudioPlayer() {
     return useContext(AudioPlayerContext)
 }
@@ -121,6 +133,8 @@ export function AudioPlayerProvider({ children }) {
                 audio.src = url
                 audio.load()
                 const onCanPlay = () => {
+                    // Exact position, no resume rewind: this is a transparent
+                    // token refresh, not a user resume (issue #42).
                     audio.currentTime = posSeconds
                     if (wasPlaying) audio.play()
                     audio.removeEventListener('canplay', onCanPlay)
@@ -294,9 +308,23 @@ export function AudioPlayerProvider({ children }) {
         }
     }, [currentAudiobook, handleConflict])
 
+    // The one resume path in this app -- the audio element is a bare `new
+    // Audio()` with no controls and no mediaSession handlers, so nothing else
+    // can start playback behind our back. Resuming rewinds RESUME_REWIND_SECONDS
+    // so you don't restart mid-word (issue #42).
+    //
+    // Deliberately NOT applied at the other two play() sites: `play()` below
+    // carries an explicit position from Home/Continue, and the stream-error
+    // recovery restores the exact position it was interrupted at.
     const togglePlayPause = useCallback(() => {
-        if (playing) pause()
-        else audioRef.current?.play()
+        if (playing) {
+            pause()
+            return
+        }
+        const audio = audioRef.current
+        if (!audio) return
+        audio.currentTime = Math.max(audio.currentTime - RESUME_REWIND_SECONDS, 0)
+        audio.play()
     }, [playing, pause])
 
     const seekTo = useCallback((seconds) => {
@@ -305,7 +333,7 @@ export function AudioPlayerProvider({ children }) {
         }
     }, [])
 
-    const skipForward = useCallback((seconds = 30) => {
+    const skipForward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
             audioRef.current.currentTime = Math.min(
                 audioRef.current.currentTime + seconds,
@@ -314,7 +342,7 @@ export function AudioPlayerProvider({ children }) {
         }
     }, [])
 
-    const skipBackward = useCallback((seconds = 15) => {
+    const skipBackward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
             audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0)
         }

@@ -55,6 +55,9 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
         <>
             <button onClick={() => player.play(7, audiobook)}>play</button>
             <button onClick={() => player.pause()}>pause</button>
+            <button onClick={() => player.togglePlayPause()}>toggle</button>
+            <button onClick={() => player.skipBackward()}>skip-back</button>
+            <button onClick={() => player.skipForward()}>skip-fwd</button>
             <button onClick={() => player.clearStaleConflict()}>clear-conflict</button>
             <div data-testid="stale-conflict">
                 {player.staleConflict ? `${player.staleConflict.deviceName}|${player.staleConflict.position}` : ''}
@@ -88,6 +91,86 @@ describe('AudioPlayerProvider play()', () => {
 
         act(() => audio.dispatchEvent(new Event('canplay')))
         expect(audio.paused).toBe(false)
+    })
+})
+
+// Issue #42: resuming mid-word after a pause is hard to follow, so a resume
+// rewinds 5 s. Skip is 30 s in both directions on every surface.
+describe('AudioPlayerProvider playback offsets', () => {
+    async function loadedPlayer() {
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        return audio
+    }
+
+    it('rewinds 5s when resuming from a pause', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 90
+        act(() => audio.pause())
+
+        fireEvent.click(screen.getByText('toggle'))
+
+        expect(audio.currentTime).toBe(85)
+        expect(audio.paused).toBe(false)
+    })
+
+    it('clamps the resume rewind at the start of the file', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 2
+        act(() => audio.pause())
+
+        fireEvent.click(screen.getByText('toggle'))
+
+        expect(audio.currentTime).toBe(0)
+    })
+
+    it('does not rewind when toggling from playing to paused', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 90
+
+        fireEvent.click(screen.getByText('toggle'))
+
+        expect(audio.paused).toBe(true)
+        expect(audio.currentTime).toBe(90)
+    })
+
+    it('does not rewind on play() — that path carries an explicit position', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 90
+        act(() => audio.pause())
+
+        // Same audiobook, no position argument: play() resumes verbatim.
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(audio.paused).toBe(false))
+        expect(audio.currentTime).toBe(90)
+    })
+
+    it('skips 30s in both directions by default', async () => {
+        const audio = await loadedPlayer()
+        audio.duration = 600
+        audio.currentTime = 100
+
+        fireEvent.click(screen.getByText('skip-fwd'))
+        expect(audio.currentTime).toBe(130)
+
+        fireEvent.click(screen.getByText('skip-back'))
+        expect(audio.currentTime).toBe(100)
+    })
+
+    it('clamps skips at both ends of the file', async () => {
+        const audio = await loadedPlayer()
+        audio.duration = 600
+        audio.currentTime = 10
+        fireEvent.click(screen.getByText('skip-back'))
+        expect(audio.currentTime).toBe(0)
+
+        audio.currentTime = 590
+        fireEvent.click(screen.getByText('skip-fwd'))
+        expect(audio.currentTime).toBe(600)
     })
 })
 
