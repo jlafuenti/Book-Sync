@@ -97,7 +97,16 @@ class Settings(BaseSettings):
     abs_audiobooks_prefix: Optional[str] = Field(default=None, alias="ABS_AUDIOBOOKS_PREFIX")
 
     # Sync Settings
-    default_rewind_seconds: int = 10
+    # How far back a text→audio handoff lands from the matched sentence. Must
+    # stay equal to the clients' resume-rewind offset (Android
+    # PlaybackOffsets.RESUME_REWIND_MS, web RESUME_REWIND_SECONDS) — see
+    # docs/position-sync-contract.md § Playback offsets (issue #42).
+    #
+    # NB: the only consumer, services.sync_engine.epub_to_audio, is currently
+    # unreachable from any router — clients do the conversion locally off their
+    # own sync-point cache. It is kept in step so the two can't disagree if a
+    # server-side handoff is ever wired up.
+    default_rewind_seconds: int = 5
 
     class Config:
         env_file = ".env"
