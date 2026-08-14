@@ -2,3 +2,6 @@
 # the checkout platform (a CRLF shebang breaks `sh entrypoint.sh`).
 *.sh text eol=lf
 server/entrypoint.sh text eol=lf
+
+# The pinned interpreter version read by uv and setup-testenv.sh.
+.python-version text eol=lf

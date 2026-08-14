@@ -9,6 +9,7 @@ import com.booksync.data.remote.*
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
+import com.booksync.player.PlaybackOffsets
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -1286,12 +1287,17 @@ class BookSyncRepository @Inject constructor(
     /**
      * Convert an EPUB position (chapter + extracted text) to an audio position using the local sync map.
      * Returns the audio position in milliseconds with rewind applied.
+     *
+     * The default lands you just *before* the sentence you were reading rather
+     * than on top of it — the same offset a resume uses, so "switch to listening"
+     * and "unpause" feel alike. Callers used to pass a literal 2000 here while
+     * this default said 10_000 (issue #42).
      */
     suspend fun epubToAudioText(
         pairId: Int,
         chapter: Int,
         epubText: String,
-        rewindMs: Int = 10_000,
+        rewindMs: Int = PlaybackOffsets.RESUME_REWIND_MS.toInt(),
     ): Int {
         val syncPoint = getSyncPointForEpubText(pairId, chapter, epubText) ?: return 0
         return maxOf(0, syncPoint.audioStartMs - rewindMs)

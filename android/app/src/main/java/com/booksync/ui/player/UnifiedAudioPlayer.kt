@@ -466,8 +466,8 @@ fun ExpandedPlayer(
                 Icon(Icons.Default.SkipPrevious, "Previous Chapter", modifier = Modifier.size(28.dp))
             }
 
-            IconButton(onClick = { viewModel.skipBackward(10) }) {
-                Icon(Icons.Default.Replay10, "Rewind 10s", modifier = Modifier.size(32.dp))
+            IconButton(onClick = { viewModel.skipBackward() }) {
+                Icon(Icons.Default.Replay30, "Rewind 30s", modifier = Modifier.size(32.dp))
             }
 
             FilledIconButton(
@@ -481,7 +481,7 @@ fun ExpandedPlayer(
                 )
             }
 
-            IconButton(onClick = { viewModel.skipForward(30) }) {
+            IconButton(onClick = { viewModel.skipForward() }) {
                 Icon(Icons.Default.Forward30, "Forward 30s", modifier = Modifier.size(32.dp))
             }
 

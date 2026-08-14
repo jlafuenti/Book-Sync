@@ -14,6 +14,11 @@ __pycache__/
 *.pyo
 .env
 venv/
+.venv/
+# Stray virtualenvs that have been created inside server/tests/ before. They sit
+# under pytest's `testpaths`, so an uncommitted one gets walked during collection
+# (see the norecursedirs guard in server/pytest.ini).
+server/tests/booksync-testenv*/
 
 # Test / coverage artifacts
 .coverage

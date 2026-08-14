@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +54,7 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.BookmarkLogResponse
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.player.AudioPlayerService
+import com.booksync.player.PlaybackOffsets
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
 import com.google.android.gms.cast.framework.CastButtonFactory
@@ -544,10 +544,10 @@ class PlayerViewModel @Inject constructor(
         } else {
             // Ensure media is loaded before playing
             ensureMediaLoaded()
-            // Rewind 5 seconds on resume to help listener reorient
-            val newPos = maxOf(0L, ctrl.currentPosition - 5000L)
-            ctrl.seekTo(newPos)
-            _positionMs.value = newPos
+            // No rewind here. This screen used to seek back 5s itself, which left
+            // Android Auto / notification / headset resumes with no rewind at all;
+            // ResumeRewindPlayer now does it on the session player, so every
+            // surface gets it. Doing it in both places jumps back 10s (issue #42).
             ctrl.play()
         }
     }
@@ -557,16 +557,14 @@ class PlayerViewModel @Inject constructor(
         _positionMs.value = positionMs
     }
 
-    fun skipForward(seconds: Int = 30) {
+    fun skipForward() {
         val ctrl = controller ?: return
-        val newPos = minOf(ctrl.currentPosition + seconds * 1000L, ctrl.duration.coerceAtLeast(0))
-        seekTo(newPos)
+        seekTo(PlaybackOffsets.skipForwardPosition(ctrl.currentPosition, ctrl.duration))
     }
 
-    fun skipBackward(seconds: Int = 10) {
+    fun skipBackward() {
         val ctrl = controller ?: return
-        val newPos = maxOf(0L, ctrl.currentPosition - seconds * 1000L)
-        seekTo(newPos)
+        seekTo(PlaybackOffsets.skipBackPosition(ctrl.currentPosition))
     }
 
     fun skipToNextChapter() {
@@ -1056,10 +1054,9 @@ fun PlayerScreen(
                     Icon(Icons.Default.SkipPrevious, "Prev chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
 
-                // Replay 15 s — Material only ships Replay5/10/30. Overlay "15"
-                // on the plain Replay arrow so the glyph matches the behaviour.
-                IconButton(onClick = { viewModel.skipBackward(15) }, enabled = isDownloaded) {
-                    Skip15Icon(forward = false, tint = colors.textPrimary, size = 32.dp)
+                // Replay 30 s — matches PlaybackOffsets.SKIP_MS.
+                IconButton(onClick = { viewModel.skipBackward() }, enabled = isDownloaded) {
+                    Icon(Icons.Default.Replay30, "Rewind 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
                 // Play / Pause FAB
@@ -1079,9 +1076,9 @@ fun PlayerScreen(
                     )
                 }
 
-                // Forward 15 s — see Skip15Icon comment above.
-                IconButton(onClick = { viewModel.skipForward(15) }, enabled = isDownloaded) {
-                    Skip15Icon(forward = true, tint = colors.textPrimary, size = 32.dp)
+                // Forward 30 s — matches PlaybackOffsets.SKIP_MS.
+                IconButton(onClick = { viewModel.skipForward() }, enabled = isDownloaded) {
+                    Icon(Icons.Default.Forward30, "Forward 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
                 // Next chapter
@@ -1377,41 +1374,3 @@ internal fun historyDeviceSuffix(deviceName: String?, deviceId: String?): String
     return if (label.isNullOrBlank()) "" else " · from $label"
 }
 
-/**
- * Plain curved arrow + "15" numeral overlay. Material ships Forward/Replay
- * 5/10/30 but not 15, and the previous "Forward10" glyph made users think the
- * button jumped 10 s when it actually jumps 15. This composable overlays a
- * bold "15" on top of the plain [Icons.Default.Replay] arrow (mirrored on X
- * for forward), matching the visual weight of the Material Forward/Replay 10
- * style without needing a hand-rolled VectorDrawable.
- */
-@Composable
-private fun Skip15Icon(
-    forward: Boolean,
-    tint: Color,
-    size: androidx.compose.ui.unit.Dp,
-) {
-    Box(
-        modifier = Modifier.size(size),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = Icons.Default.Replay,
-            contentDescription = if (forward) "Forward 15s" else "Rewind 15s",
-            tint = tint,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { if (forward) scaleX = -1f },
-        )
-        // Tuck the digits inside the circular-arrow curve. The Material
-        // Replay/Forward arrow has its arrowhead at the top-left, so the
-        // negative space where the "10" normally sits is the lower-center.
-        Text(
-            text = "15",
-            color = tint,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = (size.value * 0.25f).dp),
-        )
-    }
-}

@@ -193,3 +193,51 @@ racing transaction won and applies on top of it.
 (`location.start.percentage`) and Readium reports 0–1
 (`locator.locations.totalProgression`); both clients multiply by 100. Sending
 either raw makes the two disagree by 100×.
+
+## Playback offsets
+
+Two numbers govern how far playback jumps, and both must be **identical on every
+surface**. There is no config channel that reaches all three platforms, so each
+keeps its own copy and they are kept equal by hand:
+
+| | Value | Android | Web | Server |
+|---|---|---|---|---|
+| Skip back / forward | 30 s | `PlaybackOffsets.SKIP_MS` | `SKIP_SECONDS` | — |
+| Resume rewind | 5 s | `PlaybackOffsets.RESUME_REWIND_MS` | `RESUME_REWIND_SECONDS` | `default_rewind_seconds` |
+
+`PlaybackOffsetsTest` and `test_epub_to_audio_exact_match_applies_default_rewind`
+assert the values literally, so a one-sided edit fails CI rather than shipping a
+silent divergence. Before issue #42 there were five different numbers: 15 s on the
+phone player, 10 s in Android Auto and on the notification, 15 s back / 30 s
+forward on the web, a 2 s text→audio handoff, and a stated server default of 10 s.
+
+**Skip** is symmetric. Asymmetric skip (back 15 / forward 30) reads as a bug
+whichever way you're navigating.
+
+**Resume rewind** exists because picking up mid-word after a pause is hard to
+follow. It applies to any paused→playing transition and, deliberately, to the
+reader's text→audio handoff as well — "switch to listening" and "unpause" should
+land the same distance before where you were.
+
+On Android it lives on the **session player** (`ResumeRewindPlayer`), not in a
+button handler. It used to be inline in the phone player's play/pause handler,
+which meant Android Auto, the notification, headset buttons, Bluetooth, and
+audio-focus recovery after a nav prompt — all of which drive the MediaSession
+player directly — got no rewind at all.
+
+Three paths are exempt, each on purpose:
+
+- **First play of a book.** Opening a book restores its saved position and starts
+  playing; that is not a resume, and rewinding it would cost 5 s every launch.
+  `ResumeRewindPlayer` gates on having heard playback since the last media-item
+  transition; on the web, `play()` (which carries an explicit position from
+  Home/Continue) does not rewind, only `togglePlayPause` does.
+- **Cast.** `AudioPlayerService.switchToPlayer` branches on `newPlayer is
+  CastPlayer`, so wrapping the CastPlayer would break the Cast handoff. The
+  CastPlayer goes to the session unwrapped and gets no resume rewind.
+- **Web stream-error recovery.** Re-minting an expired media token and resuming is
+  a transparent refresh, not a user resume, so it restores the exact position.
+
+> A rewind on resume means each pause/resume cycle moves the *saved* position
+> backwards by 5 s, since the position heartbeat writes wherever playback actually
+> is. That is inherent to the feature, not a sync bug.

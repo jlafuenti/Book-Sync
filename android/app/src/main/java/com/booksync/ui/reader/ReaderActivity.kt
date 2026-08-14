@@ -1028,7 +1028,7 @@ class ReaderActivity : AppCompatActivity() {
                               else extractTextPreview(chapterIndex, progression)
             Log.d(TAG, "syncAudioToPage: textPreview='${textPreview.take(80)}'")
 
-            val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview, rewindMs = 2000)
+            val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview)
             if (audioMs > 0) {
                 repository.updateBookmark(
                     pairId = pairId,
@@ -1659,7 +1659,7 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
         lifecycleScope.launch {
-            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText, rewindMs = 2000)
+            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText)
             if (audioMs > 0) {
                 Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
                 sentenceSyncPending = true

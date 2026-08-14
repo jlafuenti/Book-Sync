@@ -7,15 +7,30 @@ suites are covered in their own sections below.
 ## Running the tests
 
 ```bash
-cd server
-python -m venv .venv && . .venv/Scripts/activate   # or .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-pytest -v
+cd server && ./setup-testenv.sh          # one-time per clone or worktree
+.venv/Scripts/python.exe -m pytest -q    # or .venv/bin/python on macOS/Linux
 ```
+
+`setup-testenv.sh` is idempotent — re-run it after pulling dependency changes. It reads
+`server/.python-version` (committed, currently `3.12`, matching CI) and provisions that
+interpreter with [uv](https://docs.astral.sh/uv/), downloading it if the machine doesn't
+have it. Because the version is committed rather than remembered, every new branch and
+worktree gets the right one. Each worktree keeps its own `server/.venv`; uv hardlinks from
+its global cache, so the second and later ones cost seconds and little disk. The script
+**fails loudly** rather than falling back to whatever `python` resolves to — a venv built
+on the wrong version is the exact problem it exists to prevent.
 
 Notes:
 - `conftest.py` points `DATABASE_URL` at a throwaway SQLite file, so `get_db` and direct
   `async_session()` calls both hit the test DB. No Postgres required.
+- **That SQLite file is per-process** (`booksync_test_<pid>.db`) and is deleted at session
+  end. It used to be one fixed path shared by every run on the machine, which the autouse
+  `_fresh_schema` fixture — it drops and recreates the whole schema before *each test* —
+  turned into a hazard: two suites running at once (one per worktree, say) tore down each
+  other's tables mid-test, producing a storm of `no such table` / `table already exists`
+  errors in files unrelated to whatever you changed. A crashed run could also leave the
+  shared file locked on Windows, breaking every later run. Pinned by
+  `tests/test_harness_db_isolation.py`.
 - The Postgres migration test (`test_migrations_postgres.py`) self-skips unless
   `RUN_PG_TESTS=1` and a Postgres `DATABASE_URL` are set (it runs in its own CI job).
   It drives the **Alembic** migrations (issue #53): `alembic upgrade head` builds the
@@ -25,12 +40,16 @@ Notes:
   uvicorn; an existing pre-Alembic DB must be `alembic stamp head`ed once.
 - On Windows, if a venv fails to build under a long path, create it at a short path
   (e.g. `C:\bst`) — pip's dist-info paths can exceed `MAX_PATH`.
-- **Match CI, not your global Python.** CI runs Python 3.12 with the pinned dev deps and
-  installs `requirements.txt` minus the heavy transcription stack:
-  `grep -viE '^(torch|openai-whisper)' requirements.txt > req-ci.txt && pip install -r req-ci.txt -r requirements-dev.txt`.
-  Running against a global interpreter with unpinned pytest or missing prod deps (e.g.
-  `audible`) produces failures that don't exist in CI. Tests that need optional heavy deps
-  should `pytest.importorskip(...)` so a missing dep skips instead of breaking collection.
+- **Match CI, not your global Python** — that is what `setup-testenv.sh` is for. Running
+  against a global interpreter with unpinned pytest or missing prod deps (e.g. `audible`)
+  produces failures that don't exist in CI. Tests that need optional heavy deps should
+  `pytest.importorskip(...)` so a missing dep skips instead of breaking collection.
+  `requirements.txt` no longer carries the heavy transcription stack (torch /
+  openai-whisper live in `requirements-local.txt`), so no filtering is needed — CI's
+  `grep -viE '^(torch|openai-whisper)'` is a historical no-op.
+- Don't create virtualenvs under `server/tests/`. They sit inside `testpaths`, so
+  collection crawls their site-packages; `norecursedirs` in `pytest.ini` guards against it
+  and `.gitignore` keeps them untracked, but `server/.venv` is the right home.
 
 ### Fast red-green loop
 
