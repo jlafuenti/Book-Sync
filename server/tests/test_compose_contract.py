@@ -76,6 +76,21 @@ def test_every_compose_service_restarts_unless_stopped(path):
     )
 
 
+def test_server_service_healthchecks_the_api():
+    """The server service must poll /api/health (issue #47).
+
+    /api/health is a real readiness probe now (503 on a dead DB); without a
+    compose healthcheck nothing consumes it and Docker keeps reporting a
+    broken backend as up.
+    """
+    services = _services(COMPOSE_TEMPLATES[0])
+    body = services["server"]
+    assert "healthcheck:" in body, "server service has no healthcheck block"
+    assert any("/api/health" in line for line in body), (
+        "server healthcheck does not hit /api/health"
+    )
+
+
 def test_parser_finds_the_expected_services():
     """Guard the hand-rolled parser itself: a silently-empty parse would pass above."""
     main = _services(COMPOSE_TEMPLATES[0])
