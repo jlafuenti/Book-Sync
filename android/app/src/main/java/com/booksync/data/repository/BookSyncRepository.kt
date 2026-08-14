@@ -99,6 +99,30 @@ class BookSyncRepository @Inject constructor(
         val remotePairs = api.getPairs()
         val entities = remotePairs.map { pair ->
             val existing = bookPairDao.getPairById(pair.id)
+
+            // A re-transcription rebuilds the server's sync map with new audio
+            // timestamps under a new version (issue #55). Cached points from the
+            // old one aren't merely out of date — `epubToAudioText` still finds
+            // the right text and hands back a second that no longer exists — so
+            // drop them outright rather than flagging them.
+            //
+            // A null *remote* version is "unknown", not "no map" — an endpoint
+            // that didn't load the relationship reports null, and wiping a good
+            // cache on that would be worse than carrying it. A null *cached*
+            // version on points that are present is different: it means a build
+            // predating this column downloaded them and we cannot tell which map
+            // they are, so they get refetched once. "Probably still fine" is the
+            // reasoning that produced this bug.
+            val remoteVersion = pair.sync_map_version
+            val cachedVersion = existing?.syncMapVersion
+            val cacheIsStale = remoteVersion != null &&
+                existing?.syncMapDownloaded == true &&
+                remoteVersion != cachedVersion
+            if (cacheIsStale) {
+                log("refreshPairs — pair ${pair.id} sync map v$cachedVersion -> v$remoteVersion; dropping cached points")
+                syncPointDao.deletePointsForPair(pair.id)
+            }
+
             BookPairEntity(
                 id = pair.id,
                 ebookId = pair.ebook.id,
@@ -115,7 +139,8 @@ class BookSyncRepository @Inject constructor(
                 status = pair.status,
                 ebookDownloaded = existing?.ebookDownloaded ?: false,
                 audiobookDownloaded = existing?.audiobookDownloaded ?: false,
-                syncMapDownloaded = existing?.syncMapDownloaded ?: false,
+                syncMapDownloaded = if (cacheIsStale) false else existing?.syncMapDownloaded ?: false,
+                syncMapVersion = if (cacheIsStale) null else existing?.syncMapVersion,
                 audiobookCoverPath = pair.audiobook.cover_path ?: existing?.audiobookCoverPath,
                 ebookSeries = pair.ebook.series,
                 ebookSeriesIndex = pair.ebook.series_index,
@@ -523,7 +548,9 @@ class BookSyncRepository @Inject constructor(
 
     /** Reset the syncMapDownloaded flag so a re-download is triggered. */
     suspend fun resetSyncMapDownloaded(pairId: Int) {
-        bookPairDao.setSyncMapDownloaded(pairId, false)
+        // Clear the version alongside the flag: a cache marked absent that still
+        // claims a version would tell `refreshPairs` it is current.
+        bookPairDao.setSyncMapCached(pairId, false, null)
     }
 
     /** Download the sync map for a book pair. */
@@ -547,8 +574,39 @@ class BookSyncRepository @Inject constructor(
             )
         }
         syncPointDao.insertPoints(entities)
-        bookPairDao.setSyncMapDownloaded(pairId, true)
-        log("downloadSyncMap complete — ${entities.size} sync points saved")
+        // Stamp the version in the same statement that marks the cache present:
+        // a cache that reads as downloaded but doesn't say which map it holds is
+        // exactly the state issue #55 is about.
+        bookPairDao.setSyncMapCached(pairId, true, syncMap.version)
+        log("downloadSyncMap complete — ${entities.size} sync points saved (v${syncMap.version})")
+    }
+
+    /**
+     * Make sure this pair's cached sync points are present, fetching them if a
+     * version bump caused [refreshPairs] to drop them. Best-effort: returns
+     * false and never throws when the map can't be fetched.
+     *
+     * Called from the paths that are about to *read* sync points — the reader,
+     * the player, Android Auto resume — so recovery from a re-transcription
+     * needs no user action. Cheap when the cache is current: one Room read.
+     *
+     * Deliberately a *single* attempt rather than [downloadSyncMapWithRetry]:
+     * these callers are opening a screen or starting playback, and the retry
+     * wrapper's 1s/3s/10s backoff would sit in front of that. Persistence is the
+     * `DownloadWorker`'s job; here a miss just means the next open tries again.
+     */
+    suspend fun ensureSyncMapCached(pairId: Int): Boolean {
+        if (bookPairDao.getPairById(pairId)?.syncMapDownloaded == true) return true
+        log("ensureSyncMapCached — pair $pairId has no cached sync map; fetching")
+        return try {
+            downloadSyncMap(pairId)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logW("ensureSyncMapCached — pair $pairId fetch failed: ${e.message}")
+            false
+        }
     }
 
     /**

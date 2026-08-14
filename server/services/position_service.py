@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from models.book import AudioBook, BookPair, EBook
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource, HintKind, PositionHint
 from models.progress import ProgressType, UserProgress
+from models.sync_map import SyncMap
 from schemas import PositionScope
 from utils import utcnow
 
@@ -327,6 +328,14 @@ async def apply_position(
         bookmark.epub_chapter = update.epub_chapter
     if update.epub_sentence_index is not None:
         bookmark.epub_sentence_index = update.epub_sentence_index
+        # A sentence index only means anything relative to the map that produced
+        # it, so record which one this write established it against (issue #55).
+        # Writes carrying no sentence index — a completion toggle, an audio
+        # heartbeat — establish no coordinate and must not claim a version.
+        if ref.scope == PositionScope.PAIR:
+            bookmark.sync_map_version = (await db.execute(
+                select(SyncMap.version).where(SyncMap.book_pair_id == ref.book_pair_id)
+            )).scalar_one_or_none()
     if update.epub_text_preview is not None:
         bookmark.epub_text_preview = update.epub_text_preview
     if update.epub_progress_percent is not None:

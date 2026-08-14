@@ -279,6 +279,13 @@ class PlayerViewModel @Inject constructor(
                 repository.refreshBookmark(pairId)
             } ?: Log.w("PlayerViewModel", "server position not available in time — using local cache")
 
+            // Same for the sync map: a re-transcription replaces it server-side
+            // and the cached points then resolve text to audio timestamps that
+            // no longer exist (issue #55). Bounded — the seek must not wait.
+            withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                repository.ensureSyncMapCached(pairId)
+            } ?: Log.w("PlayerViewModel", "sync map not available in time — using local cache")
+
             repository.getBookmarkFlow(pairId).collect { bm ->
                 bm?.audioPositionMs?.let { pos ->
                     Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")

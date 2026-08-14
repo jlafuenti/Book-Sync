@@ -4,7 +4,7 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float, JSON
+from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float, JSON, inspect
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -158,6 +158,24 @@ class BookPair(Base):
     audiobook = relationship("AudioBook", back_populates="pairs")
     sync_map = relationship("SyncMap", back_populates="book_pair", uselist=False, cascade="all, delete-orphan")
     bookmarks = relationship("Bookmark", back_populates="book_pair", cascade="all, delete-orphan")
+
+    @property
+    def sync_map_version(self) -> "int | None":
+        """The live `sync_maps.version`, for clients that cache sync points.
+
+        Re-transcription rebuilds the map under a new version (issue #55), and a
+        client holding stale points converts positions with timestamps that no
+        longer exist. Surfacing the version on the pair listing lets them notice
+        without downloading the whole map.
+
+        Returns None when the relationship isn't loaded — an async lazy-load
+        raises, and several endpoints (`POST /pairs`, for one) never eager-load
+        it. Callers must therefore read null as *unknown*, not as "no map", and
+        leave their cache alone.
+        """
+        if "sync_map" in inspect(self).unloaded:
+            return None
+        return self.sync_map.version if self.sync_map else None
 
     def __repr__(self) -> str:
         return f"<BookPair(id={self.id}, status='{self.status}')>"
