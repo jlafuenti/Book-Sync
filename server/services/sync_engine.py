@@ -6,16 +6,37 @@ and audio positions — the bridge that makes cross-mode sync work.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from models.book import BookPair
+from models.bookmark import Bookmark, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
+from schemas import PositionScope
 from services.alignment import AlignedPoint
+from services.position_service import ScopeRef, _sync_derived_progress
+from services.sync_matcher import match_text_to_sync_points
 from config import settings
+from utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+#: Shortest text anchor worth matching when re-mapping a bookmark. Below this the
+#: text matches too much — the same threshold the restore ladder's text rung uses
+#: (`position_resolver.MIN_SEARCHABLE_PREVIEW`).
+MIN_REMAPPABLE_PREVIEW = 10
+
+
+@dataclass(frozen=True)
+class OldPoint:
+    """One point of the map being replaced — just enough to translate a
+    bookmark's coordinate back into the text it named."""
+    epub_chapter: int
+    epub_sentence_index: int
+    epub_text_preview: Optional[str]
 
 
 async def save_sync_map(
@@ -26,7 +47,9 @@ async def save_sync_map(
     """
     Save alignment results as a SyncMap with SyncPoints.
 
-    If a SyncMap already exists for this pair, it is replaced.
+    If a SyncMap already exists for this pair, it is replaced — and the
+    bookmarks that referenced it are re-mapped onto the new coordinates
+    (issue #55). Flushes but does not commit; the caller owns the transaction.
     """
     # Delete existing sync map for this pair
     result = await db.execute(
@@ -34,12 +57,31 @@ async def save_sync_map(
     )
     existing = result.scalar_one_or_none()
     new_version = 1
+    old_points: List[OldPoint] = []
     if existing:
         new_version = (existing.version or 1) + 1
+        # Snapshot the outgoing points *before* the delete: they are the only
+        # way to turn a bookmark's (chapter, sentence) coordinate back into the
+        # text it meant, which is what the re-map translates from. Read as plain
+        # columns, not ORM rows — a book's map runs to thousands of points and
+        # none of them need to be session-tracked just to be read once.
+        old_points = [
+            OldPoint(*row) for row in (await db.execute(
+                select(SyncPoint.epub_chapter, SyncPoint.epub_sentence_index,
+                       SyncPoint.epub_text_preview)
+                .where(SyncPoint.sync_map_id == existing.id)
+            )).all()
+        ]
+        # Core deletes on both tables, then detach: `SyncMap.sync_points` is
+        # `delete-orphan`, so an ORM `db.delete(existing)` would load every child
+        # row and issue a DELETE per point on top of the bulk statement above —
+        # which is what the "expected to delete N row(s); 0 were matched"
+        # SAWarning was reporting.
         await db.execute(
             delete(SyncPoint).where(SyncPoint.sync_map_id == existing.id)
         )
-        await db.delete(existing)
+        await db.execute(delete(SyncMap).where(SyncMap.id == existing.id))
+        db.expunge(existing)
         await db.flush()
 
     # Count unique chapters
@@ -74,7 +116,165 @@ async def save_sync_map(
         f"for pair {book_pair_id}"
     )
 
+    # Only a *replacement* invalidates anything. A first-ever map has no old
+    # coordinates to translate from, and its points are what the next write will
+    # establish coordinates against anyway.
+    if old_points:
+        await remap_bookmarks_for_pair(
+            db, book_pair_id, aligned_points, old_points, new_version
+        )
+
     return sync_map
+
+
+# ---------------------------------------------------------------------------
+# Re-mapping bookmarks across a sync-map regeneration (issue #55)
+# ---------------------------------------------------------------------------
+
+def _old_text_for(old_points: List[OldPoint], chapter, sentence_index) -> Optional[str]:
+    """The text the old map put at (chapter, sentence_index).
+
+    Falls back to the nearest earlier sentence in that chapter that has a
+    preview, mirroring Android's `epubTextForSentence` — a point whose preview
+    is NULL should resolve to the last text we actually know about rather than
+    to nothing.
+    """
+    if chapter is None:
+        return None
+    in_chapter = sorted(
+        (p for p in old_points if p.epub_chapter == chapter),
+        key=lambda p: p.epub_sentence_index,
+    )
+    target = sentence_index or 0
+    earlier = [p for p in in_chapter
+               if p.epub_sentence_index <= target and p.epub_text_preview]
+    if earlier:
+        return earlier[-1].epub_text_preview
+    return None
+
+
+def _anchor_text(bookmark: Bookmark, old_points: List[OldPoint]) -> Optional[str]:
+    """The text this bookmark sits on, best source first.
+
+    The bookmark's own preview is preferred: it is the axis-independent anchor
+    the whole restore ladder is built on, and it survives re-parsing. The old
+    map is the fallback for rows written before previews were stored.
+    """
+    preview = (bookmark.epub_text_preview or "").strip()
+    if len(preview) >= MIN_REMAPPABLE_PREVIEW:
+        return preview
+    fallback = (_old_text_for(
+        old_points, bookmark.epub_chapter, bookmark.epub_sentence_index) or "").strip()
+    return fallback if len(fallback) >= MIN_REMAPPABLE_PREVIEW else None
+
+
+async def remap_bookmarks_for_pair(
+    db: AsyncSession,
+    book_pair_id: int,
+    new_points: List[AlignedPoint],
+    old_points: List[OldPoint],
+    new_version: int,
+) -> int:
+    """Translate every bookmark on this pair onto the freshly saved map.
+
+    Re-transcription re-segments sentences, so `epub_sentence_index` — a
+    sync-map coordinate — can end up naming different text. The position itself
+    hasn't moved; only the coordinate system has. This re-expresses each
+    bookmark in the new system:
+
+    * **audiobook**-sourced rows are re-derived from `audio_position_ms`. The
+      audio file didn't change, so that field is the truth and is never
+      rewritten; the epub side is what was derived from the old map.
+    * **ebook**-sourced rows are re-derived by matching their text anchor with
+      the shared matcher (`services/sync_matcher.py`, unchanged — the Kotlin
+      mirror and the parity vectors are untouched by this). Their
+      `audio_position_ms` *is* derived from the map, so it is refreshed to the
+      matched point's start.
+
+    `anchor_revision` bumps **only** when the chapter moves. A sentence-index
+    shift within the same spine item is the same page, and the device's Readium
+    locator / epub.js CFI still describes it — marking every hint stale would
+    drop each reader to text-search restore for a page that never moved. A
+    chapter change is a genuine relocation, so there the hints must go stale.
+
+    `captured_at` is deliberately untouched: this is a server-side translation,
+    not a device capture, and stamping it would let the remap beat a genuinely
+    newer write in `position_service.is_stale`. No `BookmarkLog` row is written
+    either — that log is the history of moves the *user* made.
+
+    A row with no usable anchor keeps its coordinates and its old
+    `sync_map_version`, so the drift stays visible instead of being papered over.
+
+    Returns the number of bookmarks re-mapped.
+    """
+    bookmarks = (await db.execute(
+        select(Bookmark).where(Bookmark.book_pair_id == book_pair_id)
+    )).scalars().all()
+    if not bookmarks:
+        return 0
+
+    pair = (await db.execute(
+        select(BookPair).where(BookPair.id == book_pair_id)
+    )).scalar_one_or_none()
+    ref = ScopeRef(
+        PositionScope.PAIR, book_pair_id=book_pair_id,
+        ebook_id=pair.ebook_id if pair else None,
+        audiobook_id=pair.audiobook_id if pair else None,
+    )
+
+    # `audio_to_epub` walks the list in audio order and stops early, so give it
+    # one. The alignment output is in reading order, which is usually the same,
+    # but "usually" is not a contract worth relying on here.
+    by_audio = sorted(new_points, key=lambda p: p.audio_start_ms)
+
+    remapped = 0
+    for bookmark in bookmarks:
+        resolved: Optional[Tuple[int, int, Optional[int]]] = None
+
+        if (bookmark.source == BookmarkSource.AUDIOBOOK
+                and bookmark.audio_position_ms is not None):
+            chapter, sentence = audio_to_epub(by_audio, bookmark.audio_position_ms)
+            resolved = (chapter, sentence, None)
+        else:
+            text = _anchor_text(bookmark, old_points)
+            if text:
+                match = match_text_to_sync_points(
+                    new_points, text, bookmark.epub_chapter or 0)
+                if match is not None:
+                    resolved = (match.epub_chapter, match.epub_sentence_index,
+                                match.audio_start_ms)
+
+        if resolved is None:
+            logger.warning(
+                "Sync map for pair %s regenerated to v%s, but bookmark %s "
+                "(user %s) has no usable anchor — its coordinates (ch=%s, s=%s) "
+                "still describe v%s and may be stale.",
+                book_pair_id, new_version, bookmark.id, bookmark.user_id,
+                bookmark.epub_chapter, bookmark.epub_sentence_index,
+                bookmark.sync_map_version,
+            )
+            continue
+
+        chapter, sentence, audio_ms = resolved
+        chapter_moved = bookmark.epub_chapter != chapter
+        bookmark.epub_chapter = chapter
+        bookmark.epub_sentence_index = sentence
+        if audio_ms is not None:
+            bookmark.audio_position_ms = audio_ms
+        bookmark.sync_map_version = new_version
+        bookmark.updated_at = utcnow()
+        if chapter_moved:
+            bookmark.anchor_revision = (bookmark.anchor_revision or 0) + 1
+        remapped += 1
+
+        await db.flush()
+        await _sync_derived_progress(db, bookmark.user_id, ref, bookmark)
+
+    logger.info(
+        "Re-mapped %s/%s bookmark(s) for pair %s onto sync map v%s",
+        remapped, len(bookmarks), book_pair_id, new_version,
+    )
+    return remapped
 
 
 def epub_to_audio(

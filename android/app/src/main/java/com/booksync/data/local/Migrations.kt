@@ -59,3 +59,16 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
         addColumnIfMissing(db, "ALTER TABLE pending_sync ADD COLUMN locatorAudioMs INTEGER")
     }
 }
+
+/** v17 -> v18: record which sync-map version the cached sync points came from (issue #55).
+ *  Re-transcription rebuilds the server's map with new audio timestamps, and nothing here
+ *  ever compared versions — a cached map kept resolving text to seconds that no longer
+ *  existed, so an ebook->audio jump landed in the wrong place forever.
+ *
+ *  Left NULL for existing rows: "version unknown". `refreshPairs` refetches those once — a
+ *  cache we can't identify is exactly the state this fixes, so it is not assumed current. */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE book_pairs ADD COLUMN syncMapVersion INTEGER")
+    }
+}

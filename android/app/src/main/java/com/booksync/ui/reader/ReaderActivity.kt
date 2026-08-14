@@ -332,6 +332,14 @@ class ReaderActivity : AppCompatActivity() {
                 // the local row in both cases.
                 repository.refreshBookmark(pairId)
 
+                // Re-fetch the sync map if a re-transcription invalidated the
+                // cached one (issue #55). The restore path below turns the
+                // stored sentence anchor back into text through these points,
+                // and every ebook->audio jump matches against them. Single
+                // request, best-effort — an offline open just restores without
+                // sentence precision, as it always has.
+                repository.ensureSyncMapCached(pairId)
+
                 // Fetch the canonical record before restoring. Reading only the
                 // local cache meant a position set on another device was never
                 // seen, so the reader confidently reopened at its own old page.

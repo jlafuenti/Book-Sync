@@ -97,7 +97,11 @@ data class BookPairResponse(
     val audiobook: AudioBookResponse,
     val status: String,
     val matched_at: String? = null,
-    val synced_at: String? = null
+    val synced_at: String? = null,
+    // The server's live sync-map version (issue #55). Null means *unknown* —
+    // either the pair has no map, or the endpoint didn't load it — so a null
+    // must never be read as "the map went away" and must not drop the cache.
+    val sync_map_version: Int? = null
 )
 
 /**

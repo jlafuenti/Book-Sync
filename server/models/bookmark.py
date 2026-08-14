@@ -83,6 +83,13 @@ class Bookmark(Base):
     # captured at, which is how staleness is judged without deleting anything.
     anchor_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
 
+    # The `sync_maps.version` these epub coordinates were computed against.
+    # `epub_sentence_index` is a sync-map coordinate, and re-transcription
+    # rebuilds the map from scratch (issue #55) — a row whose version trails the
+    # pair's current map is one the re-map could not translate, and its sentence
+    # index should not be trusted. NULL means "never established against a map".
+    sync_map_version: Mapped[int] = mapped_column(Integer, nullable=True)
+
     # Audio position (in milliseconds)
     audio_position_ms: Mapped[int] = mapped_column(Integer, nullable=True)
 
