@@ -31,7 +31,19 @@ if _SERVER_DIR not in sys.path:
 _PG_MODE = os.environ.get("RUN_PG_TESTS") == "1"
 
 if not _PG_MODE:
-    _TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "booksync_test.db")
+    # One SQLite file per pytest process. This used to be a fixed
+    # ``booksync_test.db`` shared by every run on the machine, which the autouse
+    # ``_fresh_schema`` fixture below turns into a live hazard: it drops and
+    # recreates the entire schema before *each test*, so two concurrent runs —
+    # trivially easy with git worktrees, one suite per branch — tear down each
+    # other's tables mid-test. The symptom is a storm of ``no such table`` /
+    # ``table already exists`` errors in files unrelated to whatever you changed.
+    # A crashed run could also leave the shared file locked on Windows, breaking
+    # every later run until the handle was released. See
+    # ``test_harness_db_isolation.py``.
+    _TEST_DB_PATH = os.path.join(
+        tempfile.gettempdir(), f"booksync_test_{os.getpid()}.db"
+    )
     # SQLAlchemy wants a forward-slashed absolute path in the URL (Windows-safe).
     os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + _TEST_DB_PATH.replace("\\", "/")
 
@@ -65,6 +77,29 @@ from routers.auth import hash_password, create_access_token  # noqa: E402
 import routers.auth as _auth  # noqa: E402
 from passlib.context import CryptContext as _CryptContext  # noqa: E402
 _auth.pwd_context = _CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Delete this run's SQLite file so per-process DBs don't pile up in tempdir.
+
+    Best-effort: the file is already unique to this PID, so a leftover can never
+    break a later run — it just wastes a few hundred KB. Connections are disposed
+    first because Windows refuses to unlink a file that still has an open handle,
+    which is exactly how the old shared DB ended up permanently locked.
+    """
+    if _PG_MODE:
+        return
+    try:
+        engine.sync_engine.dispose()
+    except Exception:
+        pass
+    # -wal / -shm are SQLite's journal sidecars; they linger if the DB was not
+    # closed cleanly.
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(_TEST_DB_PATH + suffix)
+        except OSError:
+            pass
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -89,12 +89,13 @@ cd android
 
 ### Tests (run the affected suite before pushing — see docs/testing.md)
 ```bash
-cd server && python -m pytest -q            # backend (SQLite, no Docker); fast loop: ptw -- tests/test_foo.py
+cd server && ./setup-testenv.sh             # once per clone/worktree — provisions the CI Python (3.12) via uv
+cd server && .venv/Scripts/python.exe -m pytest -q   # backend (SQLite, no Docker); fast loop: ptw -- tests/test_foo.py
 cd web && npx vitest run                    # web (watch mode: npm test; coverage: npm run coverage)
 cd android && ./gradlew :app:testDebugUnitTest   # Android JVM unit tests
 cd jetson && python -m pytest test_server.py -v  # Jetson auth tests — NOT in CI, run manually when touching jetson/server.py
 ```
-CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch coverage; Android = parity tests. Local Python should mirror CI (3.12, pinned dev deps) — a bare global interpreter may miss prod deps like `audible` (those tests skip).
+CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch coverage; Android = parity tests. Local Python must mirror CI (3.12, pinned dev deps) — `setup-testenv.sh` handles this; a bare global interpreter may miss prod deps like `audible` (those tests skip). Never run the server suite with a global `python`.
 
 ## Architecture
 
