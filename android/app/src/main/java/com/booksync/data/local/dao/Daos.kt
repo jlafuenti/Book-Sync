@@ -37,6 +37,13 @@ interface BookPairDao {
     @Query("UPDATE book_pairs SET syncMapDownloaded = :downloaded WHERE id = :pairId")
     suspend fun setSyncMapDownloaded(pairId: Int, downloaded: Boolean)
 
+    /**
+     * Record the cache state and the version it holds in one statement — they
+     * must never disagree, or a stale map reads as current (issue #55).
+     */
+    @Query("UPDATE book_pairs SET syncMapDownloaded = :downloaded, syncMapVersion = :version WHERE id = :pairId")
+    suspend fun setSyncMapCached(pairId: Int, downloaded: Boolean, version: Int?)
+
     @Delete
     suspend fun deletePair(pair: BookPairEntity)
 

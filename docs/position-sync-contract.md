@@ -140,6 +140,50 @@ keys on it). **The format follows actual consumption:**
 > Why: a player teardown save used to stamp `audiobook` seconds after the
 > reader closed, so a reading session still reopened the audiobook.
 
+## Re-transcription
+
+`epub_sentence_index` is a **sync-map coordinate**: it only means anything
+relative to the `sync_points` a particular `sync_maps.version` produced.
+Re-transcribing a pair deletes that map and inserts a fresh one, so the stored
+index can silently start naming different text — and the audio timestamp for a
+given sentence moves too.
+
+`save_sync_map` therefore re-maps every bookmark on the pair onto the new
+coordinates before returning (`services/sync_engine.remap_bookmarks_for_pair`).
+The position has not moved; only the coordinate system has:
+
+| Bookmark `source` | Re-derived from | Left alone |
+|---|---|---|
+| `audiobook` | `audio_position_ms` through the new map | `audio_position_ms` — the audio file didn't change, so it is the truth |
+| `ebook` | `epub_text_preview` (or the outgoing map's text at the old coordinate) through the shared matcher | the text anchor; its *derived* `audio_position_ms` is refreshed to the matched point |
+
+**`anchor_revision` bumps only when the chapter moves.** A sentence-index shift
+inside the same spine item is the same page, and a device's Readium locator /
+epub.js CFI still describes it — marking every hint stale would drop each reader
+to text-search restore for a page that never moved. A chapter change is a real
+relocation, so there the hints must go stale.
+
+`captured_at` is never touched and no `BookmarkLog` row is written: a re-map is a
+server-side translation, not a device capture. Stamping `captured_at` would let it
+beat a genuinely newer write from a phone, and the log is the history of moves the
+*user* made. A bookmark with no usable anchor keeps its coordinates and its old
+`sync_map_version`, so the drift stays visible instead of being papered over.
+
+> **Clients must check the version before using a cached map.** Android caches
+> sync points in Room; before this it never compared versions, so after a
+> re-transcription `epubToAudioText` kept finding the right text and returning an
+> audio second that no longer existed. `BookPairResponse.sync_map_version` carries
+> the live version on the pair listing clients already poll.
+>
+> On a mismatch the cached points are **deleted**, not flagged — a map that is
+> merely flagged can still be read — and the reader/player re-fetch at open
+> (`ensureSyncMapCached`). A cache holding points but *no recorded version* (an
+> app build predating the column) counts as a mismatch: it cannot be identified,
+> so it is refetched once. A **null on the server side** is the opposite case —
+> *unknown*, not "no map", since endpoints that don't eager-load the relationship
+> report null — and must leave the cache alone. `bookmarks.sync_map_version`
+> records which map a row's own coordinates belong to (issue #55).
+
 ## Reset
 
 `DELETE /api/sync/position/{scope}/{ident}` is a true reset: it deletes the
