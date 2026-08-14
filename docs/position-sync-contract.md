@@ -15,9 +15,10 @@ Everything goes through `PUT /api/sync/position/{scope}/{id}`
 verdict, one transaction.** A stale write returns 409 and changes nothing — not
 the record, not the hints, not the projection.
 
-The older `PUT /sync/bookmark/{pair}` and `PUT /sync/progress/{type}/{id}`
-endpoints still exist as thin adapters over the same service, so app builds that
-predate the position endpoint keep working and converge on the same row.
+It is the **only** write path. The older `PUT /sync/bookmark/{pair}` and
+`PUT /sync/progress/{type}/{id}` endpoints survived for a while as thin adapters
+over the same service, so app builds predating the position endpoint kept
+working; they are gone (issue #102).
 
 > Why: these were once two independent writes with two independent staleness
 > checks. Either could be accepted while the other was rejected, leaving two
@@ -59,9 +60,10 @@ audio movement alone — audio drifting on doesn't move the page.
 > that as "no position", opened at the title page, and its autosave wrote
 > chapter 0 over a real position. Staleness is a tag, not a deletion.
 
-`bookmarks.epub_locator`, `bookmarks.locator_audio_ms` and
-`user_progress.epub_cfi` remain as mirrors of the current-anchor hint, purely so
-older app builds still resume.
+`position_hints` is the only place a precise position lives. It used to be
+mirrored into `bookmarks.epub_locator`, `bookmarks.locator_audio_ms` and
+`user_progress.epub_cfi` for app builds predating that table; those columns were
+dropped by migration 0007 (issue #102).
 
 ## The restore ladder
 
@@ -140,11 +142,24 @@ keys on it). **The format follows actual consumption:**
 
 ## Reset
 
-`DELETE /api/sync/progress/pair/{pair_id}` is a true reset: it deletes the
-canonical bookmark rows (pair-scoped plus the pair's standalone-media rows),
-their hints, and the `user_progress` projection, in one transaction. After it,
-`GET /api/sync/position/...` returns 204 — the book is *unread* again, not
-"pinned at zero".
+`DELETE /api/sync/position/{scope}/{ident}` is a true reset: it deletes the
+canonical bookmark row for that scope, its hints, and the `user_progress`
+projection, in one transaction. After it, `GET /api/sync/position/...` returns
+204 — the book is *unread* again, not "pinned at zero".
+
+A **pair** reset also sweeps the standalone ebook/audiobook rows for the same
+underlying media: a client can reach those scopes independently of the pair, and
+a survivor would resurrect the position. A **standalone** reset is deliberately
+not symmetric — it must not wipe the pair's record, and it leaves the shared
+`user_progress` row alone when another scope still writes it.
+
+`DELETE /api/sync/progress/pair/{pair_id}` is an alias for the pair form, kept
+so existing clients did not have to change their reset call.
+
+Standalone media had no reset endpoint at all before this; the web client faked
+one by PUTting zeros through the legacy progress adapter, which left the
+canonical record in place for the next write to resurrect — the same failure
+mode the pair reset fixed (issue #6).
 
 The "hints are never deleted" rule above governs position **writes**; an
 explicit user reset is the one sanctioned deletion path.
@@ -153,9 +168,9 @@ explicit user reset is the one sanctioned deletion path.
 
 Every position GET is side-effect free. `GET /api/sync/position/{scope}/{id}` and
 `GET /api/sync/progress/{type}/{id}` both answer **204** when the user has no
-position for that media; `GET /api/sync/bookmark/{pair}` answers 200 with an
-unsaved start-of-book response, purely for app builds that predate the canonical
-endpoint.
+position for that media. `GET /api/sync/bookmark/{pair}` used to answer 200 with
+a fabricated start-of-book response for old app builds; it is gone (issue #102),
+so 204 is now the only "no position" answer.
 
 > Why: the progress GET used to INSERT on a miss. Two clients opening the same
 > book at the same moment each left a row behind, and every later read *and*

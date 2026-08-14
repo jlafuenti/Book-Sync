@@ -10,6 +10,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+from utils import utcnow
 
 class ProgressType(str, enum.Enum):
     """Type of media being tracked."""
@@ -35,9 +36,10 @@ class UserProgress(Base):
     
     media_type: Mapped[ProgressType] = mapped_column(Enum(ProgressType), nullable=False)
 
-    # Position tracking
-    # E-book progress is typically stored as an EPUB CFI string or chapter/percentage
-    epub_cfi: Mapped[str] = mapped_column(String(500), nullable=True)
+    # Position tracking. Chapter is the EPUB spine index — the portable anchor.
+    # An `epub_cfi` column used to mirror the web reader's hint here for old app
+    # builds; it is dropped (issue #102, migration 0007). Precise per-device
+    # positions live in `position_hints`.
     epub_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
     epub_progress_percent: Mapped[float] = mapped_column(Float, nullable=True)
     
@@ -48,7 +50,7 @@ class UserProgress(Base):
     is_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, onupdate=utcnow, nullable=False
     )
 
     # Conflict-resolution contract (issue #54): the client-reported wall-clock

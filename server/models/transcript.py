@@ -11,6 +11,7 @@ from sqlalchemy import String, DateTime, Integer, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
+from utils import utcnow
 
 
 class AudioTranscript(Base):
@@ -31,7 +32,7 @@ class AudioTranscript(Base):
     sentence_count: Mapped[int] = mapped_column(Integer, nullable=False)
     sentences_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=utcnow, nullable=False
     )
 
     def __repr__(self) -> str:

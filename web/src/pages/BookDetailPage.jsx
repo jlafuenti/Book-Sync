@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, updateProgress, resetPairProgress, getBookmark, updateBookmark, getDeviceId, getDeviceName } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, getPosition, updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -25,6 +25,13 @@ function formatDuration(seconds) {
     if (h > 0) return `${h}h ${m}m ${s}s`
     if (m > 0) return `${m}m ${s}s`
     return `${s}s`
+}
+
+// Which canonical record a write for this book addresses. A paired book has
+// ONE record shared by the reader and the player; an unpaired one gets its own
+// standalone record for its own media scope.
+function positionTarget(book, mediaType, mediaId) {
+    return book?.pair_id ? ['pair', book.pair_id] : [mediaType, mediaId]
 }
 
 function formatDate(iso) {
@@ -286,7 +293,7 @@ function BookDetailPage() {
                         {/* Mark Complete / Reset Progress */}
                         {progress && !progress.is_completed && (
                             <button className="btn btn-secondary" onClick={async () => {
-                                await updateProgress(type, id, {
+                                await updatePosition(...positionTarget(book, type, id), {
                                     is_completed: true,
                                     device_id: getDeviceId(),
                                     device_name: getDeviceName(),
@@ -309,15 +316,11 @@ function BookDetailPage() {
                                     // buttons not actually resetting).
                                     await resetPairProgress(book.pair_id)
                                 } else {
-                                    const resetData = {
-                                        is_completed: false,
-                                        device_id: getDeviceId(),
-                                        device_name: getDeviceName(),
-                                        captured_at: new Date().toISOString(),
-                                    }
-                                    if (!isAudiobook) { resetData.epub_progress_percent = 0; resetData.epub_cfi = ''; resetData.epub_chapter = 0 }
-                                    else { resetData.audio_position_ms = 0 }
-                                    await updateProgress(type, id, resetData)
+                                    // Unpaired: the scope-level DELETE removes the
+                                    // canonical record, its hints and the projection.
+                                    // The zero-write this replaced left the record in
+                                    // place, so the next save resurrected the position.
+                                    await resetPosition(type, id)
                                 }
                                 setProgress(null)
                                 showToast('Progress reset')
@@ -430,7 +433,6 @@ function BookDetailPage() {
                 <EbookReader
                     ebookId={Number(id)}
                     pairId={book.pair_id || null}
-                    initialCfi={progress?.epub_cfi || null}
                     initialChapter={readerInitialChapter}
                     bookTitle={book.title}
                     onClose={() => {
@@ -439,8 +441,8 @@ function BookDetailPage() {
                         getProgress(type, id).then(setProgress).catch(() => {})
                     }}
                     onSwitchToAudio={book.pair_id && book.paired_with ? async () => {
-                        const bm = await getBookmark(book.pair_id).catch(() => null)
-                        let audioPositionMs = bm?.audio_position_ms || 0
+                        const pos = await getPosition('pair', book.pair_id).catch(() => null)
+                        let audioPositionMs = pos?.audio_position_ms || 0
                         if (!audioPositionMs) {
                             const prog = await getProgress('audiobook', book.paired_with.id).catch(() => null)
                             audioPositionMs = prog?.audio_position_ms || 0
@@ -460,10 +462,15 @@ function BookDetailPage() {
                     onSwitchToEbook={book.pair_id && book.paired_with ? async (pairId, ebookId) => {
                         audioPlayer.pause()
                         const posMs = Math.floor(audioPlayer.currentTime * 1000)
-                        await updateBookmark(pairId, { source: 'audiobook', audio_position_ms: posMs }).catch(() => {})
-                        const bm = await getBookmark(pairId).catch(() => null)
+                        const pos = await updatePosition('pair', pairId, {
+                            source: 'audiobook',
+                            audio_position_ms: posMs,
+                            device_id: getDeviceId(),
+                            device_name: getDeviceName(),
+                            captured_at: new Date().toISOString(),
+                        }).catch(() => null)
                         setPlayerOpen(false)
-                        setReaderInitialChapter(bm?.epub_chapter ?? null)
+                        setReaderInitialChapter(pos?.epub_chapter ?? null)
                         setReaderOpen(true)
                     } : null}
                 />

@@ -132,9 +132,11 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 - `GOOGLE_BOOKS_API_KEY` — Optional; enables metadata enrichment
 
 ### Cross-Device Position Sync
-Chapter + sentence index is the portable anchor; `epub_locator` (Android) and
-`epub_cfi` (web) are device-local hints the server invalidates when they no
-longer match the anchor. Read `docs/position-sync-contract.md` before touching
+Chapter + sentence index is the portable anchor; a Readium locator (Android) and
+an epub.js CFI (web) are device-local hints, stored per device in
+`position_hints` and marked stale — never deleted — when they no longer match
+the anchor. Everything writes `PUT /api/sync/position/{scope}/{ident}`; there is
+no other write path. Read `docs/position-sync-contract.md` before touching
 bookmark/progress writes or reader restore logic — the rules are non-obvious
 and the failure mode (reopening at the wrong page) is silent.
 

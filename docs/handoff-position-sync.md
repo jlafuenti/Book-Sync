@@ -62,9 +62,10 @@ stopping it writing that nothing.
 - **`GET`/`PUT /api/sync/position/{scope}/{id}`** — one request, one staleness
   verdict, one transaction. A stale write returns 409 and changes *nothing*.
   `GET` returns 204 for "never opened" and never creates a row.
-- **Legacy `PUT /sync/bookmark/{pair}` and `/sync/progress/{type}/{id}` remain**
-  as thin adapters over the same service, so old app builds converge on the same
-  record rather than maintaining a second one.
+- **Legacy `PUT /sync/bookmark/{pair}` and `/sync/progress/{type}/{id}` are
+  gone** (issue #102). They survived for a while as thin adapters over the same
+  service so old app builds converged on the same record; every client now
+  writes the canonical endpoint directly.
 - **Parser emits true spine indices**; the zip/OPF spine walk is now primary and
   ebooklib the fallback (both spine-based). Migration 0004 re-bases existing sync
   points.
@@ -249,8 +250,8 @@ or whether the gate should only ever apply to the first write after open.
   hits, text preview, percent, and this device's Readium locator as a hint. The
   Room row is updated locally and marked synced.
 - **Server:** one staleness verdict; writes the bookmark, upserts the hint at the
-  resulting `anchor_revision`, projects `user_progress`, mirrors the legacy
-  columns — all in one transaction.
+  resulting `anchor_revision` and projects `user_progress` — all in one
+  transaction.
 
 ### Reading on the phone, offline
 
@@ -259,8 +260,9 @@ or whether the gate should only ever apply to the first write after open.
   locally stored locator is offered as a hint at the local anchor revision, so it
   qualifies and the exact page is restored.
 - **Save:** the canonical write fails and returns null, so the write falls
-  through to the legacy path — Room row updated, then queued in `pending_sync`
+  through to the retry path — Room row updated, then queued in `pending_sync`
   with `createdAt` set to the **true capture moment**, not the enqueue time.
+  `processPendingSync` drains that queue through the canonical endpoint too.
 - **On reconnect:** `processPendingSync` replays queued writes with the original
   `captured_at`, so a stale replay is correctly rejected with 409 rather than
   clobbering a newer position from another device.
@@ -313,11 +315,13 @@ invalidate the reading page.
    (2026-07-31): the DELETE now removes the bookmark rows (all scopes), their
    hints, and the projection; `GET /position` returns 204 afterwards. Client
    reset buttons that used to legacy-write zeros (ContinuePage, BookDetailPage,
-   Android) were rewired to the DELETE for paired media; standalone-media reset
-   still uses the legacy zero-write (no DELETE scope for it yet).
+   Android) were rewired to the DELETE. Standalone media kept the zero-write
+   until issue #102 added `DELETE /api/sync/position/{scope}/{ident}`, which all
+   reset buttons now use.
 7. **Legacy endpoints and mirror columns** (`bookmarks.epub_locator`,
-   `locator_audio_ms`, `user_progress.epub_cfi`) can be dropped once no old build
-   is in the field.
+   `locator_audio_ms`, `user_progress.epub_cfi`) — **done** (issue #102): both
+   legacy PUTs and `GET /sync/bookmark/{pair}` are removed, the columns dropped
+   by migration 0007, and web and Android write only the canonical endpoint.
 
 ---
 

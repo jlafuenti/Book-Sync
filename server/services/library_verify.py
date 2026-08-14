@@ -25,6 +25,7 @@ from models.book import EBook, AudioBook
 from models.library_issue import LibraryCheckResult
 from services.audio_integrity import check_audio_integrity
 from services.ebook_integrity import check_ebook_integrity
+from utils import utcnow
 
 logger = logging.getLogger("library-verify")
 
@@ -63,7 +64,7 @@ async def start_scan() -> bool:
     if _state["running"]:
         return False
     _set(running=True, phase_index=0, phase_label=_PHASES[0], current=0, total=0,
-         started_at=datetime.datetime.utcnow().isoformat(), finished_at=None,
+         started_at=utcnow().isoformat(), finished_at=None,
          cancel_requested=False, last_error=None)
     _task = asyncio.create_task(_run_scan())
     return True
@@ -97,7 +98,7 @@ async def _upsert_result(item_type: str, item_id: int, check_type: str,
         row.file_mtime = mtime
         row.ok = ok
         row.detail = detail
-        row.checked_at = datetime.datetime.utcnow()
+        row.checked_at = utcnow()
         await db.commit()
 
 
@@ -175,4 +176,4 @@ async def _run_scan() -> None:
         logger.exception(f"Library verification scan failed: {e}")
         _set(last_error=str(e))
     finally:
-        _set(running=False, finished_at=datetime.datetime.utcnow().isoformat())
+        _set(running=False, finished_at=utcnow().isoformat())
