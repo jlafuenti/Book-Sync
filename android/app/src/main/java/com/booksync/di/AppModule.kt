@@ -40,6 +40,14 @@ object AppModule {
         coerceInputValues = true
     }
 
+    /**
+     * The build-time default server URL (`tandem.defaultServerUrl`). Empty unless
+     * the build sets it — see the buildConfigField in app/build.gradle.kts.
+     */
+    @Provides
+    @Named(com.booksync.data.remote.DEFAULT_SERVER_URL_QUALIFIER)
+    fun provideDefaultServerUrl(): String = com.booksync.BuildConfig.DEFAULT_SERVER_URL
+
     @Provides
     @Singleton
     fun provideRetryInterceptor(): com.booksync.data.remote.RetryInterceptor {
@@ -72,9 +80,8 @@ object AppModule {
         serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     ): Retrofit {
         val contentType = "application/json".toMediaType()
-        val baseUrl = serverUrlManager.getServerUrlBlocking().trimEnd('/') + "/"
         return Retrofit.Builder()
-            .baseUrl(baseUrl)
+            .baseUrl(com.booksync.data.remote.retrofitBaseUrl(serverUrlManager.getServerUrlBlocking()))
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()

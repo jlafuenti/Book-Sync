@@ -1,4 +1,4 @@
-"""Alembic environment for BookSync.
+"""Alembic environment for Tandem.
 
 The application runs on async drivers (asyncpg / aiosqlite); Alembic needs a
 sync driver, so ``_sync_url()`` rewrites the driver in ``settings.database_url``

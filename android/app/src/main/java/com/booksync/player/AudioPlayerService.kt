@@ -1044,7 +1044,7 @@ class AudioPlayerService : MediaLibraryService() {
                 .setMediaId("[root]")
                 .setMediaMetadata(
                     MediaMetadata.Builder()
-                        .setTitle("BookSync")
+                        .setTitle("Tandem")
                         .setIsBrowsable(true)
                         .setIsPlayable(false)
                         .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)

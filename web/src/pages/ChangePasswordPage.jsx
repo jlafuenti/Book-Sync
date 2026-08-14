@@ -36,7 +36,7 @@ function ChangePasswordPage({ onPasswordChanged }) {
     return (
         <div className="login-page">
             <div className="login-card">
-                <h1>📖 BookSync</h1>
+                <h1>📖 Tandem</h1>
                 <p className="subtitle">Password Reset Required</p>
                 <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
                     You must set a new password before continuing.

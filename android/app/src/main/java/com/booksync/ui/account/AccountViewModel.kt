@@ -9,7 +9,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DEFAULT_SERVER_URL
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PasswordChangeRequest
 import com.booksync.data.remote.ServerUrlManager
@@ -61,7 +60,7 @@ class AccountViewModel @Inject constructor(
 ) : ViewModel() {
 
     val serverUrl = serverUrlManager.serverUrlFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), DEFAULT_SERVER_URL)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
     fun saveServerUrlAndRestart(context: Context, url: String) {
         viewModelScope.launch {

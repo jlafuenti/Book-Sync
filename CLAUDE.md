@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Book Sync** is a multi-platform system for synchronizing reading position between ebooks and audiobooks using AI transcription. Core components:
+**Tandem** (repo/folder name: Book-Sync; the product was renamed from BookSync) is a multi-platform system for synchronizing reading position between ebooks and audiobooks using AI transcription. User-visible strings say Tandem; identifiers (`com.booksync`, the `booksync` Postgres role/db, `booksync_*` volumes) deliberately still say BookSync — see the naming note in `README.md`. Core components:
 
 - `server/` — Python FastAPI backend with PostgreSQL
 - `web/` — React + Vite frontend

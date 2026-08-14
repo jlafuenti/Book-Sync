@@ -1,5 +1,5 @@
 """
-BookSync Transcription Server — faster-whisper on Jetson Orin Nano
+Tandem Transcription Server — faster-whisper on Jetson Orin Nano
 
 A lightweight FastAPI server that accepts audio file uploads and returns
 timestamped, sentence-segmented transcription results using faster-whisper.
@@ -66,7 +66,7 @@ TRANSCRIPTION_API_KEY = os.environ.get("TRANSCRIPTION_API_KEY", "")
 if not TRANSCRIPTION_API_KEY:
     raise RuntimeError(
         "TRANSCRIPTION_API_KEY is unset — refusing to start. Generate a key in "
-        "BookSync → Settings → Transcription → Remote Server API Key "
+        "Tandem → Settings → Transcription → Remote Server API Key "
         "(click \"Generate Key\"), then copy that same value into "
         "TRANSCRIPTION_API_KEY here. (Or generate one yourself with: "
         "python -c \"import secrets; print(secrets.token_urlsafe(32))\")."
@@ -933,13 +933,13 @@ def _format_duration(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="BookSync Transcription Server",
+    title="Tandem Transcription Server",
     description="faster-whisper transcription API for Jetson Orin Nano",
     version="1.0.0",
 )
 
 # No CORS middleware: the browser never talks to this server directly. The
-# BookSync web app's "Test Connection" button proxies through the main
+# Tandem web app's "Test Connection" button proxies through the main
 # server's /api/settings/test-remote, and the transcription pipeline itself
 # is server-to-server httpx (not subject to CORS).
 
