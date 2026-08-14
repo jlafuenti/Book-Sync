@@ -7,7 +7,7 @@
 #   docker compose up -d --build
 #
 # See README.md (this directory) for the full deploy walkthrough (sparse
-# clone, generating the key, pointing the main BookSync server at this host).
+# clone, generating the key, pointing the main Tandem server at this host).
 #
 # docker-compose.yml is gitignored (it carries a real secret below), so
 # pulling updates to this template never conflicts with your local copy.
@@ -40,11 +40,11 @@ services:
       - VAD_FILTER=true
       # Release the model (~4GB of unified memory for `medium`) after this many
       # idle minutes; it reloads on the next job. Set 0 to keep it resident.
-      # Pair this with BookSync → Settings → Transcription → "Only transcribe
+      # Pair this with Tandem → Settings → Transcription → "Only transcribe
       # during off-hours" if this GPU is shared with something latency-sensitive.
       - MODEL_IDLE_UNLOAD_MIN=30
       # Shared secret required on every request to this server. Generate it in
-      # BookSync → Settings → Transcription → Remote Server API Key ("Generate
+      # Tandem → Settings → Transcription → Remote Server API Key ("Generate
       # Key" button — persists it there and shows the value once), then paste
       # the same value here. Without it, this container refuses to start.
       # CLI fallback: python -c "import secrets; print(secrets.token_urlsafe(32))"

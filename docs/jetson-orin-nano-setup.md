@@ -119,7 +119,7 @@ curl -F "audio_file=@test.mp3" http://<JETSON-IP-ADDRESS>:9000/v1/transcribe
 
 If this Orin also runs something latency-sensitive (a voice assistant's STT, say),
 transcription can be confined to a nightly window — see the "Sharing the GPU" section
-of `jetson/README.md` and BookSync → Settings → Transcription → **Only transcribe during
+of `jetson/README.md` and Tandem → Settings → Transcription → **Only transcribe during
 off-hours**. Two mechanics matter operationally:
 
 - The worker holds **no** GPU memory while idle (`MODEL_IDLE_UNLOAD_MIN`), so

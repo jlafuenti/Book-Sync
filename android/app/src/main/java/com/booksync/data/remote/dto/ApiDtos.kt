@@ -3,7 +3,7 @@ package com.booksync.data.remote
 import kotlinx.serialization.Serializable
 
 /**
- * Data Transfer Objects for the BookSync API.
+ * Data Transfer Objects for the Tandem API.
  * These map to the server's Pydantic schemas.
  */
 

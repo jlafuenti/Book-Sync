@@ -1,5 +1,5 @@
 """
-BookSync Database Setup
+Tandem Database Setup
 
 Async SQLAlchemy engine and session management for PostgreSQL.
 """

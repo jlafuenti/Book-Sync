@@ -9,18 +9,21 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
+import javax.inject.Named
 import javax.inject.Singleton
 
 private val KEY_SERVER_URL = stringPreferencesKey("server_url")
 
-const val DEFAULT_SERVER_URL = "https://tandem.lafuenti.com"
-
-/** Old production hostname; its DNS record no longer exists. Stored values are migrated. */
-const val LEGACY_SERVER_URL = "https://booksync.lafuenti.com"
-
 @Singleton
 class ServerUrlManager @Inject constructor(
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    /**
+     * The URL a fresh install starts on, from the `tandem.defaultServerUrl` build
+     * property. Empty in a clean clone — the login screen then asks for one.
+     * Injected rather than read from [com.booksync.BuildConfig] here so the
+     * unconfigured case is testable.
+     */
+    @param:Named(DEFAULT_SERVER_URL_QUALIFIER) private val defaultUrl: String,
 ) {
     /**
      * Cached server URL. Initialized once at construction from DataStore and only mutated by
@@ -32,17 +35,17 @@ class ServerUrlManager @Inject constructor(
      * URLs at use-time (cover images, audio streams) immediately see the new value.
      */
     @Volatile
-    var currentUrl: String = DEFAULT_SERVER_URL
+    var currentUrl: String = defaultUrl
         private set
 
     init {
         currentUrl = runBlocking {
             val stored = dataStore.data.first()[KEY_SERVER_URL]
             if (stored == LEGACY_SERVER_URL) {
-                dataStore.edit { it[KEY_SERVER_URL] = DEFAULT_SERVER_URL }
-                DEFAULT_SERVER_URL
+                dataStore.edit { it[KEY_SERVER_URL] = defaultUrl }
+                defaultUrl
             } else {
-                stored ?: DEFAULT_SERVER_URL
+                stored ?: defaultUrl
             }
         }
     }
@@ -51,7 +54,7 @@ class ServerUrlManager @Inject constructor(
     fun getServerUrlBlocking(): String = currentUrl
 
     val serverUrlFlow: Flow<String> =
-        dataStore.data.map { it[KEY_SERVER_URL] ?: DEFAULT_SERVER_URL }
+        dataStore.data.map { it[KEY_SERVER_URL] ?: defaultUrl }
 
     suspend fun setServerUrl(url: String) {
         val normalized = url.trimEnd('/')

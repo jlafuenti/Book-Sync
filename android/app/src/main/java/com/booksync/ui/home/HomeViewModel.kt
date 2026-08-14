@@ -90,7 +90,7 @@ class HomeViewModel @Inject constructor(
 
     /** Server URL for the "Open web app" empty-state button. */
     val webAppUrl: StateFlow<String> = serverUrlManager.serverUrlFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), com.booksync.data.remote.DEFAULT_SERVER_URL)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
     /** Synchronous server URL for building cover image URLs in composables. */
     val serverUrl: String = serverUrlManager.currentUrl

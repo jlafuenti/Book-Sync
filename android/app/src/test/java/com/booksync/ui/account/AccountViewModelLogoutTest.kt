@@ -4,7 +4,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DEFAULT_SERVER_URL
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
@@ -39,6 +38,8 @@ import java.io.IOException
  * so an offline or already-expired session can still log out of the app.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+private const val TEST_SERVER_URL = "https://tandem.example.com"
+
 class AccountViewModelLogoutTest {
 
     private lateinit var api: BookSyncApi
@@ -75,7 +76,8 @@ class AccountViewModelLogoutTest {
         every { dataStore.data } returns flowOf(emptyPreferences())
 
         val serverUrlManager = mockk<ServerUrlManager>()
-        every { serverUrlManager.serverUrlFlow } returns flowOf(DEFAULT_SERVER_URL)
+        every { serverUrlManager.serverUrlFlow } returns flowOf(TEST_SERVER_URL)
+        every { serverUrlManager.currentUrl } returns TEST_SERVER_URL
 
         val deviceIdManager = mockk<DeviceIdManager>()
         every { deviceIdManager.deviceNameFlow } returns flowOf("Test Device")
