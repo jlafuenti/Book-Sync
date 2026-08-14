@@ -15,7 +15,7 @@ VALID_ROLES = set(ROLE_HIERARCHY.keys())
 
 
 class User(Base):
-    """A registered user of the BookSync system."""
+    """A registered user of the Tandem system."""
 
     __tablename__ = "users"
 

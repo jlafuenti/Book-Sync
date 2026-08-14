@@ -109,7 +109,7 @@ class DiagnosticsViewModel @Inject constructor(
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "BookSync ${channel.label} Diagnostics")
+            putExtra(Intent.EXTRA_SUBJECT, "${channel.label} Diagnostics")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         onIntent(Intent.createChooser(intent, "Share diagnostic log"))
@@ -147,7 +147,7 @@ class DiagnosticsViewModel @Inject constructor(
 
         val notification = NotificationCompat.Builder(context, BookSyncApp.DIAG_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("BookSync ${channel.label} Diagnostics Active")
+            .setContentTitle("${channel.label} Diagnostics Active")
             .setContentText("Collecting logs — tap to stop")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

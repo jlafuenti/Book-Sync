@@ -1,5 +1,5 @@
 """
-BookSync Server Configuration
+Tandem Server Configuration
 
 Loads settings from environment variables with sensible defaults.
 """

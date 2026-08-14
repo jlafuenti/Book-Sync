@@ -1,7 +1,7 @@
 # Deploying the Jetson transcription worker
 
 `jetson/` runs a standalone faster-whisper transcription server on a Jetson Orin Nano (or similar).
-It's a separate host from the main BookSync stack, so it gets its own clone — nothing else in this
+It's a separate host from the main Tandem stack, so it gets its own clone — nothing else in this
 repo needs to be present on the Jetson. The compose file lives in this directory, so deploy
 commands run from inside `jetson/` with no `-f` flag needed.
 
@@ -11,7 +11,7 @@ commands run from inside `jetson/` with no `-f` flag needed.
   runtime the compose file requests — it ships with JetPack, no extra setup needed on a stock
   Jetson image).
 - Docker + Docker Compose.
-- Network reachability between the Jetson and the machine running the main BookSync server (same
+- Network reachability between the Jetson and the machine running the main Tandem server (same
   LAN/VPN is typical — port 9000 does **not** need to be reachable from the public internet).
 
 ## 1. Sparse clone
@@ -19,8 +19,8 @@ commands run from inside `jetson/` with no `-f` flag needed.
 The Jetson only needs this directory — not `server/`, `web/`, or `android/`:
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/jlafuenti/Book-Sync.git booksync-jetson
-cd booksync-jetson
+git clone --filter=blob:none --sparse https://github.com/jlafuenti/Book-Sync.git tandem-jetson
+cd tandem-jetson
 git sparse-checkout set jetson
 cd jetson
 ```
@@ -40,7 +40,7 @@ The transcription server refuses to start without `TRANSCRIPTION_API_KEY` set �
 it (including the health check) must present this key as a bearer token, since anyone who can
 reach port 9000 would otherwise be able to submit jobs or read other users' cached transcripts.
 
-**Preferred: generate it from the BookSync UI.** On the main server, go to
+**Preferred: generate it from the Tandem UI.** On the main server, go to
 **Settings → Transcription → Remote Server API Key** and click **"Generate Key"**. This creates a
 random key, saves it there immediately, and shows you the value once — copy it.
 
@@ -59,7 +59,7 @@ environment:
   - TRANSCRIPTION_API_KEY=<paste-here>
 ```
 
-and BookSync → Settings → Transcription → Remote Server API Key (if you used the CLI fallback,
+and Tandem → Settings → Transcription → Remote Server API Key (if you used the CLI fallback,
 paste it into that field and click Save).
 
 ## 4. Deploy
@@ -75,7 +75,7 @@ restarts), so it can take a few minutes.
 
 ## 5. Point the main server at it
 
-BookSync → Settings → Transcription:
+Tandem → Settings → Transcription:
 - **Remote URL**: `http://<orin-lan-ip>:9000`
 - **Remote Server API Key**: the same value from step 3 (already filled in if you generated it
   from the UI).
@@ -92,17 +92,17 @@ pipeline) on the Orin's 8GB of unified memory:
   pre-#106 behaviour). An idle worker therefore reports `model_state: "unloaded"` on
   `/v1/health` and holds no GPU memory. That is healthy, not broken — the main server's
   availability check looks at `status`, not `model_loaded`.
-- **A running job can be paused at a chunk boundary.** BookSync posts `/v1/pause` when its
+- **A running job can be paused at a chunk boundary.** Tandem posts `/v1/pause` when its
   off-hours window closes; the worker finishes the chunk it's on (≤ ~15 minutes of audio),
   writes a checkpoint, parks the source audio next to it, unloads the model, and answers
   the transcription request with `{"status": "paused", ...}` instead of a transcript.
 - **Resuming costs no upload.** `POST /v1/transcribe/resume` continues from the retained
-  audio; BookSync falls back to a normal upload if the file has been swept. Either way the
+  audio; Tandem falls back to a normal upload if the file has been swept. Either way the
   checkpoint means no audio is transcribed twice.
 - Nothing partial is ever served from `/v1/result/{filename}` — a truncated transcript is
   indistinguishable from a complete one to the client, so paused jobs stay out of that cache.
 
-Turn the schedule itself on in BookSync → Settings → Transcription → **Only transcribe
+Turn the schedule itself on in Tandem → Settings → Transcription → **Only transcribe
 during off-hours**.
 
 To watch the memory actually come back:
@@ -117,7 +117,7 @@ watch -n 5 'free -h; curl -s -H "Authorization: Bearer $TRANSCRIPTION_API_KEY" l
   `jetson/docker-compose.yml` — the server refuses to start rather than run unauthenticated. Check
   `docker compose logs transcriber` (from inside `jetson/`) for the exact message.
 - **Test Connection / transcriptions fail with 401**: the key in `jetson/docker-compose.yml`
-  doesn't match what's saved in BookSync → Settings → Transcription. Regenerate from the UI and
+  doesn't match what's saved in Tandem → Settings → Transcription. Regenerate from the UI and
   copy it into the compose file again (then `docker compose up -d` to pick up the new env var).
 - **`up` fails with "container name ... already in use"**: an older deployment (e.g. from before
   this file lived in `jetson/`, or from a differently-named checkout directory) is still running

@@ -1,5 +1,5 @@
 """
-Shared pytest harness for the BookSync backend.
+Shared pytest harness for the Tandem backend.
 
 Strategy (see issue #46): DB-backed tests run against a throwaway **SQLite**
 database. The ORM models use SQLAlchemy's portable ``JSON`` type (with a Postgres

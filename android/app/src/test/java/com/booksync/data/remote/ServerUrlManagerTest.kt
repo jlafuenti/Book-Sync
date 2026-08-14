@@ -18,10 +18,14 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /**
- * The production server moved from booksync.lafuenti.com (DNS record deleted)
- * to tandem.lafuenti.com. These tests pin the new default and the one-time
- * migration of a persisted legacy URL, so a fresh install or app-data clear
- * never lands on the dead hostname again.
+ * The shipped default server URL is a build property (`tandem.defaultServerUrl`,
+ * surfaced as `BuildConfig.DEFAULT_SERVER_URL`) that is injected here rather than
+ * read from a compiled-in constant — which is what lets these tests cover the
+ * empty-default case a clean clone actually builds with.
+ *
+ * The production server also moved from booksync.lafuenti.com (DNS record deleted)
+ * to tandem.lafuenti.com, so a persisted legacy URL is migrated on construction;
+ * a fresh install or app-data clear must never land on the dead hostname.
  */
 class ServerUrlManagerTest {
 
@@ -42,21 +46,29 @@ class ServerUrlManagerTest {
     }
 
     @Test
-    fun `default url is tandem when nothing stored`() {
-        val manager = ServerUrlManager(newDataStore())
-        assertEquals("https://tandem.lafuenti.com", manager.currentUrl)
+    fun `build default is used when nothing stored`() {
+        val manager = ServerUrlManager(newDataStore(), "https://tandem.example.com")
+        assertEquals("https://tandem.example.com", manager.currentUrl)
     }
 
     @Test
-    fun `stored legacy booksync url is migrated to tandem`() = runBlocking {
+    fun `an empty build default leaves the server unconfigured`() {
+        // A clean clone builds with no `tandem.defaultServerUrl`; nothing may be
+        // invented on the user's behalf here.
+        val manager = ServerUrlManager(newDataStore(), "")
+        assertEquals("", manager.currentUrl)
+    }
+
+    @Test
+    fun `stored legacy booksync url is migrated to the build default`() = runBlocking {
         val dataStore = newDataStore()
-        dataStore.edit { it[key] = "https://booksync.lafuenti.com" }
+        dataStore.edit { it[key] = LEGACY_SERVER_URL }
 
-        val manager = ServerUrlManager(dataStore)
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
 
-        assertEquals("https://tandem.lafuenti.com", manager.currentUrl)
+        assertEquals("https://tandem.example.com", manager.currentUrl)
         // The migration must also rewrite the persisted value, not just the cache.
-        assertEquals("https://tandem.lafuenti.com", dataStore.data.first()[key])
+        assertEquals("https://tandem.example.com", dataStore.data.first()[key])
     }
 
     @Test
@@ -64,9 +76,22 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "https://my.own.server:8443" }
 
-        val manager = ServerUrlManager(dataStore)
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
 
         assertEquals("https://my.own.server:8443", manager.currentUrl)
         assertEquals("https://my.own.server:8443", dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `the url flow falls back to the build default until one is stored`() = runBlocking {
+        val dataStore = newDataStore()
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+
+        assertEquals("https://tandem.example.com", manager.serverUrlFlow.first())
+
+        manager.setServerUrl("https://my.own.server:8443/")
+
+        assertEquals("https://my.own.server:8443", manager.serverUrlFlow.first())
+        assertEquals("https://my.own.server:8443", manager.currentUrl)
     }
 }
