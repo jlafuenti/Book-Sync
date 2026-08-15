@@ -123,13 +123,13 @@ async def get_filename_patterns(db: AsyncSession, pattern_type: str = "ebook") -
 
 
 def compute_file_hash(filepath: str) -> str:
-    """Compute SHA-256 hash of a file (first 10MB for speed on large files)."""
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        # Read first 10MB for large audiobook files
-        data = f.read(10 * 1024 * 1024)
-        sha256.update(data)
-    return sha256.hexdigest()
+    """Composite content hash (size + head + tail) — see services/file_hash.py.
+
+    Used by scan/upload ingest and Calibre registration; troubleshoot's
+    replace_file uses the byte-level twin. Keep them in lockstep (issue #45).
+    """
+    from services.file_hash import hash_file
+    return hash_file(filepath)
 
 def extract_title_from_filename(filename: str) -> str:
     """
@@ -1072,6 +1072,67 @@ async def rescan_all_files(
     
     return {
         "message": f"Force-rescanned {updated_ebooks} ebooks and {updated_audiobooks} audiobooks."
+    }
+
+
+@router.post("/rehash")
+async def rehash_library(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """One-time migration to the composite hash scheme (issue #45).
+
+    Recomputes file_hash for every row whose file exists on disk, then remaps
+    auto_pair_excluded_hashes through the old→new mapping — unpair memory
+    stores raw hash values, so without the remap every existing exclusion
+    would silently stop matching. Rows whose file is missing keep their stale
+    hash (harmless: it can no longer collide with a composite hash).
+    """
+    from services.file_hash import hash_file
+
+    hash_map: dict[str, str] = {}
+    rehashed = 0
+    skipped_missing = 0
+
+    for model in (EBook, AudioBook):
+        result = await db.execute(select(model))
+        for book in result.scalars().all():
+            if not book.file_path or not os.path.exists(book.file_path):
+                skipped_missing += 1
+                continue
+            try:
+                new_hash = await asyncio.to_thread(hash_file, book.file_path)
+            except OSError as e:
+                logger.error(f"[rehash] Could not read {book.file_path}: {e}")
+                skipped_missing += 1
+                continue
+            if book.file_hash and book.file_hash != new_hash:
+                hash_map[book.file_hash] = new_hash
+            if book.file_hash != new_hash:
+                book.file_hash = new_hash
+                rehashed += 1
+
+    exclusions_remapped = 0
+    if hash_map:
+        for model in (EBook, AudioBook):
+            result = await db.execute(select(model))
+            for book in result.scalars().all():
+                excluded = book.auto_pair_excluded_hashes or []
+                if any(h in hash_map for h in excluded):
+                    book.auto_pair_excluded_hashes = [
+                        hash_map.get(h, h) for h in excluded
+                    ]
+                    exclusions_remapped += 1
+
+    await db.commit()
+    logger.info(
+        f"[rehash] Rehashed {rehashed} rows, skipped {skipped_missing} missing, "
+        f"remapped exclusions on {exclusions_remapped} rows."
+    )
+    return {
+        "rehashed": rehashed,
+        "skipped_missing": skipped_missing,
+        "exclusions_remapped": exclusions_remapped,
     }
 
 

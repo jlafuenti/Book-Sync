@@ -100,6 +100,47 @@
     white-space: nowrap;
 }
 
+/* Reader theme picker (issue #57) */
+.reader-theme-picker {
+    position: relative;
+}
+
+.reader-theme-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    min-width: 130px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+}
+
+.reader-theme-menu button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 13px;
+    text-align: left;
+    transition: var(--transition);
+}
+
+.reader-theme-menu button:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+}
+
+.reader-theme-menu button.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 /* Font size controls */
 .font-size-controls {
     display: flex;

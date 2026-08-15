@@ -2,7 +2,44 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
 import { fetchEbookBlob, getPosition, updatePosition, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
 import { planRestore } from '../lib/positionLadder'
+import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
+import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
+
+// Reader display prefs persist across sessions (issue #57) — device-local,
+// like Android's reader_display SharedPreferences.
+const FONT_SIZE_KEY = 'tandem_reader_font_size'
+const READER_THEME_KEY = 'tandem_reader_theme'
+const MIN_FONT = 60
+const MAX_FONT = 200
+
+function loadStoredFontSize() {
+    const stored = parseInt(localStorage.getItem(FONT_SIZE_KEY), 10)
+    if (Number.isFinite(stored)) return Math.min(MAX_FONT, Math.max(MIN_FONT, stored))
+    return 100
+}
+
+function loadStoredReaderTheme() {
+    const stored = localStorage.getItem(READER_THEME_KEY)
+    return READER_MODES.includes(stored) ? stored : 'match'
+}
+
+// The palette must be injected as a <style> into each chapter document — CSS
+// variables set on the parent document never cascade into the epub iframe.
+function paletteCss(palette) {
+    return [
+        `html, body { background: ${palette.background} !important; color: ${palette.text} !important; }`,
+        `h1, h2, h3, h4, h5, h6, p, span, div, li, td, th { color: ${palette.text} !important; }`,
+        `a { color: ${palette.link} !important; }`,
+    ].join('\n')
+}
+
+const READER_MODE_LABELS = [
+    ['match', 'Match app'],
+    ['light', 'Light'],
+    ['sepia', 'Sepia'],
+    ['dark', 'Dark'],
+]
 
 /**
  * Walk the restore ladder, taking the first step that actually lands.
@@ -60,8 +97,19 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     const [currentCfi, setCurrentCfi] = useState(null)
     const [progressPercent, setProgressPercent] = useState(0)
     const [currentChapter, setCurrentChapter] = useState('')
-    const [fontSize, setFontSize] = useState(100)
-    const fontSizeRef = useRef(100)
+    const [fontSize, setFontSize] = useState(loadStoredFontSize)
+    const fontSizeRef = useRef(fontSize)
+    const [readerTheme, setReaderTheme] = useState(loadStoredReaderTheme)
+    const [showThemeMenu, setShowThemeMenu] = useState(false)
+    // The reader may be mounted without a ThemeProvider (tests, embeds) —
+    // fall back to the default app theme then.
+    const themeCtx = useTheme()
+    const appTheme = themeCtx?.theme || DEFAULT_THEME
+    const palette = getReaderPalette(readerTheme, appTheme)
+    // Ref mirror for the content hook, which is registered once inside the
+    // [ebookId]-only load effect and must always read the current palette.
+    const paletteRef = useRef(palette)
+    paletteRef.current = palette
     const [savedIndicator, setSavedIndicator] = useState(false)
     // Stale-conflict affordance (issue #54): set when the progress write in
     // doSave() comes back `rejected: true` with a newer position from a
@@ -247,30 +295,34 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 })
                 renditionRef.current = rendition
 
-                // Apply dark theme
+                // Structural styles only — colors come from the injected
+                // #tandem-reader-theme <style> below, so the palette can
+                // change live with the reader-theme picker (issue #57).
                 rendition.themes.default({
                     'body': {
-                        'background': '#0f0f1a !important',
-                        'color': '#e8e8f0 !important',
                         'font-family': 'Georgia, "Times New Roman", serif !important',
                         'padding': '0 48px !important',
                         'max-width': '100% !important',
                         'box-sizing': 'border-box !important',
                     },
-                    'a': { 'color': '#a78bfa !important' },
-                    'h1, h2, h3, h4, h5, h6': { 'color': '#e8e8f0 !important' },
-                    'p, span, div, li, td, th': { 'color': '#e8e8f0 !important' },
                     'img': { 'max-width': '100% !important' },
                     '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
                 })
 
-                // Inject font size via <style> tag (avoids blob URL MIME rejection)
+                // Inject font size + palette via <style> tags (avoids blob URL
+                // MIME rejection; CSS vars don't cross into the iframe). Reads
+                // the refs so a pref change after registration still applies.
                 rendition.hooks.content.register(contents => {
                     if (contents.document) {
                         const style = contents.document.createElement('style')
                         style.id = 'tandem-font-size'
                         style.textContent = `html { font-size: ${fontSizeRef.current}% !important; }`
                         contents.document.head.appendChild(style)
+
+                        const themeStyle = contents.document.createElement('style')
+                        themeStyle.id = 'tandem-reader-theme'
+                        themeStyle.textContent = paletteCss(paletteRef.current)
+                        contents.document.head.appendChild(themeStyle)
                     }
                 })
 
@@ -530,6 +582,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // Font size changes — inject via <style> tag to avoid blob URL MIME rejection
     useEffect(() => {
         fontSizeRef.current = fontSize
+        localStorage.setItem(FONT_SIZE_KEY, String(fontSize))
         if (renditionRef.current) {
             renditionRef.current.getContents().forEach(c => {
                 if (c.document) {
@@ -544,6 +597,30 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             })
         }
     }, [fontSize])
+
+    // Palette changes (reader mode or app theme) — restyle already-rendered
+    // chapter documents; newly rendered ones get it from the content hook.
+    useEffect(() => {
+        if (renditionRef.current) {
+            renditionRef.current.getContents().forEach(c => {
+                if (c.document) {
+                    let style = c.document.getElementById('tandem-reader-theme')
+                    if (!style) {
+                        style = c.document.createElement('style')
+                        style.id = 'tandem-reader-theme'
+                        c.document.head.appendChild(style)
+                    }
+                    style.textContent = paletteCss(palette)
+                }
+            })
+        }
+    }, [palette.background, palette.text, palette.link]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const chooseReaderTheme = useCallback((mode) => {
+        setReaderTheme(mode)
+        localStorage.setItem(READER_THEME_KEY, mode)
+        setShowThemeMenu(false)
+    }, [])
 
     const handleTocClick = (href) => {
         renditionRef.current?.display(href)
@@ -587,9 +664,34 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                             <span style={{ fontSize: 12, marginLeft: 4 }}>Listen</span>
                         </button>
                     )}
+                    <div className="reader-theme-picker">
+                        <button
+                            className="btn-icon"
+                            onClick={() => setShowThemeMenu(s => !s)}
+                            title="Reader theme"
+                        >
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="9" />
+                                <path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor" stroke="none" />
+                            </svg>
+                        </button>
+                        {showThemeMenu && (
+                            <div className="reader-theme-menu">
+                                {READER_MODE_LABELS.map(([mode, label]) => (
+                                    <button
+                                        key={mode}
+                                        className={readerTheme === mode ? 'active' : ''}
+                                        onClick={() => chooseReaderTheme(mode)}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                     <div className="font-size-controls">
-                        <button onClick={() => setFontSize(s => Math.max(60, s - 10))} title="Decrease font">A-</button>
-                        <button onClick={() => setFontSize(s => Math.min(200, s + 10))} title="Increase font">A+</button>
+                        <button onClick={() => setFontSize(s => Math.max(MIN_FONT, s - 10))} title="Decrease font">A-</button>
+                        <button onClick={() => setFontSize(s => Math.min(MAX_FONT, s + 10))} title="Increase font">A+</button>
                     </div>
                     <span className="ebook-progress-text">{progressPercent.toFixed(1)}%</span>
                     <button
