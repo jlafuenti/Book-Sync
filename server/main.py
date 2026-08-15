@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
@@ -187,5 +188,31 @@ async def root():
 
 @app.get("/api/health")
 async def health():
-    """Health check endpoint for Docker/monitoring."""
+    """Readiness probe for Docker/monitoring: verifies the database answers.
+
+    Returns 503 when the DB is unreachable so orchestrators and uptime
+    monitors see a DB outage instead of a false "up" (issue #47). Liveness
+    (process alive, dependencies not checked) is /api/livez.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+
+    import database
+
+    try:
+        async with asyncio.timeout(5):
+            async with database.async_session() as session:
+                await session.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("Health check failed: database unreachable")
+        return JSONResponse(
+            status_code=503, content={"status": "unhealthy", "db": "down"}
+        )
     return {"status": "healthy"}
+
+
+@app.get("/api/livez")
+async def livez():
+    """Liveness probe: static 200 while the process is up."""
+    return {"status": "alive"}

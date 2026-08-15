@@ -8,7 +8,6 @@ and re-queue. Backed by the `library_verify` background scan for the expensive
 integrity checks.
 """
 
-import hashlib
 import logging
 import os
 from collections import defaultdict
@@ -28,6 +27,7 @@ from models.library_issue import LibraryCheckResult
 from models.progress import UserProgress
 from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
+from services.file_hash import hash_bytes
 from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
@@ -375,7 +375,7 @@ async def replace_file(
     item.file_path = dest_path
     item.filename = base + new_ext
     item.file_size = len(content)
-    item.file_hash = hashlib.sha256(content[: 10 * 1024 * 1024]).hexdigest()
+    item.file_hash = hash_bytes(content)
     item.format = new_ext.lstrip(".")
     for field in ("title", "author", "series", "series_index"):
         val = new_meta.get(field)
