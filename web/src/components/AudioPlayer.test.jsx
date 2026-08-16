@@ -3,18 +3,20 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AudioPlayerView, MiniPlayer } from './AudioPlayer'
 
 const {
-    getAudiobookChaptersMock, getBookmarkLogMock, getAccessTokenMock, useAudioPlayerMock,
+    getAudiobookChaptersMock, getBookmarkLogMock, getAccessTokenMock, useAudioPlayerMock, coverSrcMock,
 } = vi.hoisted(() => ({
     getAudiobookChaptersMock: vi.fn(),
     getBookmarkLogMock: vi.fn(),
     getAccessTokenMock: vi.fn(() => 'token'),
     useAudioPlayerMock: vi.fn(),
+    coverSrcMock: vi.fn(async (path) => (path ? `${path}?token=cover-media-token` : path)),
 }))
 
 vi.mock('../api', () => ({
     getAudiobookChapters: getAudiobookChaptersMock,
     getBookmarkLog: getBookmarkLogMock,
     getAccessToken: getAccessTokenMock,
+    coverSrc: coverSrcMock,
 }))
 
 vi.mock('../contexts/AudioPlayerContext', () => ({
@@ -138,5 +140,44 @@ describe('AudioPlayerView Session History device attribution (issue #54)', () =>
         expect(screen.queryByText(/from undefined/)).not.toBeInTheDocument()
         expect(screen.queryByText(/from null/)).not.toBeInTheDocument()
         expect(screen.queryByText(/from$/)).not.toBeInTheDocument()
+    })
+})
+
+// Issue #121: the player bar built its cover URL with the long-lived access
+// token, which /api/files/covers has rejected (401) since covers moved to
+// scoped media tokens (issue #50). Both player views must resolve the cover
+// through coverSrc() like every other <img> in the app.
+describe('cover art uses a scoped media token', () => {
+    const coverPath = '/api/files/covers/audiobook_238.jpg'
+
+    it('the mini player', async () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({
+            currentAudiobook: { id: 238, title: 'A Book', author: 'Author', coverPath, pairId: null },
+            stop: vi.fn(),
+        }))
+        render(<MiniPlayer onExpand={vi.fn()} />)
+
+        await waitFor(() => {
+            const img = document.querySelector('.mini-player-cover img')
+            expect(img).not.toBeNull()
+            expect(img.getAttribute('src')).toBe(`${coverPath}?token=cover-media-token`)
+        })
+        expect(coverSrcMock).toHaveBeenCalledWith(coverPath)
+        expect(getAccessTokenMock).not.toHaveBeenCalled()
+    })
+
+    it('the full player', async () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({
+            currentAudiobook: { id: 238, title: 'A Book', author: 'Author', coverPath, pairId: null },
+        }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        await waitFor(() => {
+            const img = document.querySelector('.audio-player-cover img')
+            expect(img).not.toBeNull()
+            expect(img.getAttribute('src')).toBe(`${coverPath}?token=cover-media-token`)
+        })
+        expect(getAccessTokenMock).not.toHaveBeenCalled()
     })
 })
