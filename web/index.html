@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Tandem</title>
     <link rel="icon" type="image/svg+xml" href="/favicon-blueprint.svg" id="favicon">
+    <!-- PWA (issue #62): installable, standalone, with a home-screen icon.
+         theme-color is overwritten below to match the stored theme. -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#0f0f1a">
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Tandem">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
 </head>
 <body>
@@ -18,7 +26,12 @@
                 'aurora': '#07060f',
                 'slate': '#0c0e12'
             };
-            document.documentElement.style.setProperty('--bg-primary', bgs[t] || '#0f0f1a');
+            var bg = bgs[t] || '#0f0f1a';
+            document.documentElement.style.setProperty('--bg-primary', bg);
+            // Keep the OS chrome (status bar / task switcher) in the theme's
+            // colour when installed as a PWA.
+            var meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', bg);
         })();
     </script>
     <div id="root"></div>

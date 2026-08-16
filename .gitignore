@@ -41,6 +41,8 @@ Thumbs.db
 
 # Playwright screenshots from planning/debugging
 *.png
+# ...but the PWA icons are real assets (issue #62, docs/web-pwa.md)
+!web/public/*.png
 
 # IDE
 .vscode/

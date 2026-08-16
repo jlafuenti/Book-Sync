@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { THEMES, THEME_SLUGS, DEFAULT_THEME, READER_MODES, getReaderPalette } from './themes'
+import { THEMES, THEME_SLUGS, DEFAULT_THEME, READER_MODES, getReaderPalette, applyTheme } from './themes'
 
 // Issue #57: the ebook reader used to hardcode a copy of Blueprint's palette.
 // getReaderPalette is the single source of the reader's iframe colors: 'match'
@@ -48,5 +48,23 @@ describe('getReaderPalette', () => {
 
     it('READER_MODES lists the four selectable modes', () => {
         expect(READER_MODES).toEqual(['match', 'light', 'sepia', 'dark'])
+    })
+})
+
+// Issue #62: when installed as a PWA the OS paints its chrome (status bar,
+// task switcher) with <meta name="theme-color">, so a theme change has to
+// move it along with the CSS variables and the favicon.
+describe('applyTheme', () => {
+    it('sets the theme-color meta to the theme background', () => {
+        document.head.innerHTML = '<meta name="theme-color" content="#000000"><link id="favicon" href="/x.svg">'
+        applyTheme('ember')
+        expect(document.querySelector('meta[name="theme-color"]').getAttribute('content'))
+            .toBe(THEMES.ember.vars['--bg-primary'])
+        expect(document.getElementById('favicon').getAttribute('href')).toBe(THEMES.ember.favicon)
+    })
+
+    it('does not mind a page without the meta tag', () => {
+        document.head.innerHTML = ''
+        expect(() => applyTheme('slate')).not.toThrow()
     })
 })

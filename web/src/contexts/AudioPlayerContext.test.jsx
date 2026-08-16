@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { AudioPlayerProvider, useAudioPlayer } from './AudioPlayerContext'
 
 const {
     getAudiobookStreamUrlMock, updatePositionMock,
     getAccessTokenMock, sendPositionKeepaliveMock, getDeviceIdMock, getDeviceNameMock,
+    coverSrcMock,
 } = vi.hoisted(() => ({
     getAudiobookStreamUrlMock: vi.fn(),
     updatePositionMock: vi.fn(),
@@ -12,6 +13,7 @@ const {
     sendPositionKeepaliveMock: vi.fn(),
     getDeviceIdMock: vi.fn(() => 'device-123'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
+    coverSrcMock: vi.fn(async (path) => (path ? `${path}?token=cover-token` : path)),
 }))
 
 vi.mock('../api', () => ({
@@ -21,6 +23,7 @@ vi.mock('../api', () => ({
     sendPositionKeepalive: sendPositionKeepaliveMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
+    coverSrc: coverSrcMock,
 }))
 
 // A controllable stand-in for HTMLAudioElement. Real EventTarget so the
@@ -638,5 +641,121 @@ describe('AudioPlayerProvider onEnded', () => {
             device_name: 'Web · Chrome',
             captured_at: expect.any(String),
         }))
+    })
+})
+
+// Issue #62: lock-screen / notification / hardware-key controls. The OS drives
+// the *same* context functions the on-screen transport uses, so the two never
+// disagree about skip amounts, resume rewind, or which format a save claims.
+describe('AudioPlayerProvider media session', () => {
+    let ms
+
+    beforeEach(() => {
+        ms = {
+            metadata: null,
+            playbackState: 'none',
+            setActionHandler: vi.fn(),
+            setPositionState: vi.fn(),
+        }
+        // jsdom's navigator has no mediaSession; add one for the test.
+        Object.defineProperty(navigator, 'mediaSession', { value: ms, configurable: true, writable: true })
+        vi.stubGlobal('MediaMetadata', vi.fn(function (init) { Object.assign(this, init) }))
+    })
+
+    afterEach(() => {
+        delete navigator.mediaSession
+        vi.unstubAllGlobals()
+    })
+
+    // The handler currently bound for an action (null after an unbind).
+    function handler(action) {
+        const call = [...ms.setActionHandler.mock.calls].reverse().find(([a]) => a === action)
+        return (call && call[1]) || undefined
+    }
+
+    async function loadedPlayer(audiobook = { title: 'Ship of Magic', author: 'Robin Hobb', cover_path: '/api/files/covers/audiobook_7.jpg' }) {
+        render(<AudioPlayerProvider><Harness audiobook={audiobook} /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        audio.duration = 3600
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        return audio
+    }
+
+    it('publishes title, author and a media-token cover once a book loads', async () => {
+        await loadedPlayer()
+        await waitFor(() => expect(ms.metadata).not.toBeNull())
+        expect(ms.metadata.title).toBe('Ship of Magic')
+        expect(ms.metadata.artist).toBe('Robin Hobb')
+        // The cover goes through the same scoped-token helper as every other
+        // <img> in the app (issue #50) — never the long-lived access token.
+        expect(ms.metadata.artwork[0].src).toBe('/api/files/covers/audiobook_7.jpg?token=cover-token')
+        expect(ms.metadata.artwork[0].src).not.toContain('token=token')
+    })
+
+    it('binds handlers for play, pause, stop, seek back/forward and seekto', async () => {
+        await loadedPlayer()
+        for (const action of ['play', 'pause', 'stop', 'seekbackward', 'seekforward', 'seekto']) {
+            expect(handler(action)).toEqual(expect.any(Function))
+        }
+    })
+
+    it('skips 30 s in each direction — the contract amount, not the OS default', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 100
+        act(() => handler('seekforward')({ action: 'seekforward' }))
+        expect(audio.currentTime).toBe(130)
+        act(() => handler('seekbackward')({ action: 'seekbackward' }))
+        expect(audio.currentTime).toBe(100)
+    })
+
+    it('seekto lands on the requested time', async () => {
+        const audio = await loadedPlayer()
+        act(() => handler('seekto')({ action: 'seekto', seekTime: 1234 }))
+        expect(audio.currentTime).toBe(1234)
+    })
+
+    it('a lock-screen play resumes with the 5 s rewind, and pause pauses', async () => {
+        const audio = await loadedPlayer()
+        audio.currentTime = 90
+        act(() => handler('pause')({ action: 'pause' }))
+        expect(audio.paused).toBe(true)
+
+        act(() => handler('play')({ action: 'play' }))
+        expect(audio.paused).toBe(false)
+        expect(audio.currentTime).toBe(85)
+    })
+
+    it('mirrors playback state and feeds the scrubber on timeupdate', async () => {
+        const audio = await loadedPlayer()
+        await waitFor(() => expect(ms.playbackState).toBe('playing'))
+
+        audio.currentTime = 42
+        audio.playbackRate = 1.25
+        act(() => audio.dispatchEvent(new Event('timeupdate')))
+        expect(ms.setPositionState).toHaveBeenLastCalledWith({ duration: 3600, position: 42, playbackRate: 1.25 })
+
+        act(() => audio.pause())
+        expect(ms.playbackState).toBe('paused')
+    })
+
+    it('stop clears the session so the OS drops the controls', async () => {
+        await loadedPlayer()
+        await waitFor(() => expect(ms.metadata).not.toBeNull())
+
+        fireEvent.click(screen.getByText('stop'))
+
+        expect(ms.metadata).toBeNull()
+        expect(ms.playbackState).toBe('none')
+        expect(handler('play')).toBeUndefined()
+    })
+
+    it('does nothing (and does not throw) without the API', async () => {
+        delete navigator.mediaSession
+        const audio = await loadedPlayer()
+        act(() => audio.dispatchEvent(new Event('timeupdate')))
+        fireEvent.click(screen.getByText('stop'))
+        expect(ms.setActionHandler).not.toHaveBeenCalled()
     })
 })
