@@ -250,6 +250,40 @@ read-then-insert cannot be made race-free in the application, the write path
 attempts its insert inside a savepoint and, on conflict, re-reads the row the
 racing transaction won and applies on top of it.
 
+## Completion
+
+`is_completed` on the canonical record (projected onto `user_progress` like
+everything else) is what puts a book on the Finished shelf and takes it off
+Continue. The **server** decides when a position write finishes a book
+(`position_service._auto_complete`, issue #56); clients may still send the flag
+explicitly, and an explicit value always wins.
+
+The rule: a write that **crosses into the end zone** completes the book.
+
+| Media | End zone | Setting (`server/config.py`) |
+|---|---|---|
+| Ebook | `epub_progress_percent >= 98` | `auto_complete_epub_percent` |
+| Audio | within 120 s of `AudioBook.duration_seconds` | `auto_complete_audio_tail_seconds` |
+
+- **Crossing, not being in.** The flag flips when the stored position goes from
+  outside the zone (or unset — a first write straight at the end counts) to
+  inside it. A manual un-finish (`is_completed: false`) therefore sticks while
+  the reader is still parked at the end; the next heartbeat at the same spot
+  does not undo it. Leaving the zone and re-entering it completes the book again.
+- **Never auto-cleared.** Re-reading chapter three of a finished book is not
+  un-finishing it. Only an explicit `false` or a reset clears the flag.
+- **Unknown audio length ⇒ no audio end zone.** The players' own end-of-stream
+  write still finishes the book, because it sends `is_completed: true` itself.
+- **Pairs complete as a pair.** A pair-scoped write projects one flag onto both
+  `user_progress` rows. Android used to finish a pair with two standalone-scope
+  PUTs (`ebook` + `audiobook`), which left the pair's own record un-finished
+  while web wrote the pair scope; both now write `PUT /position/pair/{id}`.
+  Standalone media keep their own scope.
+
+> Why 98 %: EPUB back-matter (acknowledgements, previews, ads) means the reader
+> rarely reaches 100 % of the spine while actually reading. The audio tail
+> exists for the same reason — outros and credits.
+
 ## Percent scale
 
 `epub_progress_percent` is **0–100** on the wire. epub.js reports 0–1

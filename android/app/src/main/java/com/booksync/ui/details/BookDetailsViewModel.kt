@@ -343,10 +343,8 @@ class BookDetailsViewModel @Inject constructor(
         val ui = uiState.value
         runSafely {
             when {
-                ui.pair != null -> {
-                    repository.markComplete("audiobook", ui.pair.audiobookId)
-                    repository.markComplete("ebook", ui.pair.ebookId)
-                }
+                ui.pair != null ->
+                    repository.markPairComplete(ui.pair.id, ui.pair.ebookId, ui.pair.audiobookId)
                 ui.ebook != null     -> repository.markComplete("ebook", ui.ebook.id)
                 ui.audiobook != null -> repository.markComplete("audiobook", ui.audiobook.id)
             }
