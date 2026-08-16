@@ -375,6 +375,27 @@ async def test_remove_tracks_deletes_only_that_folders_rows_and_their_pairs(db, 
     assert len(await _folder_rows(db)) == 1
 
 
+async def test_a_merged_file_beside_the_tracks_is_neither_counted_nor_removed(db, ts_client, tmp_path):
+    """The remediation leaves `Book.m4b` next to leftover MP3 tracks (until the
+    user deletes them). Only rows of the flagged group's extension are tracks —
+    the merged file's row must survive Remove imported tracks."""
+    c, headers = ts_client
+    folder = str(tmp_path / "Dune")
+    row = await _seed_folder(db, folder, imported=2)          # 2 .mp3 track rows
+    db.add(AudioBook(title="Dune (merged)", filename="Dune.m4b",
+                     file_path=os.path.join(folder, "Dune.m4b"), format="m4b"))
+    await db.commit()
+
+    body = (await c.get("/api/troubleshoot/issues", headers=headers)).json()
+    assert body["categories"]["multi_file_audiobook"][0]["imported_track_count"] == 2
+
+    resp = await c.post(f"/api/troubleshoot/multi-file/{row.id}/remove-tracks", headers=headers)
+
+    assert resp.json()["deleted"] == 2
+    remaining = (await db.execute(select(AudioBook))).scalars().all()
+    assert [a.title for a in remaining] == ["Dune (merged)"]
+
+
 async def test_troubleshoot_fixes_are_editor_gated(db, make_client, make_user, auth_header):
     from routers import troubleshoot
     row = await _seed_folder(db, "/data/audiobooks/Dune")

@@ -45,11 +45,15 @@ EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
 AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav", ".aac", ".wma"}
 
 
-def _is_inside(file_path: Optional[str], folder: str) -> bool:
-    """Whether `file_path` sits directly in `folder` (not in a same-prefix sibling)."""
+def _is_track_of(file_path: Optional[str], folder: str, extension: str) -> bool:
+    """Whether `file_path` is one of a flagged group's tracks: directly in
+    `folder` (not a same-prefix sibling folder) AND of the group's extension —
+    a merged `Book.m4b` beside leftover MP3 tracks is not a track."""
     if not file_path:
         return False
-    return os.path.normpath(os.path.dirname(file_path)) == os.path.normpath(folder)
+    if os.path.normpath(os.path.dirname(file_path)) != os.path.normpath(folder):
+        return False
+    return os.path.splitext(file_path)[1].lower() == extension.lower()
 
 
 def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = None) -> dict:
@@ -247,7 +251,8 @@ async def get_issues(
             "file_count": row.file_count,
             "extension": row.extension,
             "imported_track_count": sum(
-                1 for ab in audiobooks if _is_inside(ab.file_path, row.folder_path)),
+                1 for ab in audiobooks
+                if _is_track_of(ab.file_path, row.folder_path, row.extension)),
             "detail": (f"{row.file_count} {row.extension} files — multi-file audiobooks "
                        f"aren't supported; merge to one .m4b in Audiobookshelf and rescan"),
             "pair_id": None,
@@ -597,7 +602,8 @@ async def multi_file_remove_tracks(
     on disk for merging in Audiobookshelf; the folder stays flagged."""
     row = await _folder_or_404(db, folder_id)
     audiobooks = (await db.execute(select(AudioBook))).scalars().all()
-    victims = [ab.id for ab in audiobooks if _is_inside(ab.file_path, row.folder_path)]
+    victims = [ab.id for ab in audiobooks
+               if _is_track_of(ab.file_path, row.folder_path, row.extension)]
     for audiobook_id in victims:
         await _delete_item_core(db, "audiobook", audiobook_id, delete_file=False)
     return {"deleted": len(victims), "id": row.id}
