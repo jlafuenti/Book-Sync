@@ -241,9 +241,12 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
 
                     {cat.kind === 'multi_file' && (
                         <div className="alert alert-info" style={{ marginBottom: 12 }}>
-                            Multi-file audiobooks aren't supported. Merge to a single .m4b in Audiobookshelf
-                            (open the item → Manage → Merge to M4B, keep chapters), replace the folder with the
-                            merged file, then <strong>Rescan</strong>. Dismiss hides a folder until its contents change.
+                            {/* One inline child: .alert is a flex row, so a bare <strong> would become its own column. */}
+                            <span>
+                                Multi-file audiobooks aren't supported. Merge to a single .m4b in Audiobookshelf
+                                (open the item → Manage → Merge to M4B, keep chapters), replace the folder with the
+                                merged file, then <strong>Rescan</strong>. Dismiss hides a folder until its contents change.
+                            </span>
                         </div>
                     )}
 
@@ -290,7 +293,10 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                     <td>
                                         {(() => {
                                             const title = r.title || r.filename || `Item ${r.item_id}`
-                                            const target = (r.item_type && r.item_id) ? [r.item_type, r.item_id]
+                                            // Only books open the details modal; a multi-file
+                                            // folder row (item_type 'folder') has nothing to open.
+                                            const isBook = r.item_type === 'ebook' || r.item_type === 'audiobook'
+                                            const target = (isBook && r.item_id) ? [r.item_type, r.item_id]
                                                 : r.ebook_id ? ['ebook', r.ebook_id]
                                                     : r.audiobook_id ? ['audiobook', r.audiobook_id] : null
                                             return target

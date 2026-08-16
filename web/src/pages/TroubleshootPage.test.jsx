@@ -161,6 +161,8 @@ describe('TroubleshootPage multi-file audiobook folders', () => {
 
         expect(await screen.findByText(/Merge to a single \.m4b in Audiobookshelf/)).toBeInTheDocument()
         expect(screen.getByText('Dune')).toBeInTheDocument()
+        // A folder is not a book: no details-modal link on the title.
+        expect(screen.queryByRole('button', { name: 'Dune' })).not.toBeInTheDocument()
         expect(screen.getByText('/data/audiobooks/Herbert/Dune')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Rescan' })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
