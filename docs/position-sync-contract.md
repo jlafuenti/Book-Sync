@@ -184,6 +184,25 @@ beat a genuinely newer write from a phone, and the log is the history of moves t
 > report null — and must leave the cache alone. `bookmarks.sync_map_version`
 > records which map a row's own coordinates belong to (issue #55).
 
+**A write that carries `epub_sentence_index` carries `sync_map_version` too** —
+the version the client resolved that index against (issue #116). Android sends
+the version its cached points came from (`BookPairEntity.syncMapVersion`, kept on
+the bookmark and pending-sync rows so a deferred push attests the version at
+resolution time, not at push time); the web sends the `sync_map_version` returned
+by `/sync/match-text`. The server records **what the client attests to**, never
+the live version by itself:
+
+| Attested version | Server does |
+|---|---|
+| absent | stamps NULL — "unknown". Claiming the live version for a coordinate nobody vouched for is the false claim that hid the drift. |
+| equal to the live map | stamps it; coordinates taken as sent |
+| trails the live map | re-anchors the write on the live map from its own evidence — the same rule as the re-map table above (audio position for `audiobook`-sourced writes, `epub_text_preview` otherwise). Success lands the re-expressed coordinates stamped with the live version; failure keeps the coordinates as sent and stamps the *attested* version, so the row visibly trails. |
+
+The map's points are only loaded on the mismatch path; an ordinary write still
+costs a single `version` lookup. `PositionResponse.sync_map_version` reports the
+stored value so a client that pulls a position and later pushes it back attests
+the right one.
+
 ## Reset
 
 `DELETE /api/sync/position/{scope}/{ident}` is a true reset: it deletes the
@@ -285,3 +304,32 @@ Three paths are exempt, each on purpose:
 > A rewind on resume means each pause/resume cycle moves the *saved* position
 > backwards by 5 s, since the position heartbeat writes wherever playback actually
 > is. That is inherent to the feature, not a sync bug.
+
+## Save cadence
+
+Two more numbers are kept equal by hand on the player surfaces (issue #65):
+
+| | Value | Android | Web |
+|---|---|---|---|
+| Local heartbeat | 5 s | `AudioPlayerService.AUTO_SAVE_INTERVAL_MS` | `HEARTBEAT_TICK_MS` |
+| Network push | 30 s | `AudioPlayerService.NETWORK_SAVE_INTERVAL_MS` (`HeartbeatThrottle`) | `NETWORK_SAVE_INTERVAL_MS` |
+
+While audio plays, the heartbeat keeps the **local** position fresh every 5 s
+(Room on Android; in-memory + the unload keepalive on the web) but only
+**pushes to the server every 30 s**. Both players used to PUT on every 5 s tick
+— ~720 `UPDATE`s an hour per device to record "position advanced 5 s", and a
+radio wake-up every 5 s on the phone. The server copy only matters for
+cross-device resume, where 30 s of staleness is imperceptible.
+
+**Boundaries flush immediately, bypassing the throttle:** pause, seek/skip
+(debounced ~1 s on the web so a slider scrub is one write), speed change, sleep-
+timer stop, book change, stop/teardown, natural end, tab unload (keepalive), cast
+switch and controller disconnect (Android). A device that stops listening leaves
+an exact position; the 30 s only ever trails during uninterrupted playback.
+
+A **failed** push does not advance the window — the next tick retries. On Android
+a throttled tick writes its Room row **unsynced**, so if the app dies before the
+next push the startup reconcile (`syncAllBookmarksAndProgress`) and the 15-minute
+WorkManager sweep (`processPendingSync`, which now also pushes unsynced bookmark
+rows) still deliver it. The 30-minute `append_to_log` history cadence is
+orthogonal and unchanged; a log tick is itself a boundary and pushes.

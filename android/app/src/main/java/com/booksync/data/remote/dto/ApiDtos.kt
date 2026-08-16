@@ -186,6 +186,18 @@ data class BookmarkLogResponse(
     val captured_at: String? = null
 )
 
+// ============ Pagination (issue #48) ============
+
+/** One page of a paginated list endpoint. `page` is 1-based; `limit` is the
+ *  page size the server applied, so `page * limit < total` means there is more. */
+@Serializable
+data class PageResponse<T>(
+    val items: List<T>,
+    val total: Int,
+    val page: Int,
+    val limit: Int,
+)
+
 // ============ Canonical position ============
 //
 // One record per book, written atomically. Replaced the pair of
@@ -227,6 +239,12 @@ data class PositionUpdateRequest(
     // Spine index — the axis both readers position by.
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
+    // The sync-map version `epub_sentence_index` was resolved against (issue
+    // #116) — the version the cached points came from, carried on the local
+    // row so a deferred push attests what was true at resolution time. Null
+    // means "unknown"; the server then stamps NULL rather than the live
+    // version, and re-anchors a write whose version trails the live map.
+    val sync_map_version: Int? = null,
     val epub_text_preview: String? = null,
     val epub_progress_percent: Float? = null,
     val audio_position_ms: Int? = null,
@@ -248,6 +266,9 @@ data class PositionResponse(
     val anchor_revision: Long,
     val epub_chapter: Int? = null,
     val epub_sentence_index: Int? = null,
+    // Which map the stored index is expressed in; null = unknown. Kept on the
+    // local row so pushing this position back attests the right version.
+    val sync_map_version: Int? = null,
     val epub_text_preview: String? = null,
     val epub_progress_percent: Float? = null,
     val audio_position_ms: Int? = null,

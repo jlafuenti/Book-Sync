@@ -18,7 +18,33 @@ EPUB; `.mobi` and `.azw3` are indexed but flagged as unsupported until converted
 PDFs can be stored and paired but not aligned.
 
 The scanner walks `EBOOK_DIR` and `AUDIOBOOK_DIR` recursively. Folder depth is up to you — the
-patterns decide what a path means.
+patterns decide what a path means — with one exception: **an audiobook is one file.** A folder
+holding one book split into tracks is not imported at all; see *Multi-file audiobooks* below.
+
+## Multi-file audiobooks (unsupported by design)
+
+An audiobook row points at a single file, so a book ripped as `01.mp3 … 30.mp3` cannot be
+represented. Rather than import each track as its own "audiobook" (which is what used to
+happen, and it polluted both the library and auto-pairing), the scanner recognises such
+folders, **skips every file in them**, and lists them under **Troubleshoot Library → Multi-file
+audiobooks (unsupported)** (issue #63).
+
+A folder is flagged when, among its audio files of one extension, there are two or more and
+either they all share the same album tag, or none carries an album tag and every filename looks
+like a track (`01.mp3`, `Track 07`, `Part 3`, `CD1 - 05`, `Chapter 12`, `Title - 07`). Files
+whose album tags differ are distinct books in a flat folder and import normally. Only the
+qualifying extension group is held back: a merged `Book.m4b` beside leftover MP3 tracks imports
+while the MP3s stay flagged.
+
+**Remediation is external, in Audiobookshelf:** open the item → Manage → *Merge to M4B* (keep
+chapters, so the chapter markers survive), replace the folder's tracks with the merged file,
+then click **Rescan** in Troubleshoot (or run a normal library scan). The flag clears on its own
+once the folder no longer qualifies. Other actions:
+
+- **Remove imported tracks** — deletes the per-track audiobook rows imported before this
+  detection existed (and any pairs made from them). Database rows only; the files stay on disk.
+- **Dismiss** — hides a folder you're deliberately leaving as-is. It stays hidden until the
+  folder's contents change (a file added, removed or resized), then reappears.
 
 ## Where metadata comes from
 

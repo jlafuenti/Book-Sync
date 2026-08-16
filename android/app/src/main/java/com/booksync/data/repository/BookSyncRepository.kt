@@ -35,6 +35,8 @@ import javax.inject.Singleton
  * reads prefer local cache.
  */
 private const val REPO_TAG = "BookSyncRepository"
+// Page size for full-library refreshes (issue #48) — the server's maximum.
+private const val LIBRARY_PAGE_SIZE = 500
 
 /** Where a tap on a paired book should land. */
 enum class PairOpenTarget { Reader, Player, Details }
@@ -94,10 +96,28 @@ class BookSyncRepository @Inject constructor(
     /** Get downloaded book pairs as a reactive Flow from local cache. */
     fun getDownloadedPairsFlow(): Flow<List<BookPairEntity>> = bookPairDao.getDownloadedPairs()
 
+    /**
+     * Walk every page of a paginated list endpoint (issue #48) and return the
+     * whole set. The refresh* functions below mirror the server into Room and
+     * finish with `deleteOrphansExcept(remoteIds)`, so they must never act on
+     * a partial listing — a failure mid-walk throws before anything is written.
+     */
+    internal suspend fun <T> fetchAllPages(fetchPage: suspend (page: Int) -> PageResponse<T>): List<T> {
+        val all = mutableListOf<T>()
+        var page = 1
+        while (true) {
+            val body = fetchPage(page)
+            all += body.items
+            if (body.items.size < body.limit || all.size >= body.total) break
+            page++
+        }
+        return all
+    }
+
     /** Refresh book pairs from the server and update local cache. */
     suspend fun refreshPairs() {
         log("refreshPairs — fetching from server")
-        val remotePairs = api.getPairs()
+        val remotePairs = fetchAllPages { page -> api.getPairs(page, LIBRARY_PAGE_SIZE) }
         val entities = remotePairs.map { pair ->
             val existing = bookPairDao.getPairById(pair.id)
 
@@ -162,7 +182,7 @@ class BookSyncRepository @Inject constructor(
     /** Refresh ebooks from the server and update local cache. */
     suspend fun refreshEbooks() {
         log("refreshEbooks — fetching from server")
-        val remoteEbooks = api.getEbooks()
+        val remoteEbooks = fetchAllPages { page -> api.getEbooks(page, LIBRARY_PAGE_SIZE) }
         val entities = remoteEbooks.map { ebook ->
             val existing = eBookDao.getEBookById(ebook.id)
             EBookEntity(
@@ -321,7 +341,7 @@ class BookSyncRepository @Inject constructor(
     /** Refresh audiobooks from the server and update local cache. */
     suspend fun refreshAudiobooks() {
         log("refreshAudiobooks — fetching from server")
-        val remoteAudiobooks = api.getAudiobooks()
+        val remoteAudiobooks = fetchAllPages { page -> api.getAudiobooks(page, LIBRARY_PAGE_SIZE) }
         val entities = remoteAudiobooks.map { audio ->
             val existing = audioBookDao.getAudioBookById(audio.id)
             AudioBookEntity(
@@ -782,6 +802,7 @@ class BookSyncRepository @Inject constructor(
                 source = entity.source,
                 epub_chapter = entity.epubChapter,
                 epub_sentence_index = entity.epubSentenceIndex,
+                sync_map_version = entity.syncMapVersion,
                 audio_position_ms = entity.audioPositionMs,
                 hint = entity.epubLocator?.let {
                     PositionHintDto(
@@ -960,9 +981,26 @@ class BookSyncRepository @Inject constructor(
         audioPositionMs: Int,
         appendToLog: Boolean = false,
         claimFormat: Boolean = true,
-    ) {
+        // False = a throttled heartbeat (issue #65): write Room only and leave
+        // the row unsynced; the next eligible tick or boundary save pushes it.
+        // Returns whether the canonical server write landed.
+        pushToServer: Boolean = true,
+    ): Boolean {
         val hasExistingRow = bookmarkDao.getBookmark(pairId) != null
         val effectiveClaim = claimFormat || !hasExistingRow
+
+        if (!pushToServer) {
+            updateBookmark(
+                pairId = pairId,
+                source = "audiobook",
+                audioPositionMs = audioPositionMs,
+                appendToLog = false,
+                pushToServer = false,
+                stampSource = effectiveClaim,
+                markSynced = false,
+            )
+            return false
+        }
 
         val result = updatePosition(
             "pair", pairId,
@@ -985,6 +1023,7 @@ class BookSyncRepository @Inject constructor(
             pushToServer = result == null,
             stampSource = effectiveClaim,
         )
+        return result != null
     }
 
     /** Same, for a standalone audiobook (no pair). See [savePlaybackPosition]'s
@@ -994,7 +1033,18 @@ class BookSyncRepository @Inject constructor(
         audiobookId: Int,
         audioPositionMs: Int,
         claimFormat: Boolean = true,
-    ) {
+        pushToServer: Boolean = true,
+    ): Boolean {
+        if (!pushToServer) {
+            updateProgress(
+                mediaType = "audiobook",
+                mediaId = audiobookId,
+                audioPositionMs = audioPositionMs,
+                pushToServer = false,
+                markSynced = false,
+            )
+            return false
+        }
         val result = updatePosition(
             "audiobook", audiobookId,
             PositionUpdateRequest(
@@ -1011,6 +1061,7 @@ class BookSyncRepository @Inject constructor(
             audioPositionMs = audioPositionMs,
             pushToServer = result == null,
         )
+        return result != null
     }
 
     /**
@@ -1022,6 +1073,10 @@ class BookSyncRepository @Inject constructor(
         source: String,
         epubChapter: Int? = null,
         epubSentenceIndex: Int? = null,
+        // The sync-map version [epubSentenceIndex] was resolved against (issue
+        // #116). Only consulted when a sentence index is passed; otherwise the
+        // merged row keeps the version belonging to the index it keeps.
+        syncMapVersion: Int? = null,
         audioPositionMs: Int? = null,
         epubLocator: String? = null,
         // Audio position the epubLocator corresponds to; enables exact locator
@@ -1045,6 +1100,12 @@ class BookSyncRepository @Inject constructor(
         // save from a paused/idle player must not re-route which format opens
         // next (issue: background saves hijacking format routing).
         stampSource: Boolean = true,
+        // Only meaningful with pushToServer=false. True (the default) marks the
+        // local-only row synced because the caller already pushed it; false
+        // leaves it UNSYNCED — a throttled heartbeat (issue #65) that has not
+        // reached the server, which the startup reconcile and the WorkManager
+        // sweep must still deliver if the app dies before the next push.
+        markSynced: Boolean = true,
     ) {
         val existing = bookmarkDao.getBookmark(pairId)
         val nowMillis = System.currentTimeMillis()
@@ -1056,6 +1117,8 @@ class BookSyncRepository @Inject constructor(
             source = resolvedSource,
             epubChapter = epubChapter ?: existing?.epubChapter,
             epubSentenceIndex = epubSentenceIndex ?: existing?.epubSentenceIndex,
+            // The version travels with the index it describes.
+            syncMapVersion = if (epubSentenceIndex != null) syncMapVersion else existing?.syncMapVersion,
             audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
             epubLocator = epubLocator ?: existing?.epubLocator,
             locatorAudioMs = locatorAudioMs
@@ -1071,12 +1134,12 @@ class BookSyncRepository @Inject constructor(
             syncedToServer = false,
         )
 
-        // Save locally. A local-only write is marked synced because the caller
-        // has already sent this position through the canonical endpoint —
-        // leaving it unsynced would have the startup reconcile push it a
-        // second time.
+        // Save locally. A local-only write is normally marked synced because
+        // the caller has already sent this position through the canonical
+        // endpoint — leaving it unsynced would have the startup reconcile push
+        // it a second time. markSynced=false is the exception (see above).
         bookmarkDao.upsertBookmark(
-            if (pushToServer) merged else merged.copy(syncedToServer = true))
+            if (pushToServer || !markSynced) merged else merged.copy(syncedToServer = true))
 
         if (!pushToServer) return
 
@@ -1113,6 +1176,7 @@ class BookSyncRepository @Inject constructor(
                         source = resolvedSource,
                         epubChapter = merged.epubChapter,
                         epubSentenceIndex = merged.epubSentenceIndex,
+                        syncMapVersion = merged.syncMapVersion,
                         audioPositionMs = merged.audioPositionMs,
                         epubLocator = merged.epubLocator,
                         locatorAudioMs = merged.locatorAudioMs,
@@ -1134,6 +1198,7 @@ class BookSyncRepository @Inject constructor(
                     source = resolvedSource,
                     epubChapter = merged.epubChapter,
                     epubSentenceIndex = merged.epubSentenceIndex,
+                    syncMapVersion = merged.syncMapVersion,
                     audioPositionMs = merged.audioPositionMs,
                     epubLocator = merged.epubLocator,
                     locatorAudioMs = merged.locatorAudioMs,
@@ -1188,6 +1253,14 @@ class BookSyncRepository @Inject constructor(
             val resolvedChapterIndex = syncPoint?.epubChapter ?: snapshot.chapterIndex
             val resolvedSentenceIndex = syncPoint?.epubSentenceIndex
             val resolvedAudioMs = syncPoint?.audioStartMs
+            // Which map that sentence index is a coordinate of (issue #116):
+            // the version the cached points came from when a match was found;
+            // otherwise the merged row reuses the existing index, so it keeps
+            // the existing version too. Read here, at resolution time, so a
+            // queued replay attests what was true now, not at push time.
+            val resolvedSyncMapVersion =
+                if (syncPoint != null) bookPairDao.getPairById(snapshot.pairId)?.syncMapVersion
+                else existing?.syncMapVersion
 
             // Room-first: this is the one write that must land no matter what
             // happens to the network call below. Written unsynced, then
@@ -1199,6 +1272,7 @@ class BookSyncRepository @Inject constructor(
                 source = "ebook",
                 epubChapter = resolvedChapterIndex,
                 epubSentenceIndex = resolvedSentenceIndex ?: existing?.epubSentenceIndex,
+                syncMapVersion = resolvedSyncMapVersion,
                 audioPositionMs = resolvedAudioMs ?: existing?.audioPositionMs,
                 epubLocator = snapshot.locatorJson,
                 locatorAudioMs = resolvedAudioMs ?: existing?.locatorAudioMs,
@@ -1214,6 +1288,7 @@ class BookSyncRepository @Inject constructor(
                 source = "ebook",
                 epub_chapter = resolvedChapterIndex,
                 epub_sentence_index = resolvedSentenceIndex,
+                sync_map_version = if (resolvedSentenceIndex != null) resolvedSyncMapVersion else null,
                 epub_text_preview = snapshot.textPreview.takeIf { it.isNotEmpty() },
                 // Null when it can't be computed; omitted rather than sent as
                 // 0, which would overwrite a real percent.
@@ -1240,6 +1315,7 @@ class BookSyncRepository @Inject constructor(
                         source = "ebook",
                         epubChapter = merged.epubChapter,
                         epubSentenceIndex = merged.epubSentenceIndex,
+                        syncMapVersion = merged.syncMapVersion,
                         audioPositionMs = merged.audioPositionMs,
                         epubLocator = merged.epubLocator,
                         locatorAudioMs = merged.locatorAudioMs,
@@ -1452,6 +1528,9 @@ class BookSyncRepository @Inject constructor(
         // See updateBookmark: false writes the Room row only, for callers that
         // have already sent this position through the canonical endpoint.
         pushToServer: Boolean = true,
+        // See updateBookmark.markSynced — false keeps a local-only write
+        // unsynced so the sweep delivers it (throttled heartbeat, issue #65).
+        markSynced: Boolean = true,
     ) {
         val existing = userProgressDao.getProgress(mediaType, mediaId)
         val nowMillis = System.currentTimeMillis()
@@ -1476,7 +1555,7 @@ class BookSyncRepository @Inject constructor(
         )
 
         userProgressDao.upsertProgress(
-            if (pushToServer) merged else merged.copy(syncedToServer = true))
+            if (pushToServer || !markSynced) merged else merged.copy(syncedToServer = true))
 
         if (!pushToServer) return
 
@@ -1594,6 +1673,9 @@ class BookSyncRepository @Inject constructor(
                         source = sync.source,
                         epub_chapter = sync.epubChapter,
                         epub_sentence_index = sync.epubSentenceIndex,
+                        // The version that was true when the index was
+                        // resolved — not whatever the cache holds now.
+                        sync_map_version = sync.syncMapVersion,
                         audio_position_ms = sync.audioPositionMs,
                         hint = sync.epubLocator?.let {
                             PositionHintDto(
@@ -1626,6 +1708,22 @@ class BookSyncRepository @Inject constructor(
                         logW("processPendingSync — bookmark pairId=${sync.bookPairId} failed HTTP ${response.code()}, stopping")
                         break
                     }
+                }
+            } catch (e: Exception) {
+                logW("processPendingSync — still offline, stopping (${e.message})")
+                break
+            }
+        }
+
+        // Bookmark rows left unsynced by a throttled heartbeat (issue #65) or a
+        // PUT that failed before it could be queued. pushBookmark sends the
+        // row's own captured_at, so a stale replay still loses to a newer
+        // write on another device (409 → adopt server state).
+        for (row in bookmarkDao.getUnsyncedBookmarks()) {
+            try {
+                if (pushBookmark(row.bookPairId, row, appendToLog = false) == PushOutcome.FAILED) {
+                    logW("processPendingSync — unsynced bookmark pairId=${row.bookPairId} failed, stopping")
+                    break
                 }
             } catch (e: Exception) {
                 logW("processPendingSync — still offline, stopping (${e.message})")
@@ -1756,6 +1854,9 @@ internal fun PositionResponse.toBookmarkEntity(pairId: Int, previous: BookmarkEn
         source = source,
         epubChapter = epub_chapter,
         epubSentenceIndex = epub_sentence_index,
+        // The server's word on which map its index is expressed in; a later
+        // push of this row attests it (issue #116).
+        syncMapVersion = sync_map_version,
         audioPositionMs = audio_position_ms,
         epubLocator = locator?.value ?: previous?.epubLocator,
         locatorAudioMs = if (locator != null) locator.audio_position_ms else previous?.locatorAudioMs,

@@ -21,7 +21,7 @@ import com.booksync.data.local.entity.*
         AcknowledgedItemEntity::class,
         BookmarkLogEntity::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 abstract class BookSyncDatabase : RoomDatabase() {

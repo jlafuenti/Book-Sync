@@ -72,3 +72,19 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
         addColumnIfMissing(db, "ALTER TABLE book_pairs ADD COLUMN syncMapVersion INTEGER")
     }
 }
+
+/** v18 -> v19: record which sync-map version a bookmark's own sentence index was resolved
+ *  against (issue #116). The server used to stamp `bookmarks.sync_map_version` with whatever
+ *  map was live when a write landed, so a deferred push of pre-re-transcription coordinates
+ *  was recorded as current and nothing could detect the drift. The client now attests the
+ *  version at resolution time; it rides on the bookmark row and on queued pending_sync rows
+ *  so a later replay sends the version that was true when the index was computed.
+ *
+ *  Left NULL for existing rows: "unknown". The server stamps NULL for an unattested write
+ *  rather than claiming currency for it. */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN syncMapVersion INTEGER")
+        addColumnIfMissing(db, "ALTER TABLE pending_sync ADD COLUMN syncMapVersion INTEGER")
+    }
+}

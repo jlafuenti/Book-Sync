@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import get_db
 from models.book import AudioBook, BookPair, EBook, PairStatus
-from models.library_issue import LibraryCheckResult
+from models.library_issue import LibraryCheckResult, MultiFileAudiobookFolder
 from models.progress import UserProgress
 from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
@@ -43,6 +43,13 @@ _TINY_AUDIO_BYTES = 1 * 1024 * 1024     # 1 MB
 _TINY_EBOOK_BYTES = 1 * 1024            # 1 KB
 EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
 AUDIOBOOK_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".wav", ".aac", ".wma"}
+
+
+def _is_inside(file_path: Optional[str], folder: str) -> bool:
+    """Whether `file_path` sits directly in `folder` (not in a same-prefix sibling)."""
+    if not file_path:
+        return False
+    return os.path.normpath(os.path.dirname(file_path)) == os.path.normpath(folder)
 
 
 def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = None) -> dict:
@@ -217,6 +224,35 @@ async def get_issues(
                     "detail": "Cover file not referenced by any book",
                 })
 
+    # Multi-file audiobook folders the scanner refused to import (issue #63).
+    # Persisted by the scan; dismissed rows stay hidden until the folder's
+    # contents change. `imported_track_count` is live: rows that predate the
+    # detection (one AudioBook per track) can be removed from here.
+    multi_file = []
+    folder_rows = (await db.execute(
+        select(MultiFileAudiobookFolder)
+        .where(MultiFileAudiobookFolder.dismissed == False)
+        .order_by(MultiFileAudiobookFolder.folder_path)
+    )).scalars().all()
+    for row in folder_rows:
+        multi_file.append({
+            "item_type": "folder",
+            "item_id": row.id,
+            "title": row.guessed_title or os.path.basename(row.folder_path),
+            "author": row.guessed_author,
+            "filename": None,
+            "file_path": row.folder_path,
+            "format": row.extension.lstrip("."),
+            "file_size": row.total_size,
+            "file_count": row.file_count,
+            "extension": row.extension,
+            "imported_track_count": sum(
+                1 for ab in audiobooks if _is_inside(ab.file_path, row.folder_path)),
+            "detail": (f"{row.file_count} {row.extension} files — multi-file audiobooks "
+                       f"aren't supported; merge to one .m4b in Audiobookshelf and rescan"),
+            "pair_id": None,
+        })
+
     categories = {
         "missing": missing,
         "zero_byte": zero_byte,
@@ -225,6 +261,7 @@ async def get_issues(
         "ebook_drm": ebook_drm,
         "ebook_unreadable": ebook_unreadable,
         "unsupported_format": unsupported,
+        "multi_file_audiobook": multi_file,
         "sync_map_missing": sync_map_missing,
         "duplicate": duplicate,
         "missing_cover": missing_cover,
@@ -520,3 +557,47 @@ async def acsm_dismiss(req: AcsmDismissRequest, _: User = Depends(get_editor_use
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Could not delete: {e}")
     return {"status": "dismissed"}
+
+
+# ---------------------------------------------------------------------------
+# Multi-file audiobook folders (issue #63)
+# ---------------------------------------------------------------------------
+
+async def _folder_or_404(db: AsyncSession, folder_id: int) -> MultiFileAudiobookFolder:
+    row = (await db.execute(
+        select(MultiFileAudiobookFolder).where(MultiFileAudiobookFolder.id == folder_id)
+    )).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Multi-file audiobook folder not found")
+    return row
+
+
+@router.post("/multi-file/{folder_id}/dismiss")
+async def multi_file_dismiss(
+    folder_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Hide a flagged folder until its contents change (the next scan clears
+    the dismissal when the folder's fingerprint moves)."""
+    row = await _folder_or_404(db, folder_id)
+    row.dismissed = True
+    await db.commit()
+    return {"status": "dismissed", "id": row.id}
+
+
+@router.post("/multi-file/{folder_id}/remove-tracks")
+async def multi_file_remove_tracks(
+    folder_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Delete the AudioBook rows that were imported one-per-track from this
+    folder before multi-file detection existed. DB rows only — the files stay
+    on disk for merging in Audiobookshelf; the folder stays flagged."""
+    row = await _folder_or_404(db, folder_id)
+    audiobooks = (await db.execute(select(AudioBook))).scalars().all()
+    victims = [ab.id for ab in audiobooks if _is_inside(ab.file_path, row.folder_path)]
+    for audiobook_id in victims:
+        await _delete_item_core(db, "audiobook", audiobook_id, delete_file=False)
+    return {"deleted": len(victims), "id": row.id}

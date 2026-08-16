@@ -145,6 +145,7 @@ describe('EbookReader doSave — one atomic write', () => {
         await setupReader(LONG_TEXT)
         matchTextToAudioMock.mockResolvedValue({
             epub_chapter: 3, epub_sentence_index: 11, audio_position_ms: 654321,
+            sync_map_version: 4,
         })
 
         fireEvent.click(screen.getByTitle('Save position'))
@@ -154,6 +155,10 @@ describe('EbookReader doSave — one atomic write', () => {
             epub_chapter: 3,
             epub_sentence_index: 11,
             audio_position_ms: 654321,
+            // A sentence index is a sync-map coordinate: attest which map it
+            // came from so the server never records it as current by
+            // default (issue #116).
+            sync_map_version: 4,
         }))
     })
 
@@ -170,6 +175,8 @@ describe('EbookReader doSave — one atomic write', () => {
         expect(body.epub_chapter).toBe(0)
         expect(body.epub_text_preview).toBeTruthy()
         expect(body.audio_position_ms).toBeUndefined()
+        // No sentence index → nothing to attest a version for.
+        expect(body.sync_map_version).toBeUndefined()
     })
 
     it('skips the matcher when there is too little text, and still saves', async () => {

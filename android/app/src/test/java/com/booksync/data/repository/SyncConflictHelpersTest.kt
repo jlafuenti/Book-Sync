@@ -129,6 +129,7 @@ class SyncConflictHelpersTest {
         deviceId: String? = null,
         deviceName: String? = null,
         hints: List<PositionHintResponse> = emptyList(),
+        syncMapVersion: Int? = null,
     ) = PositionResponse(
         scope = "pair",
         book_pair_id = 42,
@@ -136,6 +137,7 @@ class SyncConflictHelpersTest {
         anchor_revision = 4,
         epub_chapter = epubChapter,
         epub_sentence_index = epubSentenceIndex,
+        sync_map_version = syncMapVersion,
         audio_position_ms = audioPositionMs,
         is_completed = false,
         captured_at = capturedAt,
@@ -159,6 +161,17 @@ class SyncConflictHelpersTest {
         updatedAt = "0",
         syncedToServer = true,
     )
+
+    @Test
+    fun `toBookmarkEntity carries the server's sync-map version onto the local row`() {
+        // A pulled position is later pushed back (startup reconcile, offline
+        // replay); the push must attest the version the server said the index
+        // is expressed in, not whatever this device's cache happens to hold.
+        val entity = position(epubSentenceIndex = 10, syncMapVersion = 6)
+            .toBookmarkEntity(42, previousBookmark().copy(syncMapVersion = 2))
+
+        assertEquals(6, entity.syncMapVersion)
+    }
 
     @Test
     fun `toBookmarkEntity maps server fields and preserves previous locator state`() {

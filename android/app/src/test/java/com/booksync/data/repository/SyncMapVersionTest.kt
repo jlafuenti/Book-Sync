@@ -7,6 +7,7 @@ import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.AudioBookResponse
 import com.booksync.data.remote.BookPairResponse
 import com.booksync.data.remote.EBookResponse
+import com.booksync.data.remote.PageResponse
 import com.booksync.data.remote.SyncMapResponse
 import com.booksync.data.remote.SyncPointDto
 import io.mockk.coEvery
@@ -74,6 +75,9 @@ class SyncMapVersionTest {
         sync_map_version = syncMapVersion,
     )
 
+    private fun page(vararg pairs: BookPairResponse) =
+        PageResponse(items = pairs.toList(), total = pairs.size, page = 1, limit = 500)
+
     private fun cachedPair(syncMapVersion: Int?, downloaded: Boolean = true) = BookPairEntity(
         id = 42,
         ebookId = 1, ebookTitle = "E", ebookAuthor = null, ebookFilename = "e.epub",
@@ -114,7 +118,7 @@ class SyncMapVersionTest {
 
     @Test
     fun `refreshPairs drops the cached points when the server version moved`() = runTest {
-        coEvery { api.getPairs() } returns listOf(remotePair(syncMapVersion = 4))
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = 4))
         coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
         val saved = slot<List<BookPairEntity>>()
         coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
@@ -129,7 +133,7 @@ class SyncMapVersionTest {
 
     @Test
     fun `refreshPairs keeps the cache when the version matches`() = runTest {
-        coEvery { api.getPairs() } returns listOf(remotePair(syncMapVersion = 3))
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = 3))
         coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
         val saved = slot<List<BookPairEntity>>()
         coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
@@ -146,7 +150,7 @@ class SyncMapVersionTest {
     fun `refreshPairs leaves the cache alone when the server reports no version`() = runTest {
         // Null is "unknown" — an endpoint that didn't load the relationship —
         // not "this pair has no map". Dropping on null would wipe a good cache.
-        coEvery { api.getPairs() } returns listOf(remotePair(syncMapVersion = null))
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = null))
         coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
         val saved = slot<List<BookPairEntity>>()
         coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
@@ -164,7 +168,7 @@ class SyncMapVersionTest {
         // Upgrading from a build predating the column: the points are present
         // but we cannot tell which map they came from, so they get refetched
         // once. "Probably still fine" is the reasoning that produced issue #55.
-        coEvery { api.getPairs() } returns listOf(remotePair(syncMapVersion = 4))
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = 4))
         coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = null)
         val saved = slot<List<BookPairEntity>>()
         coEvery { bookPairDao.upsertPairs(capture(saved)) } returns Unit
@@ -179,7 +183,7 @@ class SyncMapVersionTest {
     fun `refreshPairs does not churn on a pair that has no cached map at all`() = runTest {
         // Nothing downloaded: there is nothing to invalidate, and issuing a
         // delete per pair on every library refresh would be pure noise.
-        coEvery { api.getPairs() } returns listOf(remotePair(syncMapVersion = 4))
+        coEvery { api.getPairs(any(), any()) } returns page(remotePair(syncMapVersion = 4))
         coEvery { bookPairDao.getPairById(42) } returns
             cachedPair(syncMapVersion = null, downloaded = false)
         val saved = slot<List<BookPairEntity>>()
