@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { getPairs, getEbooks, getAudiobooks, createPair, deletePair, getAllProgress } from '../api'
+import { getPairs, getUnpairedMedia, createPair, deletePair, getAllProgress } from '../api'
 import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
@@ -36,8 +36,10 @@ function PairsPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
     const [pairs, setPairs] = useState([])
-    const [ebooks, setEbooks] = useState([])
-    const [audiobooks, setAudiobooks] = useState([])
+    // Only the unpaired media are fetched (issue #120) — the manual-pairing
+    // pickers need nothing else, and the whole-library walk is gone.
+    const [unpairedEbooks, setUnpairedEbooks] = useState([])
+    const [unpairedAudiobooks, setUnpairedAudiobooks] = useState([])
     // Progress records — used to determine `lastFormat` per pair so a pair-tap
     // routes to whichever medium the user last used.
     const [progress, setProgress] = useState([])
@@ -61,13 +63,13 @@ function PairsPage({ tab }) {
 
     const loadData = async () => {
         try {
-            const [p, e, a, prog] = await Promise.all([
-                getPairs(), getEbooks(), getAudiobooks(),
+            const [p, unpaired, prog] = await Promise.all([
+                getPairs(), getUnpairedMedia(),
                 getAllProgress().catch(() => []),
             ])
             setPairs(p)
-            setEbooks(e)
-            setAudiobooks(a)
+            setUnpairedEbooks(unpaired.ebooks)
+            setUnpairedAudiobooks(unpaired.audiobooks)
             setProgress(prog || [])
         } catch (err) {
             setError(err.message)
@@ -105,12 +107,6 @@ function PairsPage({ tab }) {
         })
         return out
     }, [pairs, progress])
-
-    // Compute unpaired items
-    const pairedEbookIds = new Set(pairs.map(p => p.ebook.id))
-    const pairedAudiobookIds = new Set(pairs.map(p => p.audiobook.id))
-    const unpairedEbooks = ebooks.filter(e => !pairedEbookIds.has(e.id))
-    const unpairedAudiobooks = audiobooks.filter(a => !pairedAudiobookIds.has(a.id))
 
     // Sorting logic for pairs
     const handlePairSort = (col) => {
