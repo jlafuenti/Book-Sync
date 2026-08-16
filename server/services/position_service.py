@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import settings
 from models.book import AudioBook, BookPair, EBook
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource, HintKind, PositionHint
 from models.progress import ProgressType, UserProgress
@@ -346,6 +347,60 @@ async def _resolve_against_live_map(
     )
 
 
+def _in_epub_end_zone(percent: Optional[float]) -> bool:
+    return percent is not None and percent >= settings.auto_complete_epub_percent
+
+
+def _in_audio_end_zone(position_ms: Optional[int], duration_seconds: Optional[int]) -> bool:
+    if position_ms is None or duration_seconds is None:
+        return False
+    tail_ms = settings.auto_complete_audio_tail_seconds * 1000
+    return duration_seconds * 1000 - position_ms <= tail_ms
+
+
+async def _auto_complete(
+    db: AsyncSession, ref: ScopeRef, bookmark: Bookmark, update,
+    prev_percent: Optional[float], prev_audio_ms: Optional[int],
+    wrote_percent: bool, wrote_audio: bool,
+) -> None:
+    """Mark the book finished when this write *crosses into* the end zone.
+
+    docs/position-sync-contract.md § Completion (issue #56). The rule lives
+    here so every client inherits it — the web player, the Android player and
+    both readers used to each decide for themselves (or not at all).
+
+    - An explicit `is_completed` on the write always wins; the rule only runs
+      when the client said nothing.
+    - It never clears the flag: re-reading a chapter is not un-finishing.
+    - It fires on the *transition* into the zone, not on being in it, so a
+      manual un-finish sticks while the position sits at the end — the next
+      heartbeat doesn't undo the user's choice. Leaving and re-entering the
+      zone completes the book again.
+    - Ebook: the write carried `epub_progress_percent` and the stored value
+      went from below `auto_complete_epub_percent` (or unset) to at/above it.
+    - Audio: the write carried `audio_position_ms`, the scope has an
+      audiobook whose `duration_seconds` is known, and the position went from
+      outside the last `auto_complete_audio_tail_seconds` to inside them.
+      Unknown length means no end zone; the client's own end-of-stream write
+      still completes the book because it sends `is_completed` explicitly.
+    """
+    if update.is_completed is not None or bookmark.is_completed:
+        return
+
+    if wrote_percent and _in_epub_end_zone(bookmark.epub_progress_percent) \
+            and not _in_epub_end_zone(prev_percent):
+        bookmark.is_completed = True
+        return
+
+    if wrote_audio and ref.audiobook_id is not None:
+        duration = (await db.execute(
+            select(AudioBook.duration_seconds).where(AudioBook.id == ref.audiobook_id)
+        )).scalar_one_or_none()
+        if _in_audio_end_zone(bookmark.audio_position_ms, duration) \
+                and not _in_audio_end_zone(prev_audio_ms, duration):
+            bookmark.is_completed = True
+
+
 async def apply_position(
     db: AsyncSession, user_id: int, ref: ScopeRef, update, *, commit: bool = True
 ) -> Tuple[Bookmark, bool]:
@@ -392,6 +447,7 @@ async def apply_position(
     before_anchor = _anchor_of(bookmark)
     prev = (bookmark.epub_chapter, bookmark.epub_sentence_index,
             bookmark.audio_position_ms)
+    prev_percent = bookmark.epub_progress_percent
 
     # Omission means "leave alone". A write carrying no anchor — a completion
     # toggle, say — must never blank one out. `source` follows the same rule:
@@ -435,6 +491,11 @@ async def apply_position(
         bookmark.audio_position_ms = audio_position_ms
     if update.is_completed is not None:
         bookmark.is_completed = update.is_completed
+    await _auto_complete(
+        db, ref, bookmark, update, prev_percent, prev[2],
+        wrote_percent=update.epub_progress_percent is not None,
+        wrote_audio=audio_position_ms is not None,
+    )
 
     if update.device_id is not None:
         bookmark.device_id = update.device_id

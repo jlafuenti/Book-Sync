@@ -106,8 +106,7 @@ class ReaderViewModel @Inject constructor(
     fun markComplete() {
         viewModelScope.launch {
             val p = _pair.value ?: return@launch
-            p.audiobookId?.let { repository.markComplete("audiobook", it) }
-            p.ebookId?.let { repository.markComplete("ebook", it) }
+            repository.markPairComplete(p.id, p.ebookId, p.audiobookId)
         }
     }
 
