@@ -2,12 +2,15 @@ package com.booksync.data.repository
 
 import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.dao.PendingSyncDao
+import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.local.entity.BookmarkEntity
+import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
@@ -15,7 +18,9 @@ import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.Response
 
@@ -42,6 +47,7 @@ class SavePlaybackPositionTest {
     private val api = mockk<BookSyncApi>()
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
+    private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
 
     private fun repository() = BookSyncRepository(
         api = api,
@@ -51,7 +57,7 @@ class SavePlaybackPositionTest {
         syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
-        userProgressDao = mockk(relaxed = true),
+        userProgressDao = userProgressDao,
         acknowledgedItemDao = mockk(relaxed = true),
         bookmarkLogDao = mockk(relaxed = true),
         context = mockk(relaxed = true),
@@ -187,5 +193,77 @@ class SavePlaybackPositionTest {
         repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
 
         assertEquals("audiobook", sentRequest.captured.source)
+    }
+
+    // ============ pushToServer — the throttled heartbeat (issue #65) ============
+    //
+    // The service's 5s heartbeat writes Room on every tick but only pushes to
+    // the server every 30s. A local-only tick must leave the row UNSYNCED so
+    // the backstops (startup reconcile, the WorkManager sweep) still deliver
+    // it if the app dies before the next push.
+
+    @Test
+    fun `pushToServer=false writes Room only, unsynced, and reports no push`() = runTest {
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        val pushed = repository().savePlaybackPosition(
+            pairId = 42, audioPositionMs = 5_000, claimFormat = true, pushToServer = false)
+
+        assertFalse(pushed)
+        coVerify(exactly = 0) { api.updatePosition(any(), any(), any()) }
+        assertEquals(5_000, savedBookmark.captured.audioPositionMs)
+        assertFalse("a throttled heartbeat has not reached the server", savedBookmark.captured.syncedToServer)
+        coVerify(exactly = 0) { pendingSyncDao.insert(any()) }
+    }
+
+    @Test
+    fun `pushToServer=true reports whether the canonical write landed`() = runTest {
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
+        assertTrue(repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000))
+
+        coEvery { api.updatePosition("pair", 42, any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+        assertFalse(repository().savePlaybackPosition(pairId = 42, audioPositionMs = 6_000))
+    }
+
+    @Test
+    fun `standalone pushToServer=false writes progress locally, unsynced, without a network call`() = runTest {
+        val savedProgress = slot<UserProgressEntity>()
+        coEvery { userProgressDao.upsertProgress(capture(savedProgress)) } returns Unit
+
+        val pushed = repository().savePlaybackPositionStandalone(
+            audiobookId = 7, audioPositionMs = 3_000, pushToServer = false)
+
+        assertFalse(pushed)
+        coVerify(exactly = 0) { api.updatePosition(any(), any(), any()) }
+        assertEquals(3_000, savedProgress.captured.audioPositionMs)
+        assertFalse(savedProgress.captured.syncedToServer)
+    }
+
+    @Test
+    fun `processPendingSync pushes a bookmark row a throttled heartbeat left unsynced`() = runTest {
+        // The 15-minute WorkManager sweep is the backstop the throttle relies
+        // on when the app is killed between pushes; it must see these rows.
+        val stale = BookmarkEntity(
+            bookPairId = 42, source = "audiobook", epubChapter = null, epubSentenceIndex = null,
+            audioPositionMs = 9_000, updatedAt = "1000", capturedAt = "2026-08-15T10:00:00Z",
+            syncedToServer = false,
+        )
+        coEvery { pendingSyncDao.getAllPending() } returns emptyList()
+        coEvery { userProgressDao.getUnsyncedProgress() } returns emptyList()
+        coEvery { bookmarkDao.getUnsyncedBookmarks() } returns listOf(stale)
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().processPendingSync()
+
+        assertEquals(9_000, sentRequest.captured.audio_position_ms)
+        assertEquals("2026-08-15T10:00:00Z", sentRequest.captured.captured_at)
+        assertTrue(savedBookmark.captured.syncedToServer)
     }
 }

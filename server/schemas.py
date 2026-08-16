@@ -4,7 +4,7 @@ Pydantic schemas for API request/response validation.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, List
+from typing import Generic, Optional, List, TypeVar
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from models.book import PairStatus
 from models.bookmark import BookmarkSource
@@ -334,6 +334,10 @@ class TextMatchResponse(BaseModel):
     epub_chapter: int
     epub_sentence_index: int
     preview: Optional[str] = None
+    # The map version this match was resolved against — the client echoes it
+    # as `PositionUpdate.sync_map_version` on the write it derives from this
+    # match (issue #116).
+    sync_map_version: Optional[int] = None
 
 
 class BookmarkLogResponse(BaseModel):
@@ -447,6 +451,9 @@ class LibraryScanResponse(BaseModel):
     new_ebooks: int
     new_audiobooks: int
     auto_matched_pairs: int
+    # Folders of per-track audio the scan refused to import (issue #63);
+    # they're listed in Troubleshoot Library.
+    multi_file_folders: int = 0
     message: str
 
 # ============================================================
@@ -488,9 +495,25 @@ class IgnoreDiscrepancyRequest(BaseModel):
 # New Items / New Pairs Inbox Schemas
 # ============================================================
 
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """One page of a list endpoint (issue #48).
+
+    `page` is 1-based and `limit` is the page size that was applied, so a
+    client can tell whether there is more (`page * limit < total`) without a
+    second request. Same conventions as `GET /api/users/audit-log`.
+    """
+    items: List[T]
+    total: int
+    page: int
+    limit: int
+
+
 class NewItemsResponse(BaseModel):
-    ebooks: List[EBookResponse]
-    audiobooks: List[AudioBookResponse]
+    ebooks: Page[EBookResponse]
+    audiobooks: Page[AudioBookResponse]
 
 
 class AcknowledgeItemsRequest(BaseModel):
@@ -552,6 +575,11 @@ class PositionUpdate(BaseModel):
     # Spine index: the axis both readers position by.
     epub_chapter: Optional[int] = None
     epub_sentence_index: Optional[int] = None
+    # The sync-map version `epub_sentence_index` was resolved against (issue
+    # #116). A sentence index is a map coordinate; the server records what the
+    # client attests to (NULL when it says nothing) and re-anchors a write
+    # whose version trails the live map rather than trusting its index.
+    sync_map_version: Optional[int] = None
     epub_text_preview: Optional[str] = None
     epub_progress_percent: Optional[float] = None
     audio_position_ms: Optional[int] = None
@@ -577,6 +605,9 @@ class PositionResponse(BaseModel):
     anchor_revision: int
     epub_chapter: Optional[int] = None
     epub_sentence_index: Optional[int] = None
+    # Which map the stored sentence index is expressed in; NULL = unknown. A
+    # client that pulls this and later pushes it back attests to this value.
+    sync_map_version: Optional[int] = None
     epub_text_preview: Optional[str] = None
     epub_progress_percent: Optional[float] = None
     audio_position_ms: Optional[int] = None

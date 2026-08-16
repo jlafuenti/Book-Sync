@@ -11,6 +11,7 @@ writes through `PUT /position/{scope}/{ident}`, and `user_progress` is only a
 projection this module maintains.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Tuple
@@ -26,6 +27,8 @@ from models.progress import ProgressType, UserProgress
 from models.sync_map import SyncMap
 from schemas import PositionScope
 from utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 class PositionScopeError(ValueError):
@@ -270,6 +273,79 @@ async def _sync_derived_progress(
         row.updated_at = utcnow()
 
 
+async def _resolve_against_live_map(
+    db: AsyncSession, ref: ScopeRef, update, bookmark: Bookmark,
+    epub_chapter: Optional[int], epub_sentence_index: int,
+    audio_position_ms: Optional[int],
+) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+    """Decide which version a sentence-index-carrying write is recorded against,
+    re-anchoring it when its attested version trails the live map (issue #116).
+
+    Returns `(version_to_stamp, epub_chapter, epub_sentence_index, audio_position_ms)`.
+
+    * No attested version → stamp NULL ("unknown"). Claiming the live version
+      for a coordinate nobody vouched for is the false claim that hid the drift.
+    * Attested == live → stamp it; the coordinates are taken as sent.
+    * Mismatch → resolve the position on the live map from the write's own
+      evidence (audio position for an audiobook-sourced write, text preview
+      otherwise — the same rule the re-map uses). Success re-expresses the
+      coordinates and stamps the live version. Failure keeps the coordinates as
+      sent and stamps the *attested* version, so the row visibly trails.
+
+    The map's points are only loaded on the mismatch path; the ordinary write
+    costs one `version` lookup, as before.
+    """
+    # Local import: sync_engine imports this module.
+    from services.sync_engine import resolve_on_map
+
+    live_version = (await db.execute(
+        select(SyncMap.version).where(SyncMap.book_pair_id == ref.book_pair_id)
+    )).scalar_one_or_none()
+    attested = update.sync_map_version
+
+    if attested is None:
+        return None, epub_chapter, epub_sentence_index, audio_position_ms
+    if live_version is None or attested == live_version:
+        # No map to check against, or in agreement with it: record the claim.
+        return attested, epub_chapter, epub_sentence_index, audio_position_ms
+
+    sync_map = (await db.execute(
+        select(SyncMap)
+        .options(selectinload(SyncMap.sync_points))
+        .where(SyncMap.book_pair_id == ref.book_pair_id)
+    )).scalar_one_or_none()
+    points = list(sync_map.sync_points) if sync_map else []
+    resolved = None
+    if points:
+        by_audio = sorted(points, key=lambda p: p.audio_start_ms)
+        resolved = resolve_on_map(
+            update.source or bookmark.source, audio_position_ms,
+            update.epub_text_preview, epub_chapter, points, by_audio,
+        )
+
+    if resolved is None:
+        logger.warning(
+            "Position write for pair %s (user %s) attests sync map v%s but the "
+            "live map is v%s and it carries no usable anchor — keeping its "
+            "coordinates (ch=%s, s=%s) and stamping v%s.",
+            ref.book_pair_id, bookmark.user_id, attested, live_version,
+            epub_chapter, epub_sentence_index, attested,
+        )
+        return attested, epub_chapter, epub_sentence_index, audio_position_ms
+
+    new_chapter, new_sentence, new_audio_ms = resolved
+    logger.info(
+        "Re-anchored a v%s position write for pair %s (user %s) onto sync map "
+        "v%s: (ch=%s, s=%s) -> (ch=%s, s=%s).",
+        attested, ref.book_pair_id, bookmark.user_id, live_version,
+        epub_chapter, epub_sentence_index, new_chapter, new_sentence,
+    )
+    return (
+        live_version, new_chapter, new_sentence,
+        new_audio_ms if new_audio_ms is not None else audio_position_ms,
+    )
+
+
 async def apply_position(
     db: AsyncSession, user_id: int, ref: ScopeRef, update, *, commit: bool = True
 ) -> Tuple[Bookmark, bool]:
@@ -324,24 +400,39 @@ async def apply_position(
     # it must not re-stamp the stored value.
     if update.source is not None:
         bookmark.source = update.source
-    if update.epub_chapter is not None:
-        bookmark.epub_chapter = update.epub_chapter
-    if update.epub_sentence_index is not None:
-        bookmark.epub_sentence_index = update.epub_sentence_index
-        # A sentence index only means anything relative to the map that produced
-        # it, so record which one this write established it against (issue #55).
+
+    # The coordinates this write lands with. A sentence index is a sync-map
+    # coordinate, so a write whose attested `sync_map_version` trails the live
+    # map is re-expressed in the live map's terms first (issue #116) — the
+    # remaining fields below are then applied from these resolved values.
+    epub_chapter = update.epub_chapter
+    epub_sentence_index = update.epub_sentence_index
+    audio_position_ms = update.audio_position_ms
+    stamp_version = False
+    version_to_stamp: Optional[int] = None
+    if update.epub_sentence_index is not None and ref.scope == PositionScope.PAIR:
         # Writes carrying no sentence index — a completion toggle, an audio
         # heartbeat — establish no coordinate and must not claim a version.
-        if ref.scope == PositionScope.PAIR:
-            bookmark.sync_map_version = (await db.execute(
-                select(SyncMap.version).where(SyncMap.book_pair_id == ref.book_pair_id)
-            )).scalar_one_or_none()
+        stamp_version = True
+        version_to_stamp, epub_chapter, epub_sentence_index, audio_position_ms = (
+            await _resolve_against_live_map(
+                db, ref, update, bookmark,
+                epub_chapter, epub_sentence_index, audio_position_ms,
+            )
+        )
+
+    if epub_chapter is not None:
+        bookmark.epub_chapter = epub_chapter
+    if epub_sentence_index is not None:
+        bookmark.epub_sentence_index = epub_sentence_index
+    if stamp_version:
+        bookmark.sync_map_version = version_to_stamp
     if update.epub_text_preview is not None:
         bookmark.epub_text_preview = update.epub_text_preview
     if update.epub_progress_percent is not None:
         bookmark.epub_progress_percent = update.epub_progress_percent
-    if update.audio_position_ms is not None:
-        bookmark.audio_position_ms = update.audio_position_ms
+    if audio_position_ms is not None:
+        bookmark.audio_position_ms = audio_position_ms
     if update.is_completed is not None:
         bookmark.is_completed = update.is_completed
 
@@ -409,6 +500,7 @@ def to_response_dict(bookmark: Bookmark, ref: ScopeRef) -> dict:
         "anchor_revision": bookmark.anchor_revision,
         "epub_chapter": bookmark.epub_chapter,
         "epub_sentence_index": bookmark.epub_sentence_index,
+        "sync_map_version": bookmark.sync_map_version,
         "epub_text_preview": bookmark.epub_text_preview,
         "epub_progress_percent": bookmark.epub_progress_percent,
         "audio_position_ms": bookmark.audio_position_ms,

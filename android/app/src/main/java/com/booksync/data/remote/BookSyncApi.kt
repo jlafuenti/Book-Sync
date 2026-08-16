@@ -36,14 +36,17 @@ interface BookSyncApi {
 
     // ============ Library ============
 
+    // The list endpoints are paginated (issue #48): `{items,total,page,limit}`,
+    // limit ≤ 500. The repository walks every page before touching Room —
+    // see BookSyncRepository.fetchAllPages.
     @GET("api/library/ebooks")
-    suspend fun getEbooks(): List<EBookResponse>
+    suspend fun getEbooks(@Query("page") page: Int, @Query("limit") limit: Int): PageResponse<EBookResponse>
 
     @GET("api/library/audiobooks")
-    suspend fun getAudiobooks(): List<AudioBookResponse>
+    suspend fun getAudiobooks(@Query("page") page: Int, @Query("limit") limit: Int): PageResponse<AudioBookResponse>
 
     @GET("api/library/pairs")
-    suspend fun getPairs(): List<BookPairResponse>
+    suspend fun getPairs(@Query("page") page: Int, @Query("limit") limit: Int): PageResponse<BookPairResponse>
 
     // ---- Per-book extended metadata (description, publisher, etc.) ----
     // These endpoints return richer metadata than the list endpoints. We use

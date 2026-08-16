@@ -74,3 +74,6 @@ android/.externalNativeBuild/
 
 # Sync-parity fixtures copied from server/ at build time (single source of truth is the server)
 android/app/src/test/resources/sync_parity/
+
+# Playwright MCP snapshots/screenshots
+.playwright-mcp/

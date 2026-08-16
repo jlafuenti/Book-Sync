@@ -168,6 +168,43 @@ def _anchor_text(bookmark: Bookmark, old_points: List[OldPoint]) -> Optional[str
     return fallback if len(fallback) >= MIN_REMAPPABLE_PREVIEW else None
 
 
+def resolve_on_map(
+    source,
+    audio_position_ms: Optional[int],
+    anchor_text: Optional[str],
+    chapter: Optional[int],
+    points,
+    points_by_audio,
+) -> Optional[Tuple[int, int, Optional[int]]]:
+    """Express one position in a map's coordinates, best evidence first.
+
+    The one rule both the re-map and a version-mismatched client write share
+    (issue #116):
+
+    * **audiobook**-sourced with an audio position → `audio_to_epub`; the audio
+      file didn't change, so that field is the truth. Returns `audio_ms=None`
+      because it must not be rewritten.
+    * otherwise → the text anchor through the shared matcher (unchanged — the
+      Kotlin mirror and the parity vectors are untouched by this). Returns the
+      matched point's audio start, since an ebook-sourced audio position *is*
+      derived from the map.
+
+    `points` may be `AlignedPoint`s or `SyncPoint` rows; `points_by_audio` is
+    the same list sorted by `audio_start_ms` (`audio_to_epub` stops early).
+    Returns None when there is nothing usable to resolve from.
+    """
+    if source == BookmarkSource.AUDIOBOOK and audio_position_ms is not None:
+        ch, sentence = audio_to_epub(points_by_audio, audio_position_ms)
+        return (ch, sentence, None)
+    text = (anchor_text or "").strip()
+    if len(text) < MIN_REMAPPABLE_PREVIEW:
+        return None
+    match = match_text_to_sync_points(points, text, chapter or 0)
+    if match is None:
+        return None
+    return (match.epub_chapter, match.epub_sentence_index, match.audio_start_ms)
+
+
 async def remap_bookmarks_for_pair(
     db: AsyncSession,
     book_pair_id: int,
@@ -229,20 +266,11 @@ async def remap_bookmarks_for_pair(
 
     remapped = 0
     for bookmark in bookmarks:
-        resolved: Optional[Tuple[int, int, Optional[int]]] = None
-
-        if (bookmark.source == BookmarkSource.AUDIOBOOK
-                and bookmark.audio_position_ms is not None):
-            chapter, sentence = audio_to_epub(by_audio, bookmark.audio_position_ms)
-            resolved = (chapter, sentence, None)
-        else:
-            text = _anchor_text(bookmark, old_points)
-            if text:
-                match = match_text_to_sync_points(
-                    new_points, text, bookmark.epub_chapter or 0)
-                if match is not None:
-                    resolved = (match.epub_chapter, match.epub_sentence_index,
-                                match.audio_start_ms)
+        resolved = resolve_on_map(
+            bookmark.source, bookmark.audio_position_ms,
+            _anchor_text(bookmark, old_points), bookmark.epub_chapter,
+            new_points, by_audio,
+        )
 
         if resolved is None:
             logger.warning(

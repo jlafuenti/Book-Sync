@@ -229,6 +229,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 source: 'ebook',
                 epub_chapter: match ? match.epub_chapter : chapter,
                 epub_sentence_index: match ? match.epub_sentence_index : undefined,
+                // A sentence index is a sync-map coordinate; attest which map
+                // it was resolved against so the server can tell a stale
+                // index from a current one (issue #116).
+                sync_map_version: match ? match.sync_map_version : undefined,
                 epub_text_preview: textPreview || undefined,
                 epub_progress_percent: Math.round(percent * 100) / 100,
                 audio_position_ms: match ? match.audio_position_ms : undefined,

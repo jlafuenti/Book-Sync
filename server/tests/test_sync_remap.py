@@ -328,26 +328,145 @@ async def test_remap_does_not_touch_captured_at_or_write_a_log_row(db):
     assert logs == []
 
 
-async def test_apply_position_stamps_the_current_sync_map_version(db):
-    """A client write establishes coordinates against whatever map is live, so
-    the column tracks ordinary writes too — otherwise it would only ever reflect
-    re-maps and could not detect a client writing against an old map."""
-    from schemas import PositionScope, PositionUpdate
-    from services.position_service import ScopeRef, apply_position
+async def _pair_at_v2(db):
+    """A pair whose map has been regenerated once: OLD_POINTS was v1, NEW_POINTS is v2."""
+    from schemas import PositionScope
+    from services.position_service import ScopeRef
 
     pair = await make_book_pair(db)
     await save_sync_map(db, pair.id, _aligned(OLD_POINTS))
     await _retranscribe(db, pair.id)  # now at version 2
-
     ref = ScopeRef(PositionScope.PAIR, book_pair_id=pair.id,
                    ebook_id=pair.ebook_id, audiobook_id=pair.audiobook_id)
+    return pair, ref
+
+
+async def test_apply_position_stamps_the_version_the_client_attests_to(db):
+    """A write carrying the live version is recorded against it — the ordinary
+    case, and the one the column exists to track (issue #116)."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair, ref = await _pair_at_v2(db)
+    record, accepted = await apply_position(db, 1, ref, PositionUpdate(
+        epub_chapter=0, epub_sentence_index=3, sync_map_version=2,
+        epub_text_preview="pack my box with five dozen liquor jugs",
+    ))
+
+    assert accepted
+    assert (record.epub_chapter, record.epub_sentence_index) == (0, 3)
+    assert record.sync_map_version == 2
+
+
+async def test_apply_position_without_an_attested_version_stamps_null(db):
+    """A client that doesn't say which map its index came from gets NULL —
+    "unknown" — rather than the current version. Claiming currency for a
+    coordinate nobody vouched for is exactly the false claim #116 describes."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair, ref = await _pair_at_v2(db)
     record, accepted = await apply_position(db, 1, ref, PositionUpdate(
         epub_chapter=0, epub_sentence_index=3,
         epub_text_preview="pack my box with five dozen liquor jugs",
     ))
 
     assert accepted
+    assert record.sync_map_version is None
+
+
+async def test_stale_ebook_write_with_a_usable_preview_is_re_anchored(db):
+    """The phone pushes v1 coordinates (0, 1) after the map moved to v2. Its
+    preview names the same sentence, so the write lands re-expressed in v2
+    terms — (0, 3), audio 6500 — and is stamped current, instead of the stale
+    index being recorded as if it were current."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair, ref = await _pair_at_v2(db)
+    record, accepted = await apply_position(db, 1, ref, PositionUpdate(
+        source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1, sync_map_version=1,
+        epub_text_preview="pack my box with five dozen liquor jugs",
+        audio_position_ms=5_000,
+    ))
+
+    assert accepted
+    assert (record.epub_chapter, record.epub_sentence_index) == (0, 3)
+    assert record.audio_position_ms == 6_500
     assert record.sync_map_version == 2
+
+
+async def test_stale_audiobook_write_is_re_derived_from_its_audio_position(db):
+    """An audiobook-sourced write's audio position is the truth; its epub side
+    was derived from the old map, so it is re-derived from the new one."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair, ref = await _pair_at_v2(db)
+    record, accepted = await apply_position(db, 1, ref, PositionUpdate(
+        source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=1, epub_sentence_index=0, sync_map_version=1,
+        audio_position_ms=11_500,
+    ))
+
+    assert accepted
+    # 11 500 ms in the v2 map is "how vexingly quick daft zebras jump" = (1, 1).
+    assert (record.epub_chapter, record.epub_sentence_index) == (1, 1)
+    assert record.audio_position_ms == 11_500
+    assert record.sync_map_version == 2
+
+
+async def test_stale_write_without_a_usable_anchor_keeps_its_stale_version(db):
+    """Nothing to re-anchor from: the coordinates are kept as sent, and the row
+    keeps saying v1 so the drift stays detectable."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair, ref = await _pair_at_v2(db)
+    record, accepted = await apply_position(db, 1, ref, PositionUpdate(
+        source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1, sync_map_version=1,
+        epub_text_preview="zzz",  # too short to match anything
+    ))
+
+    assert accepted
+    assert (record.epub_chapter, record.epub_sentence_index) == (0, 1)
+    assert record.sync_map_version == 1
+
+
+async def test_position_response_reports_the_sync_map_version(db):
+    """Clients pulling a position learn what its coordinates are expressed in,
+    so a later deferred push can attest the right version."""
+    from schemas import PositionResponse, PositionUpdate
+    from services.position_service import apply_position, to_response_dict
+
+    pair, ref = await _pair_at_v2(db)
+    record, _ = await apply_position(db, 1, ref, PositionUpdate(
+        epub_chapter=0, epub_sentence_index=3, sync_map_version=2,
+    ))
+
+    payload = PositionResponse.model_validate(to_response_dict(record, ref))
+    assert payload.sync_map_version == 2
+
+
+async def test_match_text_reports_the_sync_map_version(db, make_client, make_user, auth_header):
+    """The web resolves its sentence index server-side via /match-text, so that
+    response is where it learns which version to attest to."""
+    from routers import sync as sync_router
+
+    pair, _ = await _pair_at_v2(db)
+    user = await make_user()
+
+    async with make_client(sync_router.router) as c:
+        resp = await c.post(
+            f"/api/sync/match-text/{pair.id}", headers=auth_header(user),
+            json={"epub_text": "pack my box with five dozen liquor jugs", "chapter_hint": 0},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["sync_map_version"] == 2
+    assert resp.json()["epub_sentence_index"] == 3
 
 
 async def test_apply_position_without_a_sentence_index_leaves_the_version_alone(db):
@@ -386,7 +505,7 @@ async def test_pairs_listing_reports_the_sync_map_version(db, make_client, make_
         resp = await c.get("/api/library/pairs", headers=auth_header(user))
 
     assert resp.status_code == 200
-    body = {p["id"]: p for p in resp.json()}
+    body = {p["id"]: p for p in resp.json()["items"]}
     assert body[pair.id]["sync_map_version"] == 2
 
 
@@ -401,8 +520,8 @@ async def test_pair_without_a_sync_map_reports_null(db, make_client, make_user,
         resp = await c.get("/api/library/pairs", headers=auth_header(user))
 
     assert resp.status_code == 200
-    assert resp.json()[0]["sync_map_version"] is None
-    assert resp.json()[0]["id"] == pair.id
+    assert resp.json()["items"][0]["sync_map_version"] is None
+    assert resp.json()["items"][0]["id"] == pair.id
 
 
 async def test_serialising_a_pair_with_the_map_unloaded_does_not_lazy_load(db):
