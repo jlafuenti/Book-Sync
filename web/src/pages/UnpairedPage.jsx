@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { getPairs, getEbooks, getAudiobooks, createPair } from '../api'
+import { getUnpairedMedia, createPair } from '../api'
 import CoverImg from '../components/CoverImg'
 
 function matchesFilters(item, text, author, series) {
@@ -81,9 +81,10 @@ export function BookRow({ item, selected, onSelect }) {
 }
 
 export default function UnpairedPage() {
-    const [pairs, setPairs] = useState([])
-    const [ebooks, setEbooks] = useState([])
-    const [audiobooks, setAudiobooks] = useState([])
+    // Only the unpaired set is fetched (issue #120) — bounded by
+    // `tab=unpaired`, not the whole library set-diffed against every pair.
+    const [unpairedEbooks, setUnpairedEbooks] = useState([])
+    const [unpairedAudiobooks, setUnpairedAudiobooks] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
 
@@ -111,10 +112,9 @@ export default function UnpairedPage() {
 
     const loadData = async () => {
         try {
-            const [p, e, a] = await Promise.all([getPairs(), getEbooks(), getAudiobooks()])
-            setPairs(p)
-            setEbooks(e)
-            setAudiobooks(a)
+            const { ebooks, audiobooks } = await getUnpairedMedia()
+            setUnpairedEbooks(ebooks)
+            setUnpairedAudiobooks(audiobooks)
         } catch (err) {
             setError(err.message)
         } finally {
@@ -123,12 +123,6 @@ export default function UnpairedPage() {
     }
 
     useEffect(() => { loadData() }, [])
-
-    const pairedEbookIds = useMemo(() => new Set(pairs.map(p => p.ebook.id)), [pairs])
-    const pairedAudiobookIds = useMemo(() => new Set(pairs.map(p => p.audiobook.id)), [pairs])
-
-    const unpairedEbooks = useMemo(() => ebooks.filter(e => !pairedEbookIds.has(e.id)), [ebooks, pairedEbookIds])
-    const unpairedAudiobooks = useMemo(() => audiobooks.filter(a => !pairedAudiobookIds.has(a.id)), [audiobooks, pairedAudiobookIds])
 
     // Dropdown option lists — derived from all unpaired items (not filtered), so options don't disappear while filtering
     const globalAuthors = useMemo(() => uniqueSorted([...unpairedEbooks, ...unpairedAudiobooks], 'author'), [unpairedEbooks, unpairedAudiobooks])

@@ -905,3 +905,10 @@
         padding: 40px 24px;
     }
 }
+
+/* Infinite-scroll sentinel (issue #120): an invisible marker below the loaded
+   items; when it scrolls into view the page asks for the next page. */
+.library-scroll-sentinel {
+    height: 1px;
+    margin-bottom: 8px;
+}
