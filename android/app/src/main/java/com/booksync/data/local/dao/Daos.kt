@@ -204,6 +204,12 @@ interface BookmarkDao {
     @Query("UPDATE bookmarks SET syncedToServer = 1 WHERE bookPairId = :pairId")
     suspend fun markSynced(pairId: Int)
 
+    // Rows a throttled heartbeat (issue #65) or a failed PUT left behind —
+    // processPendingSync pushes them on the WorkManager sweep, mirroring
+    // UserProgressDao.getUnsyncedProgress.
+    @Query("SELECT * FROM bookmarks WHERE syncedToServer = 0")
+    suspend fun getUnsyncedBookmarks(): List<BookmarkEntity>
+
     @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
     suspend fun updateLocator(pairId: Int, locatorJson: String)
 

@@ -290,6 +290,7 @@ async def match_text_to_audio(
         epub_chapter=matched_point.epub_chapter,
         epub_sentence_index=matched_point.epub_sentence_index,
         preview=matched_point.epub_text_preview,
+        sync_map_version=sync_map.version,
     )
 
 

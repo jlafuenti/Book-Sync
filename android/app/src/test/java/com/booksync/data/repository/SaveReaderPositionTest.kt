@@ -1,8 +1,10 @@
 package com.booksync.data.repository
 
+import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.SyncPointDao
+import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.local.entity.SyncPointEntity
@@ -57,10 +59,11 @@ class SaveReaderPositionTest {
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
     private val syncPointDao = mockk<SyncPointDao>(relaxed = true)
+    private val bookPairDao = mockk<BookPairDao>(relaxed = true)
 
     private fun repository() = BookSyncRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
+        bookPairDao = bookPairDao,
         eBookDao = mockk(relaxed = true),
         audioBookDao = mockk(relaxed = true),
         syncPointDao = syncPointDao,
@@ -266,5 +269,76 @@ class SaveReaderPositionTest {
         assertNull(sentRequest.captured.epub_sentence_index)
         assertNull(sentRequest.captured.audio_position_ms)
         coVerify(exactly = 0) { syncPointDao.getPointsForPair(any()) }
+    }
+
+    // ---------- attesting the sync-map version (issue #116) ----------
+
+    private fun cachedPair(syncMapVersion: Int?) = BookPairEntity(
+        id = 42, ebookId = 1, ebookTitle = "E", ebookAuthor = null, ebookFilename = "e.epub",
+        ebookFormat = "epub", audiobookId = 2, audiobookTitle = "A", audiobookAuthor = null,
+        audiobookFilename = "a.m4b", audiobookFormat = "m4b", audiobookDurationSeconds = null,
+        status = "synced", syncMapDownloaded = true, syncMapVersion = syncMapVersion,
+    )
+
+    @Test
+    fun `a sync-point match attests the version the cached points came from`() = runTest {
+        // The sentence index is a coordinate of the map whose points are
+        // cached locally; the write says so, on the wire and on the Room row,
+        // so the server never records it as current by default.
+        coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
+        coEvery { syncPointDao.getPointsForPair(42) } returns listOf(matchingSyncPoint())
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(textPreview = previewText)).join()
+
+        assertEquals(3, sentRequest.captured.sync_map_version)
+        assertEquals(3, savedBookmark.captured.syncMapVersion)
+    }
+
+    @Test
+    fun `a sync-point miss carries the existing row's version alongside its reused index`() = runTest {
+        // The merged row keeps the previously stored sentence index, so it must
+        // keep the version that index belongs to as well — not the live one.
+        coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 5)
+        coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
+        coEvery { bookmarkDao.getBookmark(42) } returns BookmarkEntity(
+            bookPairId = 42, source = "ebook", epubChapter = 12, epubSentenceIndex = 9,
+            audioPositionMs = 1000, updatedAt = "1", syncMapVersion = 2,
+        )
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+        coEvery { api.updatePosition(any(), any(), any()) } returns Response.success(positionResponse())
+
+        repository().saveReaderPosition(snapshot()).join()
+
+        assertEquals(9, savedBookmark.captured.epubSentenceIndex)
+        assertEquals(2, savedBookmark.captured.syncMapVersion)
+    }
+
+    @Test
+    fun `a queued fallback replays with the version that was true at resolution time`() = runTest {
+        coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 3)
+        coEvery { syncPointDao.getPointsForPair(42) } returns listOf(matchingSyncPoint())
+        coEvery { api.updatePosition(any(), any(), any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+        val pending = slot<PendingSyncEntity>()
+        coEvery { pendingSyncDao.insert(capture(pending)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(textPreview = previewText)).join()
+
+        assertEquals(7, pending.captured.epubSentenceIndex)
+        assertEquals(3, pending.captured.syncMapVersion)
+
+        // ...and the replay sends it, even if the pair's cache has since moved on.
+        coEvery { pendingSyncDao.getAllPending() } returns listOf(pending.captured)
+        val replayed = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(replayed)) } returns Response.success(positionResponse())
+
+        repository().processPendingSync()
+
+        assertEquals(3, replayed.captured.sync_map_version)
     }
 }
