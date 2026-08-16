@@ -15,6 +15,20 @@ function positionTarget(audiobook) {
 // a 1-hour uninterrupted session logs ~2 entries instead of ~720.
 const LOG_INTERVAL_MS = 30 * 60 * 1000
 
+// Position-save cadence (issue #65). The heartbeat ticks every 5s, but a
+// network push only goes out once NETWORK_SAVE_INTERVAL_MS has elapsed since
+// the last successful one — recording "position advanced 5s" as a Postgres
+// UPDATE 720 times an hour per device bought nothing, since the server copy
+// only matters for cross-device resume, where 30s of staleness is
+// imperceptible. Session boundaries (pause, seek, sleep-timer stop, book
+// change, stop, unload) flush immediately regardless. Android's
+// AudioPlayerService keeps the same two numbers; see
+// docs/position-sync-contract.md § Save cadence before changing either.
+const HEARTBEAT_TICK_MS = 5000
+const NETWORK_SAVE_INTERVAL_MS = 30_000
+// A slider scrub fires many seeks; coalesce them into one write.
+const SEEK_FLUSH_DEBOUNCE_MS = 1000
+
 // Playback offsets (issue #42). These two numbers are the web copy of a value
 // that must be identical on every surface -- Android's PlaybackOffsets and the
 // server's default_rewind_seconds carry the same ones. See
@@ -66,6 +80,15 @@ export function AudioPlayerProvider({ children }) {
     // Guards the stream-error recovery below against retry loops: only one
     // re-mint attempt per load, cleared once playback resumes successfully.
     const recoveringStreamRef = useRef(false)
+    // Network-push throttle (issue #65): when the last push *succeeded*, and
+    // whether one is still in flight. A failed push leaves lastPushTimeRef
+    // alone so the next tick retries instead of waiting out another 30s.
+    const lastPushTimeRef = useRef(0)
+    const pushInFlightRef = useRef(false)
+    const seekFlushTimerRef = useRef(null)
+    // Latest flushPosition, readable from timer callbacks (sleep timer, seek
+    // debounce) that would otherwise close over a stale one.
+    const flushRef = useRef(() => Promise.resolve())
 
     const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
     const [pairedEbookId, setPairedEbookId] = useState(null)
@@ -94,6 +117,51 @@ export function AudioPlayerProvider({ children }) {
     }, [])
 
     const clearStaleConflict = useCallback(() => setStaleConflict(null), [])
+
+    // The one position write for the player (issue #65). Boundary flushes call
+    // it directly; the heartbeat calls it only when the throttle says so.
+    //
+    // `appendToLog` marks a session boundary (history entry + resets the
+    // 30-min continuous-playback clock). `claimFormat` follows the product
+    // rule from `onUnload`: only a playing player or an explicit user command
+    // claims `source`. `target` lets a book-change flush name the book being
+    // left after state has already moved on.
+    const flushPosition = useCallback(({ appendToLog = false, claimFormat = true, target = null } = {}) => {
+        const audio = audioRef.current
+        const ab = target || currentAudiobookRef.current
+        if (!audio || !ab) return Promise.resolve()
+        if (appendToLog) lastLogTimeRef.current = Date.now()
+        const [scope, id] = positionTarget(ab)
+        pushInFlightRef.current = true
+        return updatePosition(scope, id, {
+            source: claimFormat ? 'audiobook' : undefined,
+            audio_position_ms: Math.floor(audio.currentTime * 1000),
+            append_to_log: appendToLog,
+            device_id: getDeviceId(),
+            device_name: getDeviceName(),
+            captured_at: new Date().toISOString(),
+        }).then((result) => {
+            lastPushTimeRef.current = Date.now()
+            return handleConflict(result)
+        }).catch(() => {}).finally(() => {
+            pushInFlightRef.current = false
+        })
+    }, [handleConflict])
+
+    useEffect(() => {
+        flushRef.current = flushPosition
+    }, [flushPosition])
+
+    // Seek / speed changes: one write after the last change settles, so a
+    // slider scrub doesn't turn into a burst of PUTs.
+    const scheduleFlush = useCallback(() => {
+        if (!currentAudiobookRef.current) return
+        if (seekFlushTimerRef.current) clearTimeout(seekFlushTimerRef.current)
+        seekFlushTimerRef.current = setTimeout(() => {
+            seekFlushTimerRef.current = null
+            flushRef.current({ appendToLog: false, claimFormat: playingRef.current })
+        }, SEEK_FLUSH_DEBOUNCE_MS)
+    }, [])
 
     // Create audio element once
     useEffect(() => {
@@ -195,45 +263,39 @@ export function AudioPlayerProvider({ children }) {
         playingRef.current = playing
     }, [playing])
 
-    // Auto-save progress every 5s while playing. Heartbeat keeps the bookmark
-    // position fresh so a crash / tab close costs at most a few seconds of
-    // listening. The 5s cadence WAS also clogging the history log; now the
-    // history entry is gated on `append_to_log`, which only flips true once
-    // every 30 min of continuous playback (pauses freeze the timer because
-    // this interval stops running when `playing` goes false).
+    // Heartbeat while playing (issue #65): ticks every 5s, but only pushes to
+    // the server once NETWORK_SAVE_INTERVAL_MS has passed since the last
+    // successful push. The unload keepalive covers a tab close; a browser
+    // crash costs at most 30s, which is what the server copy is for anyway
+    // (cross-device resume). The history entry is gated separately on
+    // `append_to_log`, which flips true once every 30 min of continuous
+    // playback (pauses freeze both clocks because this interval stops running
+    // when `playing` goes false).
     useEffect(() => {
         if (saveIntervalRef.current) clearInterval(saveIntervalRef.current)
 
         if (playing && currentAudiobook) {
-            // Seed the log timer so the first log entry lands 30 min into the
-            // session, not immediately on resume.
+            // Seed both timers so the first log entry lands 30 min into the
+            // session and the first push 30s in — not immediately on resume,
+            // which just flushed on the pause boundary.
             if (lastLogTimeRef.current === 0) {
                 lastLogTimeRef.current = Date.now()
             }
+            lastPushTimeRef.current = Date.now()
             saveIntervalRef.current = setInterval(() => {
-                const audio = audioRef.current
-                if (audio && currentAudiobook) {
-                    // One write per tick; flip append_to_log only when the
-                    // 30-min continuous-playback threshold has been crossed.
-                    const shouldLog = Date.now() - lastLogTimeRef.current >= LOG_INTERVAL_MS
-                    if (shouldLog) lastLogTimeRef.current = Date.now()
-                    const [scope, id] = positionTarget(currentAudiobook)
-                    updatePosition(scope, id, {
-                        source: 'audiobook',
-                        audio_position_ms: Math.floor(audio.currentTime * 1000),
-                        append_to_log: shouldLog,
-                        device_id: getDeviceId(),
-                        device_name: getDeviceName(),
-                        captured_at: new Date().toISOString(),
-                    }).then(handleConflict).catch(() => {})
+                const now = Date.now()
+                const shouldLog = now - lastLogTimeRef.current >= LOG_INTERVAL_MS
+                const pushDue = now - lastPushTimeRef.current >= NETWORK_SAVE_INTERVAL_MS
+                if (shouldLog || (pushDue && !pushInFlightRef.current)) {
+                    flushPosition({ appendToLog: shouldLog, claimFormat: true })
                 }
-            }, 5000)
+            }, HEARTBEAT_TICK_MS)
         }
 
         return () => {
             if (saveIntervalRef.current) clearInterval(saveIntervalRef.current)
         }
-    }, [playing, currentAudiobook, handleConflict])
+    }, [playing, currentAudiobook, flushPosition])
 
     // Final history entry when the tab closes / reloads. Regular fetch is
     // aborted during unload, so we use the keepalive helper that sends the
@@ -284,6 +346,15 @@ export function AudioPlayerProvider({ children }) {
             return
         }
 
+        // Leaving one book for another is a session boundary for the book
+        // being left: flush it before the src swap moves the clock.
+        if (currentAudiobookRef.current && currentAudiobookRef.current.id !== audiobookId) {
+            flushPosition({
+                appendToLog: true, claimFormat: playingRef.current,
+                target: currentAudiobookRef.current,
+            })
+        }
+
         // Load new audiobook
         const url = await getAudiobookStreamUrl(audiobookId)
         audio.src = url
@@ -308,25 +379,15 @@ export function AudioPlayerProvider({ children }) {
         }
         audio.addEventListener('canplay', onCanPlay)
         audio.load()
-    }, [currentAudiobook, speed])
+    }, [currentAudiobook, speed, flushPosition])
 
     const pause = useCallback(() => {
         audioRef.current?.pause()
         // Save position immediately on pause. Pause is a session boundary —
         // log a history entry and reset the 30-min continuous-playback timer.
-        if (currentAudiobook && audioRef.current) {
-            const [scope, id] = positionTarget(currentAudiobook)
-            updatePosition(scope, id, {
-                source: 'audiobook',
-                audio_position_ms: Math.floor(audioRef.current.currentTime * 1000),
-                append_to_log: true,
-                device_id: getDeviceId(),
-                device_name: getDeviceName(),
-                captured_at: new Date().toISOString(),
-            }).then(handleConflict).catch(() => {})
-            lastLogTimeRef.current = Date.now()
-        }
-    }, [currentAudiobook, handleConflict])
+        // An explicit user command, so it claims the format.
+        flushPosition({ appendToLog: true, claimFormat: true })
+    }, [flushPosition])
 
     // The one resume path in this app -- the audio element is a bare `new
     // Audio()` with no controls and no mediaSession handlers, so nothing else
@@ -347,11 +408,15 @@ export function AudioPlayerProvider({ children }) {
         audio.play()
     }, [playing, pause])
 
+    // Seeks and skips are boundaries too — the position jumped, so the
+    // server copy should follow promptly rather than in up to 30s — but a
+    // slider scrub is many seeks, hence the debounce.
     const seekTo = useCallback((seconds) => {
         if (audioRef.current) {
             audioRef.current.currentTime = seconds
+            scheduleFlush()
         }
-    }, [])
+    }, [scheduleFlush])
 
     const skipForward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
@@ -359,22 +424,25 @@ export function AudioPlayerProvider({ children }) {
                 audioRef.current.currentTime + seconds,
                 audioRef.current.duration || Infinity
             )
+            scheduleFlush()
         }
-    }, [])
+    }, [scheduleFlush])
 
     const skipBackward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
             audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0)
+            scheduleFlush()
         }
-    }, [])
+    }, [scheduleFlush])
 
     const setSpeed = useCallback((rate) => {
         setSpeedState(rate)
         localStorage.setItem(SPEED_STORAGE_KEY, String(rate))
         if (audioRef.current) {
             audioRef.current.playbackRate = rate
+            scheduleFlush()
         }
-    }, [])
+    }, [scheduleFlush])
 
     const setSleepTimer = useCallback((minutes) => {
         if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current)
@@ -384,13 +452,19 @@ export function AudioPlayerProvider({ children }) {
         }
         setSleepMinutes(minutes)
         sleepTimerRef.current = setTimeout(() => {
+            // A sleep-timer stop is a session boundary like a pause: flush now
+            // rather than leaving the last position to the unload keepalive.
+            // The player was playing until this instant, so it claims the format.
             audioRef.current?.pause()
+            flushRef.current({ appendToLog: true, claimFormat: true })
             setSleepMinutes(null)
         }, minutes * 60 * 1000)
     }, [])
 
     const stop = useCallback(() => {
         if (audioRef.current) {
+            // Flush before the src swap resets the clock.
+            flushPosition({ appendToLog: true, claimFormat: playingRef.current })
             audioRef.current.pause()
             audioRef.current.src = ''
         }
@@ -398,7 +472,7 @@ export function AudioPlayerProvider({ children }) {
         setPlaying(false)
         setCurrentTime(0)
         setDuration(0)
-    }, [])
+    }, [flushPosition])
 
     const value = {
         currentAudiobook,

@@ -738,3 +738,143 @@ describe('getProgress()', () => {
         await expect(getProgress('ebook', 7)).rejects.toThrow('Failed to fetch progress')
     })
 })
+
+// Issue #48: the library list endpoints are paginated ({items,total,page,limit}).
+// The `*Page` functions expose one page; the legacy `getEbooks()`-style
+// functions keep returning the full array by walking every page, so the pages
+// that still need whole lists (Library, Pairs, Series, Home) are untouched.
+describe('paginated library lists (issue #48)', () => {
+    function pageResponse(items, total, page, limit) {
+        return { ok: true, status: 200, json: async () => ({ items, total, page, limit }) }
+    }
+
+    it('getEbooksPage builds page/limit/q into the query string and returns the envelope', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(pageResponse([{ id: 1 }], 1, 2, 25))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getEbooksPage } = await import('./api')
+        const body = await getEbooksPage({ page: 2, limit: 25, q: 'dune messiah' })
+
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/ebooks?page=2&limit=25&q=dune+messiah')
+        expect(body).toEqual({ items: [{ id: 1 }], total: 1, page: 2, limit: 25 })
+    })
+
+    it('getAudiobooksPage / getPairsPage / getNewPairsPage hit their endpoints and omit an empty q', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(pageResponse([], 0, 1, 100))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getAudiobooksPage, getPairsPage, getNewPairsPage } = await import('./api')
+        await getAudiobooksPage()
+        await getPairsPage({ page: 3 })
+        await getNewPairsPage({ limit: 10 })
+
+        expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+            '/api/library/audiobooks?page=1&limit=100',
+            '/api/library/pairs?page=3&limit=100',
+            '/api/library/new-pairs?page=1&limit=10',
+        ])
+    })
+
+    it('getEbooks() walks every page and returns the concatenated array', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(pageResponse([{ id: 1 }, { id: 2 }], 3, 1, 2))
+            .mockResolvedValueOnce(pageResponse([{ id: 3 }], 3, 2, 2))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { fetchAllPages } = await import('./api')
+        // Drive the walker with a 2-item page size so the test stays small.
+        const all = await fetchAllPages(
+            (page) => import('./api').then(m => m.getEbooksPage({ page, limit: 2 })))
+
+        expect(all.map(e => e.id)).toEqual([1, 2, 3])
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('getPairs() returns an array (one full page means one request)', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(pageResponse([{ id: 9 }], 1, 1, 500))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getPairs } = await import('./api')
+        const pairs = await getPairs()
+
+        expect(Array.isArray(pairs)).toBe(true)
+        expect(pairs).toEqual([{ id: 9 }])
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/pairs?page=1&limit=500')
+    })
+
+    it('getNewItems() keeps the {ebooks, audiobooks} array shape, walking both sub-lists', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({
+                ok: true, status: 200, json: async () => ({
+                    ebooks: { items: [{ id: 1 }], total: 1, page: 1, limit: 500 },
+                    audiobooks: { items: [{ id: 7 }], total: 1, page: 1, limit: 500 },
+                }),
+            })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getNewItems } = await import('./api')
+        const body = await getNewItems()
+
+        expect(body).toEqual({ ebooks: [{ id: 1 }], audiobooks: [{ id: 7 }] })
+    })
+
+    it('fetchAllPages stops when a page comes back short, and never loops on an empty page', async () => {
+        const { fetchAllPages } = await import('./api')
+        const calls = []
+        const all = await fetchAllPages(async (page) => {
+            calls.push(page)
+            return { items: [], total: 0, page, limit: 500 }
+        })
+        expect(all).toEqual([])
+        expect(calls).toEqual([1])
+    })
+})
+
+describe('whole-list wrappers and multi-file folder actions', () => {
+    it('getEbooks / getAudiobooks / getNewPairs walk the paged endpoints and return arrays', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ items: [{ id: 3 }], total: 1, page: 1, limit: 500 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getEbooks, getAudiobooks, getNewPairs } = await import('./api')
+        expect(await getEbooks()).toEqual([{ id: 3 }])
+        expect(await getAudiobooks()).toEqual([{ id: 3 }])
+        expect(await getNewPairs()).toEqual([{ id: 3 }])
+
+        expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+            '/api/library/ebooks?page=1&limit=500',
+            '/api/library/audiobooks?page=1&limit=500',
+            '/api/library/new-pairs?page=1&limit=500',
+        ])
+    })
+
+    it('a failed page rejects instead of returning a partial list', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }))
+        localStorage.setItem('tandem_token', 't')
+        const { getEbooks } = await import('./api')
+        await expect(getEbooks()).rejects.toThrow('Failed to fetch ebooks')
+    })
+
+    it('dismissMultiFileFolder and removeMultiFileTracks POST to the troubleshoot endpoints', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: 2 }) })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { dismissMultiFileFolder, removeMultiFileTracks } = await import('./api')
+        await dismissMultiFileFolder(7)
+        const res = await removeMultiFileTracks(7)
+
+        expect(res).toEqual({ deleted: 2 })
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/troubleshoot/multi-file/7/dismiss')
+        expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST' }))
+        expect(fetchMock.mock.calls[1][0]).toBe('/api/troubleshoot/multi-file/7/remove-tracks')
+    })
+})

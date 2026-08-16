@@ -44,3 +44,36 @@ class LibraryCheckResult(Base):
         UniqueConstraint("item_type", "item_id", "check_type", name="uq_check_item_domain"),
         Index("ix_check_ok", "check_type", "ok"),
     )
+
+
+class MultiFileAudiobookFolder(Base):
+    """A folder of per-track audio files the scanner refused to import (issue #63).
+
+    `AudioBook` has one `file_path`; a book ripped as `01.mp3 … 30.mp3` is not
+    representable, and importing each track as its own audiobook polluted the
+    library and auto-pairing. The scanner detects such folders, skips their
+    files, and records them here so Troubleshoot Library can show them with the
+    remediation (merge to a single .m4b in Audiobookshelf, replace the folder,
+    rescan). One row per (folder, extension) group.
+
+    `fingerprint` hashes the sorted (name, size) list; a dismissed row stays
+    dismissed only while the fingerprint is unchanged. A folder that no longer
+    qualifies on a rescan (merged file, tracks removed) has its row deleted.
+    """
+    __tablename__ = "multi_file_audiobook_folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    folder_path = Column(String(2000), nullable=False)
+    extension = Column(String(10), nullable=False)          # ".mp3", ".m4a", …
+    file_count = Column(Integer, nullable=False)
+    total_size = Column(BigInteger, nullable=False, default=0)
+    guessed_title = Column(String(500), nullable=True)
+    guessed_author = Column(String(500), nullable=True)
+    fingerprint = Column(String(64), nullable=False)
+    dismissed = Column(Boolean, nullable=False, default=False)
+    first_seen_at = Column(DateTime, default=utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("folder_path", "extension", name="uq_multi_file_folder_ext"),
+    )

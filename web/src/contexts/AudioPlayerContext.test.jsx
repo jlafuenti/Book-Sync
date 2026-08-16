@@ -54,6 +54,10 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
     return (
         <>
             <button onClick={() => player.play(7, audiobook)}>play</button>
+            <button onClick={() => player.play(8, { title: 'Another Book', pair_id: 100 })}>play-other</button>
+            <button onClick={() => player.stop()}>stop</button>
+            <button onClick={() => player.setSleepTimer(1)}>sleep-1min</button>
+            <button onClick={() => player.seekTo(120)}>seek-120</button>
             <button onClick={() => player.pause()}>pause</button>
             <button onClick={() => player.togglePlayPause()}>toggle</button>
             <button onClick={() => player.skipBackward()}>skip-back</button>
@@ -276,29 +280,35 @@ describe('AudioPlayerProvider stream-error recovery', () => {
     })
 })
 
+// Issue #65: the 5s tick used to PUT on every fire (~720 writes/hour). The tick
+// still runs every 5s, but a network push only goes out once NETWORK_SAVE
+// _INTERVAL_MS (30s) has elapsed since the last successful one; boundaries
+// (pause, seek, sleep-timer stop, book change, stop, unload) flush at once.
 describe('AudioPlayerProvider heartbeat', () => {
-    it('writes ONE canonical position per tick, carrying device_id/device_name/captured_at', async () => {
-        // Fake only setInterval/clearInterval so the 5s heartbeat tick can be
-        // advanced deterministically. Everything else (Promise resolution,
-        // testing-library's waitFor) keeps using real timers/microtasks.
-        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    // Start playback with real timers (the src swap resolves through promises
+    // that testing-library's waitFor polls on), THEN fake the clock so ticks
+    // and the throttle window can be advanced deterministically. Date is
+    // faked too, so Date.now() moves with advanceTimersByTime.
+    async function startPlaying(audiobook = { title: 'A Book', cover_path: null, pair_id: 99 }) {
+        render(<AudioPlayerProvider><Harness audiobook={audiobook} /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] })
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        return audio
+    }
 
+    it('does not push on the 5s tick; pushes ONE canonical position once 30s have elapsed', async () => {
         try {
-            render(
-                <AudioPlayerProvider>
-                    <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
-                </AudioPlayerProvider>
-            )
-            fireEvent.click(screen.getByText('play'))
-
-            await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
-            const audio = audioInstances[0]
-            await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
-
-            act(() => audio.dispatchEvent(new Event('canplay')))
-
+            const audio = await startPlaying()
             audio.currentTime = 42
+
             act(() => { vi.advanceTimersByTime(5000) })
+            expect(updatePositionMock).not.toHaveBeenCalled()
+
+            act(() => { vi.advanceTimersByTime(25_000) })
 
             // One write, not two. As a progress write plus a bookmark write
             // they were adjudicated separately, so one could be accepted while
@@ -307,9 +317,109 @@ describe('AudioPlayerProvider heartbeat', () => {
             expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
                 source: 'audiobook',
                 audio_position_ms: 42000,
+                append_to_log: false,
                 device_id: 'device-123',
                 device_name: 'Web · Chrome',
                 captured_at: expect.any(String),
+            }))
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('pushes about 10 times over 5 minutes of untouched playback, not 60', async () => {
+        try {
+            await startPlaying()
+            for (let i = 0; i < 60; i++) {
+                act(() => { vi.advanceTimersByTime(5000) })
+                // Let the resolved PUT's .then run so the throttle advances.
+                await act(async () => { await Promise.resolve() })
+            }
+            expect(updatePositionMock.mock.calls.length).toBeGreaterThanOrEqual(9)
+            expect(updatePositionMock.mock.calls.length).toBeLessThanOrEqual(11)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('a failed push does not advance the throttle — the next tick retries', async () => {
+        try {
+            updatePositionMock.mockRejectedValueOnce(new Error('offline'))
+            await startPlaying()
+
+            act(() => { vi.advanceTimersByTime(30_000) })
+            await act(async () => { await Promise.resolve() })
+            expect(updatePositionMock).toHaveBeenCalledTimes(1)
+
+            act(() => { vi.advanceTimersByTime(5000) })
+            expect(updatePositionMock).toHaveBeenCalledTimes(2)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('a sleep-timer stop flushes immediately with a history entry', async () => {
+        try {
+            const audio = await startPlaying()
+            fireEvent.click(screen.getByText('sleep-1min'))
+            audio.currentTime = 30
+
+            act(() => { vi.advanceTimersByTime(60_000) })
+
+            expect(audio.paused).toBe(true)
+            const flush = updatePositionMock.mock.calls.find(c => c[2].append_to_log === true)
+            expect(flush).toBeTruthy()
+            expect(flush[0]).toBe('pair')
+            expect(flush[1]).toBe(99)
+            expect(flush[2].audio_position_ms).toBe(30000)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('a seek flushes once (debounced), bypassing the 30s throttle', async () => {
+        try {
+            const audio = await startPlaying()
+            fireEvent.click(screen.getByText('skip-fwd'))
+            fireEvent.click(screen.getByText('skip-fwd'))
+            fireEvent.click(screen.getByText('seek-120'))
+            expect(updatePositionMock).not.toHaveBeenCalled()
+
+            act(() => { vi.advanceTimersByTime(1500) })
+
+            expect(updatePositionMock).toHaveBeenCalledTimes(1)
+            expect(audio.currentTime).toBe(120)
+            expect(updatePositionMock.mock.calls[0][2].audio_position_ms).toBe(120000)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('stop() flushes the outgoing book before tearing the player down', async () => {
+        try {
+            const audio = await startPlaying()
+            audio.currentTime = 77
+            fireEvent.click(screen.getByText('stop'))
+
+            expect(updatePositionMock).toHaveBeenCalledTimes(1)
+            expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+                audio_position_ms: 77000, append_to_log: true,
+            }))
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('switching to another book flushes the one being left', async () => {
+        try {
+            const audio = await startPlaying()
+            audio.currentTime = 66
+            fireEvent.click(screen.getByText('play-other'))
+            // Let the new book's stream-URL promise settle inside act.
+            await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+            expect(updatePositionMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+                audio_position_ms: 66000, append_to_log: true,
             }))
         } finally {
             vi.useRealTimers()

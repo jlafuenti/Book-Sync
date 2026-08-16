@@ -316,10 +316,67 @@ export async function rescanAllLibrary() {
     return resp.json();
 }
 
-export async function getEbooks() {
-    const resp = await fetchWithAuth(`${API_BASE}/library/ebooks`);
-    if (!resp.ok) throw new Error('Failed to fetch ebooks');
+// ---- Paginated list endpoints (issue #48) ----
+//
+// The server returns `{items, total, page, limit}` (limit ≤ 500, default 100)
+// and accepts `q` for a server-side title/author/series search. The `*Page`
+// functions expose one page for a paged UI; the legacy whole-list functions
+// (`getEbooks()`, `getPairs()`, ...) keep their array return shape by walking
+// every page, so the pages that still assemble the full library locally
+// (Library, Pairs, Series, Home) don't have to change in this step.
+
+const FETCH_ALL_PAGE_SIZE = 500;
+
+function pageQuery({ page = 1, limit = 100, q } = {}) {
+    const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (q) params.set('q', q);
+    return `?${params.toString()}`;
+}
+
+async function fetchPage(path, opts, what) {
+    const resp = await fetchWithAuth(`${API_BASE}${path}${pageQuery(opts)}`);
+    if (!resp.ok) throw new Error(`Failed to fetch ${what}`);
     return resp.json();
+}
+
+// Walk `fetchOnePage(page)` until a page comes back short (or `total` is
+// reached), returning every item. Exported for tests and for callers that
+// page an endpoint not wrapped here.
+export async function fetchAllPages(fetchOnePage) {
+    const all = [];
+    for (let page = 1; ; page++) {
+        const body = await fetchOnePage(page);
+        const items = body?.items || [];
+        all.push(...items);
+        const limit = body?.limit || items.length || 1;
+        if (items.length < limit) break;
+        if (typeof body?.total === 'number' && all.length >= body.total) break;
+    }
+    return all;
+}
+
+export function getEbooksPage(opts) {
+    return fetchPage('/library/ebooks', opts, 'ebooks');
+}
+
+export function getAudiobooksPage(opts) {
+    return fetchPage('/library/audiobooks', opts, 'audiobooks');
+}
+
+export function getPairsPage(opts) {
+    return fetchPage('/library/pairs', opts, 'book pairs');
+}
+
+export function getNewPairsPage(opts) {
+    return fetchPage('/library/new-pairs', opts, 'new pairs');
+}
+
+export function getNewItemsPage(opts) {
+    return fetchPage('/library/new-items', opts, 'new items');
+}
+
+export function getEbooks() {
+    return fetchAllPages((page) => getEbooksPage({ page, limit: FETCH_ALL_PAGE_SIZE }));
 }
 
 export async function getEbook(id) {
@@ -328,10 +385,8 @@ export async function getEbook(id) {
     return resp.json();
 }
 
-export async function getAudiobooks() {
-    const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks`);
-    if (!resp.ok) throw new Error('Failed to fetch audiobooks');
-    return resp.json();
+export function getAudiobooks() {
+    return fetchAllPages((page) => getAudiobooksPage({ page, limit: FETCH_ALL_PAGE_SIZE }));
 }
 
 export async function getAudiobook(id) {
@@ -349,10 +404,8 @@ export async function rescanBook(type, id) {
 }
 
 
-export async function getPairs() {
-    const resp = await fetchWithAuth(`${API_BASE}/library/pairs`);
-    if (!resp.ok) throw new Error('Failed to fetch book pairs');
-    return resp.json();
+export function getPairs() {
+    return fetchAllPages((page) => getPairsPage({ page, limit: FETCH_ALL_PAGE_SIZE }));
 }
 
 export async function createPair(ebookId, audiobookId) {
@@ -940,10 +993,20 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
 
 // ============ New Items / New Pairs Inbox ============
 
+// Whole-list shape `{ebooks: [...], audiobooks: [...]}` preserved for the
+// inbox page; the server pages each sub-list independently.
 export async function getNewItems() {
-    const resp = await fetchWithAuth(`${API_BASE}/library/new-items`);
-    if (!resp.ok) throw new Error('Failed to get new items');
-    return resp.json();
+    const pages = [];
+    for (let page = 1; ; page++) {
+        const body = await getNewItemsPage({ page, limit: FETCH_ALL_PAGE_SIZE });
+        pages.push(body);
+        const more = (sub) => sub.items.length >= FETCH_ALL_PAGE_SIZE && page * FETCH_ALL_PAGE_SIZE < sub.total;
+        if (!more(body.ebooks) && !more(body.audiobooks)) break;
+    }
+    return {
+        ebooks: pages.flatMap(p => p.ebooks.items),
+        audiobooks: pages.flatMap(p => p.audiobooks.items),
+    };
 }
 
 export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
@@ -955,10 +1018,8 @@ export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
     return resp.json();
 }
 
-export async function getNewPairs() {
-    const resp = await fetchWithAuth(`${API_BASE}/library/new-pairs`);
-    if (!resp.ok) throw new Error('Failed to get new pairs');
-    return resp.json();
+export function getNewPairs() {
+    return fetchAllPages((page) => getNewPairsPage({ page, limit: FETCH_ALL_PAGE_SIZE }));
 }
 
 export async function acknowledgeNewPairs(pairIds) {
@@ -1237,6 +1298,24 @@ export async function dismissFailedAcsm(filename) {
         body: JSON.stringify({ filename }),
     });
     return _jsonOrThrow(resp, 'Dismiss failed');
+}
+
+// Multi-file audiobook folders (issue #63): flagged by the library scan, not
+// imported. Dismiss hides one until its contents change; remove-tracks deletes
+// the AudioBook rows imported one-per-track before detection existed (files
+// stay on disk for merging in Audiobookshelf).
+export async function dismissMultiFileFolder(folderId) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/multi-file/${folderId}/dismiss`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Dismiss failed');
+}
+
+export async function removeMultiFileTracks(folderId) {
+    const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/multi-file/${folderId}/remove-tracks`, {
+        method: 'POST',
+    });
+    return _jsonOrThrow(resp, 'Removing imported tracks failed');
 }
 
 export async function deleteOrphanCovers(filenames) {

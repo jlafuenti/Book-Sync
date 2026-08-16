@@ -7,6 +7,7 @@ import {
     rescanBook, deleteOrphanCovers,
     getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
     repairChapterEncoding, bulkRepairChapterEncoding,
+    dismissMultiFileFolder, removeMultiFileTracks, scanLibrary,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -22,6 +23,9 @@ const CATEGORIES = [
     { key: 'zero_byte', label: 'Zero-byte / tiny files', kind: 'item', tone: 'warning' },
     { key: 'chapter_encoding_bad', label: 'Audiobooks with corrupt chapter titles', kind: 'chapter_repair', tone: 'warning' },
     { key: 'unsupported_format', label: 'Unsupported formats (MOBI/AZW3)', kind: 'unsupported', tone: 'warning' },
+    // Folders of per-track audio the scanner refused to import (issue #63).
+    // No in-app fix by design: merge in Audiobookshelf, then Rescan.
+    { key: 'multi_file_audiobook', label: 'Multi-file audiobooks (unsupported)', kind: 'multi_file', tone: 'warning' },
     { key: 'sync_map_missing', label: 'Synced pairs missing a sync map', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
     { key: 'missing_cover', label: 'Missing covers', kind: 'cover', tone: 'warning' },
@@ -54,6 +58,8 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     const [busy, setBusy] = useState(false)
     const [msg, setMsg] = useState(null)
     const [confirmDelete, setConfirmDelete] = useState(false)
+    // Row whose imported per-track AudioBook rows are about to be removed (multi_file).
+    const [confirmRemoveTracks, setConfirmRemoveTracks] = useState(null)
     const lastIdxRef = useRef(null)
     const replaceInputRef = useRef(null)
     const replaceTargetRef = useRef(null)
@@ -187,6 +193,39 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
         finally { setBusy(false) }
     }
 
+    // ---- multi-file audiobook folders (issue #63) ----
+    const doDismissFolder = async (r) => {
+        setBusy(true); setMsg(null)
+        try { await dismissMultiFileFolder(r.item_id); onChanged() }
+        catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    // A *library* scan (the one that flags/clears these folders), not the
+    // verification scan the page header runs.
+    const doLibraryRescan = async () => {
+        setBusy(true); setMsg(null)
+        try {
+            const res = await scanLibrary()
+            setMsg({ type: 'success', text: res.message || 'Rescanned' })
+            onChanged()
+        } catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
+    const doRemoveTracks = async () => {
+        const r = confirmRemoveTracks
+        setConfirmRemoveTracks(null)
+        if (!r) return
+        setBusy(true); setMsg(null)
+        try {
+            const res = await removeMultiFileTracks(r.item_id)
+            setMsg({ type: 'success', text: `Removed ${res.deleted} imported track row${res.deleted === 1 ? '' : 's'} — the files are still on disk for merging` })
+            onChanged()
+        } catch (e) { setMsg({ type: 'error', text: e.message }) }
+        finally { setBusy(false) }
+    }
+
     return (
         <div className="system-card ts-section">
             <div className="system-card-header system-card-header-clickable" onClick={() => setOpen(o => !o)}>
@@ -199,6 +238,14 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
             {open && (
                 <div className="system-card-body">
                     {msg && <div className={`alert alert-${msg.type}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
+
+                    {cat.kind === 'multi_file' && (
+                        <div className="alert alert-info" style={{ marginBottom: 12 }}>
+                            Multi-file audiobooks aren't supported. Merge to a single .m4b in Audiobookshelf
+                            (open the item → Manage → Merge to M4B, keep chapters), replace the folder with the
+                            merged file, then <strong>Rescan</strong>. Dismiss hides a folder until its contents change.
+                        </div>
+                    )}
 
                     {canEdit && selectable && selected.size > 0 && (
                         <div className="ts-bulk-bar">
@@ -298,6 +345,20 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                                     <button className="btn btn-sm btn-danger" disabled={busy}
                                                         onClick={() => doDismiss(r)}>Dismiss</button>
                                                 )}
+                                                {cat.kind === 'multi_file' && (
+                                                    <>
+                                                        <button className="btn btn-sm btn-primary" disabled={busy}
+                                                            onClick={doLibraryRescan}>Rescan</button>
+                                                        {r.imported_track_count > 0 && (
+                                                            <button className="btn btn-sm btn-danger" disabled={busy}
+                                                                onClick={() => setConfirmRemoveTracks(r)}>
+                                                                Remove imported tracks ({r.imported_track_count})
+                                                            </button>
+                                                        )}
+                                                        <button className="btn btn-sm btn-secondary" disabled={busy}
+                                                            onClick={() => doDismissFolder(r)}>Dismiss</button>
+                                                    </>
+                                                )}
                                             </div>
                                         </td>
                                     )}
@@ -307,6 +368,26 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                     </table>
 
                     <input ref={replaceInputRef} type="file" style={{ display: 'none' }} onChange={onReplacePicked} />
+
+                    {confirmRemoveTracks && (
+                        <div className="modal-overlay" onClick={() => setConfirmRemoveTracks(null)}>
+                            <div className="modal-dialog" onClick={e => e.stopPropagation()}>
+                                <h3 style={{ marginTop: 0 }}>
+                                    Remove {confirmRemoveTracks.imported_track_count} imported track
+                                    row{confirmRemoveTracks.imported_track_count === 1 ? '' : 's'}?
+                                </h3>
+                                <p>
+                                    The per-track audiobook entries imported from <code>{confirmRemoveTracks.file_path}</code> (and
+                                    any pairs made from them) will be removed from the library. The audio files stay on disk so
+                                    you can merge them in Audiobookshelf.
+                                </p>
+                                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                    <button className="btn btn-secondary" onClick={() => setConfirmRemoveTracks(null)}>Cancel</button>
+                                    <button className="btn btn-danger" onClick={doRemoveTracks}>Remove tracks</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {confirmDelete && (
                         <div className="modal-overlay" onClick={() => setConfirmDelete(false)}>

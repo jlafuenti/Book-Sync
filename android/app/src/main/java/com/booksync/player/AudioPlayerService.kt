@@ -95,7 +95,13 @@ class AudioPlayerService : MediaLibraryService() {
         private const val PREF_LAST_POSITION = "last_position_ms"
         private const val PREF_LAST_MEDIA_ID = "last_media_id"
         private const val PREF_LAST_SAVED_AT = "last_position_saved_at"
+        // Save cadence (issue #65): Room every AUTO_SAVE_INTERVAL_MS, the server
+        // every NETWORK_SAVE_INTERVAL_MS, boundaries immediately. The web player
+        // carries the same two numbers (AudioPlayerContext HEARTBEAT_TICK_MS /
+        // NETWORK_SAVE_INTERVAL_MS); see docs/position-sync-contract.md § Save
+        // cadence before changing either.
         private const val AUTO_SAVE_INTERVAL_MS = 5_000L
+        private const val NETWORK_SAVE_INTERVAL_MS = 30_000L
         // Generous socket read timeout for slow Cast receivers downloading big audiobook files.
         private const val NanoHTTPDSocketReadTimeoutMs = 60_000
         // Write a history-log entry every 30 min of continuous playback
@@ -120,6 +126,10 @@ class AudioPlayerService : MediaLibraryService() {
     // naturally freeze the clock. See [ContinuousPlaybackLog] for why this is a
     // seeded object rather than a `0L` long.
     private val continuousPlaybackLog = ContinuousPlaybackLog(AUTO_LOG_INTERVAL_MS)
+    // When the heartbeat may next push to the server (issue #65). Advanced only
+    // by pushes that actually landed — heartbeat or boundary — so a failed PUT
+    // is retried on the next tick rather than 30s later.
+    private val heartbeatThrottle = HeartbeatThrottle(NETWORK_SAVE_INTERVAL_MS)
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
@@ -243,6 +253,11 @@ class AudioPlayerService : MediaLibraryService() {
                     // the claimFormat split exists to fix.
                     saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
                 }
+            }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // A different book: don't make its first heartbeat wait out the
+                // previous book's push window (issue #65).
+                heartbeatThrottle.reset()
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // Track/audiobook reached its natural end (fires on both
@@ -826,7 +841,13 @@ class AudioPlayerService : MediaLibraryService() {
      *   playing or the listener can't tell a deliberate command from an
      *   involuntary stop, so they all pass false.
      */
-    private fun saveCurrentPositionForAuto(appendToLog: Boolean = false, claimFormat: Boolean) {
+    private fun saveCurrentPositionForAuto(
+        appendToLog: Boolean = false,
+        claimFormat: Boolean,
+        // False = a throttled heartbeat tick (issue #65): Room only, no network.
+        // Every boundary save leaves this true.
+        pushToServer: Boolean = true,
+    ) {
         val player = mediaLibrarySession?.player ?: return
         val mediaId = player.currentMediaItem?.mediaId ?: return
         val posMs = player.currentPosition.toInt()
@@ -836,7 +857,7 @@ class AudioPlayerService : MediaLibraryService() {
 
         serviceScope.launch {
             try {
-                when {
+                val pushed = when {
                     mediaId.startsWith("pair_") -> {
                         val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
                         repository.savePlaybackPosition(
@@ -844,6 +865,7 @@ class AudioPlayerService : MediaLibraryService() {
                             audioPositionMs = posMs,
                             appendToLog = appendToLog,
                             claimFormat = claimFormat,
+                            pushToServer = pushToServer,
                         )
                     }
                     mediaId.startsWith("audiobook_") -> {
@@ -854,9 +876,13 @@ class AudioPlayerService : MediaLibraryService() {
                             audiobookId = audiobookId,
                             audioPositionMs = posMs,
                             claimFormat = claimFormat,
+                            pushToServer = pushToServer,
                         )
                     }
+                    else -> false
                 }
+                // Only a push that actually landed advances the throttle window.
+                if (pushed) heartbeatThrottle.onPushed(System.currentTimeMillis())
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to save Auto position", e)
             }
@@ -871,6 +897,10 @@ class AudioPlayerService : MediaLibraryService() {
      * an identical 5-second loop of its own whenever the player screen was
      * open, which doubled the server write volume and made the app's two
      * near-simultaneous writes race each other into 409s in `apply_position`.
+     *
+     * Every tick writes Room; only every [NETWORK_SAVE_INTERVAL_MS] does one
+     * also push to the server (issue #65) — see [HeartbeatThrottle]. Boundary
+     * saves (pause, stop, track end, cast switch, disconnect) always push.
      */
     private fun startAutoPositionSave() {
         autoPositionSaveJob?.cancel()
@@ -878,18 +908,25 @@ class AudioPlayerService : MediaLibraryService() {
         autoPositionSaveJob = serviceScope.launch {
             while (true) {
                 delay(AUTO_SAVE_INTERVAL_MS)
-                // Heartbeat: keep bookmark position fresh, no history entry.
-                // claimFormat=true: this loop only runs while playing (started
-                // on isPlaying=true, torn down by stopAutoPositionSave on
-                // pause), so every tick here is genuine active consumption.
-                saveCurrentPositionForAuto(appendToLog = false, claimFormat = true)
+                val now = System.currentTimeMillis()
                 // 30-min continuous-playback tick: write a single history entry
                 // and reset the timer. Only reached while isPlaying (the loop is
                 // torn down by stopAutoPositionSave on pause), so pauses freeze
-                // the clock automatically.
-                if (continuousPlaybackLog.isDue(System.currentTimeMillis())) {
+                // the clock automatically. A log entry is a boundary: it always
+                // pushes, and doubles as this tick's heartbeat.
+                if (continuousPlaybackLog.isDue(now)) {
                     saveCurrentPositionForAuto(appendToLog = true, claimFormat = true)
+                    continue
                 }
+                // Heartbeat: keep the local position fresh, no history entry;
+                // push to the server only when the throttle window has passed.
+                // claimFormat=true: this loop only runs while playing (started
+                // on isPlaying=true, torn down by stopAutoPositionSave on
+                // pause), so every tick here is genuine active consumption.
+                saveCurrentPositionForAuto(
+                    appendToLog = false, claimFormat = true,
+                    pushToServer = heartbeatThrottle.shouldPush(now),
+                )
             }
         }
     }

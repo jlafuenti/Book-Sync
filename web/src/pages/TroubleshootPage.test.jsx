@@ -5,12 +5,16 @@ import TroubleshootPage from './TroubleshootPage'
 
 const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
-    getLibraryScanProgressMock,
+    getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
+    scanLibraryMock,
 } = vi.hoisted(() => ({
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
     bulkRepairChapterEncodingMock: vi.fn(),
     getLibraryScanProgressMock: vi.fn(),
+    dismissMultiFileFolderMock: vi.fn(),
+    removeMultiFileTracksMock: vi.fn(),
+    scanLibraryMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -33,6 +37,9 @@ vi.mock('../api', () => ({
     updateAudiobookMetadata: vi.fn(),
     repairChapterEncoding: repairChapterEncodingMock,
     bulkRepairChapterEncoding: bulkRepairChapterEncodingMock,
+    dismissMultiFileFolder: dismissMultiFileFolderMock,
+    removeMultiFileTracks: removeMultiFileTracksMock,
+    scanLibrary: scanLibraryMock,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
@@ -41,7 +48,8 @@ vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => null }))
 function issuesWithChapterEncodingBad(rows, extra = {}) {
     const categories = {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
-        ebook_drm: [], ebook_unreadable: [], unsupported_format: [], sync_map_missing: [],
+        ebook_drm: [], ebook_unreadable: [], unsupported_format: [], multi_file_audiobook: [],
+        sync_map_missing: [],
         duplicate: [], missing_cover: [], orphaned_cover: [], failed_transcription: [], failed_acsm: [],
         ...extra,
     }
@@ -57,6 +65,9 @@ beforeEach(() => {
     repairChapterEncodingMock.mockReset()
     bulkRepairChapterEncodingMock.mockReset()
     getLibraryScanProgressMock.mockReset().mockResolvedValue({ running: false })
+    dismissMultiFileFolderMock.mockReset().mockResolvedValue({ status: 'dismissed' })
+    removeMultiFileTracksMock.mockReset().mockResolvedValue({ deleted: 12 })
+    scanLibraryMock.mockReset().mockResolvedValue({ new_ebooks: 0, new_audiobooks: 0, auto_matched_pairs: 0, multi_file_folders: 1, message: '' })
 })
 
 describe('TroubleshootPage chapter encoding repair', () => {
@@ -130,5 +141,66 @@ describe('TroubleshootPage chapter encoding repair', () => {
 
         expect(await screen.findByRole('button', { name: 'Delete Selected' })).toBeInTheDocument()
         expect(screen.queryByRole('button', { name: 'Repair Selected' })).not.toBeInTheDocument()
+    })
+})
+
+// Issue #63: folders of per-track audio the scanner refused to import.
+describe('TroubleshootPage multi-file audiobook folders', () => {
+    const folderRow = {
+        item_type: 'folder', item_id: 7, title: 'Dune', author: 'Frank Herbert',
+        file_path: '/data/audiobooks/Herbert/Dune', file_size: 1234, file_count: 12,
+        extension: '.mp3', imported_track_count: 0,
+        detail: "12 .mp3 files — multi-file audiobooks aren't supported; merge to one .m4b in Audiobookshelf and rescan",
+    }
+
+    it('lists the folder with the fixed remediation notice and no Remove-tracks button when nothing was imported', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { multi_file_audiobook: [folderRow] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Multi-file audiobooks/))
+
+        expect(await screen.findByText(/Merge to a single \.m4b in Audiobookshelf/)).toBeInTheDocument()
+        expect(screen.getByText('Dune')).toBeInTheDocument()
+        expect(screen.getByText('/data/audiobooks/Herbert/Dune')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Rescan' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Remove imported tracks/ })).not.toBeInTheDocument()
+    })
+
+    it('Dismiss hides the folder via the API and reloads', async () => {
+        getLibraryIssuesMock.mockResolvedValueOnce(issuesWithChapterEncodingBad([], { multi_file_audiobook: [folderRow] }))
+        getLibraryIssuesMock.mockResolvedValueOnce(issuesWithChapterEncodingBad([]))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Multi-file audiobooks/))
+        fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }))
+
+        await waitFor(() => expect(dismissMultiFileFolderMock).toHaveBeenCalledWith(7))
+        await waitFor(() => expect(getLibraryIssuesMock).toHaveBeenCalledTimes(2))
+    })
+
+    it('Rescan runs a library scan (not the verification scan) and reloads', async () => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { multi_file_audiobook: [folderRow] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Multi-file audiobooks/))
+        fireEvent.click(await screen.findByRole('button', { name: 'Rescan' }))
+
+        await waitFor(() => expect(scanLibraryMock).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(getLibraryIssuesMock).toHaveBeenCalledTimes(2))
+    })
+
+    it('Remove imported tracks appears only when track rows exist, confirms, then calls the API', async () => {
+        const withTracks = { ...folderRow, imported_track_count: 12 }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { multi_file_audiobook: [withTracks] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Multi-file audiobooks/))
+        fireEvent.click(await screen.findByRole('button', { name: /Remove imported tracks \(12\)/ }))
+        // A confirm dialog, then the destructive call.
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove tracks' }))
+
+        await waitFor(() => expect(removeMultiFileTracksMock).toHaveBeenCalledWith(7))
+        expect(await screen.findByText(/Removed 12 imported track/)).toBeInTheDocument()
     })
 })

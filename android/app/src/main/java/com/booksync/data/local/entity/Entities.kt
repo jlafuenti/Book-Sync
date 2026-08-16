@@ -104,7 +104,13 @@ data class BookmarkEntity(
     // state the server returned (pull / 409-conflict adoption).
     val capturedAt: String? = null,
     val deviceId: String? = null,
-    val deviceName: String? = null
+    val deviceName: String? = null,
+    // The sync-map version epubSentenceIndex was resolved against (issue
+    // #116): the version the cached points came from at resolution time, or
+    // the server's stored value on a pull. Sent as `sync_map_version` on
+    // every push so a deferred replay attests what was true when the index
+    // was computed, not whatever map is live when it finally lands.
+    val syncMapVersion: Int? = null,
 )
 
 @Entity(tableName = "pending_sync")
@@ -114,6 +120,8 @@ data class PendingSyncEntity(
     val source: String,
     val epubChapter: Int?,
     val epubSentenceIndex: Int?,
+    // See BookmarkEntity.syncMapVersion — replayed with the queued write.
+    val syncMapVersion: Int? = null,
     val audioPositionMs: Int?,
     val epubLocator: String? = null,
     // The locator's audio anchor. Queued alongside the locator so an offline

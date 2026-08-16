@@ -43,11 +43,12 @@ from schemas import (
     BookPairCreate, LibraryScanResponse, SearchResponse,
     EBookDetailResponse, AudioBookDetailResponse,
     MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField,
-    NewItemsResponse, AcknowledgeItemsRequest, AcknowledgePairsRequest,
+    NewItemsResponse, AcknowledgeItemsRequest, AcknowledgePairsRequest, Page,
 )
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
+from services import multi_file_audiobooks
 from utils import resolve_cover_url, safe_join, utcnow
 
 logger = logging.getLogger(__name__)
@@ -901,7 +902,21 @@ async def scan_files_impl(
         if await _ingest_one_ebook(db, path, ebook_dir):
             new_ebooks += 1
 
+    # A file inside a multi-file folder is judged with its siblings (issue
+    # #63): if the folder is one book split into tracks, none of it imports.
+    # Only the folders touched are re-flagged; a targeted scan says nothing
+    # about the rest of the library, so it never prunes.
+    flagged_groups = {}
+    for folder in {os.path.dirname(p) for p in audiobook_paths}:
+        for group in _multi_file_groups(folder, audiobook_dir):
+            flagged_groups[(group.folder_path, group.extension)] = group
+    skip = {p for g in flagged_groups.values() for p in g.paths}
+    if flagged_groups:
+        await multi_file_audiobooks.sync_folder_flags(db, flagged_groups.values(), prune=False)
+
     for path in audiobook_paths:
+        if path in skip:
+            continue
         if await _ingest_one_audiobook(db, path, audiobook_dir, abs_index):
             new_audiobooks += 1
 
@@ -912,10 +927,25 @@ async def scan_files_impl(
         new_ebooks=new_ebooks,
         new_audiobooks=new_audiobooks,
         auto_matched_pairs=auto_matched,
+        multi_file_folders=len(flagged_groups),
         message=(
             f"Scanned {len(filepaths)} file(s): {new_ebooks} new ebooks, "
             f"{new_audiobooks} new audiobooks, auto-matched {auto_matched} pairs."
+            + (f" Skipped {len(flagged_groups)} multi-file audiobook folder(s)."
+               if flagged_groups else "")
         ),
+    )
+
+
+def _multi_file_groups(folder: str, audiobook_dir: str):
+    """The multi-file audiobook groups in one folder (issue #63)."""
+    try:
+        names = [n for n in os.listdir(folder)
+                 if os.path.isfile(os.path.join(folder, n))]
+    except OSError:
+        return []
+    return multi_file_audiobooks.classify_folder(
+        folder, names, multi_file_audiobooks.read_audio_tags, library_root=audiobook_dir,
     )
 
 
@@ -938,14 +968,29 @@ async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
 
     abs_index = await _maybe_load_abs_index(db)
 
+    # Multi-file audiobook folders (issue #63): a folder whose same-extension
+    # audio files are one book split into tracks is flagged, not imported —
+    # `AudioBook` has one `file_path`, and one row per track polluted the
+    # library and auto-pairing. The flags are reconciled after the walk so a
+    # folder that stops qualifying (merged .m4b, tracks removed) clears.
+    flagged_groups = []
     if os.path.isdir(settings.audiobook_dir):
         for root, _, files in os.walk(settings.audiobook_dir):
+            groups = multi_file_audiobooks.classify_folder(
+                root, files, multi_file_audiobooks.read_audio_tags,
+                library_root=settings.audiobook_dir,
+            )
+            flagged_groups.extend(groups)
+            skip = {p for g in groups for p in g.paths}
             for filename in files:
                 if Path(filename).suffix.lower() not in AUDIOBOOK_EXTENSIONS:
                     continue
                 filepath = os.path.join(root, filename)
+                if filepath in skip:
+                    continue
                 if await _ingest_one_audiobook(db, filepath, settings.audiobook_dir, abs_index):
                     new_audiobooks += 1
+        await multi_file_audiobooks.sync_folder_flags(db, flagged_groups, prune=True)
 
     await db.flush()
     auto_matched = await auto_match_books(db)
@@ -954,8 +999,11 @@ async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
         new_ebooks=new_ebooks,
         new_audiobooks=new_audiobooks,
         auto_matched_pairs=auto_matched,
+        multi_file_folders=len(flagged_groups),
         message=f"Found {new_ebooks} new ebooks, {new_audiobooks} new audiobooks, "
-                f"auto-matched {auto_matched} pairs.",
+                f"auto-matched {auto_matched} pairs."
+                + (f" Skipped {len(flagged_groups)} multi-file audiobook folder(s) — "
+                   f"see Troubleshoot Library." if flagged_groups else ""),
     )
 
 
@@ -1345,30 +1393,102 @@ async def auto_match_books(db: AsyncSession) -> int:
     return matched
 
 
-@router.get("/ebooks", response_model=List[EBookResponse])
+# ---------------------------------------------------------------------------
+# Paginated list endpoints (issue #48)
+#
+# `page`/`limit` follow GET /api/users/audit-log: 1-based page, limit 1..500,
+# default 100. `q` is a case-insensitive substring match on title/author/series
+# — the same match `/search` does — so clients stop fetching everything to
+# filter locally. Every ordering ends in `id` so pages are disjoint and stable.
+# ---------------------------------------------------------------------------
+
+PAGE_DEFAULT_LIMIT = 100
+PAGE_MAX_LIMIT = 500
+
+
+def _page_param() -> int:
+    return Query(1, ge=1, description="1-based page number")
+
+
+def _limit_param() -> int:
+    return Query(PAGE_DEFAULT_LIMIT, ge=1, le=PAGE_MAX_LIMIT, description="Page size")
+
+
+def _q_param() -> Optional[str]:
+    return Query(None, min_length=1, description="Substring match on title, author, or series")
+
+
+def _search_clause(model, q: Optional[str]):
+    """`WHERE lower(title|author|series) LIKE %q%` for one model, or None."""
+    if not q:
+        return None
+    term = f"%{q.lower()}%"
+    return or_(
+        func.lower(model.title).like(term),
+        func.lower(model.author).like(term),
+        func.lower(model.series).like(term),
+    )
+
+
+def _library_order(model):
+    """The library's browse order: author → series → series index → title, then id."""
+    return (
+        model.author.nulls_last(), model.series.nulls_last(),
+        model.series_index.nulls_last(), model.title, model.id,
+    )
+
+
+async def _paginate(db: AsyncSession, query, count_from, page: int, limit: int) -> Page:
+    """Run `query` for one page and a matching count.
+
+    `count_from` is the FROM/JOIN/WHERE part of the same statement with no
+    ORDER BY or eager-load options, so the total reflects exactly the filtered
+    set. Returns a `Page` whose `items` are ORM rows — the endpoint's
+    `response_model` serialises them.
+    """
+    total = (await db.execute(
+        select(func.count()).select_from(count_from.subquery())
+    )).scalar_one()
+    rows = (await db.execute(
+        query.offset((page - 1) * limit).limit(limit)
+    )).scalars().all()
+    return Page(items=rows, total=total, page=page, limit=limit)
+
+
+async def _list_media(db, model, *, page, limit, q, where=None, order=None):
+    """Shared body of the ebook/audiobook list endpoints."""
+    base = select(model)
+    if where is not None:
+        base = base.where(where)
+    clause = _search_clause(model, q)
+    if clause is not None:
+        base = base.where(clause)
+    ordered = base.order_by(*(order if order is not None else _library_order(model)))
+    return await _paginate(db, ordered, base, page, limit)
+
+
+@router.get("/ebooks", response_model=Page[EBookResponse])
 async def list_ebooks(
+    page: int = _page_param(),
+    limit: int = _limit_param(),
+    q: Optional[str] = _q_param(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """List all ebooks in the library."""
-    result = await db.execute(
-        select(EBook)
-        .order_by(EBook.author.nulls_last(), EBook.series.nulls_last(), EBook.series_index.nulls_last(), EBook.title)
-    )
-    return result.scalars().all()
+    """One page of ebooks, in library order, optionally narrowed by `q`."""
+    return await _list_media(db, EBook, page=page, limit=limit, q=q)
 
 
-@router.get("/audiobooks", response_model=List[AudioBookResponse])
+@router.get("/audiobooks", response_model=Page[AudioBookResponse])
 async def list_audiobooks(
+    page: int = _page_param(),
+    limit: int = _limit_param(),
+    q: Optional[str] = _q_param(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """List all audiobooks in the library."""
-    result = await db.execute(
-        select(AudioBook)
-        .order_by(AudioBook.author.nulls_last(), AudioBook.series.nulls_last(), AudioBook.series_index.nulls_last(), AudioBook.title)
-    )
-    return result.scalars().all()
+    """One page of audiobooks, in library order, optionally narrowed by `q`."""
+    return await _list_media(db, AudioBook, page=page, limit=limit, q=q)
 
 
 @router.get("/ebooks/{book_id}", response_model=EBookDetailResponse)
@@ -1486,23 +1606,37 @@ async def search_library(
     )
 
 
-@router.get("/pairs", response_model=List[BookPairResponse])
+def _pairs_base(q: Optional[str], where=None):
+    """FROM/JOIN/WHERE for a pairs listing; `q` matches either side of the pair."""
+    base = select(BookPair).join(BookPair.ebook).join(BookPair.audiobook)
+    if where is not None:
+        base = base.where(where)
+    if q:
+        base = base.where(or_(_search_clause(EBook, q), _search_clause(AudioBook, q)))
+    return base
+
+
+_PAIR_LOADS = (
+    # `sync_map` is eager-loaded purely so `sync_map_version` can be
+    # reported here — this is the listing Android's `refreshPairs` polls,
+    # and it is how a client learns its cached sync points went stale.
+    selectinload(BookPair.ebook), selectinload(BookPair.audiobook),
+    selectinload(BookPair.sync_map),
+)
+
+
+@router.get("/pairs", response_model=Page[BookPairResponse])
 async def list_pairs(
+    page: int = _page_param(),
+    limit: int = _limit_param(),
+    q: Optional[str] = _q_param(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """List all book pairs (matched ebook + audiobook)."""
-    result = await db.execute(
-        select(BookPair)
-        # `sync_map` is eager-loaded purely so `sync_map_version` can be
-        # reported here — this is the listing Android's `refreshPairs` polls,
-        # and it is how a client learns its cached sync points went stale.
-        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook),
-                 selectinload(BookPair.sync_map))
-        .join(BookPair.ebook)
-        .order_by(EBook.author.nulls_last(), EBook.series.nulls_last(), EBook.series_index.nulls_last(), EBook.title)
-    )
-    return result.scalars().all()
+    """One page of book pairs (matched ebook + audiobook), in library order."""
+    base = _pairs_base(q)
+    ordered = base.options(*_PAIR_LOADS).order_by(*_library_order(EBook), BookPair.id)
+    return await _paginate(db, ordered, base, page, limit)
 
 
 @router.post("/pairs", response_model=BookPairResponse, status_code=status.HTTP_201_CREATED)
@@ -2249,19 +2383,33 @@ def _pair_has_discrepancies(pair: BookPair) -> bool:
 
 @router.get("/new-items", response_model=NewItemsResponse)
 async def get_new_items(
+    page: int = _page_param(),
+    limit: int = _limit_param(),
+    q: Optional[str] = _q_param(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Return ebooks and audiobooks that haven't been acknowledged yet."""
-    ebook_result = await db.execute(
-        select(EBook).where(EBook.acknowledged == False).order_by(EBook.uploaded_at.desc())
+    """Ebooks and audiobooks that haven't been acknowledged yet, newest first.
+
+    One page per sub-list; `page`/`limit` apply to each independently.
+    """
+    ebooks = await _list_media(
+        db, EBook, page=page, limit=limit, q=q,
+        where=EBook.acknowledged == False,
+        order=(EBook.uploaded_at.desc(), EBook.id.desc()),
     )
-    audio_result = await db.execute(
-        select(AudioBook).where(AudioBook.acknowledged == False).order_by(AudioBook.uploaded_at.desc())
+    audiobooks = await _list_media(
+        db, AudioBook, page=page, limit=limit, q=q,
+        where=AudioBook.acknowledged == False,
+        order=(AudioBook.uploaded_at.desc(), AudioBook.id.desc()),
     )
     return NewItemsResponse(
-        ebooks=[EBookResponse.model_validate(e) for e in ebook_result.scalars().all()],
-        audiobooks=[AudioBookResponse.model_validate(a) for a in audio_result.scalars().all()],
+        ebooks=Page[EBookResponse](
+            items=[EBookResponse.model_validate(e) for e in ebooks.items],
+            total=ebooks.total, page=page, limit=limit),
+        audiobooks=Page[AudioBookResponse](
+            items=[AudioBookResponse.model_validate(a) for a in audiobooks.items],
+            total=audiobooks.total, page=page, limit=limit),
     )
 
 
@@ -2284,19 +2432,18 @@ async def acknowledge_new_items(
     return {"acknowledged_ebooks": len(req.ebook_ids), "acknowledged_audiobooks": len(req.audiobook_ids)}
 
 
-@router.get("/new-pairs", response_model=List[BookPairResponse])
+@router.get("/new-pairs", response_model=Page[BookPairResponse])
 async def get_new_pairs(
+    page: int = _page_param(),
+    limit: int = _limit_param(),
+    q: Optional[str] = _q_param(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Return book pairs that haven't been acknowledged yet."""
-    result = await db.execute(
-        select(BookPair)
-        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
-        .where(BookPair.acknowledged == False)
-        .order_by(BookPair.matched_at.desc())
-    )
-    return result.scalars().all()
+    """One page of book pairs that haven't been acknowledged yet, newest first."""
+    base = _pairs_base(q, where=BookPair.acknowledged == False)
+    ordered = base.options(*_PAIR_LOADS).order_by(BookPair.matched_at.desc(), BookPair.id.desc())
+    return await _paginate(db, ordered, base, page, limit)
 
 
 @router.post("/new-pairs/acknowledge")
