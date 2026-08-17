@@ -516,6 +516,76 @@ class NewItemsResponse(BaseModel):
     audiobooks: Page[AudioBookResponse]
 
 
+# ============================================================
+# Mixed library browse (issue #120)
+# ============================================================
+
+class LibraryItemKind(str, Enum):
+    PAIR = "pair"
+    EBOOK = "ebook"
+    AUDIOBOOK = "audiobook"
+
+
+class LibraryTab(str, Enum):
+    ALL = "all"
+    EBOOKS = "ebooks"
+    AUDIOBOOKS = "audiobooks"
+    PAIRED = "paired"
+    UNPAIRED = "unpaired"
+    NEW = "new"
+
+
+class LibrarySort(str, Enum):
+    TITLE = "title"
+    AUTHOR = "author"
+    DATE = "date"
+    SERIES = "series"
+    SIZE = "size"
+
+
+class SortDir(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+class LibraryItem(BaseModel):
+    """One row of `GET /api/library/items` — a pair, or an ebook/audiobook.
+
+    `kind` names which of the three is the item. A `pair` item carries the
+    pair (with both sides nested) and nothing else; an `ebook`/`audiobook`
+    item carries that medium plus, when it is paired, the pair it belongs to,
+    so the client can show pairing status without a second lookup. The nested
+    models are the same ones the per-type list endpoints return.
+    """
+    kind: LibraryItemKind
+    pair: Optional[BookPairResponse] = None
+    ebook: Optional[EBookResponse] = None
+    audiobook: Optional[AudioBookResponse] = None
+
+
+class FacetCount(BaseModel):
+    name: str
+    count: int
+
+
+class LibraryCounts(BaseModel):
+    ebooks: int
+    audiobooks: int
+    pairs: int
+    unpaired: int
+    new_ebooks: int
+    new_audiobooks: int
+    new_pairs: int
+
+
+class LibraryFacets(BaseModel):
+    """`GET /api/library/facets`: filter-pill options scoped to a tab, plus
+    the library-wide counts the tab labels show."""
+    authors: List[FacetCount]
+    series: List[FacetCount]
+    counts: LibraryCounts
+
+
 class AcknowledgeItemsRequest(BaseModel):
     ebook_ids: List[int] = []
     audiobook_ids: List[int] = []
