@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
-import { getAudiobookChapters, getBookmarkLog, getAccessToken } from '../api'
+import { getAudiobookChapters, getBookmarkLog } from '../api'
+import useCoverSrc from '../hooks/useCoverSrc'
 import './AudioPlayer.css'
 
 function formatTime(seconds) {
@@ -42,6 +43,9 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
     }, [player.currentAudiobook?.id])
 
     const pairIdForHistory = player.currentAudiobook?.pairId || null
+    // Scoped media token, like every other cover in the app (issues #50/#121)
+    // — the access token in the URL 401s against /api/files/covers.
+    const coverUrl = useCoverSrc(player.currentAudiobook?.coverPath) || null
 
     useEffect(() => {
         if (showHistory && pairIdForHistory) {
@@ -58,10 +62,6 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 
     const currentChapter = chapters.length > 0
         ? [...chapters].reverse().find(ch => currentTime >= (ch.start_time || ch.startTime || 0))
-        : null
-
-    const coverUrl = currentAudiobook.coverPath
-        ? `${currentAudiobook.coverPath}?token=${getAccessToken()}`
         : null
 
     return (
@@ -295,15 +295,12 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 // ---- Mini Player Bar ----
 export function MiniPlayer({ onExpand }) {
     const player = useAudioPlayer()
+    const coverUrl = useCoverSrc(player.currentAudiobook?.coverPath) || null
 
     if (!player.currentAudiobook) return null
 
     const { currentAudiobook, playing, currentTime, duration } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
-
-    const coverUrl = currentAudiobook.coverPath
-        ? `${currentAudiobook.coverPath}?token=${getAccessToken()}`
-        : null
 
     return (
         <div className="mini-player" onClick={onExpand} style={{ cursor: 'pointer' }}>
