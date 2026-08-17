@@ -15,7 +15,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.booksync.R
-import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ReaderPositionSnapshot
@@ -225,7 +224,7 @@ class ReaderActivity : AppCompatActivity() {
         toolbar.inflateMenu(R.menu.reader_toolbar)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_switch_audio -> { switchToAudio(); true }
+                R.id.action_switch_audio -> { syncAudioToPage(); true }
                 R.id.action_font_settings -> { showFontSettings(); true }
                 else -> false
             }
@@ -1010,14 +1009,26 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
+    /**
+     * The toolbar's "Switch to Audio" action (issue #114).
+     *
+     * Matches the text actually on screen to a sync point and hands the player
+     * that exact second, rather than letting it re-derive a position from the
+     * chapter anchor. Every exit still goes through [switchToAudio], so a page
+     * that can't be matched — no sync map, no audiobook downloaded, no readable
+     * DOM text — behaves exactly as the button did before: it switches, on the
+     * anchor, with a toast saying why it wasn't precise.
+     */
     private fun syncAudioToPage() {
-        if (pair?.audiobookDownloaded != true) {
-            android.widget.Toast.makeText(this, "Audiobook not downloaded", android.widget.Toast.LENGTH_SHORT).show()
+        val locator = navigator?.currentLocator?.value
+        val pub = publication
+        if (pair?.audiobookDownloaded != true || locator == null || pub == null) {
+            // Nothing to match against — the plain anchor handoff is the whole
+            // of what this button used to do, so fall back to it silently.
+            switchToAudio()
             return
         }
-        val locator = navigator?.currentLocator?.value ?: return
-        val pub = publication ?: return
-        
+
         // Find chapter using robust matching
         val rawChapterIndex = pub.spineIndexOf(locator)
         val chapterIndex = rawChapterIndex.coerceAtLeast(0)
@@ -1037,18 +1048,25 @@ class ReaderActivity : AppCompatActivity() {
             Log.d(TAG, "syncAudioToPage: textPreview='${textPreview.take(80)}'")
 
             val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview)
-            if (audioMs > 0) {
-                repository.updateBookmark(
-                    pairId = pairId,
-                    source = "ebook",
-                    epubChapter = chapterIndex,
-                    audioPositionMs = audioMs,
-                )
-                android.widget.Toast.makeText(this@ReaderActivity, "Audio synced — switching to player", android.widget.Toast.LENGTH_SHORT).show()
-                switchToAudio()
+            // Set before the write, so a savePosition landing in between can't
+            // resolve its own sync-point guess over this deliberate match (see
+            // ReaderPositionSnapshot.skipSyncPointLookup).
+            if (audioMs > 0) sentenceSyncPending = true
+
+            val matched = PageAudioHandoff.apply(
+                repository = repository,
+                pairId = pairId,
+                chapterIndex = chapterIndex,
+                locatorJson = locator.toJSON().toString(),
+                audioMs = audioMs,
+            )
+            val message = if (matched) {
+                "Audio synced to ${formatAudioTime(audioMs.toLong())}"
             } else {
-                android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found for this page", android.widget.Toast.LENGTH_SHORT).show()
+                "No matching audio found for this page"
             }
+            android.widget.Toast.makeText(this@ReaderActivity, message, android.widget.Toast.LENGTH_SHORT).show()
+            switchToAudio()
         }
     }
 
@@ -1671,16 +1689,14 @@ class ReaderActivity : AppCompatActivity() {
             if (audioMs > 0) {
                 Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
                 sentenceSyncPending = true
-                SyncState.pendingAudioSeekMs = audioMs.toLong()
-                repository.updateBookmark(
+                // Same bookkeeping as the page path — shared so the two can't
+                // drift apart again (issue #114).
+                PageAudioHandoff.apply(
+                    repository = repository,
                     pairId = pairId,
-                    source = "ebook",
-                    epubChapter = chapterIndex,
-                    audioPositionMs = audioMs,
-                    epubLocator = locator.toJSON().toString(),
-                    // Pair the page the user is on with the synced audio position so
-                    // returning from the player within ~30s lands on this exact page.
-                    locatorAudioMs = audioMs,
+                    chapterIndex = chapterIndex,
+                    locatorJson = locator.toJSON().toString(),
+                    audioMs = audioMs,
                 )
                 val timeStr = formatAudioTime(audioMs.toLong())
                 android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
