@@ -392,3 +392,172 @@ async def test_the_write_response_includes_the_hint_it_just_stored(
     hints = put.json()["hints"]
     assert [h["value"] for h in hints] == [LOCATOR]
     assert hints[0]["current"] is True
+
+
+# ---------- completion (issue #56) ----------
+#
+# "Finished" used to be whatever each client remembered to send: the web
+# player set it on the audio `ended` event, the Android player on STATE_ENDED,
+# and no reader ever set it. The rule now lives on the server so every client
+# inherits it: a write whose position *crosses into* the end zone completes
+# the book. Explicit values always win, and nothing ever auto-clears.
+
+async def test_ebook_write_crossing_the_end_zone_completes_the_book(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    mid = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=10, epub_progress_percent=50.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert mid.json()["is_completed"] is False
+
+    end = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=40, epub_progress_percent=98.5,
+        captured_at="2026-07-30T11:00:00Z",
+    )
+    assert end.status_code == 200, end.text
+    assert end.json()["is_completed"] is True
+
+    # The projection the Home/Continue lists read follows — both rows of a pair.
+    progress = await client.get("/api/sync/progress", headers=auth_header(user))
+    flags = {r["media_type"]: r["is_completed"] for r in progress.json()}
+    assert flags == {"ebook": True, "audiobook": True}
+
+
+async def test_first_ever_write_already_in_the_end_zone_completes(
+    client, make_user, auth_header, db
+):
+    """No previous position counts as "below the threshold" — a book opened
+    straight at the acknowledgements is finished, not merely started."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "ebook", pair.ebook_id,
+        epub_chapter=40, epub_progress_percent=99.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.json()["is_completed"] is True
+
+
+async def test_audio_write_within_the_tail_completes(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    mid = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=1_800_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    assert mid.json()["is_completed"] is False
+
+    # 60 s before the end — inside the 120 s tail.
+    end = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_540_000, captured_at="2026-07-30T11:00:00Z",
+    )
+    assert end.json()["is_completed"] is True
+
+
+async def test_audio_write_with_unknown_duration_never_auto_completes(
+    client, make_user, auth_header, db
+):
+    """No length, no end zone. The client's own end-of-stream write still
+    completes the book (it sends `is_completed` explicitly)."""
+    pair = await make_book_pair(db, duration_seconds=None)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "audiobook", pair.audiobook_id,
+        source="audiobook", audio_position_ms=99_999_999,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.json()["is_completed"] is False
+
+
+async def test_explicit_is_completed_false_beats_the_rule(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=40, epub_progress_percent=99.0, is_completed=False,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.json()["is_completed"] is False
+
+
+async def test_un_finishing_sticks_while_the_position_stays_in_the_end_zone(
+    client, make_user, auth_header, db
+):
+    """The rule fires on *crossing* into the zone, not on being in it. A user
+    who un-finishes a book they're still sitting at the end of must not have
+    the very next heartbeat finish it again."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_590_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    unfinish = await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=False, captured_at="2026-07-30T10:01:00Z",
+    )
+    assert unfinish.json()["is_completed"] is False
+
+    heartbeat = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_595_000, captured_at="2026-07-30T10:02:00Z",
+    )
+    assert heartbeat.json()["is_completed"] is False
+
+    # Never auto-cleared either: a completed book stays completed on a
+    # mid-book write (re-reading a chapter is not un-finishing).
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:03:00Z",
+    )
+    back = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=1_000_000, captured_at="2026-07-30T10:04:00Z",
+    )
+    assert back.json()["is_completed"] is True
+
+
+async def test_re_entering_the_end_zone_completes_again(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(client, user, auth_header, "pair", pair.id,
+               epub_progress_percent=99.0, captured_at="2026-07-30T10:00:00Z")
+    await _put(client, user, auth_header, "pair", pair.id,
+               is_completed=False, captured_at="2026-07-30T10:01:00Z")
+    await _put(client, user, auth_header, "pair", pair.id,
+               epub_progress_percent=50.0, captured_at="2026-07-30T10:02:00Z")
+    again = await _put(client, user, auth_header, "pair", pair.id,
+                       epub_progress_percent=98.0, captured_at="2026-07-30T10:03:00Z")
+    assert again.json()["is_completed"] is True
+
+
+async def test_completion_thresholds_are_settings(monkeypatch, client, make_user,
+                                                  auth_header, db):
+    """One place decides the thresholds (issue #56 asked for exactly that)."""
+    from config import settings
+    monkeypatch.setattr(settings, "auto_complete_epub_percent", 90.0)
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    put = await _put(client, user, auth_header, "pair", pair.id,
+                     epub_progress_percent=91.0, captured_at="2026-07-30T10:00:00Z")
+    assert put.json()["is_completed"] is True

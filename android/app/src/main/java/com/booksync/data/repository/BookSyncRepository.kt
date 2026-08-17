@@ -252,9 +252,73 @@ class BookSyncRepository @Inject constructor(
             ebooks.filter { it.id !in completedIds }
         }
 
-    /** Mark a media item as completed. */
+    /** Mark a *standalone* media item as completed. Pairs go through [markPairComplete]. */
     suspend fun markComplete(mediaType: String, mediaId: Int) {
         updateProgress(mediaType, mediaId, isCompleted = true)
+    }
+
+    /**
+     * Mark a pair finished: one `PUT /api/sync/position/pair/{id}` carrying
+     * `is_completed = true` and nothing else (issue #56,
+     * docs/position-sync-contract.md § Completion).
+     *
+     * This used to be two standalone-scope writes (`ebook/{id}` +
+     * `audiobook/{id}`), which flagged the two standalone records and left the
+     * pair's own canonical record un-finished — the web writes the pair scope,
+     * so the two clients disagreed about the same book. The server projects a
+     * pair-scoped flag onto both `user_progress` rows itself.
+     *
+     * The write carries no anchor and no `source`: a completion toggle must not
+     * move the position or re-claim which format opens next. Both local rows
+     * are flagged first (unsynced) so an offline toggle still shows on the
+     * Finished shelf and the sync sweep delivers it later.
+     */
+    suspend fun markPairComplete(pairId: Int, ebookId: Int, audiobookId: Int) {
+        val nowMillis = System.currentTimeMillis()
+        val capturedAt = capturedAtIsoFromMillis(nowMillis)
+
+        suspend fun flagLocal(mediaType: String, mediaId: Int, synced: Boolean) {
+            val existing = userProgressDao.getProgress(mediaType, mediaId)
+            userProgressDao.upsertProgress(
+                UserProgressEntity(
+                    mediaType = mediaType,
+                    mediaId = mediaId,
+                    bookPairId = pairId,
+                    epubCfi = existing?.epubCfi,
+                    epubChapter = existing?.epubChapter,
+                    epubProgressPercent = existing?.epubProgressPercent,
+                    audioPositionMs = existing?.audioPositionMs,
+                    isCompleted = true,
+                    updatedAt = nowMillis,
+                    deviceId = deviceIdManager.deviceId,
+                    deviceName = deviceIdManager.deviceName,
+                    capturedAt = capturedAt,
+                    syncedToServer = synced,
+                )
+            )
+        }
+
+        flagLocal("ebook", ebookId, synced = false)
+        flagLocal("audiobook", audiobookId, synced = false)
+
+        val ok = try {
+            api.updatePosition(
+                "pair", pairId,
+                PositionUpdateRequest(
+                    is_completed = true,
+                    device_id = deviceIdManager.deviceId,
+                    device_name = deviceIdManager.deviceName,
+                    captured_at = capturedAt,
+                )
+            ).isSuccessful
+        } catch (e: Exception) {
+            logW("markPairComplete $pairId: push failed (${e.message}) — left unsynced for the sweep")
+            false
+        }
+        if (ok) {
+            flagLocal("ebook", ebookId, synced = true)
+            flagLocal("audiobook", audiobookId, synced = true)
+        }
     }
 
     /**

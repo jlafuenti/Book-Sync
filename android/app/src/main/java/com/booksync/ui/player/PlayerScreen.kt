@@ -345,9 +345,12 @@ class PlayerViewModel @Inject constructor(
                         // history entry so the session shows up as "finished".
                         // claimFormat=true: listening all the way to the end is
                         // the clearest possible consumption signal there is.
+                        // The completion flag itself is written once, by
+                        // AudioPlayerService's STATE_ENDED listener (which also
+                        // fires for Auto/notification playback) — not here too
+                        // (issue #56).
                         if (playbackState == Player.STATE_ENDED) {
                             saveBookmark(appendToLog = true, claimFormat = true)
-                            markComplete()
                         }
                     }
                     override fun onMediaMetadataChanged(metadata: MediaMetadata) {
@@ -787,8 +790,7 @@ class PlayerViewModel @Inject constructor(
                 return@launch
             }
             val p = _pair.value ?: return@launch
-            p.audiobookId?.let { repository.markComplete("audiobook", it) }
-            p.ebookId?.let { repository.markComplete("ebook", it) }
+            repository.markPairComplete(p.id, p.ebookId, p.audiobookId)
         }
     }
 
