@@ -322,8 +322,9 @@ export async function rescanAllLibrary() {
 // and accepts `q` for a server-side title/author/series search. The `*Page`
 // functions expose one page for a paged UI; the legacy whole-list functions
 // (`getEbooks()`, `getPairs()`, ...) keep their array return shape by walking
-// every page, so the pages that still assemble the full library locally
-// (Library, Pairs, Series, Home) don't have to change in this step.
+// every page, for the pages that still assemble lists locally (Home,
+// Continue, Series, Transcription, System). The Library page is server-driven
+// (issue #120, `getLibraryItemsPage` below) and no longer uses them.
 
 const FETCH_ALL_PAGE_SIZE = 500;
 
@@ -373,6 +374,61 @@ export function getNewPairsPage(opts) {
 
 export function getNewItemsPage(opts) {
     return fetchPage('/library/new-items', opts, 'new items');
+}
+
+// ---- Server-driven library browse (issue #120) ----
+//
+// `getLibraryItemsPage` is the mixed list the Library page renders — each pair
+// once plus every unpaired ebook/audiobook (or a tab's slice of it), filtered,
+// sorted and paged on the server. Items are `{kind, pair, ebook, audiobook}`
+// with the same nested shapes the per-type endpoints return.
+// `getLibraryFacets` is the filter-pill options (distinct authors / series
+// with counts, scoped to the tab) plus the library-wide tab counts.
+
+// (`q` is carried by pageQuery, which already knows about it.)
+function browseQuery({ tab, kind, q, author, series, sort, dir, withQ = false } = {}) {
+    const params = new URLSearchParams();
+    if (tab) params.set('tab', tab);
+    if (kind) params.set('kind', kind);
+    if (withQ && q) params.set('q', q);
+    if (author) params.set('author', author);
+    if (series) params.set('series', series);
+    if (sort) params.set('sort', sort);
+    if (dir) params.set('dir', dir);
+    return params.toString();
+}
+
+export async function getLibraryItemsPage(opts = {}) {
+    const extra = browseQuery(opts);
+    const path = `/library/items${pageQuery(opts)}${extra ? `&${extra}` : ''}`;
+    const resp = await fetchWithAuth(`${API_BASE}${path}`);
+    if (!resp.ok) throw new Error('Failed to fetch library items');
+    return resp.json();
+}
+
+/**
+ * Every unpaired ebook and audiobook — for the manual-pairing pickers on the
+ * Pairs / Unpaired pages. Bounded to the unpaired set (paged through
+ * `tab=unpaired`), instead of downloading the whole library and set-diffing
+ * against every pair client-side. Returns `{ebooks, audiobooks}` as plain
+ * media objects.
+ */
+export async function getUnpairedMedia() {
+    const [ebookItems, audiobookItems] = await Promise.all([
+        fetchAllPages((page) => getLibraryItemsPage({ tab: 'unpaired', kind: 'ebook', page, limit: FETCH_ALL_PAGE_SIZE })),
+        fetchAllPages((page) => getLibraryItemsPage({ tab: 'unpaired', kind: 'audiobook', page, limit: FETCH_ALL_PAGE_SIZE })),
+    ]);
+    return {
+        ebooks: ebookItems.map((it) => it.ebook).filter(Boolean),
+        audiobooks: audiobookItems.map((it) => it.audiobook).filter(Boolean),
+    };
+}
+
+export async function getLibraryFacets(opts = {}) {
+    const extra = browseQuery(opts);
+    const resp = await fetchWithAuth(`${API_BASE}/library/facets${extra ? `?${extra}` : ''}`);
+    if (!resp.ok) throw new Error('Failed to fetch library facets');
+    return resp.json();
 }
 
 export function getEbooks() {

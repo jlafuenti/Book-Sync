@@ -878,3 +878,81 @@ describe('whole-list wrappers and multi-file folder actions', () => {
         expect(fetchMock.mock.calls[1][0]).toBe('/api/troubleshoot/multi-file/7/remove-tracks')
     })
 })
+
+// Issue #120: the Library page is server-driven. `/library/items` is the mixed
+// list (pairs + unpaired media, or a tab's slice of it) filtered, sorted and
+// paged on the server; `/library/facets` is the pill options + tab counts.
+describe('library browse (issue #120)', () => {
+    function ok(body) {
+        return { ok: true, status: 200, json: async () => body }
+    }
+
+    it('getLibraryItemsPage builds every filter into the query string, omitting empties', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(ok({ items: [], total: 0, page: 2, limit: 50 }))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getLibraryItemsPage } = await import('./api')
+        await getLibraryItemsPage({
+            tab: 'unpaired', kind: 'ebook', q: 'dune', author: 'Frank Herbert', series: '',
+            sort: 'author', dir: 'desc', page: 2, limit: 50,
+        })
+        await getLibraryItemsPage()
+
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            '/api/library/items?page=2&limit=50&q=dune&tab=unpaired&kind=ebook&author=Frank+Herbert&sort=author&dir=desc')
+        expect(fetchMock.mock.calls[1][0]).toBe('/api/library/items?page=1&limit=100')
+    })
+
+    it('getLibraryItemsPage returns the envelope and throws on a non-ok response', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(ok({ items: [{ kind: 'pair' }], total: 1, page: 1, limit: 100 }))
+            .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getLibraryItemsPage } = await import('./api')
+        expect(await getLibraryItemsPage()).toEqual({ items: [{ kind: 'pair' }], total: 1, page: 1, limit: 100 })
+        await expect(getLibraryItemsPage()).rejects.toThrow('Failed to fetch library items')
+    })
+
+    it('getUnpairedMedia walks tab=unpaired per kind and returns plain media objects', async () => {
+        const fetchMock = vi.fn().mockImplementation(async (url) => {
+            const u = new URL(url, 'http://x')
+            const kind = u.searchParams.get('kind')
+            const page = Number(u.searchParams.get('page'))
+            const items = kind === 'ebook'
+                ? (page === 1 ? [{ kind: 'ebook', ebook: { id: 1 } }, { kind: 'ebook', ebook: { id: 2 } }] : [{ kind: 'ebook', ebook: { id: 3 } }])
+                : [{ kind: 'audiobook', audiobook: { id: 9 } }]
+            const total = kind === 'ebook' ? 3 : 1
+            return ok({ items, total, page, limit: kind === 'ebook' ? 2 : 500 })
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getUnpairedMedia } = await import('./api')
+        const { ebooks, audiobooks } = await getUnpairedMedia()
+
+        expect(ebooks.map((e) => e.id)).toEqual([1, 2, 3])
+        expect(audiobooks.map((a) => a.id)).toEqual([9])
+        const urls = fetchMock.mock.calls.map((c) => c[0])
+        expect(urls).toContain('/api/library/items?page=1&limit=500&tab=unpaired&kind=ebook')
+        expect(urls).toContain('/api/library/items?page=1&limit=500&tab=unpaired&kind=audiobook')
+        // Only the unpaired set is fetched — no /library/ebooks or /library/pairs walk.
+        expect(urls.every((u) => u.startsWith('/api/library/items?'))).toBe(true)
+    })
+
+    it('getLibraryFacets scopes to tab/kind and returns authors, series and counts', async () => {
+        const facets = { authors: [{ name: 'A', count: 2 }], series: [], counts: { ebooks: 4 } }
+        const fetchMock = vi.fn().mockResolvedValue(ok(facets))
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getLibraryFacets } = await import('./api')
+        expect(await getLibraryFacets({ tab: 'new', kind: 'pair' })).toEqual(facets)
+        await getLibraryFacets()
+
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/facets?tab=new&kind=pair')
+        expect(fetchMock.mock.calls[1][0]).toBe('/api/library/facets')
+    })
+})

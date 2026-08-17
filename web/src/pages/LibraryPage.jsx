@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-    getEbooks, getAudiobooks, getPairs, getNewPairs, uploadEbook, uploadAudiobook, scanLibrary,
+    getLibraryItemsPage, getLibraryFacets, fetchAllPages,
+    uploadEbook, uploadAudiobook, scanLibrary,
     normalizeLibrary, updateEbookMetadata, updateAudiobookMetadata,
     rescanAllLibrary, deleteEbook, deleteAudiobook, verifyFiles,
     cleanupOrphans, acknowledgeNewItems, acknowledgeNewPairs,
     getAllProgress
 } from '../api'
-import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
+import { pairTargetPath } from '../utils/pairRouting'
+import useLibraryBrowse from '../hooks/useLibraryBrowse'
+import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from '../lib/libraryItems'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
 import FilterPill from '../components/FilterPill'
@@ -17,46 +20,28 @@ import useIsMobile from '../hooks/useIsMobile'
 import useCoverSrc from '../hooks/useCoverSrc'
 import './LibraryPage.css'
 
-// ---- Sort helper ----
+// ---- Browse constants (issue #120) ----
+//
+// The list is server-driven: tabs, sub-filters, search, author/series pills
+// and sort are query params on GET /api/library/items, and the page loads it
+// PAGE_SIZE items at a time (infinite scroll, with a "Show more" fallback).
+const PAGE_SIZE = 50
+const SEARCH_DEBOUNCE_MS = 300
+// UI sub-filter keys → the server's `kind` param.
+const SUB_FILTER_KIND = { all: '', ebooks: 'ebook', audiobooks: 'audiobook', pairs: 'pair' }
+const KIND_SUB_FILTER = { '': 'all', ebook: 'ebooks', audiobook: 'audiobooks', pair: 'pairs' }
+const EMPTY_FACETS = {
+    authors: [], series: [],
+    counts: { ebooks: 0, audiobooks: 0, pairs: 0, unpaired: 0, new_ebooks: 0, new_audiobooks: 0, new_pairs: 0 },
+}
 
-function sortComparator(sortKey) {
-    return (a, b) => {
-        let valA, valB
-        const lastDash = sortKey.lastIndexOf('-')
-        const field = sortKey.slice(0, lastDash)
-        const dir = sortKey.slice(lastDash + 1)
-
-        if (field === 'title' || field === 'author') {
-            valA = (a[field] || '').toLowerCase()
-            valB = (b[field] || '').toLowerCase()
-            if (!a[field]) return 1
-            if (!b[field]) return -1
-        } else if (field === 'date') {
-            valA = new Date(a.uploaded_at || 0).getTime()
-            valB = new Date(b.uploaded_at || 0).getTime()
-        } else if (field === 'series') {
-            const sA = (a.series || '').toLowerCase()
-            const sB = (b.series || '').toLowerCase()
-            if (!a.series && !b.series) return 0
-            if (!a.series) return 1
-            if (!b.series) return -1
-            if (sA !== sB) { valA = sA; valB = sB }
-            else {
-                valA = a.series_index ?? 999999
-                valB = b.series_index ?? 999999
-            }
-        } else if (field === 'size') {
-            valA = a.file_size ?? 0
-            valB = b.file_size ?? 0
-        } else {
-            valA = (a[field] || '').toLowerCase()
-            valB = (b[field] || '').toLowerCase()
-        }
-
-        if (valA < valB) return dir === 'asc' ? -1 : 1
-        if (valA > valB) return dir === 'asc' ? 1 : -1
-        return 0
-    }
+function useDebouncedValue(value, delayMs) {
+    const [debounced, setDebounced] = useState(value)
+    useEffect(() => {
+        const t = setTimeout(() => setDebounced(value), delayMs)
+        return () => clearTimeout(t)
+    }, [value, delayMs])
+    return debounced
 }
 
 function formatSize(bytes) {
@@ -265,14 +250,13 @@ function LibraryPage({ tab }) {
     const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
     const mobileFilterRef = useRef(null)
 
-    // Data state
-    const [ebooks, setEbooks] = useState([])
-    const [audiobooks, setAudiobooks] = useState([])
-    const [pairs, setPairs] = useState([])
-    // Progress records — used to determine `lastFormat` per pair so a pair-tap
-    // routes to whichever medium the user last used.
+    // Data state. The list itself lives in useLibraryBrowse (below); facets
+    // are the filter-pill options + tab counts; progress records decide
+    // `lastFormat` per pair so a pair-tap routes to whichever medium the user
+    // last used.
+    const [facets, setFacets] = useState(null)
+    const [facetsTick, setFacetsTick] = useState(0)
     const [progress, setProgress] = useState([])
-    const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [scanResult, setScanResult] = useState(null)
 
@@ -285,21 +269,44 @@ function LibraryPage({ tab }) {
 
     // View state
     const [viewMode, setViewMode] = useState('grid')
-    const [activeFilter, setActiveFilter] = useState('all')
-    const [unpairedSubFilter, setUnpairedSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks'
-    const [newSubFilter, setNewSubFilter] = useState('all') // 'all' | 'ebooks' | 'audiobooks' | 'pairs'
-    const [newPairs, setNewPairs] = useState([])
     const [acknowledging, setAcknowledging] = useState(false)
     const [showMetadataCleanup, setShowMetadataCleanup] = useState(false)
-    const [gridPage, setGridPage] = useState(1)
-
-    const GRID_PAGE_SIZE = 50
-    const [sortField, setSortField] = useState('title')
-    const [sortDir, setSortDir] = useState('asc')
     const [sortOpen, setSortOpen] = useState(false)
-    const [searchTerm, setSearchTerm] = useState('')
-    const [authorFilter, setAuthorFilter] = useState('')
-    const [seriesFilter, setSeriesFilter] = useState('')
+
+    // ---- URL-backed browse state (issue #120) ----
+    // Tab, sub-filter, sort, search and the author/series pills all live in
+    // the query string: a reload or a shared link lands on the same view, and
+    // the server query is derived from one place. `search` is owned by the
+    // global search bar (it sets/clears it); the mobile box is local and
+    // debounced. The route prop (`/library/ebooks`) is the default tab.
+    const defaultTab = tab === 'audiobooks' ? 'audiobooks' : tab === 'ebooks' ? 'ebooks' : 'all'
+    const activeFilter = searchParams.get('tab') || defaultTab
+    const kindParam = searchParams.get('kind') || ''
+    const unpairedSubFilter = activeFilter === 'unpaired' ? (KIND_SUB_FILTER[kindParam] || 'all') : 'all'
+    const newSubFilter = activeFilter === 'new' ? (KIND_SUB_FILTER[kindParam] || 'all') : 'all'
+    const sortField = searchParams.get('sort') || 'title'
+    const sortDir = searchParams.get('dir') || 'asc'
+    const searchTerm = searchParams.get('search') || ''
+    const authorFilter = searchParams.get('author') || ''
+    const seriesFilter = searchParams.get('series') || ''
+
+    const setParams = useCallback((patch) => {
+        setSearchParams(prev => {
+            const n = new URLSearchParams(prev)
+            for (const [k, v] of Object.entries(patch)) {
+                if (v === null || v === undefined || v === '') n.delete(k)
+                else n.set(k, String(v))
+            }
+            return n
+        }, { replace: true })
+    }, [setSearchParams])
+    const setActiveFilter = (v) => setParams({ tab: v, kind: '' })
+    const setUnpairedSubFilter = (v) => setParams({ kind: SUB_FILTER_KIND[v] || '' })
+    const setNewSubFilter = (v) => setParams({ kind: SUB_FILTER_KIND[v] || '' })
+    const setSortField = (v) => setParams({ sort: v })
+    const setSortDir = (v) => setParams({ dir: v })
+    const setAuthorFilter = (v) => setParams({ author: v })
+    const setSeriesFilter = (v) => setParams({ series: v })
 
     // Edit state
     const [editingBook, setEditingBook] = useState(null)
@@ -338,254 +345,68 @@ function LibraryPage({ tab }) {
     const ebookFileRef = useRef(null)
     const audiobookFileRef = useRef(null)
 
-    // Sync search from URL (global search bar owns it — don't clear it)
-    // One-time navigation params (author/series from SeriesPage links) are cleared after reading
+    // ---- Server-driven list (issue #120) ----
+    const effectiveSearch = searchTerm || mobileSearch
+    const q = useDebouncedValue(effectiveSearch, SEARCH_DEBOUNCE_MS)
+    const browseQuery = useMemo(() => ({
+        tab: activeFilter, kind: kindParam, q, author: authorFilter, series: seriesFilter,
+        sort: sortField, dir: sortDir,
+    }), [activeFilter, kindParam, q, authorFilter, seriesFilter, sortField, sortDir])
+    const browse = useLibraryBrowse(browseQuery, { pageSize: PAGE_SIZE })
+
+    // Facets follow the tab (pills describe the whole tab, not the search).
     useEffect(() => {
-        const urlSearch = searchParams.get('search')
-        const urlAuthor = searchParams.get('author')
-        const urlSeries = searchParams.get('series')
-        setSearchTerm(urlSearch || '')
-        if (urlAuthor) setAuthorFilter(urlAuthor)
-        if (urlSeries) setSeriesFilter(urlSeries)
-        if (urlAuthor || urlSeries) {
-            setSearchParams(prev => {
-                const n = new URLSearchParams(prev)
-                n.delete('author')
-                n.delete('series')
-                return n
-            }, { replace: true })
-        }
-    }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
+        let cancelled = false
+        getLibraryFacets({ tab: activeFilter, kind: kindParam })
+            .then(f => { if (!cancelled) setFacets(f) })
+            .catch(() => { if (!cancelled) setFacets(prev => prev || EMPTY_FACETS) })
+        return () => { cancelled = true }
+    }, [activeFilter, kindParam, facetsTick])
 
-    // Set initial filter based on tab prop
-    useEffect(() => {
-        if (tab === 'audiobooks') setActiveFilter('audiobooks')
-        else if (tab === 'ebooks') setActiveFilter('ebooks')
-    }, [tab])
-
-    // Pair lookup maps
-    const pairMaps = useMemo(() => {
-        const byEbookId = {}
-        const byAudiobookId = {}
-        pairs.forEach(p => {
-            if (p.ebook?.id) byEbookId[p.ebook.id] = p
-            if (p.audiobook?.id) byAudiobookId[p.audiobook.id] = p
-        })
-        return { byEbookId, byAudiobookId }
-    }, [pairs])
-
-    // Annotated individual book lists (with pair info)
-    const annotatedEbooks = useMemo(() =>
-        ebooks.map(b => ({
-            ...b,
-            mediaType: 'ebook',
-            pair_id: pairMaps.byEbookId[b.id]?.id ?? null,
-            pair_status: pairMaps.byEbookId[b.id]?.status ?? null,
-            paired_audiobook_id: pairMaps.byEbookId[b.id]?.audiobook?.id ?? null,
-        })),
-    [ebooks, pairMaps])
-
-    const annotatedAudiobooks = useMemo(() =>
-        audiobooks.map(b => ({
-            ...b,
-            mediaType: 'audiobook',
-            pair_id: pairMaps.byAudiobookId[b.id]?.id ?? null,
-            pair_status: pairMaps.byAudiobookId[b.id]?.status ?? null,
-            paired_ebook_id: pairMaps.byAudiobookId[b.id]?.ebook?.id ?? null,
-        })),
-    [audiobooks, pairMaps])
-
-    // Merged pair entries (one entry per pair for All/Paired views)
-    const pairEntries = useMemo(() => {
-        const ebookMap = {}
-        const abMap = {}
-        ebooks.forEach(b => { ebookMap[b.id] = b })
-        audiobooks.forEach(b => { abMap[b.id] = b })
-
-        // Group progress records by pair so we can compute `lastFormat` per pair.
-        // Falls back to id-based lookup if the record predates `book_pair_id`.
-        const ebookToPairId = {}
-        const audiobookToPairId = {}
-        pairs.forEach(p => {
-            if (p.ebook?.id) ebookToPairId[p.ebook.id] = p.id
-            if (p.audiobook?.id) audiobookToPairId[p.audiobook.id] = p.id
-        })
-        const progressByPair = {}
-        ;(progress || []).forEach(rec => {
-            let pid = rec.book_pair_id
-            if (!pid) {
-                if (rec.media_type === 'ebook' && rec.ebook_id) pid = ebookToPairId[rec.ebook_id]
-                if (rec.media_type === 'audiobook' && rec.audiobook_id) pid = audiobookToPairId[rec.audiobook_id]
-            }
-            if (!pid) return
-            if (!progressByPair[pid]) progressByPair[pid] = []
-            progressByPair[pid].push(rec)
-        })
-
-        return pairs.map(p => {
-            const eb = p.ebook?.id ? ebookMap[p.ebook.id] : null
-            const ab = p.audiobook?.id ? abMap[p.audiobook.id] : null
-            if (!eb && !ab) return null
-            // Prefer ebook as primary source for metadata/cover
-            const primary = eb || ab
-            return {
-                ...primary,
-                mediaType: 'pair',
-                cover_path: eb?.cover_path || ab?.cover_path,
-                title: eb?.title || ab?.title,
-                author: eb?.author || ab?.author,
-                series: eb?.series || ab?.series,
-                series_index: eb?.series_index ?? ab?.series_index,
-                uploaded_at: eb?.uploaded_at || ab?.uploaded_at,
-                pair_id: p.id,
-                pair_status: p.status,
-                ebook_id: eb?.id ?? null,
-                audiobook_id: ab?.id ?? null,
-                // 'audiobook' | 'ebook' | null — drives where a click lands.
-                lastFormat: lastFormatFromProgress(progressByPair[p.id]),
-            }
-        }).filter(Boolean)
-    }, [pairs, ebooks, audiobooks, progress])
-
-    // Filtered + sorted display list
-    const filteredBooks = useMemo(() => {
-        let list
-
-        if (activeFilter === 'all') {
-            // Pairs as one entry + unpaired individual items
-            const pairedEbookIds = new Set(annotatedEbooks.filter(b => b.pair_id).map(b => b.id))
-            const pairedAudiobookIds = new Set(annotatedAudiobooks.filter(b => b.pair_id).map(b => b.id))
-            const unpairedEbooks = annotatedEbooks.filter(b => !pairedEbookIds.has(b.id))
-            const unpairedAudiobooks = annotatedAudiobooks.filter(b => !pairedAudiobookIds.has(b.id))
-            list = [...pairEntries, ...unpairedEbooks, ...unpairedAudiobooks]
-        } else if (activeFilter === 'ebooks') {
-            list = annotatedEbooks
-        } else if (activeFilter === 'audiobooks') {
-            list = annotatedAudiobooks
-        } else if (activeFilter === 'paired') {
-            list = pairEntries
-        } else if (activeFilter === 'unpaired') {
-            const unpEl = annotatedEbooks.filter(b => !b.pair_id)
-            const unpAb = annotatedAudiobooks.filter(b => !b.pair_id)
-            if (unpairedSubFilter === 'ebooks') list = unpEl
-            else if (unpairedSubFilter === 'audiobooks') list = unpAb
-            else list = [...unpEl, ...unpAb]
-        } else if (activeFilter === 'new') {
-            const newEbooks = annotatedEbooks.filter(b => !b.acknowledged)
-            const newAudiobooks = annotatedAudiobooks.filter(b => !b.acknowledged)
-            if (newSubFilter === 'ebooks') list = newEbooks
-            else if (newSubFilter === 'audiobooks') list = newAudiobooks
-            else if (newSubFilter === 'pairs') {
-                // Show new pairs as pairEntries filtered to new pair IDs
-                const newPairIds = new Set(newPairs.map(p => p.id))
-                list = pairEntries.filter(p => newPairIds.has(p.pair_id))
-            } else list = [...newEbooks, ...newAudiobooks]
-        } else {
-            list = [...annotatedEbooks, ...annotatedAudiobooks]
-        }
-
-        // Text search (desktop uses URL param, mobile uses local state)
-        const effectiveSearch = searchTerm || mobileSearch
-        if (effectiveSearch) {
-            const term = effectiveSearch.toLowerCase()
-            list = list.filter(b =>
-                b.title?.toLowerCase().includes(term) ||
-                b.author?.toLowerCase().includes(term) ||
-                b.series?.toLowerCase().includes(term)
-            )
-        }
-
-        // Explicit author / series filters (from SeriesPage navigation)
-        if (authorFilter) list = list.filter(b => b.author === authorFilter)
-        if (seriesFilter) list = list.filter(b => b.series === seriesFilter)
-
-        return [...list].sort(sortComparator(`${sortField}-${sortDir}`))
-    }, [annotatedEbooks, annotatedAudiobooks, pairEntries, searchTerm, mobileSearch, activeFilter, unpairedSubFilter, newSubFilter, newPairs, sortField, sortDir, authorFilter, seriesFilter])
-
-    // Stats
-    const stats = useMemo(() => {
-        const newEbooksCount = ebooks.filter(b => !b.acknowledged).length
-        const newAudiobooksCount = audiobooks.filter(b => !b.acknowledged).length
-        const newCount = newEbooksCount + newAudiobooksCount + newPairs.length
-        return {
-            totalEbooks: ebooks.length,
-            totalAudiobooks: audiobooks.length,
-            pairCount: pairs.length,
-            unpaired: ebooks.filter(b => !pairMaps.byEbookId[b.id]).length + audiobooks.filter(b => !pairMaps.byAudiobookId[b.id]).length,
-            newCount,
-            newEbooksCount,
-            newAudiobooksCount,
-            newPairsCount: newPairs.length,
-            displayTotal: filteredBooks.length,
-        }
-    }, [ebooks, audiobooks, pairs, pairMaps, filteredBooks, newPairs])
-
-    // Base list for filter pill options — scoped to current activeFilter (no search/author/series applied)
-    const baseListForOptions = useMemo(() => {
-        if (activeFilter === 'ebooks')    return annotatedEbooks
-        if (activeFilter === 'audiobooks') return annotatedAudiobooks
-        if (activeFilter === 'paired')    return pairEntries
-        if (activeFilter === 'unpaired') {
-            const unpEl = annotatedEbooks.filter(b => !b.pair_id)
-            const unpAb = annotatedAudiobooks.filter(b => !b.pair_id)
-            if (unpairedSubFilter === 'ebooks') return unpEl
-            if (unpairedSubFilter === 'audiobooks') return unpAb
-            return [...unpEl, ...unpAb]
-        }
-        if (activeFilter === 'new') {
-            const newEb = annotatedEbooks.filter(b => !b.acknowledged)
-            const newAb = annotatedAudiobooks.filter(b => !b.acknowledged)
-            if (newSubFilter === 'ebooks') return newEb
-            if (newSubFilter === 'audiobooks') return newAb
-            if (newSubFilter === 'pairs') {
-                const ids = new Set(newPairs.map(p => p.id))
-                return pairEntries.filter(p => ids.has(p.pair_id))
-            }
-            return [...newEb, ...newAb]
-        }
-        // 'all'
-        const pairedEbookIds = new Set(annotatedEbooks.filter(b => b.pair_id).map(b => b.id))
-        const pairedAudiobookIds = new Set(annotatedAudiobooks.filter(b => b.pair_id).map(b => b.id))
-        return [
-            ...pairEntries,
-            ...annotatedEbooks.filter(b => !pairedEbookIds.has(b.id)),
-            ...annotatedAudiobooks.filter(b => !pairedAudiobookIds.has(b.id)),
-        ]
-    }, [activeFilter, annotatedEbooks, annotatedAudiobooks, pairEntries, unpairedSubFilter, newSubFilter, newPairs])
-
-    const allAuthors = useMemo(() => {
-        const set = new Set(baseListForOptions.map(b => b.author).filter(Boolean))
-        return [...set].sort()
-    }, [baseListForOptions])
-
-    const allSeriesNames = useMemo(() => {
-        const set = new Set(baseListForOptions.map(b => b.series).filter(Boolean))
-        return [...set].sort()
-    }, [baseListForOptions])
-
-    // Data loading
-    const loadData = useCallback(async () => {
-        try {
-            const [e, a, p, np, prog] = await Promise.all([
-                getEbooks(), getAudiobooks(), getPairs(), getNewPairs(),
-                getAllProgress().catch(() => []),
-            ])
-            setEbooks(e)
-            setAudiobooks(a)
-            setPairs(p)
-            setNewPairs(np)
-            setProgress(prog || [])
-        } catch (err) {
-            setError(err.message)
-        } finally {
-            setLoading(false)
-        }
+    const loadProgress = useCallback(() => {
+        return getAllProgress().then(p => setProgress(p || [])).catch(() => setProgress([]))
     }, [])
+    useEffect(() => { loadProgress() }, [loadProgress])
 
-    useEffect(() => { loadData() }, [loadData])
+    // After any mutation: refetch the loaded span, the counts/pills, and progress.
+    const refreshAll = useCallback(async () => {
+        setFacetsTick(t => t + 1)
+        await Promise.all([browse.reload(), loadProgress()])
+    }, [browse.reload, loadProgress]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Reset grid pagination whenever the filtered list changes
-    useEffect(() => { setGridPage(1) }, [filteredBooks])
+    const counts = (facets || EMPTY_FACETS).counts
+    const allAuthors = useMemo(() => (facets || EMPTY_FACETS).authors.map(a => a.name), [facets])
+    const allSeriesNames = useMemo(() => (facets || EMPTY_FACETS).series.map(s => s.name), [facets])
+
+    // Display entries — the flat shape the cards/rows/selection consume.
+    const progressByPair = useMemo(() => groupProgressByPair(progress, browse.items), [progress, browse.items])
+    const filteredBooks = useMemo(
+        () => browse.items.map(it => toDisplayEntry(it, progressByPair)),
+        [browse.items, progressByPair],
+    )
+    const total = browse.total
+    const loading = facets === null || (browse.loading && browse.page === 0)
+
+    // Infinite scroll: a sentinel below the list asks for the next page as it
+    // scrolls into view; the "Show more" button below it is the fallback.
+    const sentinelRef = useRef(null)
+    const loadMoreRef = useRef(browse.loadMore)
+    useEffect(() => { loadMoreRef.current = browse.loadMore }, [browse.loadMore])
+    useEffect(() => {
+        const el = sentinelRef.current
+        if (!el || typeof IntersectionObserver === 'undefined') return
+        const io = new IntersectionObserver((entries) => {
+            if (entries.some(e => e.isIntersecting)) loadMoreRef.current()
+        }, { rootMargin: '400px' })
+        io.observe(el)
+        return () => io.disconnect()
+    }, [browse.hasMore, viewMode, isMobile, loading])
+
+    // Everything of the current tab/kind (not just the loaded pages) — for
+    // "Acknowledge All", which must cover items that haven't scrolled in.
+    const collectAllInTab = useCallback(() => fetchAllPages(
+        (page) => getLibraryItemsPage({ tab: activeFilter, kind: kindParam, page, limit: 500 })
+    ), [activeFilter, kindParam])
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -602,10 +423,7 @@ function LibraryPage({ tab }) {
 
     // ---- Selection helpers ----
 
-    const bookKey = (b) => {
-        if (b.mediaType === 'pair') return `pair-${b.pair_id}`
-        return `${b.mediaType}-${b.id}`
-    }
+    const bookKey = entryKey
 
     const handleSelect = useCallback((book, idx, shiftKey) => {
         const key = bookKey(book)
@@ -649,11 +467,11 @@ function LibraryPage({ tab }) {
         return [...selectedIds].flatMap(key => {
             if (key.startsWith('pair-')) {
                 const pairId = parseInt(key.slice(5))
-                const pair = pairs.find(p => p.id === pairId)
-                if (!pair) return []
+                const entry = filteredBooks.find(b => b.mediaType === 'pair' && b.pair_id === pairId)
+                if (!entry) return []
                 const results = []
-                if (pair.ebook?.id) results.push({ mediaType: 'ebook', id: pair.ebook.id })
-                if (pair.audiobook?.id) results.push({ mediaType: 'audiobook', id: pair.audiobook.id })
+                if (entry.ebook_id) results.push({ mediaType: 'ebook', id: entry.ebook_id })
+                if (entry.audiobook_id) results.push({ mediaType: 'audiobook', id: entry.audiobook_id })
                 return results
             }
             const idx = key.lastIndexOf('-')
@@ -679,8 +497,8 @@ function LibraryPage({ tab }) {
                 const fn = s.mediaType === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata
                 return fn(s.id, patch)
             }))
-            setEbooks(prev => prev.map(b => selected.some(s => s.mediaType === 'ebook' && s.id === b.id) ? { ...b, ...patch } : b))
-            setAudiobooks(prev => prev.map(b => selected.some(s => s.mediaType === 'audiobook' && s.id === b.id) ? { ...b, ...patch } : b))
+            browse.patchItems(items => selected.reduce((acc, s) => patchMedia(acc, s.mediaType, s.id, patch), items))
+            setFacetsTick(t => t + 1)
             setBulkEditOpen(false)
             setBulkEditFields({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
             exitSelectMode()
@@ -699,7 +517,7 @@ function LibraryPage({ tab }) {
                 const fn = s.mediaType === 'ebook' ? deleteEbook : deleteAudiobook
                 return fn(s.id, bulkDeleteSourceFile)
             }))
-            await loadData()
+            await refreshAll()
             setBulkDeleteOpen(false)
             exitSelectMode()
         } catch (err) {
@@ -713,14 +531,14 @@ function LibraryPage({ tab }) {
 
     const handleScan = async () => {
         setScanning(true); setScanResult(null); setError('')
-        try { const r = await scanLibrary(); setScanResult(r); await loadData() }
+        try { const r = await scanLibrary(); setScanResult(r); await refreshAll() }
         catch (err) { setError(err.message) }
         finally { setScanning(false) }
     }
 
     const handleNormalize = async () => {
         setNormalizing(true); setScanResult(null); setError('')
-        try { const r = await normalizeLibrary(); setScanResult(r); await loadData() }
+        try { const r = await normalizeLibrary(); setScanResult(r); await refreshAll() }
         catch (err) { setError(err.message) }
         finally { setNormalizing(false) }
     }
@@ -728,7 +546,7 @@ function LibraryPage({ tab }) {
     const handleRescanAll = async () => {
         if (!window.confirm("WARNING: This will force a complete rescan of EVERY file in your library, overwriting all current database metadata with whatever tags are physically embedded inside the files. This cannot be undone!\n\nAre you sure?")) return
         setRescanningAll(true); setScanResult(null); setError('')
-        try { const r = await rescanAllLibrary(); setScanResult(r); await loadData() }
+        try { const r = await rescanAllLibrary(); setScanResult(r); await refreshAll() }
         catch (err) { setError(err.message) }
         finally { setRescanningAll(false) }
     }
@@ -736,7 +554,7 @@ function LibraryPage({ tab }) {
     const handleEbookUpload = async (e) => {
         const file = e.target.files[0]; if (!file) return
         setUploadingEbook(true); setError('')
-        try { await uploadEbook(file); await loadData() }
+        try { await uploadEbook(file); await refreshAll() }
         catch (err) { setError(err.message) }
         finally { setUploadingEbook(false); ebookFileRef.current.value = '' }
     }
@@ -744,7 +562,7 @@ function LibraryPage({ tab }) {
     const handleAudiobookUpload = async (e) => {
         const file = e.target.files[0]; if (!file) return
         setUploadingAudiobook(true); setError('')
-        try { await uploadAudiobook(file); await loadData() }
+        try { await uploadAudiobook(file); await refreshAll() }
         catch (err) { setError(err.message) }
         finally { setUploadingAudiobook(false); audiobookFileRef.current.value = '' }
     }
@@ -753,11 +571,11 @@ function LibraryPage({ tab }) {
         try {
             if (editingType === 'ebook') {
                 await updateEbookMetadata(bookId, meta)
-                setEbooks(prev => prev.map(b => b.id === bookId ? { ...b, ...meta } : b))
             } else {
                 await updateAudiobookMetadata(bookId, meta)
-                setAudiobooks(prev => prev.map(b => b.id === bookId ? { ...b, ...meta } : b))
             }
+            browse.patchItems(items => patchMedia(items, editingType, bookId, meta))
+            setFacetsTick(t => t + 1)
             setEditingBook(null); setEditingType(null)
         } catch (err) {
             alert('Failed to update metadata: ' + err.message)
@@ -767,7 +585,7 @@ function LibraryPage({ tab }) {
     const openEdit = (book) => {
         if (book.mediaType === 'pair') {
             // Edit the ebook component of the pair
-            const eb = ebooks.find(b => b.id === book.ebook_id)
+            const eb = book.pair?.ebook
             if (eb) { setEditingBook({ ...eb }); setEditingType('ebook') }
         } else {
             setEditingBook({ ...book })
@@ -786,12 +604,10 @@ function LibraryPage({ tab }) {
         try {
             if (deleteTarget.type === 'ebook') {
                 await deleteEbook(deleteTarget.id, deleteSourceFile)
-                setEbooks(prev => prev.filter(b => b.id !== deleteTarget.id))
             } else {
                 await deleteAudiobook(deleteTarget.id, deleteSourceFile)
-                setAudiobooks(prev => prev.filter(b => b.id !== deleteTarget.id))
             }
-            await loadData()
+            await refreshAll()
             setDeleteTarget(null)
         } catch (err) {
             alert('Failed to delete: ' + err.message)
@@ -805,25 +621,23 @@ function LibraryPage({ tab }) {
     const handleAcknowledgeAll = async () => {
         setAcknowledging(true)
         try {
-            if (newSubFilter === 'pairs') {
-                await acknowledgeNewPairs(newPairs.map(p => p.id))
-            } else if (newSubFilter === 'ebooks') {
-                const ids = filteredBooks.map(b => b.id)
-                await acknowledgeNewItems(ids, [])
-            } else if (newSubFilter === 'audiobooks') {
-                const ids = filteredBooks.map(b => b.id)
-                await acknowledgeNewItems([], ids)
-            } else {
-                // all: ebooks + audiobooks + pairs
-                const ebookIds = ebooks.filter(b => !b.acknowledged).map(b => b.id)
-                const audioIds = audiobooks.filter(b => !b.acknowledged).map(b => b.id)
-                const pairIds = newPairs.map(p => p.id)
-                await Promise.all([
-                    acknowledgeNewItems(ebookIds, audioIds),
-                    ...(pairIds.length ? [acknowledgeNewPairs(pairIds)] : []),
-                ])
+            // Everything new in this sub-filter — including items that
+            // haven't scrolled in — not just the loaded pages.
+            const all = await collectAllInTab()
+            const ebookIds = all.filter(it => it.kind === 'ebook').map(it => it.ebook.id)
+            const audioIds = all.filter(it => it.kind === 'audiobook').map(it => it.audiobook.id)
+            let pairIds = all.filter(it => it.kind === 'pair').map(it => it.pair.id)
+            if (newSubFilter === 'all') {
+                // The "All" sub-filter lists media; new pairs are acknowledged too.
+                const newPairs = await fetchAllPages(
+                    (page) => getLibraryItemsPage({ tab: 'new', kind: 'pair', page, limit: 500 }))
+                pairIds = newPairs.map(it => it.pair.id)
             }
-            await loadData()
+            await Promise.all([
+                ...(ebookIds.length || audioIds.length ? [acknowledgeNewItems(ebookIds, audioIds)] : []),
+                ...(pairIds.length ? [acknowledgeNewPairs(pairIds)] : []),
+            ])
+            await refreshAll()
         } catch (err) {
             alert('Failed to acknowledge: ' + err.message)
         } finally {
@@ -842,7 +656,7 @@ function LibraryPage({ tab }) {
             return
         }
         exitSelectMode()
-        await loadData()
+        await refreshAll()
     }
 
     // ---- Verify handlers ----
@@ -868,8 +682,7 @@ function LibraryPage({ tab }) {
         setCleaningUp(true)
         try {
             const result = await cleanupOrphans([...selectedOrphanEbooks], [...selectedOrphanAudiobooks])
-            setEbooks(prev => prev.filter(b => !selectedOrphanEbooks.has(b.id)))
-            setAudiobooks(prev => prev.filter(b => !selectedOrphanAudiobooks.has(b.id)))
+            await refreshAll()
             setVerifyReport(prev => ({
                 orphaned_ebooks: prev.orphaned_ebooks.filter(e => !selectedOrphanEbooks.has(e.id)),
                 orphaned_audiobooks: prev.orphaned_audiobooks.filter(a => !selectedOrphanAudiobooks.has(a.id)),
@@ -887,12 +700,12 @@ function LibraryPage({ tab }) {
         const types = new Set(parsed.map(s => s.mediaType))
         if (types.size !== 1) return null
         const type = [...types][0]
-        const source = type === 'ebook' ? ebooks : audiobooks
+        const ids = new Set(parsed.map(s => s.id))
         return {
-            books: source.filter(b => parsed.some(s => s.id === b.id)),
+            books: filteredBooks.filter(b => b.mediaType === type && ids.has(b.id)),
             bookType: type,
         }
-    }, [selectedIds, ebooks, audiobooks, pairs])
+    }, [selectedIds, filteredBooks]) // eslint-disable-line react-hooks/exhaustive-deps
 
     // ---- Render ----
 
@@ -900,13 +713,14 @@ function LibraryPage({ tab }) {
         return <div className="loading-page"><div className="spinner"></div> Loading library...</div>
     }
 
+    const newCount = counts.new_ebooks + counts.new_audiobooks + counts.new_pairs
     const filterPills = [
-        { key: 'all', label: 'All', count: pairEntries.length + ebooks.filter(b => !pairMaps.byEbookId[b.id]).length + audiobooks.filter(b => !pairMaps.byAudiobookId[b.id]).length },
-        { key: 'ebooks', label: 'Ebooks', count: ebooks.length },
-        { key: 'audiobooks', label: 'Audiobooks', count: audiobooks.length },
-        { key: 'paired', label: 'Paired', count: pairs.length },
-        { key: 'unpaired', label: 'Unpaired', count: stats.unpaired },
-        ...(stats.newCount > 0 ? [{ key: 'new', label: 'New', count: stats.newCount }] : []),
+        { key: 'all', label: 'All', count: counts.pairs + counts.unpaired },
+        { key: 'ebooks', label: 'Ebooks', count: counts.ebooks },
+        { key: 'audiobooks', label: 'Audiobooks', count: counts.audiobooks },
+        { key: 'paired', label: 'Paired', count: counts.pairs },
+        { key: 'unpaired', label: 'Unpaired', count: counts.unpaired },
+        ...(newCount > 0 || activeFilter === 'new' ? [{ key: 'new', label: 'New', count: newCount }] : []),
     ]
     const activePill = filterPills.find(p => p.key === activeFilter) || filterPills[0]
 
@@ -927,7 +741,7 @@ function LibraryPage({ tab }) {
                             <button
                                 key={p.key}
                                 className={`library-filter-pill${activeFilter === p.key ? ' active' : ''}`}
-                                onClick={() => { setActiveFilter(p.key); setUnpairedSubFilter('all'); setNewSubFilter('all') }}
+                                onClick={() => setActiveFilter(p.key)}
                             >
                                 {p.label} ({p.count})
                             </button>
@@ -1092,8 +906,6 @@ function LibraryPage({ tab }) {
                                     className={`library-mobile-filter-option${activeFilter === p.key ? ' active' : ''}`}
                                     onClick={() => {
                                         setActiveFilter(p.key)
-                                        setUnpairedSubFilter('all')
-                                        setNewSubFilter('all')
                                         setMobileFilterOpen(false)
                                     }}
                                 >
@@ -1130,10 +942,10 @@ function LibraryPage({ tab }) {
             {activeFilter === 'new' && (
                 <div className="library-sub-filter-row">
                     {[
-                        { key: 'all', label: `All (${stats.newEbooksCount + stats.newAudiobooksCount + stats.newPairsCount})` },
-                        { key: 'ebooks', label: `Ebooks (${stats.newEbooksCount})` },
-                        { key: 'audiobooks', label: `Audiobooks (${stats.newAudiobooksCount})` },
-                        { key: 'pairs', label: `Pairs (${stats.newPairsCount})` },
+                        { key: 'all', label: `All (${newCount})` },
+                        { key: 'ebooks', label: `Ebooks (${counts.new_ebooks})` },
+                        { key: 'audiobooks', label: `Audiobooks (${counts.new_audiobooks})` },
+                        { key: 'pairs', label: `Pairs (${counts.new_pairs})` },
                     ].map(s => (
                         <button
                             key={s.key}
@@ -1162,7 +974,7 @@ function LibraryPage({ tab }) {
             {/* Mobile view controls */}
             {isMobile && (
                 <div className="library-mobile-controls">
-                    <span className="showing-count">Showing {filteredBooks.length} items</span>
+                    <span className="showing-count">Showing {filteredBooks.length} of {total}</span>
                     <div className="control-buttons">
                         <button
                             className={`control-btn${viewMode === 'grid' ? ' active' : ''}`}
@@ -1297,29 +1109,35 @@ function LibraryPage({ tab }) {
 
             {/* Stats bar */}
             <div className="library-stats">
-                <span className="library-stat"><strong>{ebooks.length}</strong> Ebooks</span>
-                <span className="library-stat"><strong>{audiobooks.length}</strong> Audiobooks</span>
-                <span className="library-stat"><strong>{pairs.length}</strong> Paired</span>
-                <span className="library-stat">Showing <strong>{filteredBooks.length}</strong></span>
+                <span className="library-stat"><strong>{counts.ebooks}</strong> Ebooks</span>
+                <span className="library-stat"><strong>{counts.audiobooks}</strong> Audiobooks</span>
+                <span className="library-stat"><strong>{counts.pairs}</strong> Paired</span>
+                <span className="library-stat">Showing <strong>{filteredBooks.length}</strong> of <strong>{total}</strong></span>
+                {browse.loading && filteredBooks.length > 0 && <span className="library-stat muted">Updating…</span>}
+                {browse.error && <span className="library-stat" style={{ color: 'var(--danger, #e66)' }}>{browse.error}</span>}
             </div>
 
             {/* Book display */}
             {filteredBooks.length === 0 ? (
-                <div className="library-empty">
-                    <div className="library-empty-icon">
-                        {ebooks.length + audiobooks.length === 0 ? '📚' : '🔍'}
+                browse.loading ? (
+                    <div className="loading-page"><div className="spinner"></div></div>
+                ) : (
+                    <div className="library-empty">
+                        <div className="library-empty-icon">
+                            {counts.ebooks + counts.audiobooks === 0 ? '📚' : '🔍'}
+                        </div>
+                        <h3>{counts.ebooks + counts.audiobooks === 0 ? 'No books yet' : 'No books match your filters'}</h3>
+                        <p>{counts.ebooks + counts.audiobooks === 0
+                            ? 'Scan your directories or upload books to get started.'
+                            : 'Try adjusting your search or filters.'
+                        }</p>
                     </div>
-                    <h3>{ebooks.length + audiobooks.length === 0 ? 'No books yet' : 'No books match your filters'}</h3>
-                    <p>{ebooks.length + audiobooks.length === 0
-                        ? 'Scan your directories or upload books to get started.'
-                        : 'Try adjusting your search or filters.'
-                    }</p>
-                </div>
+                )
             ) : (viewMode === 'grid' || isMobile) ? (
                 /* ---- Grid View ---- */
                 <>
                     <div className="library-grid">
-                        {filteredBooks.slice(0, gridPage * GRID_PAGE_SIZE).map((book, idx) => (
+                        {filteredBooks.map((book, idx) => (
                             <BookCard
                                 key={bookKey(book)}
                                 book={book}
@@ -1338,14 +1156,16 @@ function LibraryPage({ tab }) {
                             />
                         ))}
                     </div>
-                    {filteredBooks.length > gridPage * GRID_PAGE_SIZE && (
+                    {browse.hasMore && (
                         <div style={{ textAlign: 'center', marginTop: '24px' }}>
+                            <div ref={sentinelRef} className="library-scroll-sentinel" aria-hidden="true" />
                             <button
                                 className="btn btn-secondary"
-                                onClick={() => setGridPage(p => p + 1)}
+                                onClick={() => browse.loadMore()}
+                                disabled={browse.loadingMore}
                                 style={{ padding: '8px 32px' }}
                             >
-                                Show more ({filteredBooks.length - gridPage * GRID_PAGE_SIZE} remaining)
+                                {browse.loadingMore ? 'Loading…' : `Show more (${total - filteredBooks.length} remaining)`}
                             </button>
                         </div>
                     )}
@@ -1385,6 +1205,19 @@ function LibraryPage({ tab }) {
                             canEdit={canEdit}
                         />
                     ))}
+                    {browse.hasMore && (
+                        <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                            <div ref={sentinelRef} className="library-scroll-sentinel" aria-hidden="true" />
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => browse.loadMore()}
+                                disabled={browse.loadingMore}
+                                style={{ padding: '8px 32px' }}
+                            >
+                                {browse.loadingMore ? 'Loading…' : `Show more (${total - filteredBooks.length} remaining)`}
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -1432,7 +1265,7 @@ function LibraryPage({ tab }) {
             )}
 
             {/* Floating acknowledge bar — shown when New filter is active */}
-            {activeFilter === 'new' && filteredBooks.length > 0 && !selectMode && (
+            {activeFilter === 'new' && total > 0 && !selectMode && (
                 <div style={{
                     position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
                     background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -1441,9 +1274,9 @@ function LibraryPage({ tab }) {
                     boxShadow: '0 8px 32px rgba(0,0,0,0.7)', zIndex: 100, whiteSpace: 'nowrap'
                 }}>
                     <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        {filteredBooks.length} new item{filteredBooks.length !== 1 ? 's' : ''}
+                        {total} new item{total !== 1 ? 's' : ''}
                     </span>
-                    {(newSubFilter === 'pairs' || newSubFilter === 'all') && newPairs.length > 0 && (
+                    {(newSubFilter === 'pairs' || newSubFilter === 'all') && counts.new_pairs > 0 && (
                         <button
                             className="btn btn-secondary"
                             onClick={() => setShowMetadataCleanup(true)}
@@ -1468,7 +1301,7 @@ function LibraryPage({ tab }) {
                     onClose={() => setShowMetadataCleanup(false)}
                     onComplete={() => {
                         setShowMetadataCleanup(false)
-                        loadData()
+                        refreshAll()
                     }}
                 />
             )}
@@ -1603,8 +1436,7 @@ function LibraryPage({ tab }) {
                     bookType={selectedBooksForMatch.bookType}
                     onClose={() => setBulkMatchOpen(false)}
                     onUpdate={(id, patch) => {
-                        if (selectedBooksForMatch.bookType === 'ebook') setEbooks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
-                        else setAudiobooks(prev => prev.map(b => b.id === id ? { ...b, ...patch } : b))
+                        browse.patchItems(items => patchMedia(items, selectedBooksForMatch.bookType, id, patch))
                     }}
                 />
             )}

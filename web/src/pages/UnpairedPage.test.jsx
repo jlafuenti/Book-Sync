@@ -1,13 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { BookRow } from './UnpairedPage'
+import UnpairedPage, { BookRow } from './UnpairedPage'
 
-const { coverSrcMock } = vi.hoisted(() => ({ coverSrcMock: vi.fn() }))
+const { coverSrcMock, getUnpairedMediaMock } = vi.hoisted(() => ({
+    coverSrcMock: vi.fn(),
+    getUnpairedMediaMock: vi.fn(),
+}))
 
-vi.mock('../api', () => ({ coverSrc: coverSrcMock }))
+vi.mock('../api', () => ({
+    coverSrc: coverSrcMock,
+    getUnpairedMedia: getUnpairedMediaMock,
+    createPair: vi.fn(),
+}))
 
 beforeEach(() => {
     coverSrcMock.mockReset()
+    getUnpairedMediaMock.mockReset()
+})
+
+// Issue #120: the manual-pairing page loads only the unpaired set through the
+// bounded `getUnpairedMedia()` helper (tab=unpaired on /library/items) — it no
+// longer downloads every ebook, audiobook and pair to set-diff them itself.
+describe('UnpairedPage data source', () => {
+    it('lists the unpaired ebooks and audiobooks from getUnpairedMedia()', async () => {
+        getUnpairedMediaMock.mockResolvedValue({
+            ebooks: [{ id: 1, title: 'Lonely Ebook', author: 'A', filename: 'e.epub' }],
+            audiobooks: [{ id: 2, title: 'Lonely Audio', author: 'B', filename: 'a.m4b' }],
+        })
+        render(<UnpairedPage />)
+
+        expect(await screen.findByText('Lonely Ebook')).toBeInTheDocument()
+        expect(screen.getByText('Lonely Audio')).toBeInTheDocument()
+        expect(getUnpairedMediaMock).toHaveBeenCalledTimes(1)
+    })
 })
 
 describe('UnpairedPage BookRow', () => {
