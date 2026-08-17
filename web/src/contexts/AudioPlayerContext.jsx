@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updatePosition, getAccessToken, sendPositionKeepalive, getDeviceId, getDeviceName } from '../api'
+import { getAudiobookStreamUrl, updatePosition, sendPositionKeepalive, getDeviceId, getDeviceName, coverSrc } from '../api'
+import {
+    applyMetadata, applyPositionState, setPlaybackState, bindActionHandlers, clearMediaSession,
+} from '../lib/mediaSession'
 
 const AudioPlayerContext = createContext(null)
 
@@ -40,6 +43,10 @@ const SEEK_FLUSH_DEBOUNCE_MS = 1000
 // handoff jump on Android.
 const SKIP_SECONDS = 30
 const RESUME_REWIND_SECONDS = 5
+
+// How often the Media Session scrubber is updated from `timeupdate` (issue
+// #62). The OS interpolates between updates, so ~1 s is plenty.
+const POSITION_STATE_INTERVAL_MS = 1000
 
 // Playback speed persists across sessions (issue #57). Kept in localStorage —
 // device-local, like Android's SharedPreferences equivalent.
@@ -89,6 +96,8 @@ export function AudioPlayerProvider({ children }) {
     // Latest flushPosition, readable from timer callbacks (sleep timer, seek
     // debounce) that would otherwise close over a stale one.
     const flushRef = useRef(() => Promise.resolve())
+    // Last time the OS scrubber was fed (Media Session position state).
+    const lastPositionStateRef = useRef(0)
 
     const [currentAudiobook, setCurrentAudiobook] = useState(null) // { id, title, author, coverPath, durationSeconds, pairId, pairedEbookId }
     const [pairedEbookId, setPairedEbookId] = useState(null)
@@ -172,12 +181,27 @@ export function AudioPlayerProvider({ children }) {
         audioRef.current.playbackRate = loadStoredSpeed()
 
         const audio = audioRef.current
-        const onPlay = () => setPlaying(true)
-        const onPause = () => setPlaying(false)
-        const onTimeUpdate = () => setCurrentTime(audio.currentTime)
-        const onDurationChange = () => setDuration(audio.duration || 0)
+        // Media Session (issue #62): mirror element state to the OS so the
+        // lock-screen / notification controls and scrubber stay truthful.
+        // Position state is throttled — timeupdate fires ~4×/s and the OS
+        // scrubber interpolates between updates anyway.
+        const positionState = () => applyPositionState({
+            duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate,
+        })
+        const onPlay = () => { setPlaying(true); setPlaybackState('playing') }
+        const onPause = () => { setPlaying(false); setPlaybackState('paused') }
+        const onTimeUpdate = () => {
+            setCurrentTime(audio.currentTime)
+            const now = Date.now()
+            if (now - lastPositionStateRef.current >= POSITION_STATE_INTERVAL_MS) {
+                lastPositionStateRef.current = now
+                positionState()
+            }
+        }
+        const onDurationChange = () => { setDuration(audio.duration || 0); positionState() }
         const onEnded = () => {
             setPlaying(false)
+            setPlaybackState('paused')
             // Mark complete on finish. Reads currentAudiobookRef (not the
             // `currentAudiobook` state closed over by this mount-only effect,
             // which is permanently null) -- same fix as onError below, which
@@ -262,6 +286,23 @@ export function AudioPlayerProvider({ children }) {
     useEffect(() => {
         playingRef.current = playing
     }, [playing])
+
+    // Media Session metadata (issue #62): what the lock screen shows. The
+    // cover goes through coverSrc() — the same short-lived scoped media token
+    // every other <img> uses (issue #50) — so it resolves asynchronously;
+    // publish title/author at once and add the artwork when the token lands.
+    useEffect(() => {
+        if (!currentAudiobook) return
+        let cancelled = false
+        const base = { title: currentAudiobook.title, artist: currentAudiobook.author, artworkUrl: null }
+        applyMetadata(base)
+        if (currentAudiobook.coverPath) {
+            coverSrc(currentAudiobook.coverPath)
+                .then((url) => { if (!cancelled && url) applyMetadata({ ...base, artworkUrl: url }) })
+                .catch(() => {})
+        }
+        return () => { cancelled = true }
+    }, [currentAudiobook])
 
     // Heartbeat while playing (issue #65): ticks every 5s, but only pushes to
     // the server once NETWORK_SAVE_INTERVAL_MS has passed since the last
@@ -390,9 +431,10 @@ export function AudioPlayerProvider({ children }) {
     }, [flushPosition])
 
     // The one resume path in this app -- the audio element is a bare `new
-    // Audio()` with no controls and no mediaSession handlers, so nothing else
-    // can start playback behind our back. Resuming rewinds RESUME_REWIND_SECONDS
-    // so you don't restart mid-word (issue #42).
+    // Audio()` with no controls, and the Media Session `play` action (lock
+    // screen, headset, media keys) is routed here too, so nothing can start
+    // playback behind our back. Resuming rewinds RESUME_REWIND_SECONDS so you
+    // don't restart mid-word (issue #42).
     //
     // Deliberately NOT applied at the other two play() sites: `play()` below
     // carries an explicit position from Home/Continue, and the stream-error
@@ -411,12 +453,22 @@ export function AudioPlayerProvider({ children }) {
     // Seeks and skips are boundaries too — the position jumped, so the
     // server copy should follow promptly rather than in up to 30s — but a
     // slider scrub is many seeks, hence the debounce.
+    // A jump or a speed change should reach the OS scrubber at once, not on
+    // the next throttled timeupdate.
+    const pushPositionState = useCallback(() => {
+        const audio = audioRef.current
+        if (!audio) return
+        lastPositionStateRef.current = Date.now()
+        applyPositionState({ duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate })
+    }, [])
+
     const seekTo = useCallback((seconds) => {
         if (audioRef.current) {
             audioRef.current.currentTime = seconds
+            pushPositionState()
             scheduleFlush()
         }
-    }, [scheduleFlush])
+    }, [scheduleFlush, pushPositionState])
 
     const skipForward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
@@ -424,25 +476,28 @@ export function AudioPlayerProvider({ children }) {
                 audioRef.current.currentTime + seconds,
                 audioRef.current.duration || Infinity
             )
+            pushPositionState()
             scheduleFlush()
         }
-    }, [scheduleFlush])
+    }, [scheduleFlush, pushPositionState])
 
     const skipBackward = useCallback((seconds = SKIP_SECONDS) => {
         if (audioRef.current) {
             audioRef.current.currentTime = Math.max(audioRef.current.currentTime - seconds, 0)
+            pushPositionState()
             scheduleFlush()
         }
-    }, [scheduleFlush])
+    }, [scheduleFlush, pushPositionState])
 
     const setSpeed = useCallback((rate) => {
         setSpeedState(rate)
         localStorage.setItem(SPEED_STORAGE_KEY, String(rate))
         if (audioRef.current) {
             audioRef.current.playbackRate = rate
+            pushPositionState()
             scheduleFlush()
         }
-    }, [scheduleFlush])
+    }, [scheduleFlush, pushPositionState])
 
     const setSleepTimer = useCallback((minutes) => {
         if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current)
@@ -473,6 +528,29 @@ export function AudioPlayerProvider({ children }) {
         setCurrentTime(0)
         setDuration(0)
     }, [flushPosition])
+
+    // Media Session actions (issue #62): the OS controls call the *same*
+    // functions as the on-screen transport, so a lock-screen resume gets the
+    // 5 s rewind, a lock-screen skip is the contract's 30 s, and every one of
+    // them is an explicit user command that claims `source` the way the
+    // buttons do. With no book loaded the session is cleared so the OS drops
+    // the controls (and metadata) rather than showing a dead player.
+    useEffect(() => {
+        if (!currentAudiobook) {
+            clearMediaSession()
+            return
+        }
+        bindActionHandlers({
+            play: () => { if (!playingRef.current) togglePlayPause() },
+            pause: () => { if (playingRef.current) pause() },
+            stop: () => stop(),
+            seekbackward: () => skipBackward(SKIP_SECONDS),
+            seekforward: () => skipForward(SKIP_SECONDS),
+            seekto: (details) => {
+                if (details && Number.isFinite(details.seekTime)) seekTo(details.seekTime)
+            },
+        })
+    }, [currentAudiobook, togglePlayPause, pause, stop, seekTo, skipForward, skipBackward])
 
     const value = {
         currentAudiobook,

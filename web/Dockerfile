@@ -7,10 +7,35 @@ RUN npm run build
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-# SPA routing + API Proxy
+# SPA routing + API proxy + PWA cache headers (issue #62, docs/web-pwa.md).
+#
+# The service worker, its precache manifest, index.html and the web manifest
+# must never be served from a stale HTTP cache — the worker's update check is
+# what rolls a new deploy out to installed apps. Hashed /assets/* are immutable
+# by construction (Vite content-hashes the names), so cache them hard.
 RUN echo 'server { \
     listen 3000; \
     root /usr/share/nginx/html; \
+    location = /sw.js { \
+    add_header Cache-Control "no-cache, must-revalidate"; \
+    try_files $uri =404; \
+    } \
+    location ~ ^/workbox-.*\.js$ { \
+    add_header Cache-Control "no-cache, must-revalidate"; \
+    try_files $uri =404; \
+    } \
+    location = /manifest.webmanifest { \
+    add_header Cache-Control "no-cache, must-revalidate"; \
+    types { } default_type application/manifest+json; \
+    try_files $uri =404; \
+    } \
+    location = /index.html { \
+    add_header Cache-Control "no-cache, must-revalidate"; \
+    } \
+    location /assets/ { \
+    add_header Cache-Control "public, max-age=31536000, immutable"; \
+    try_files $uri =404; \
+    } \
     location / { \
     try_files $uri /index.html; \
     } \

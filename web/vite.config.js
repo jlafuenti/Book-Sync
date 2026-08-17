@@ -1,9 +1,43 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-    plugins: [react()],
+    plugins: [
+        react(),
+        // PWA service worker (issue #62) — see docs/web-pwa.md.
+        //
+        // Precache the built app shell only. /api/* is bearer-token JSON or
+        // short-lived-token media (issue #50): never cached, never used as a
+        // navigation fallback. Audio/ebook/cover responses are deliberately
+        // NOT cached either — offline media is a separate future feature.
+        VitePWA({
+            registerType: 'autoUpdate',
+            // We ship a hand-written public/manifest.webmanifest and register
+            // from src/pwa/registerSw.js (production-only), so the plugin
+            // neither generates a manifest nor injects a register script.
+            manifest: false,
+            injectRegister: null,
+            includeAssets: [
+                'favicon.ico', 'icon.svg', 'favicon-*.svg',
+                'apple-touch-icon-180x180.png', 'pwa-*.png', 'maskable-icon-512x512.png',
+            ],
+            workbox: {
+                globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
+                navigateFallback: '/index.html',
+                navigateFallbackDenylist: [/^\/api\//],
+                cleanupOutdatedCaches: true,
+                clientsClaim: true,
+                skipWaiting: true,
+                // No runtimeCaching entries on purpose: anything not
+                // precached (i.e. every /api/ request) goes to the network.
+                runtimeCaching: [],
+            },
+            // Never in dev: HMR and a worker fight, and tests must stay SW-free.
+            devOptions: { enabled: false },
+        }),
+    ],
     server: {
         port: 3000,
         proxy: {

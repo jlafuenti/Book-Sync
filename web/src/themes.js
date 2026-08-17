@@ -161,4 +161,9 @@ export function applyTheme(slug) {
   }
   const favicon = document.getElementById("favicon")
   if (favicon) favicon.href = theme.favicon
+  // Installed-PWA chrome (status bar / task switcher) follows the theme too
+  // (issue #62). index.html seeds this before first paint; this keeps it in
+  // step when the user switches themes.
+  const themeColor = document.querySelector('meta[name="theme-color"]')
+  if (themeColor) themeColor.setAttribute("content", theme.vars["--bg-primary"])
 }

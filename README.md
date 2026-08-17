@@ -167,6 +167,7 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 | [docs/operations.md](docs/operations.md) | Logs, upgrades, password rotation, restart policies |
 | [docs/backup-restore.md](docs/backup-restore.md) | Backup schedule, restore procedure, test drills |
 | [docs/position-sync-contract.md](docs/position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |
+| [docs/web-pwa.md](docs/web-pwa.md) | Web app as a PWA: lock-screen controls, home-screen install, service-worker caching policy |
 | [docs/testing.md](docs/testing.md) | Test suites, fixtures, coverage policy |
 | [jetson/README.md](jetson/README.md) | Deploying the remote transcription worker |
 
