@@ -43,6 +43,7 @@ import com.booksync.ui.home.HomeSeeAll
 import com.booksync.ui.library.LibraryFilter
 import com.booksync.ui.library.LibraryScreen
 import com.booksync.ui.library.LibrarySort
+import com.booksync.ui.library.SearchResultItem
 import com.booksync.ui.library.SearchScreen
 import com.booksync.ui.player.PlayerScreen
 import com.booksync.ui.reader.ReaderScreen
@@ -108,6 +109,29 @@ object Routes {
     fun bookDetailsPair(pairId: Int)           = "book_details/pair/$pairId"
     fun bookDetailsEbook(ebookId: Int)         = "book_details/ebook/$ebookId"
     fun bookDetailsAudiobook(audiobookId: Int) = "book_details/audiobook/$audiobookId"
+
+    /**
+     * Where a Search result opens (issue #119).
+     *
+     * Search deals in three kinds of row and used to route all of them through
+     * the pair routes, so a standalone ebook's id was read as a pair id — the
+     * reader then opened an unrelated pair, or none, and its Reset / Mark
+     * Complete actions silently did nothing (or worse, acted on that other
+     * book). Standalone media gets the same destinations Library gives it:
+     * details for an ebook (there is no standalone reader yet) and the
+     * standalone player for an audiobook.
+     *
+     * Returns null when the row names nothing openable.
+     */
+    fun searchDestination(item: SearchResultItem): String? {
+        item.pairId?.let { return reader(it) }
+        val id = item.numericId ?: return null
+        return when {
+            item.isEbook     -> bookDetailsEbook(id)
+            item.isAudiobook -> playerStandalone(id)
+            else             -> null
+        }
+    }
 }
 
 /**
@@ -194,8 +218,9 @@ fun BookSyncNavigation() {
         composable(Routes.SEARCH) {
             SearchScreen(
                 onBack = { navController.popBackStack() },
-                onBookSelect = { pairId -> navController.navigate(Routes.reader(pairId)) },
-                onAudioSelect = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onResultSelect = { item ->
+                    Routes.searchDestination(item)?.let { navController.navigate(it) }
+                },
             )
         }
 
