@@ -306,9 +306,14 @@ invalidate the reading page.
 3. **Duplicate `user_progress` rows** for `(user 1, ebook 1726)`, two empty rows
    3ms apart from the old GET race. Left in place by choice; reads tolerate them,
    but they may show a phantom Continue entry.
-4. **`.mobi` books** — the server parses the `.mobi` while the reader renders a
-   Calibre-converted EPUB, so their axes cannot correspond. Those positions rely
-   on the preview/percent rungs. Fix by parsing the artifact the reader renders.
+4. **`.mobi` books** — **fixed** (issue #101): alignment now runs only on EPUB,
+   the one format the readers render (`ebook_integrity.format_is_alignable`), so
+   a `.mobi` pair fails its integrity check in seconds with an instruction to
+   convert instead of producing a map on an axis nobody shares. Converting an
+   unsupported file re-points its pairs *and* rebuilds their sync maps against
+   the new EPUB (`services/realign.py`), which re-maps the bookmarks; a pair
+   with no cached transcript goes back to `manual_matched` rather than keeping a
+   map that no longer describes its ebook.
 5. **`is_completed` at ≥98%** — from #61, never implemented; needs both clients
    together or they disagree.
 6. **`reset_pair_progress` doesn't delete the canonical bookmark** — **fixed**

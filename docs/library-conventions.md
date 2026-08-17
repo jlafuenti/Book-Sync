@@ -132,3 +132,16 @@ reported specifically for the two cases worth acting on:
 
 If the server image was built without Calibre, conversion reports that `ebook-convert` is missing
 rather than failing silently.
+
+**Only EPUB can be aligned** (issue #101). Both readers render EPUB and nothing else, so a sync
+map built from a `.mobi` names chapters that cannot exist in the document on screen — the MOBI
+parser flattens a whole book into one chapter. Transcription therefore refuses a non-EPUB pair at
+its integrity check, within seconds, with an instruction to convert first.
+
+Because of that, converting with **delete original** does more than swap files: the pairs that
+pointed at the source are re-pointed at the new EPUB *and* their sync maps are rebuilt against it
+from the cached transcript (no re-transcription), which re-maps every bookmark onto the new
+coordinates. A pair with no cached transcript has nothing to rebuild from, so it goes back to
+`manual_matched` — visibly needing transcription — and the UI says which pair and why. The old map
+is never deleted: it is the only thing a stored (chapter, sentence) coordinate can still be
+translated from.
