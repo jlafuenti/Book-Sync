@@ -161,8 +161,7 @@ class DownloadedViewModel @Inject constructor(
     fun deleteStandaloneAudiobook(audio: AudioBookEntity)    = runSafely { repository.deleteStandaloneAudiobook(audio) }
 
     fun markComplete(pair: BookPairEntity) = runSafely {
-        repository.markComplete("audiobook", pair.audiobookId)
-        repository.markComplete("ebook", pair.ebookId)
+        repository.markPairComplete(pair.id, pair.ebookId, pair.audiobookId)
     }
 
     // Pair-level DELETE removes the canonical bookmark + hints + user_progress

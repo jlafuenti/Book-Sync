@@ -267,8 +267,7 @@ class HomeViewModel @Inject constructor(
     fun unlinkPair(pair: BookPairEntity)                  = runSafely { repository.deletePair(pair.id) }
 
     fun markComplete(pair: BookPairEntity) = runSafely {
-        repository.markComplete("audiobook", pair.audiobookId)
-        repository.markComplete("ebook", pair.ebookId)
+        repository.markPairComplete(pair.id, pair.ebookId, pair.audiobookId)
     }
     fun markCompleteEbook(id: Int)     = runSafely { repository.markComplete("ebook", id) }
     fun markCompleteAudiobook(id: Int) = runSafely { repository.markComplete("audiobook", id) }

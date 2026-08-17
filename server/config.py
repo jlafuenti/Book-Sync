@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     # server-side handoff is ever wired up.
     default_rewind_seconds: int = 5
 
+    # Auto-completion thresholds — docs/position-sync-contract.md § Completion
+    # (issue #56). A position write that *crosses into* the end zone marks the
+    # book finished; explicit `is_completed` values always win and nothing is
+    # ever auto-cleared. EPUB back-matter (acknowledgements, previews) means
+    # 100 % is rarely reached while reading, hence 98.
+    auto_complete_epub_percent: float = 98.0
+    auto_complete_audio_tail_seconds: int = 120
+
     class Config:
         env_file = ".env"
         extra = "ignore"

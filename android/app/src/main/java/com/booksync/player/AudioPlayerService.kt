@@ -275,8 +275,11 @@ class AudioPlayerService : MediaLibraryService() {
                                 mediaId.startsWith("pair_") -> {
                                     val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
                                     val pair = repository.getPairById(pairId) ?: return@launch
-                                    repository.markComplete("audiobook", pair.audiobookId)
-                                    repository.markComplete("ebook", pair.ebookId)
+                                    // One pair-scoped write (issue #56) — this
+                                    // listener is the single end-of-book
+                                    // completion path; PlayerScreen no longer
+                                    // duplicates it.
+                                    repository.markPairComplete(pair.id, pair.ebookId, pair.audiobookId)
                                 }
                                 mediaId.startsWith("audiobook_") -> {
                                     val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch

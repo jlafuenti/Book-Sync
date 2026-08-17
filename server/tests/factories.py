@@ -43,10 +43,15 @@ async def make_audiobook(db, *, title="A", filename="a.m4b"):
 
 
 async def make_book_pair(db, status=PairStatus.SYNCED, *,
-                         ebook_title="E", audiobook_title="A"):
-    """Create an EBook + AudioBook + BookPair and return the committed pair."""
+                         ebook_title="E", audiobook_title="A",
+                         duration_seconds=None):
+    """Create an EBook + AudioBook + BookPair and return the committed pair.
+
+    `duration_seconds` lands on the AudioBook (None = unknown length, which
+    is what a freshly scanned file has until ffprobe runs)."""
     eb = EBook(title=ebook_title, filename="e.epub", file_path="/x/e.epub")
-    ab = AudioBook(title=audiobook_title, filename="a.m4b", file_path="/x/a.m4b")
+    ab = AudioBook(title=audiobook_title, filename="a.m4b", file_path="/x/a.m4b",
+                   duration_seconds=duration_seconds)
     db.add_all([eb, ab])
     await db.flush()
     pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=status)
