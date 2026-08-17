@@ -511,6 +511,16 @@ describe('AudioPlayerProvider pause()', () => {
         act(() => audio.dispatchEvent(new Event('canplay')))
         audio.currentTime = 17
 
+        // Scope the count to the click (issue #132). "ONE write" is a claim
+        // about what pause() does, but the assertion was counting every call
+        // since the render — so anything else that pushed while the test was
+        // getting here (the 5s heartbeat's 30s throttle elapsing on a stalled
+        // CI worker, a straggling continuation from an earlier test landing
+        // after beforeEach's reset) failed it without pause() being wrong.
+        // The keepalive test above already clears immediately before its
+        // action for the same reason.
+        updatePositionMock.mockClear()
+
         fireEvent.click(screen.getByText('pause'))
 
         expect(updatePositionMock).toHaveBeenCalledTimes(1)
