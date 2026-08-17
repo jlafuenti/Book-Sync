@@ -365,8 +365,11 @@ class SearchViewModel @Inject constructor(
 @Composable
 fun SearchScreen(
     onBack: () -> Unit,
-    onBookSelect: (Int) -> Unit,
-    onAudioSelect: (Int) -> Unit,
+    // One callback taking the whole row rather than an id per section: an id on
+    // its own cannot say whether it names a pair, an ebook or an audiobook,
+    // which is how standalone ids ended up in pair routes (issue #119). The
+    // caller decides where each kind opens — see Routes.searchDestination.
+    onResultSelect: (SearchResultItem) -> Unit,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -506,9 +509,7 @@ fun SearchScreen(
                 }
                 else -> SearchResultsList(
                     results = results,
-                    onPairClick = onBookSelect,
-                    onEbookSelect = onBookSelect,
-                    onAudioSelect = onAudioSelect,
+                    onResultSelect = onResultSelect,
                     onRequestPair = { pairingItem = it },
                     onDownload = { viewModel.downloadFromResult(it) },
                 )
@@ -550,9 +551,7 @@ private fun OfflineSearchChip() {
 @Composable
 private fun SearchResultsList(
     results: List<SearchResultItem>,
-    onPairClick: (Int) -> Unit,
-    onEbookSelect: (Int) -> Unit,
-    onAudioSelect: (Int) -> Unit,
+    onResultSelect: (SearchResultItem) -> Unit,
     onRequestPair: (SearchResultItem) -> Unit,
     onDownload: (SearchResultItem) -> Unit,
 ) {
@@ -570,7 +569,7 @@ private fun SearchResultsList(
             items(pairs, key = { it.id }) { item ->
                 ResultRow(
                     item = item,
-                    onClick = { item.pairId?.let(onPairClick) },
+                    onClick = { onResultSelect(item) },
                     onRequestPair = { /* pairs aren't pairable */ },
                     onDownload = onDownload,
                 )
@@ -581,7 +580,7 @@ private fun SearchResultsList(
             items(ebooks, key = { it.id }) { item ->
                 ResultRow(
                     item = item,
-                    onClick = { item.numericId?.let(onEbookSelect) },
+                    onClick = { onResultSelect(item) },
                     onRequestPair = onRequestPair,
                     onDownload = onDownload,
                 )
@@ -592,7 +591,7 @@ private fun SearchResultsList(
             items(audiobooks, key = { it.id }) { item ->
                 ResultRow(
                     item = item,
-                    onClick = { item.numericId?.let(onAudioSelect) },
+                    onClick = { onResultSelect(item) },
                     onRequestPair = onRequestPair,
                     onDownload = onDownload,
                 )
