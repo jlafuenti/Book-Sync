@@ -3354,24 +3354,69 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
     return epub_eb
 
 
-async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> None:
+async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: AsyncSession) -> List[int]:
     """
     For every BookPair whose ebook_id == eb_id:
       - If epub_eb is given: re-point pair.ebook_id to the new EPUB (keeps pair + all data intact).
       - If epub_eb is None: delete the pair and all its dependent rows.
     Also removes UserProgress rows that reference eb_id directly.
+
+    Returns the ids of the pairs that were re-pointed. Their sync maps were
+    built from the *source* file and no longer describe the ebook the reader
+    gets, so the caller must rebuild them — see `_realign_relinked_pairs`
+    (issue #101).
     """
+    relinked: List[int] = []
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eb_id))
     for pair in pairs_result.scalars().all():
         if epub_eb is not None:
             pair.ebook_id = epub_eb.id
             db.add(pair)
+            relinked.append(pair.id)
         else:
             await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
             await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
             await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
             await db.delete(pair)
     await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
+    return relinked
+
+
+async def _realign_relinked_pairs(pair_ids: List[int], db: AsyncSession) -> List[dict]:
+    """
+    Rebuild the sync map of every pair that was just re-pointed at a converted
+    EPUB, so its coordinates describe the artifact the reader renders (#101).
+
+    The map is *not* deleted when it cannot be rebuilt: it is the only thing a
+    bookmark's (chapter, sentence) coordinate can still be translated from. A
+    pair with no cached transcript is put back to `manual_matched` instead, which
+    is how it shows up as needing transcription.
+
+    Returns one entry per failure; a failure never aborts the batch, because the
+    conversion itself has already happened on disk.
+    """
+    from services.realign import (
+        NoCachedTranscript,
+        RealignError,
+        realign_pair_from_cached_transcript,
+    )
+
+    failures: List[dict] = []
+    for pair_id in pair_ids:
+        try:
+            await realign_pair_from_cached_transcript(db, pair_id)
+        except NoCachedTranscript as e:
+            pair = await db.get(BookPair, pair_id)
+            if pair is not None and pair.status == PairStatus.SYNCED:
+                pair.status = PairStatus.MANUAL_MATCHED
+                db.add(pair)
+            failures.append({"pair_id": pair_id, "error": e.detail})
+        except RealignError as e:
+            failures.append({"pair_id": pair_id, "error": e.detail})
+        except Exception as e:  # noqa: BLE001 — a bad ebook must not undo the conversion
+            logger.warning(f"[convert] realign of pair {pair_id} failed: {e}")
+            failures.append({"pair_id": pair_id, "error": str(e)})
+    return failures
 
 
 @router.get("/unsupported", response_model=List[UnsupportedFileResponse])
@@ -3440,13 +3485,15 @@ async def convert_all_unsupported(
         except RuntimeError as e:
             failed.append({"filename": eb.filename, "error": str(e)})
 
+    realign_failures: list[dict] = []
     for eb, epub_eb in to_delete:
-        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
         try:
             os.remove(eb.file_path)
         except OSError as e:
             logger.warning(f"[convert] could not delete {eb.file_path}: {e}")
         await db.delete(eb)
+        realign_failures.extend(await _realign_relinked_pairs(relinked, db))
 
     await db.commit()
 
@@ -3454,6 +3501,7 @@ async def convert_all_unsupported(
         "succeeded": succeeded,
         "failed": failed,
         "total": len(ebooks),
+        "realign_failures": realign_failures,
     }
 
 
@@ -3483,13 +3531,16 @@ async def convert_unsupported_file(
     epub_ebook_id = epub_eb.id
 
     # Delete source if requested — re-link any pairs to the new EPUB first
+    realign_failures: list[dict] = []
+    relinked: List[int] = []
     if delete_source:
-        await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
+        relinked = await _relink_or_cleanup_pairs(eb.id, epub_eb, db)
         try:
             os.remove(eb.file_path)
         except OSError as e:
             logger.warning(f"[convert] could not delete source {eb.file_path}: {e}")
         await db.delete(eb)
+        realign_failures = await _realign_relinked_pairs(relinked, db)
 
     await db.commit()
 
@@ -3498,6 +3549,10 @@ async def convert_unsupported_file(
         "epub_ebook_id": epub_ebook_id,
         "epub_path": epub_path,
         "source_deleted": delete_source,
+        # A re-linked pair whose map was rebuilt now shares one axis with the
+        # reader; one that couldn't be rebuilt says why (issue #101).
+        "realigned": bool(relinked) and not realign_failures,
+        "realign_error": realign_failures[0]["error"] if realign_failures else None,
     }
 
 
@@ -3527,11 +3582,17 @@ async def delete_unsupported_source(
 
     # Ensure the EPUB is registered, then re-link any pairs to it (preserves pair + transcript)
     epub_eb = await _register_epub_in_db(str(epub_sibling), eb, db)
-    await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
+    relinked = await _relink_or_cleanup_pairs(ebook_id, epub_eb, db)
 
     await db.delete(eb)
+    realign_failures = await _realign_relinked_pairs(relinked, db)
     await db.commit()
-    return {"status": "deleted", "filename": eb.filename}
+    return {
+        "status": "deleted",
+        "filename": eb.filename,
+        "realigned": bool(relinked) and not realign_failures,
+        "realign_error": realign_failures[0]["error"] if realign_failures else None,
+    }
 
 
 # NOTE: /unsupported/force-all must be registered BEFORE /unsupported/{ebook_id}/force

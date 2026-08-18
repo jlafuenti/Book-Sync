@@ -728,7 +728,7 @@ function DetailedBreakdown({ stats }) {
 }
 
 /* ── UnsupportedFilesTab ───────────────────────────────────────────── */
-function UnsupportedFilesTab({ canAdmin }) {
+export function UnsupportedFilesTab({ canAdmin }) {
     const [files, setFiles] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -756,8 +756,20 @@ function UnsupportedFilesTab({ canAdmin }) {
     const handleConvert = async (file, deleteSource) => {
         setFileBusy(file.id, true); setFileMsg(file.id, null)
         try {
-            await convertUnsupportedFile(file.id, deleteSource)
-            setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & deleted' : 'Converted to EPUB' })
+            const result = await convertUnsupportedFile(file.id, deleteSource)
+            // A converted file whose pairs were re-pointed also needs its sync
+            // map rebuilt on the new EPUB's axis (issue #101). The conversion
+            // succeeds either way, so a failure here is a warning, not an error
+            // — but it must not pass silently: the pair's stored coordinates no
+            // longer describe its ebook until it is transcribed or re-aligned.
+            if (result?.realign_error) {
+                setFileMsg(file.id, {
+                    type: 'error',
+                    text: `Converted, but the sync map could not be rebuilt: ${result.realign_error}`,
+                })
+            } else {
+                setFileMsg(file.id, { type: 'success', text: deleteSource ? 'Converted & deleted' : 'Converted to EPUB' })
+            }
             await loadFiles()
         } catch (err) { setFileMsg(file.id, { type: 'error', text: err.message }) }
         finally { setFileBusy(file.id, false) }
@@ -791,8 +803,15 @@ function UnsupportedFilesTab({ canAdmin }) {
         setBatchBusy(true); setBatchResult(null)
         try {
             const result = await convertAllUnsupportedFiles(deleteSource)
-            const msg = `Converted ${result.succeeded.length} of ${result.total}.${result.failed.length > 0 ? ` ${result.failed.length} failed.` : ''}`
-            setBatchResult({ type: result.failed.length > 0 ? 'error' : 'success', text: msg, detail: result })
+            const realignFailures = result.realign_failures || []
+            const msg = `Converted ${result.succeeded.length} of ${result.total}.`
+                + (result.failed.length > 0 ? ` ${result.failed.length} failed.` : '')
+                + (realignFailures.length > 0 ? ` ${realignFailures.length} sync map${realignFailures.length !== 1 ? 's' : ''} not rebuilt.` : '')
+            setBatchResult({
+                type: result.failed.length > 0 || realignFailures.length > 0 ? 'error' : 'success',
+                text: msg,
+                detail: result,
+            })
             await loadFiles()
         } catch (err) { setBatchResult({ type: 'error', text: err.message }) }
         finally { setBatchBusy(false) }
@@ -833,6 +852,13 @@ function UnsupportedFilesTab({ canAdmin }) {
                     {batchResult.detail?.failed?.length > 0 && (
                         <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: '0.8rem' }}>
                             {batchResult.detail.failed.map((f, i) => <li key={i}>{f.filename}: {f.error}</li>)}
+                        </ul>
+                    )}
+                    {batchResult.detail?.realign_failures?.length > 0 && (
+                        <ul style={{ marginTop: 8, paddingLeft: 20, fontSize: '0.8rem' }}>
+                            {batchResult.detail.realign_failures.map((f, i) => (
+                                <li key={i}>Sync map for pair {f.pair_id} not rebuilt: {f.error}</li>
+                            ))}
                         </ul>
                     )}
                 </div>
