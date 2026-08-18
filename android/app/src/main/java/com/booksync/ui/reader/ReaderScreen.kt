@@ -187,29 +187,36 @@ fun ReaderScreen(
                     FilledTonalIconButton(onClick = onSwitchToAudio) {
                         Icon(Icons.Default.Headphones, "Switch to Audio")
                     }
-                    Box {
-                        IconButton(onClick = { showOverflowMenu = true }) {
-                            Icon(Icons.Default.MoreVert, "More options")
-                        }
-                        DropdownMenu(
-                            expanded = showOverflowMenu,
-                            onDismissRequest = { showOverflowMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Mark Complete") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    viewModel.markComplete()
-                                    onBack()
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Reset Progress") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    viewModel.resetProgress()
-                                },
-                            )
+                    // Both actions need a resolved pair — the VM's markComplete
+                    // and resetProgress return early without one. Offering them
+                    // anyway is how a reader opened on an id that names no pair
+                    // (issue #119) presented two buttons that silently did
+                    // nothing.
+                    if (pair != null) {
+                        Box {
+                            IconButton(onClick = { showOverflowMenu = true }) {
+                                Icon(Icons.Default.MoreVert, "More options")
+                            }
+                            DropdownMenu(
+                                expanded = showOverflowMenu,
+                                onDismissRequest = { showOverflowMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Mark Complete") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.markComplete()
+                                        onBack()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Reset Progress") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.resetProgress()
+                                    },
+                                )
+                            }
                         }
                     }
                 },
