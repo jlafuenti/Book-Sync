@@ -781,17 +781,16 @@ class ReaderActivity : AppCompatActivity() {
         return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
     }
 
-    /** Extract a text preview from a chapter at a given progression, stripping headings and book title.
-     *  Suspend, parse-on-miss version used by callers that are already inside a
-     *  coroutine and can afford to touch the publication (e.g. [syncAudioToPage]);
-     *  [savePosition]'s synchronous capture uses [extractTextPreviewFromCache] instead. */
-    private suspend fun extractTextPreview(chapterIndex: Int, progression: Double): String {
-        val plainText = getChapterPlainText(chapterIndex) ?: return ""
-        return buildTextPreview(plainText, progression, pair?.ebookTitle)
-    }
-
     /**
-     * Cache-only, synchronous counterpart to [extractTextPreview].
+     * Extract a text preview from a chapter at a given progression, stripping
+     * headings and book title.
+     *
+     * Progression × character count is an estimate: Readium paginates by pixel
+     * height in CSS columns, so this does not name the page on screen. That is
+     * fine for [savePosition], whose preview is a *restore* anchor searched for
+     * as text — but it is why the audio handoff no longer accepts it as a page
+     * read (issue #131). The suspend, parse-on-miss variant had no callers left
+     * once that changed and was removed.
      *
      * [savePosition]'s FullSave capture (issue #61/#40 fix 2) must run
      * synchronously on the calling thread — no `lifecycleScope.launch`, so a
@@ -922,14 +921,17 @@ class ReaderActivity : AppCompatActivity() {
      * Readium pre-renders adjacent chapters in background iframes so we MUST target
      * the iframe whose src URL matches the current chapter filename.
      * Within that iframe, Readium CSS uses horizontal CSS columns for pagination;
-     * elements on the current page have BoundingClientRect.left in [0, innerWidth).
-     * Falls back to scroll-position text extraction if BoundingClientRect gives nothing.
+     * the fragments of the current page sit in [0, innerWidth).
+     *
+     * Reports *how* it answered (issue #131). The scroll-position fallback is an
+     * estimate by character count, which does not track page position under
+     * column pagination — the caller must not treat it as a real read.
      */
-    private suspend fun extractVisibleTextFromWebView(chapterHref: String): String =
+    private suspend fun extractVisibleTextFromWebView(chapterHref: String): VisibleText =
         suspendCancellableCoroutine { cont ->
             val webView = navigator?.view?.let { findWebView(it) }
             if (webView == null) {
-                cont.resume("")
+                cont.resume(VisibleText.EMPTY)
                 return@suspendCancellableCoroutine
             }
             val chapterFile = chapterHref.substringAfterLast("/").ifEmpty { chapterHref }
@@ -941,19 +943,28 @@ class ReaderActivity : AppCompatActivity() {
                     function getVisibleText(doc) {
                         var win = doc.defaultView;
                         var vpW = win ? win.innerWidth : 800;
-                        var vpH = win ? win.innerHeight : 1200;
                         var elems = doc.querySelectorAll('p, li, blockquote');
                         for (var i = 0; i < elems.length; i++) {
                             var el = elems[i];
-                            if (el.children.length > 4) continue;
-                            var r = el.getBoundingClientRect();
-                            // Readium paginated = CSS columns with horizontal scroll:
-                            // current page elements have left in [0, vpW), bottom > 0
-                            if (r.width > 0 && r.height > 0 &&
-                                r.right > 0 && r.left < vpW &&
-                                r.bottom > 0 && r.top < vpH) {
-                                var text = (el.innerText || el.textContent || '').trim();
-                                if (text.length > 20) return text.substring(0, 350);
+                            // getClientRects() gives one rect per CSS-column
+                            // fragment; getBoundingClientRect() gives their
+                            // union, which for a paragraph spanning several
+                            // columns overlaps the viewport even when the part
+                            // on screen is pages away. The old union test
+                            // therefore matched the earliest such paragraph
+                            // rather than the visible one (issue #131).
+                            var rects = el.getClientRects();
+                            for (var r = 0; r < rects.length; r++) {
+                                var rect = rects[r];
+                                if (rect.width <= 0 || rect.height <= 0) continue;
+                                // The current column's fragments sit in
+                                // [0, vpW); earlier pages are negative, later
+                                // ones past vpW.
+                                if (rect.left >= -1 && rect.left < vpW) {
+                                    var text = (el.innerText || el.textContent || '').trim();
+                                    if (text.length > 20) return text.substring(0, 350);
+                                    break;
+                                }
                             }
                         }
                         return '';
@@ -983,30 +994,30 @@ class ReaderActivity : AppCompatActivity() {
                         } catch(e) {}
                     }
 
+                    function result(text, source) {
+                        return JSON.stringify({ text: text, source: source });
+                    }
+
                     if (targetDoc) {
                         var text = getVisibleText(targetDoc);
-                        if (!text) text = scrollBasedText(targetDoc);
-                        if (text.trim().length > 10) return JSON.stringify(text);
+                        if (text.trim().length > 10) return result(text, 'dom');
+                        var guess = scrollBasedText(targetDoc);
+                        if (guess.trim().length > 10) return result(guess, 'estimated');
                     }
 
                     // No matching iframe — try all frames (chapter may load directly in WebView)
                     for (var i = 0; i < frames.length; i++) {
                         try {
                             var text = getVisibleText(frames[i].contentDocument);
-                            if (text.trim().length > 10) return JSON.stringify(text);
+                            if (text.trim().length > 10) return result(text, 'dom');
                         } catch(e) {}
                     }
-                    return JSON.stringify('');
+                    return result('', 'none');
                 })()
             """.trimIndent()
-            webView.evaluateJavascript(js) { result ->
-                val text = try {
-                    org.json.JSONArray("[$result]").getString(0)
-                } catch (e: Exception) {
-                    result?.trim('"') ?: ""
-                }
-                cont.resume(text.replace("\\n", " ").replace("\\t", " ").trim())
-            }
+            // The bridge double-encodes our JSON.stringify(...); VisibleText.parse
+            // handles both shapes, so the whole decode is one unit-tested step.
+            webView.evaluateJavascript(js) { result -> cont.resume(VisibleText.parse(result)) }
         }
 
     /**
@@ -1039,15 +1050,20 @@ class ReaderActivity : AppCompatActivity() {
 
         val chapterHref = locator.href.toString()
         lifecycleScope.launch {
-            // Prefer DOM-based visible text (accurate) over progression * length (unreliable,
-            // because Readium pagination splits by pixel height, not character count).
-            // Pass chapter href so we target the correct iframe (Readium pre-loads adjacent chapters).
-            val domText = extractVisibleTextFromWebView(chapterHref)
-            val textPreview = if (domText.length >= 10) domText
-                              else extractTextPreview(chapterIndex, progression)
-            Log.d(TAG, "syncAudioToPage: textPreview='${textPreview.take(80)}'")
+            // Only a real DOM read of the current column is worth seeking on.
+            // The extractor's other answer is a character-offset estimate, which
+            // under column pagination routinely names text from another page —
+            // and a confident seek to the wrong second is worse than the anchor
+            // handoff the user would otherwise have got (issue #131). Pass the
+            // chapter href so we target the right iframe; Readium pre-loads the
+            // adjacent chapters.
+            val visible = extractVisibleTextFromWebView(chapterHref)
+            Log.d(TAG, "syncAudioToPage: source=${visible.source} " +
+                "textPreview='${visible.text.take(80)}'")
 
-            val audioMs = repository.epubToAudioText(pairId, chapterIndex, textPreview)
+            val audioMs = if (visible.isPrecise) {
+                repository.epubToAudioText(pairId, chapterIndex, visible.text)
+            } else 0
             // Set before the write, so a savePosition landing in between can't
             // resolve its own sync-point guess over this deliberate match (see
             // ReaderPositionSnapshot.skipSyncPointLookup).
@@ -1060,10 +1076,12 @@ class ReaderActivity : AppCompatActivity() {
                 locatorJson = locator.toJSON().toString(),
                 audioMs = audioMs,
             )
-            val message = if (matched) {
-                "Audio synced to ${formatAudioTime(audioMs.toLong())}"
-            } else {
-                "No matching audio found for this page"
+            val message = when {
+                matched -> "Audio synced to ${formatAudioTime(audioMs.toLong())}"
+                visible.isPrecise -> "No matching audio found for this page"
+                // Say what actually happened rather than implying a failed
+                // match: we never got a usable read of the page.
+                else -> "Couldn't read this page — switching on the chapter anchor"
             }
             android.widget.Toast.makeText(this@ReaderActivity, message, android.widget.Toast.LENGTH_SHORT).show()
             switchToAudio()
