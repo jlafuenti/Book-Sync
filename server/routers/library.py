@@ -50,6 +50,7 @@ from schemas import (
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
+from services.audio_duration import probe_duration_seconds
 from services import multi_file_audiobooks
 from utils import resolve_cover_url, safe_join, utcnow
 
@@ -338,25 +339,30 @@ async def extract_metadata(
             logger.debug(f"[extract_metadata]   EPUB embedded: {file_meta}")
 
         elif file_type == "audiobook":
+            # Runtime, off the container header (issue #127). ffprobe is the
+            # authority and mutagen's info.length only the fallback for hosts
+            # without ffmpeg — see services/audio_duration.py for the library-wide
+            # measurement behind that ordering. Left *absent* when neither can
+            # supply one; callers take "no key" as "leave whatever is stored
+            # alone", and an unknown length cleanly disables the audio end zone
+            # while a wrong one would silently finish the book.
+            duration = await asyncio.to_thread(probe_duration_seconds, filepath)
+
             try:
                 audio = mutagen.File(filepath)
             except mutagen.mp4.MP4MetadataError:
                 audio = None
                 logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
-            # Runtime, straight off the container header (issue #127). Read once
-            # here rather than per-format so every mutagen type gets it, and
-            # left *absent* when unreadable — callers take "no key" as "leave
-            # whatever is stored alone".
-            #
-            # Deliberately guarded on `is not None`, not on the `if audio:`
-            # below: mutagen's FileType defines __len__ as its tag count and no
-            # __bool__, so a file with *no tags at all* is falsy. Those are
-            # exactly the files where the length is the only metadata worth
-            # recovering, so they must not be skipped along with the tags.
-            if audio is not None:
-                length = getattr(getattr(audio, 'info', None), 'length', None)
-                if length and length > 0:
-                    file_meta["duration_seconds"] = int(length)
+
+            # The mutagen fallback is guarded on `is not None`, not on the
+            # `if audio:` below: mutagen's FileType defines __len__ as its tag
+            # count and no __bool__, so a file with *no tags at all* is falsy.
+            # Those are exactly the files where the length is the only metadata
+            # worth recovering.
+            if duration is None and audio is not None:
+                duration = getattr(getattr(audio, 'info', None), 'length', None)
+            if duration and duration > 0:
+                file_meta["duration_seconds"] = int(duration)
 
             if audio:
                 logger.debug(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
