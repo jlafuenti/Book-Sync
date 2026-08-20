@@ -8,6 +8,7 @@ resource via ?token= works, and every way a query-param token can be wrong
 
 import contextlib
 from datetime import timedelta
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI
@@ -70,6 +71,24 @@ async def test_get_cover_accepts_scoped_media_token_via_query(
 
     async with _files_client() as client:
         r = await client.get(f"/api/files/covers/cover.jpg?token={token}")
+
+    assert r.status_code == 200
+    assert r.content == b"jpeg-bytes"
+
+
+async def test_get_cover_with_hash_in_filename_accepts_scoped_token(
+    make_user, temp_covers_dir,
+):
+    """Issue #126: a '#' (or space) in the cover name must survive percent-encoding
+    on the wire -- the decoded path param has to match the media token's
+    resource_id, which is minted from the raw filename."""
+    name = "James_Patterson - Private_#1_Suspect.jpg"
+    (temp_covers_dir / name).write_bytes(b"jpeg-bytes")
+    user = await make_user(username="reader", role="user")
+    token = create_media_token(user, "cover", name)
+
+    async with _files_client() as client:
+        r = await client.get(f"/api/files/covers/{quote(name)}?token={token}")
 
     assert r.status_code == 200
     assert r.content == b"jpeg-bytes"

@@ -6,7 +6,7 @@ import ContinuePage from './ContinuePage'
 const {
     getAllProgressMock, getEbooksMock, getAudiobooksMock, getPairsMock,
     updatePositionMock, resetPairProgressMock, resetPositionMock, getProgressMock, getPositionMock,
-    getAccessTokenMock, getDeviceIdMock, getDeviceNameMock,
+    getAccessTokenMock, getDeviceIdMock, getDeviceNameMock, coverSrcMock,
 } = vi.hoisted(() => ({
     getAllProgressMock: vi.fn(),
     getEbooksMock: vi.fn(),
@@ -20,6 +20,7 @@ const {
     getAccessTokenMock: vi.fn(() => 'token'),
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
+    coverSrcMock: vi.fn(async (path) => `${path}?token=scoped`),
 }))
 
 vi.mock('../api', () => ({
@@ -35,6 +36,7 @@ vi.mock('../api', () => ({
     getAccessToken: getAccessTokenMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
+    coverSrc: coverSrcMock,
 }))
 
 // Isolate ContinuePage from its heavier children -- EbookReader pulls in
@@ -94,6 +96,7 @@ beforeEach(() => {
     player.currentTime = 0
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
+    coverSrcMock.mockReset().mockImplementation(async (path) => `${path}?token=scoped`)
 })
 
 describe('ContinuePage device attribution (issue #54)', () => {
@@ -302,5 +305,34 @@ describe('ContinuePage reader/player handoff', () => {
 
         const reader = await screen.findByTestId('reader')
         expect(reader).toHaveAttribute('data-chapter', 'null')
+    })
+})
+
+describe('ContinuePage covers (issue #126)', () => {
+    it('resolves cover URLs through coverSrc, not a hand-built access-token URL', async () => {
+        // The old inline `${cover_path}?token=${getAccessToken()}` left a '#' in the
+        // filename unencoded (the browser then dropped the query as a fragment -> 401)
+        // and put the long-lived access token in the URL, which #50 removed.
+        getEbooksMock.mockResolvedValue([
+            { id: 11, title: 'Suspect', cover_path: '/api/files/covers/Private_#1_Suspect.jpg' },
+        ])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])
+        getAllProgressMock.mockResolvedValue([
+            {
+                id: 1, media_type: 'ebook', ebook_id: 11, epub_progress_percent: 40,
+                epub_chapter: 0, book_pair_id: null, is_completed: false,
+                updated_at: '2024-01-02T00:00:00Z',
+            },
+        ])
+
+        render(<MemoryRouter><ContinuePage /></MemoryRouter>)
+
+        const img = await screen.findByAltText('Suspect')
+        await waitFor(() => expect(img).toHaveAttribute(
+            'src', '/api/files/covers/Private_#1_Suspect.jpg?token=scoped',
+        ))
+        expect(coverSrcMock).toHaveBeenCalledWith('/api/files/covers/Private_#1_Suspect.jpg')
+        expect(getAccessTokenMock).not.toHaveBeenCalled()
     })
 })

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getAllProgress, getEbooks, getAudiobooks, getPairs, updatePosition, resetPairProgress, resetPosition, getProgress, getPosition, getAccessToken, getDeviceId, getDeviceName } from '../api'
+import { getAllProgress, getEbooks, getAudiobooks, getPairs, updatePosition, resetPairProgress, resetPosition, getProgress, getPosition, getDeviceId, getDeviceName } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import EbookReader from '../components/EbookReader'
 import { AudioPlayerView } from '../components/AudioPlayer'
+import CoverImg from '../components/CoverImg'
 
 function formatTime(ms) {
     if (!ms) return '0:00'
@@ -378,15 +379,11 @@ function ContinuePage() {
                             progressLabel = formatTime(item.audio_position_ms)
                         }
 
-                        const coverUrl = item.book.cover_path
-                            ? `${item.book.cover_path}?token=${getAccessToken()}`
-                            : null
-
                         return (
                             <div key={item.itemId} className="continue-card" onClick={() => handleContinue(item)}>
                                 <div className="continue-card-cover">
-                                    {coverUrl ? (
-                                        <img src={coverUrl} alt={item.book.title} />
+                                    {item.book.cover_path ? (
+                                        <CoverImg path={item.book.cover_path} alt={item.book.title} />
                                     ) : (
                                         <div className="continue-card-cover-placeholder">
                                             <span>{isPair ? '📖' : isEbook ? '📚' : '🎧'}</span>

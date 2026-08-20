@@ -47,6 +47,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
 import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.PairOpenTarget
 import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
@@ -318,7 +319,7 @@ private fun ContinueRow(
                     localFile != null && localFile.exists() -> localFile
                     item.audiobookCoverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
-                        "${serverUrl.trimEnd('/')}${item.audiobookCoverPath}"
+                        coverImageUrl(serverUrl, item.audiobookCoverPath)
                     else -> null
                 }
             }
@@ -380,7 +381,7 @@ private fun PairRow(
                 when {
                     localFile.exists() -> localFile
                     pair.audiobookCoverPath != null ->
-                        "${serverUrl.trimEnd('/')}${pair.audiobookCoverPath}"
+                        coverImageUrl(serverUrl, pair.audiobookCoverPath)
                     else -> null
                 }
             }
