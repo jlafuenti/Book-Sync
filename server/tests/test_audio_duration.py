@@ -76,13 +76,40 @@ class MP3(dict):
 
 @pytest.fixture
 def fake_mutagen(monkeypatch):
-    """Make `mutagen.File(...)` return a fake with the given length/tags."""
+    """Make `mutagen.File(...)` return a fake with the given length/tags.
+
+    Pass `raises=` to simulate the legacy-`chpl` failure, where
+    `mutagen.File()` blows up before yielding anything at all.
+    """
     import mutagen
 
-    def _install(length=None, tags=None):
+    def _install(length=None, tags=None, raises=None):
         audio = MP3(tags if tags is not None else {"title": ["Dune"]}, length=length)
-        monkeypatch.setattr(mutagen, "File", lambda path, **kw: audio)
+
+        def _file(path, **kw):
+            if raises is not None:
+                raise raises
+            return audio
+
+        monkeypatch.setattr(mutagen, "File", _file)
         return audio
+
+    return _install
+
+
+@pytest.fixture(autouse=True)
+def no_ffprobe(monkeypatch):
+    """Default every test to "ffprobe found nothing", so the tests that care
+    about mutagen exercise the fallback deliberately rather than by accident of
+    whether ffprobe happens to be installed on the machine running them."""
+    monkeypatch.setattr(library, "probe_duration_seconds", lambda path: None)
+
+
+@pytest.fixture
+def fake_ffprobe(monkeypatch):
+    """Make the ffprobe probe return a fixed number of seconds."""
+    def _install(seconds):
+        monkeypatch.setattr(library, "probe_duration_seconds", lambda path: seconds)
 
     return _install
 
@@ -119,6 +146,73 @@ def stub_extract(monkeypatch):
         return meta
 
     return _install
+
+
+# ---------- which source wins ----------
+
+async def test_ffprobe_beats_a_mutagen_length_that_disagrees(
+    db, fake_ffprobe, fake_mutagen, audio_library
+):
+    """The real reason ffprobe is the authority (issue #127, found on deploy).
+
+    "Artemis Fowl and the Time Paradox" is a 9.9-hour MP3 whose header makes
+    mutagen report **12 seconds**. Storing that is worse than storing nothing:
+    `_in_audio_end_zone` is `duration*1000 - position <= 120_000`, which at 12 s
+    is true for *every* position, so the first audio write would silently mark
+    the book finished. Nothing about mutagen's answer looks wrong on its own —
+    only a second opinion catches it.
+    """
+    fake_ffprobe(35648.2)
+    fake_mutagen(length=12.0)
+
+    meta = await library.extract_metadata(
+        str(audio_library), "audiobook", db, library_root=settings.audiobook_dir
+    )
+
+    assert meta["duration_seconds"] == 35648
+
+
+async def test_ffprobe_reads_a_file_mutagen_cannot_open_at_all(
+    db, fake_ffprobe, fake_mutagen, audio_library
+):
+    """The 17 m4b files on prod with a legacy Nero `chpl` atom: `mutagen.File()`
+    raises before yielding anything, while ffprobe reads every one of them."""
+    import mutagen.mp4
+
+    fake_ffprobe(45492.6)
+    fake_mutagen(raises=mutagen.mp4.MP4MetadataError("unpack requires a buffer of 8 bytes"))
+
+    meta = await library.extract_metadata(
+        str(audio_library), "audiobook", db, library_root=settings.audiobook_dir
+    )
+
+    assert meta["duration_seconds"] == 45492
+
+
+async def test_mutagen_is_used_when_ffprobe_is_unavailable(
+    db, fake_mutagen, audio_library
+):
+    """`no_ffprobe` is autouse, so this is the ffprobe-missing path: a machine
+    without ffmpeg on PATH still gets a duration."""
+    fake_mutagen(length=3600.7)
+
+    meta = await library.extract_metadata(
+        str(audio_library), "audiobook", db, library_root=settings.audiobook_dir
+    )
+
+    assert meta["duration_seconds"] == 3600
+
+
+async def test_neither_source_yields_a_length(db, fake_mutagen, audio_library):
+    import mutagen.mp4
+
+    fake_mutagen(raises=mutagen.mp4.MP4MetadataError("boom"))
+
+    meta = await library.extract_metadata(
+        str(audio_library), "audiobook", db, library_root=settings.audiobook_dir
+    )
+
+    assert "duration_seconds" not in meta
 
 
 # ---------- reading the length out of the file ----------

@@ -275,12 +275,20 @@ The rule: a write that **crosses into the end zone** completes the book.
 - **Unknown audio length ⇒ no audio end zone.** The players' own end-of-stream
   write still finishes the book, because it sends `is_completed: true` itself.
   `AudioBook.duration_seconds` is filled by the library scan from the file's own
-  container header (mutagen `info.length`, issue #127) — for new rows and for
-  existing ones, so an ordinary scan backfills a library that predates it. The
-  file always wins over a stored value; an unreadable length never clears one.
-  It stays blank only when mutagen cannot open the file at all — chiefly an m4b
-  with a legacy Nero `chpl` atom, which Troubleshoot Library flags and can
-  repair, after which a rescan fills the length in.
+  container header (issue #127) — for new rows and for existing ones, so an
+  ordinary scan backfills a library that predates it. The file always wins over
+  a stored value; an unreadable length never clears one.
+- **Where the length comes from.** `services/audio_duration.py` probes with
+  **ffprobe**, falling back to mutagen's `info.length` only when ffmpeg isn't on
+  PATH. That ordering is deliberate: measured across the full production library,
+  the two agreed on 290 of 308 files, mutagen could not open 17 at all (legacy
+  Nero `chpl` atom) that ffprobe read fine, and on one MP3 mutagen confidently
+  reported 12 seconds for a 9.9-hour book. **A wrong length is worse than a
+  missing one here** — unknown cleanly disables the end zone, while a too-short
+  one makes every position look like the end and finishes the book on the first
+  write. Files split into per-chapter tracks are skipped by the scanner
+  entirely (they are flagged for Troubleshoot instead), so their rows keep
+  whatever length they had; the per-book rescan endpoint still fills them.
 - **Pairs complete as a pair.** A pair-scoped write projects one flag onto both
   `user_progress` rows. Android used to finish a pair with two standalone-scope
   PUTs (`ebook` + `audiobook`), which left the pair's own record un-finished
