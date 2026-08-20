@@ -130,9 +130,19 @@ export async function prefetchMediaTokens(resources) {
  */
 export async function coverSrc(path) {
     if (!path) return path;
-    const filename = path.split('/').pop().split('?')[0];
+    const qIndex = path.indexOf('?');
+    const rawPath = qIndex === -1 ? path : path.slice(0, qIndex);
+    const query = qIndex === -1 ? '' : path.slice(qIndex + 1);
+    const segments = rawPath.split('/');
+    // Encode only the filename segment. A '#' in a cover name would otherwise be
+    // read as a fragment delimiter, so the request path gets truncated and the
+    // ?token= never reaches the server -- a 401 (issue #126). encodeURIComponent
+    // also covers ' ', '?', '&' and '%'. The token stays scoped to the RAW
+    // filename: the server percent-decodes the path param before comparing.
+    const filename = segments.pop();
     const token = await getMediaToken('cover', filename);
-    return `${path}${path.includes('?') ? '&' : '?'}token=${token}`;
+    const encodedPath = [...segments, encodeURIComponent(filename)].join('/');
+    return `${encodedPath}?${query ? `${query}&` : ''}token=${token}`;
 }
 
 async function fetchWithAuth(url, options = {}) {

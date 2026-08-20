@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.booksync.BuildConfig
+import com.booksync.data.remote.coverImageUrl
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import java.io.File
@@ -332,9 +333,10 @@ private fun Hero(ui: BookDetailsUi, serverUrl: String) {
     val context = LocalContext.current
     val coverModel = remember(ui.audiobookIdForCover, ui.audiobookCoverPath, serverUrl) {
         val local = ui.audiobookIdForCover?.let { File(context.filesDir, "covers/$it.jpg") }
+        val coverPath = ui.audiobookCoverPath
         when {
             local != null && local.exists() -> local
-            ui.audiobookCoverPath != null   -> "${serverUrl.trimEnd('/')}${ui.audiobookCoverPath}"
+            coverPath != null               -> coverImageUrl(serverUrl, coverPath)
             else                            -> null
         }
     }
