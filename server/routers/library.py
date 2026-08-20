@@ -343,10 +343,25 @@ async def extract_metadata(
             except mutagen.mp4.MP4MetadataError:
                 audio = None
                 logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
+            # Runtime, straight off the container header (issue #127). Read once
+            # here rather than per-format so every mutagen type gets it, and
+            # left *absent* when unreadable — callers take "no key" as "leave
+            # whatever is stored alone".
+            #
+            # Deliberately guarded on `is not None`, not on the `if audio:`
+            # below: mutagen's FileType defines __len__ as its tag count and no
+            # __bool__, so a file with *no tags at all* is falsy. Those are
+            # exactly the files where the length is the only metadata worth
+            # recovering, so they must not be skipped along with the tags.
+            if audio is not None:
+                length = getattr(getattr(audio, 'info', None), 'length', None)
+                if length and length > 0:
+                    file_meta["duration_seconds"] = int(length)
+
             if audio:
                 logger.debug(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
                 logger.debug(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
-                
+
                 # MP4/M4B/M4A files (mutagen.mp4.MP4)
                 if hasattr(audio, 'tags') and hasattr(audio, 'info'):
                     audio_type = type(audio).__name__
@@ -478,7 +493,13 @@ async def extract_metadata(
         if file_meta.get(field) is not None:
             meta[field] = file_meta[field]
             has_embedded = True
-    
+
+    # Duration is a physical property of the file rather than something a
+    # tagger wrote, so it merges outside the loop above: a readable length must
+    # not by itself flip `_metadata_source` to "embedded".
+    if file_meta.get("duration_seconds") is not None:
+        meta["duration_seconds"] = file_meta["duration_seconds"]
+
     # Track the source: if embedded data overrode anything, note it
     if has_embedded:
         if meta.get("_metadata_source") == "pattern":
@@ -788,6 +809,15 @@ async def _ingest_one_audiobook(
                 setattr(existing_audiobook, f, meta.get(f))
                 updated = True
 
+        # Duration is deliberately *not* in that fill-if-null list: the file is
+        # the authority, so a length we can read wins over whatever is stored
+        # (a replaced or re-encoded file must not keep a stale end zone). This
+        # branch is also the backfill — a library scanned before #127 shipped
+        # gets every row populated by one ordinary scan.
+        if meta.get("duration_seconds") and existing_audiobook.duration_seconds != meta["duration_seconds"]:
+            existing_audiobook.duration_seconds = meta["duration_seconds"]
+            updated = True
+
         if updated:
             db.add(existing_audiobook)
 
@@ -830,6 +860,7 @@ async def _ingest_one_audiobook(
         isbn=meta.get("isbn"),
         asin=meta.get("asin"),
         narrators=meta.get("narrators"),
+        duration_seconds=meta.get("duration_seconds"),
         is_explicit=meta.get("is_explicit", False),
         is_abridged=meta.get("is_abridged", False),
         metadata_source=meta.get("_metadata_source"),
@@ -1101,6 +1132,7 @@ async def rescan_all_files(
             book.tags = meta.get("tags") or book.tags
 
             if meta.get("narrators"): book.narrators = meta["narrators"]
+            book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
 
             book.metadata_source = meta.get("_metadata_source")
             book.metadata_pattern = meta.get("_metadata_pattern")
@@ -1232,6 +1264,7 @@ async def rescan_book_file(
     
     if book_type == "audiobook":
         if meta.get("narrators"): book.narrators = meta["narrators"]
+        book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
     if book_type == "ebook":
         if meta.get("isbn"): book.isbn = meta["isbn"]
         if meta.get("asin"): book.asin = meta["asin"]

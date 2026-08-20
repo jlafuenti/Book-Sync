@@ -274,6 +274,13 @@ The rule: a write that **crosses into the end zone** completes the book.
   un-finishing it. Only an explicit `false` or a reset clears the flag.
 - **Unknown audio length ⇒ no audio end zone.** The players' own end-of-stream
   write still finishes the book, because it sends `is_completed: true` itself.
+  `AudioBook.duration_seconds` is filled by the library scan from the file's own
+  container header (mutagen `info.length`, issue #127) — for new rows and for
+  existing ones, so an ordinary scan backfills a library that predates it. The
+  file always wins over a stored value; an unreadable length never clears one.
+  It stays blank only when mutagen cannot open the file at all — chiefly an m4b
+  with a legacy Nero `chpl` atom, which Troubleshoot Library flags and can
+  repair, after which a rescan fills the length in.
 - **Pairs complete as a pair.** A pair-scoped write projects one flag onto both
   `user_progress` rows. Android used to finish a pair with two standalone-scope
   PUTs (`ebook` + `audiobook`), which left the pair's own record un-finished
