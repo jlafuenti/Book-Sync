@@ -425,6 +425,10 @@ async def replace_file(
             setattr(item, field, val)
     if not item.title:
         item.title = base
+    # The file is the authority on its own length (issue #127) — carrying the
+    # replaced file's duration forward would leave a silently wrong end zone.
+    if item_type == "audiobook" and new_meta.get("duration_seconds"):
+        item.duration_seconds = new_meta["duration_seconds"]
 
     # Replacing an audiobook invalidates the cached transcript & sync.
     if item_type == "audiobook":
