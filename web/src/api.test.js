@@ -299,6 +299,55 @@ describe('coverSrc()', () => {
         expect(src).toBe('/api/files/covers/book.jpg?token=scoped-cover-token')
     })
 
+    it('percent-encodes the filename segment so a # is not read as a fragment', async () => {
+        // Issue #126: without encoding, the browser treats everything from '#' on as
+        // a URL fragment -- the ?token= never reaches the server and the cover 401s.
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ token: 'scoped-cover-token', expires_in: 900 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc } = await import('./api')
+        const src = await coverSrc('/api/files/covers/A_#1.jpg')
+
+        // The token is still minted for the RAW filename -- that's what the server
+        // compares the decoded path param against.
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/auth/media-token?resource_type=cover&resource_id=A_%231.jpg'),
+            expect.anything(),
+        )
+        expect(src).toBe('/api/files/covers/A_%231.jpg?token=scoped-cover-token')
+    })
+
+    it('encodes spaces alongside # for the production cover filename shape', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ token: 'scoped-cover-token', expires_in: 900 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc } = await import('./api')
+        const src = await coverSrc('/api/files/covers/James_Patterson - Private_#1_Suspect.jpg')
+
+        expect(src).toBe(
+            '/api/files/covers/James_Patterson%20-%20Private_%231_Suspect.jpg?token=scoped-cover-token',
+        )
+    })
+
+    it('keeps an existing query string and still appends the token', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ token: 'scoped-cover-token', expires_in: 900 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc } = await import('./api')
+        const src = await coverSrc('/api/files/covers/book.jpg?v=2')
+
+        expect(src).toBe('/api/files/covers/book.jpg?v=2&token=scoped-cover-token')
+    })
+
     it('returns falsy paths unchanged without minting a token', async () => {
         const fetchMock = vi.fn()
         vi.stubGlobal('fetch', fetchMock)
