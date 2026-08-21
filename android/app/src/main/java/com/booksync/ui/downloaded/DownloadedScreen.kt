@@ -41,6 +41,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
+import com.booksync.data.remote.coverImageUrl
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
 import com.booksync.ui.components.CardOverflowMenu
@@ -184,7 +185,7 @@ fun DownloadedScreen(
                                     when {
                                         localFile.exists() -> localFile
                                         pair.audiobookCoverPath != null ->
-                                            "${viewModel.serverUrl.trimEnd('/')}${pair.audiobookCoverPath}"
+                                            coverImageUrl(viewModel.serverUrl, pair.audiobookCoverPath)
                                         else -> null
                                     }
                                 }
@@ -230,7 +231,7 @@ fun DownloadedScreen(
                                     when {
                                         localFile.exists() -> localFile
                                         audio.coverFilename != null ->
-                                            "${viewModel.serverUrl.trimEnd('/')}${audio.coverFilename}"
+                                            coverImageUrl(viewModel.serverUrl, audio.coverFilename)
                                         else -> null
                                     }
                                 }

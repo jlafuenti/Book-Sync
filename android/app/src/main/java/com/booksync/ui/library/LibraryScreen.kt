@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
+import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.PairOpenTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -572,7 +573,7 @@ private fun ItemGrid(
                     localFile != null && localFile.exists() -> localFile
                     coverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
-                        "${serverUrl.trimEnd('/')}$coverPath"
+                        coverImageUrl(serverUrl, coverPath)
                     else -> null
                 }
             }
@@ -620,7 +621,7 @@ private fun SeriesGrid(
                     val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
                     when {
                         localFile != null && localFile.exists() -> localFile
-                        coverPath != null -> "${serverUrl.trimEnd('/')}$coverPath"
+                        coverPath != null -> coverImageUrl(serverUrl, coverPath)
                         else -> null
                     }
                 }
