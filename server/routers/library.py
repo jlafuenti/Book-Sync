@@ -50,6 +50,7 @@ from schemas import (
 from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
+from services.audio_duration import probe_duration_seconds
 from services import multi_file_audiobooks
 from utils import resolve_cover_url, safe_join, utcnow
 
@@ -338,15 +339,35 @@ async def extract_metadata(
             logger.debug(f"[extract_metadata]   EPUB embedded: {file_meta}")
 
         elif file_type == "audiobook":
+            # Runtime, off the container header (issue #127). ffprobe is the
+            # authority and mutagen's info.length only the fallback for hosts
+            # without ffmpeg — see services/audio_duration.py for the library-wide
+            # measurement behind that ordering. Left *absent* when neither can
+            # supply one; callers take "no key" as "leave whatever is stored
+            # alone", and an unknown length cleanly disables the audio end zone
+            # while a wrong one would silently finish the book.
+            duration = await asyncio.to_thread(probe_duration_seconds, filepath)
+
             try:
                 audio = mutagen.File(filepath)
             except mutagen.mp4.MP4MetadataError:
                 audio = None
                 logger.warning(f"[extract_metadata] MP4 chapter parse failed for {filepath}, skipping embedded tags")
+
+            # The mutagen fallback is guarded on `is not None`, not on the
+            # `if audio:` below: mutagen's FileType defines __len__ as its tag
+            # count and no __bool__, so a file with *no tags at all* is falsy.
+            # Those are exactly the files where the length is the only metadata
+            # worth recovering.
+            if duration is None and audio is not None:
+                duration = getattr(getattr(audio, 'info', None), 'length', None)
+            if duration and duration > 0:
+                file_meta["duration_seconds"] = int(duration)
+
             if audio:
                 logger.debug(f"[extract_metadata]   Mutagen type: {type(audio).__name__}")
                 logger.debug(f"[extract_metadata]   Available tags: {list(audio.keys())[:30]}")
-                
+
                 # MP4/M4B/M4A files (mutagen.mp4.MP4)
                 if hasattr(audio, 'tags') and hasattr(audio, 'info'):
                     audio_type = type(audio).__name__
@@ -478,7 +499,13 @@ async def extract_metadata(
         if file_meta.get(field) is not None:
             meta[field] = file_meta[field]
             has_embedded = True
-    
+
+    # Duration is a physical property of the file rather than something a
+    # tagger wrote, so it merges outside the loop above: a readable length must
+    # not by itself flip `_metadata_source` to "embedded".
+    if file_meta.get("duration_seconds") is not None:
+        meta["duration_seconds"] = file_meta["duration_seconds"]
+
     # Track the source: if embedded data overrode anything, note it
     if has_embedded:
         if meta.get("_metadata_source") == "pattern":
@@ -788,6 +815,15 @@ async def _ingest_one_audiobook(
                 setattr(existing_audiobook, f, meta.get(f))
                 updated = True
 
+        # Duration is deliberately *not* in that fill-if-null list: the file is
+        # the authority, so a length we can read wins over whatever is stored
+        # (a replaced or re-encoded file must not keep a stale end zone). This
+        # branch is also the backfill — a library scanned before #127 shipped
+        # gets every row populated by one ordinary scan.
+        if meta.get("duration_seconds") and existing_audiobook.duration_seconds != meta["duration_seconds"]:
+            existing_audiobook.duration_seconds = meta["duration_seconds"]
+            updated = True
+
         if updated:
             db.add(existing_audiobook)
 
@@ -830,6 +866,7 @@ async def _ingest_one_audiobook(
         isbn=meta.get("isbn"),
         asin=meta.get("asin"),
         narrators=meta.get("narrators"),
+        duration_seconds=meta.get("duration_seconds"),
         is_explicit=meta.get("is_explicit", False),
         is_abridged=meta.get("is_abridged", False),
         metadata_source=meta.get("_metadata_source"),
@@ -1101,6 +1138,7 @@ async def rescan_all_files(
             book.tags = meta.get("tags") or book.tags
 
             if meta.get("narrators"): book.narrators = meta["narrators"]
+            book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
 
             book.metadata_source = meta.get("_metadata_source")
             book.metadata_pattern = meta.get("_metadata_pattern")
@@ -1232,6 +1270,7 @@ async def rescan_book_file(
     
     if book_type == "audiobook":
         if meta.get("narrators"): book.narrators = meta["narrators"]
+        book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
     if book_type == "ebook":
         if meta.get("isbn"): book.isbn = meta["isbn"]
         if meta.get("asin"): book.asin = meta["asin"]
