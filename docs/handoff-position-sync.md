@@ -319,7 +319,7 @@ invalidate the reading page.
 6. **`reset_pair_progress` doesn't delete the canonical bookmark** — **fixed**
    (2026-07-31): the DELETE now removes the bookmark rows (all scopes), their
    hints, and the projection; `GET /position` returns 204 afterwards. Client
-   reset buttons that used to legacy-write zeros (ContinuePage, BookDetailPage,
+   reset buttons that used to legacy-write zeros (HomePage, BookDetailPage,
    Android) were rewired to the DELETE. Standalone media kept the zero-write
    until issue #102 added `DELETE /api/sync/position/{scope}/{ident}`, which all
    reset buttons now use.
