@@ -189,6 +189,22 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
         })))
     })
 
+    it('calls the pair-level DELETE for a paired Reset Progress instead of zero-writing each leg', async () => {
+        // The old per-leg zero-write left the canonical bookmark in place,
+        // which re-seeded progress right back (issue: reset buttons not
+        // actually resetting). The pair-scoped DELETE removes the bookmark +
+        // hints + progress rows server-side.
+        setupLibrary()
+        renderHome()
+
+        const card = await openMenu('Pair Ebook')
+        fireEvent.click(within(card).getByText('Reset Progress'))
+
+        await waitFor(() => expect(resetPairProgressMock).toHaveBeenCalledWith(100))
+        expect(updatePositionMock).not.toHaveBeenCalled()
+        expect(resetPositionMock).not.toHaveBeenCalled()
+    })
+
     it('resets a standalone ebook with the scoped DELETE, not a zero-write', async () => {
         setupLibrary()
         renderHome()
