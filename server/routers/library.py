@@ -495,7 +495,7 @@ async def extract_metadata(
     meta = filename_meta.copy()
 
     has_embedded = False
-    for field in ["title", "author", "series", "series_index", "description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
+    for field in ["title", "author", "series", "series_index", "description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin", "narrators"]:
         if file_meta.get(field) is not None:
             meta[field] = file_meta[field]
             has_embedded = True
