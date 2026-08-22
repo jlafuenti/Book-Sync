@@ -277,6 +277,24 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
     audio = mutagen.mp4.MP4(filepath)
 
     def _set(tag: str, val) -> None:
+        """Write `val`, or clear the tag — but only when the caller has an
+        opinion about the field.
+
+        `None` (or an absent key) means "unknown", and an unknown value must
+        leave whatever the file already carries alone. An *empty string* is the
+        explicit "make this blank" and still deletes the tag — the same
+        convention the ingest already uses for a user-cleared series.
+
+        Deleting on unknown is what turned a read gap into data loss (#135).
+        The narrator never survived extract_metadata's merge whitelist, so
+        every write-back saw no narrator and destroyed both narrator atoms in
+        the user's own file. The same shape hit `series`: the filename parser
+        always emits the key as `None`, so scanning a book whose pattern found
+        no series wiped the series tags the file did have. The app is not the
+        authority on tags it could not read.
+        """
+        if val is None:
+            return
         if val:
             audio[tag] = [str(val)]
         elif tag in audio:
@@ -293,6 +311,16 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
     _set("\xa9pub", file_meta.get("publisher"))
     _set("\xa9wrt", file_meta.get("narrators"))
 
+    # Also write custom iTunes freeform atoms for compatibility with other players
+    def _set_freeform(atom: str, val: Optional[str]) -> None:
+        key = f"----:com.apple.iTunes:{atom}"
+        if val is None:
+            return
+        if val:
+            audio[key] = [val.encode("utf-8")]
+        elif key in audio:
+            del audio[key]
+
     # Series → ©grp as "Name #N" (the format extract_series_and_index reads)
     series = file_meta.get("series")
     series_index = file_meta.get("series_index")
@@ -303,22 +331,14 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
             else series
         )
         audio["\xa9grp"] = [grp]
-    elif "\xa9grp" in audio:
+    elif series == "" and "\xa9grp" in audio:
         del audio["\xa9grp"]
-
-    # Also write custom iTunes freeform atoms for compatibility with other players
-    def _set_freeform(atom: str, val: Optional[str]) -> None:
-        key = f"----:com.apple.iTunes:{atom}"
-        if val:
-            audio[key] = [val.encode("utf-8")]
-        elif key in audio:
-            del audio[key]
 
     _set_freeform("SERIES", series)
     if series and series_index is not None:
         _set_freeform("SERIES-PART", str(series_index))
-    elif series is None:
-        _set_freeform("SERIES-PART", None)
+    elif series == "":
+        _set_freeform("SERIES-PART", "")
     _set_freeform("NARRATOR", file_meta.get("narrators"))
 
     audio.save()
