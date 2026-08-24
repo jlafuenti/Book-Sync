@@ -91,6 +91,38 @@ def test_server_service_healthchecks_the_api():
     )
 
 
+def test_server_service_has_memory_and_pid_limits():
+    """Cap the blast radius of oversized request bodies (issue #151).
+
+    4g fits the 4 GiB MAX_UPLOAD_BYTES ceiling plus the app's working set;
+    pids_limit stops a request flood from forking the container to death.
+    """
+    services = _services(COMPOSE_TEMPLATES[0])
+    body = services["server"]
+    assert "mem_limit: 4g" in body, "server service has no mem_limit: 4g"
+    assert "pids_limit: 512" in body, "server service has no pids_limit: 512"
+
+
+def test_caddyfile_template_caps_request_bodies():
+    """Caddyfile.example must front the API with request_body caps (issue #151):
+    a big-upload route group at 4GB and a default /api/* cap at 16MB."""
+    path = os.path.join(_REPO_ROOT, "Caddyfile.example")
+    assert os.path.isfile(path), "Caddyfile.example missing at repo root"
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    for needle in (
+        "request_body",
+        "4GB",
+        "16MB",
+        "/api/library/upload/",
+        "/api/library/ebooks/",
+        "/api/library/audiobooks/",
+        "/api/troubleshoot/replace/",
+        "/api/import/acsm/upload",
+    ):
+        assert needle in text, f"Caddyfile.example missing {needle!r}"
+
+
 def test_parser_finds_the_expected_services():
     """Guard the hand-rolled parser itself: a silently-empty parse would pass above."""
     main = _services(COMPOSE_TEMPLATES[0])
