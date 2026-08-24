@@ -35,6 +35,13 @@ coverage.xml
 # from jetson/docker-compose.example.yml and customize; never tracked.
 /jetson/docker-compose.yml
 
+# Databases (local SQLite files must never be committed — issue #153)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
 # OS files
 .DS_Store
 Thumbs.db
