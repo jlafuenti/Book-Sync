@@ -157,6 +157,39 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // never set from `relocated` events, which the restore and the text-nav
     // pass also emit (issue #159).
     const userNavigatedRef = useRef(false)
+    // True only when the restore GENUINELY landed: a rung from the record
+    // resolved, the record was empty, or an audio-derived landing was
+    // confirmed by actually finding the preview text. The navigation clause
+    // reopening the gate does NOT set it — saves after an unconfirmed landing
+    // must never carry matcher-derived fields (audio_position_ms above all):
+    // in production the matcher "upgraded" wrong copyright-page text and
+    // overwrote a 600000ms listening position with 1530ms.
+    const restoreLandedRef = useRef(false)
+    // Set while an audio-derived restore awaits confirmation from the
+    // text-nav pass. The chapter + preview came from the SYNC MAP, not the
+    // record, so displaying that chapter is a guess, not a landing — the
+    // map's chapter axis can be offset from the spine, and treating the
+    // guess as landed is what let settle relocations write the Copyright
+    // page over a real position. Only finding the text confirms it.
+    const audioConfirmPendingRef = useRef(false)
+
+    // The text-nav pass confirmed an audio-derived landing: the preview text
+    // was actually located in this book.
+    const confirmProvisionalLanding = useCallback(() => {
+        if (!audioConfirmPendingRef.current) return
+        audioConfirmPendingRef.current = false
+        positionEstablishedRef.current = true
+        restoreLandedRef.current = true
+        setUnresolvedPosition(false)
+    }, [])
+
+    // The text-nav pass could not find the preview anywhere: the audio rung
+    // did NOT land. Unresolved semantics — banner, gate stays closed.
+    const failProvisionalLanding = useCallback(() => {
+        if (!audioConfirmPendingRef.current) return
+        audioConfirmPendingRef.current = false
+        setUnresolvedPosition(true)
+    }, [])
 
     // Opens the write gate if it may open, and says whether it is open.
     // Reads only refs so the mount-time `relocated` handler can call it.
@@ -238,7 +271,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // adjudicated by the server — false when the gate/text-nav suppressed it
     // or the request failed — so callers can be honest about what happened
     // (issue #159: the ✓ used to flash regardless).
-    const doSave = useCallback(async (cfi, percent, spineIndex) => {
+    //
+    // `explicit` marks a direct user command (the Save button): it always
+    // writes and always claims the format.
+    const doSave = useCallback(async (cfi, percent, spineIndex, { explicit = false } = {}) => {
         if (!cfi) return false
         // Don't save while text nav is hopping between chapters looking for text
         if (textNavInProgressRef.current) return false
@@ -251,6 +287,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             console.warn('[EbookReader] save suppressed: position not established yet')
             return false
         }
+        // Locations generation re-reports the same spot with a refined
+        // percent; an automatic save must not treat that drift as movement
+        // (production wrote the same page twice, 8s apart, at percent
+        // 0.0 → 0.1). An unchanged cfi is not a new position.
+        if (!explicit && cfi === lastIssuedSaveRef.current) return true
         const chapter = spineIndex ?? currentSpineIndexRef.current
         const capturedAt = new Date().toISOString()
         console.log(`[EbookReader] doSave: chapter=${chapter}, pairId=${pairId}, percent=${percent?.toFixed(1)}`)
@@ -258,9 +299,17 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             // Sync-map match (paired books only) upgrades the anchor to a
             // sentence and its audio position. A miss is not a failure — the
             // chapter + preview anchor still describes the position.
+            //
+            // Only for a GENUINELY landed restore. When the gate reopened via
+            // the navigation clause instead (failed/unconfirmed landing), the
+            // matcher stays out of the write: matching the wrong text mints a
+            // wrong audio_position_ms that overwrites a real audio anchor —
+            // the exact production loss. Chapter + preview is a full
+            // position; omitting audio_position_ms leaves the stored one
+            // alone.
             const textPreview = extractVisibleText()
             let match = null
-            if (pairId && textPreview && textPreview.length > 10) {
+            if (restoreLandedRef.current && pairId && textPreview && textPreview.length > 10) {
                 match = await matchTextToAudio(pairId, textPreview, chapter).catch(e => {
                     console.warn('[EbookReader] matchTextToAudio failed:', e.message || e)
                     return null
@@ -272,7 +321,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             // while the other was rejected and the two rows would then
             // disagree about where the reader was, permanently.
             const position = {
-                source: 'ebook',
+                // Only a foreground, user-initiated write claims the format
+                // (schemas.PositionUpdate). A settle relocation the user
+                // never asked for must not flip a listen-only pair to
+                // `ebook` — omission means "keep the stored value".
+                source: (explicit || userNavigatedRef.current) ? 'ebook' : undefined,
                 epub_chapter: match ? match.epub_chapter : chapter,
                 epub_sentence_index: match ? match.epub_sentence_index : undefined,
                 // A sentence index is a sync-map coordinate; attest which map
@@ -337,7 +390,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         return {
             cfi,
             payload: {
-                source: 'ebook',
+                // Same rule as doSave: an automatic flush claims the format
+                // only when the user actually navigated this session.
+                source: userNavigatedRef.current ? 'ebook' : undefined,
                 epub_chapter: spineIndex ?? currentSpineIndexRef.current,
                 epub_text_preview: textPreview || undefined,
                 epub_progress_percent: Math.round(percent * 100) / 100,
@@ -422,7 +477,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             clearTimeout(saveTimerRef.current)
             saveTimerRef.current = null
         }
-        const wrote = await doSave(currentCfi, progressPercent)
+        const wrote = await doSave(currentCfi, progressPercent, undefined, { explicit: true })
         setSaveState(wrote ? 'saved' : 'error')
         setTimeout(() => setSaveState(null), 1500)
     }, [doSave, currentCfi, progressPercent])
@@ -521,6 +576,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 // resolved chapter + preview, which then seed the chapter
                 // display and the text-nav pass below. Audio is always
                 // planned last, so it being FIRST means it is the only rung.
+                let audioDerived = false
                 if (pairId && steps.length > 0 && steps[0].kind === 'audio') {
                     const resolved = await audioToEpub(pairId, steps[0].audioPositionMs)
                         .catch(() => null)
@@ -532,6 +588,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                             epub_text_preview: resolved.preview || position.epub_text_preview,
                         }
                         steps = planRestore(position, ladderContext)
+                        audioDerived = true
                     }
                 }
                 positionRef.current = position
@@ -549,8 +606,31 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 // "unread" was exactly the silent gate-open that let page one
                 // overwrite a real position (issue #159).
                 const unresolved = !landed || (steps.length === 0 && hasAnchor(position))
-                positionEstablishedRef.current = !unresolved
-                if (!destroyed) setUnresolvedPosition(unresolved)
+                const derivedPreview = (position?.epub_text_preview || '').trim()
+                if (!unresolved && audioDerived && derivedPreview) {
+                    // PROVISIONAL landing: the chapter + preview came from the
+                    // sync map, not the record, and the map's chapter axis can
+                    // be offset from the spine. Displaying the derived chapter
+                    // is a guess — only the text-nav pass actually finding the
+                    // preview confirms it. Treating the guess as landed is
+                    // what let settle relocations write the Copyright page
+                    // (and a matcher-minted audio position) over a real
+                    // 10-minute listening position.
+                    audioConfirmPendingRef.current = true
+                    positionEstablishedRef.current = false
+                    restoreLandedRef.current = false
+                    if (!destroyed) setUnresolvedPosition(false)
+                } else if (!unresolved && audioDerived) {
+                    // Derived chapter with no searchable preview: nothing can
+                    // ever confirm the guess, so it stays unresolved.
+                    positionEstablishedRef.current = false
+                    restoreLandedRef.current = false
+                    if (!destroyed) setUnresolvedPosition(true)
+                } else {
+                    positionEstablishedRef.current = !unresolved
+                    restoreLandedRef.current = !unresolved
+                    if (!destroyed) setUnresolvedPosition(unresolved)
+                }
 
                 if (!destroyed) setLoading(false)
 
@@ -667,56 +747,118 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                                 }
                             }
 
+                            // Load one spine document's text WITHOUT rendering
+                            // it (epub.js Section.load), normalized the same
+                            // way as the search target. Null when the section
+                            // can't be loaded.
+                            const loadSectionText = async (idx) => {
+                                const b = bookRef.current
+                                const item = b?.spine?.items?.[idx]
+                                if (!item || typeof item.load !== 'function') return null
+                                try {
+                                    const contents = await item.load(
+                                        typeof b.load === 'function' ? b.load.bind(b) : undefined
+                                    )
+                                    const raw = contents?.textContent
+                                        ?? contents?.body?.textContent ?? ''
+                                    item.unload?.()
+                                    return String(raw).toLowerCase()
+                                        .replace(/[\n\r\t]/g, ' ')
+                                        .replace(/[^a-z0-9 ]/g, '')
+                                        .replace(/ +/g, ' ')
+                                } catch (e) {
+                                    return null
+                                }
+                            }
+
+                            // Search EVERY spine document, outward from the
+                            // seed — Android parity (ReaderActivity
+                            // .findSpineIndexForText walks the whole reading
+                            // order the same way). The old ±2 window silently
+                            // missed a real preview whenever the sync map's
+                            // chapter axis was offset from the spine by the
+                            // front matter, which is exactly how a live
+                            // restore ended up on the Copyright page.
+                            const findSpineIndexForText = async (target, seedIdx) => {
+                                const n = (bookRef.current?.spine?.items || []).length
+                                if (!n) return -1
+                                const seed = seedIdx >= 0 && seedIdx < n ? seedIdx : Math.floor(n / 2)
+                                for (let offset = 0; offset < n; offset++) {
+                                    const candidates = offset === 0
+                                        ? [seed] : [seed + offset, seed - offset]
+                                    for (const idx of candidates) {
+                                        if (idx < 0 || idx >= n) continue
+                                        const text = await loadSectionText(idx)
+                                        if (text && text.includes(target)) {
+                                            console.log(`[EbookReader] text nav: found '${target}' in spine ${idx} (seed=${seed})`)
+                                            return idx
+                                        }
+                                    }
+                                }
+                                return -1
+                            }
+
                             setTimeout(async () => {
                                 const spineItems = bookRef.current?.spine?.items || []
                                 const baseChapter = currentSpineIndexRef.current
-                                const offsets = [0, 1, -1, 2, -2]
 
-                                for (const offset of offsets) {
-                                    const tryChapter = baseChapter + offset
-                                    if (tryChapter < 0 || tryChapter >= spineItems.length) continue
-                                    const href = spineItems[tryChapter].href
-
-                                    // Navigate to this chapter if it's not the initial one
-                                    if (offset !== 0) {
-                                        console.log(`[EbookReader] text nav: '${shortTarget}' not in chapter ${tryChapter - (offset > 0 ? 1 : -1)}, trying chapter ${tryChapter}`)
-                                        try {
-                                            await renditionRef.current?.display(href)
-                                            // Wait for epub.js to fully render the new chapter content
-                                            await new Promise(r => setTimeout(r, 300))
-                                        } catch (e) {
-                                            console.warn(`[EbookReader] text nav: failed to display chapter ${tryChapter}:`, e.message)
-                                            continue
-                                        }
-                                    }
-
-                                    const cfiStr = trySearchChapter(href)
-                                    if (cfiStr) {
-                                        // Keep textNavInProgressRef true through the display() call.
-                                        // Setting it false BEFORE display() (the previous bug) allowed
-                                        // doSave to run from the relocated event that display() fires,
-                                        // corrupting the just-restored bookmark.
-                                        // Also wait 3 s after navigation: book.locations.generate()
-                                        // fires reportLocation() asynchronously, which emits another
-                                        // relocated and overwrites our position if not suppressed.
-                                        try {
-                                            await renditionRef.current?.display(cfiStr)
-                                            console.log(`[EbookReader] text nav: navigated to CFI successfully`)
-                                            await new Promise(r => setTimeout(r, 3000))
-                                        } catch (e) {
-                                            console.warn(`[EbookReader] text nav: display(cfi) failed:`, e.message)
-                                        } finally {
-                                            textNavInProgressRef.current = false
-                                        }
-                                        return
-                                    }
+                                // Concludes the pass. Confirmation matters for
+                                // audio-derived restores: found = the landing
+                                // is real; not found = it was a guess and the
+                                // session is unresolved (banner, gate closed).
+                                const finish = (found) => {
+                                    if (found) confirmProvisionalLanding()
+                                    else failProvisionalLanding()
+                                    textNavInProgressRef.current = false
                                 }
 
-                                // Exhausted all attempts
-                                console.warn(`[EbookReader] text nav: '${shortTarget}' not found in chapters ${baseChapter}±2, giving up`)
-                                textNavInProgressRef.current = false
+                                // Fast path: the text is usually in the
+                                // chapter already rendered.
+                                let cfiStr = trySearchChapter(spineItems[baseChapter]?.href)
+                                let foundIdx = cfiStr ? baseChapter : -1
+
+                                if (foundIdx < 0) {
+                                    foundIdx = await findSpineIndexForText(shortTarget, baseChapter)
+                                }
+                                if (foundIdx == null || foundIdx < 0) {
+                                    console.warn(`[EbookReader] text nav: '${shortTarget}' not found in any spine document, giving up`)
+                                    finish(false)
+                                    return
+                                }
+
+                                // Keep textNavInProgressRef true through the display() calls.
+                                // Setting it false BEFORE display() (the previous bug) allowed
+                                // doSave to run from the relocated event that display() fires,
+                                // corrupting the just-restored bookmark.
+                                // Also wait 3 s after a CFI navigation: book.locations.generate()
+                                // fires reportLocation() asynchronously, which emits another
+                                // relocated and overwrites our position if not suppressed.
+                                try {
+                                    if (foundIdx !== baseChapter) {
+                                        await renditionRef.current?.display(spineItems[foundIdx].href)
+                                        // Wait for epub.js to fully render the new chapter content
+                                        await new Promise(r => setTimeout(r, 300))
+                                    }
+                                    if (!cfiStr) cfiStr = trySearchChapter(spineItems[foundIdx].href)
+                                    if (cfiStr) {
+                                        await renditionRef.current?.display(cfiStr)
+                                        console.log(`[EbookReader] text nav: navigated to CFI successfully`)
+                                        await new Promise(r => setTimeout(r, 3000))
+                                    }
+                                } catch (e) {
+                                    console.warn('[EbookReader] text nav: navigation failed:', e.message)
+                                } finally {
+                                    // The text WAS located (rendered or in the
+                                    // section source) — the landing is real
+                                    // even when the precise CFI could not be
+                                    // computed; the chapter is right.
+                                    finish(true)
+                                }
                             }, 100)
                         } else {
+                            // Too short to search: an audio-derived guess can
+                            // never be confirmed by it.
+                            failProvisionalLanding()
                             textNavInProgressRef.current = false
                         }
                     }
