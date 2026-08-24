@@ -33,6 +33,13 @@ services:
       # refuses to start with the wildcard default — set this to your actual
       # web frontend origin(s).
       - CORS_ORIGINS=http://localhost:3000
+      # Reverse-proxy trust: the address your reverse proxy (Caddy, the `web`
+      # nginx container) connects from — check the server log's
+      # `request.client.host`; a CIDR/comma list is accepted. uvicorn only
+      # honors X-Forwarded-For from these peers; unset, all proxied clients
+      # share the proxy's IP and the login rate limit becomes one global
+      # bucket. NEVER "*" — that trusts an attacker-chosen header.
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12
       - WHISPER_MODEL=small
       - WHISPER_DEVICE=auto
       - EBOOK_DIR=/data/ebooks

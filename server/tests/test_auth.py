@@ -390,3 +390,115 @@ async def test_media_token_batch_skips_invalid_resource_type(client, make_user, 
     )
     assert r.status_code == 200
     assert list(r.json()["tokens"].keys()) == ["cover:a.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# Client IP: audit rows + rate-limit buckets (issue #156)
+#
+# Behind a reverse proxy every request shares one socket peer, so the client
+# address must come from `scope["client"]` — which uvicorn's
+# ProxyHeadersMiddleware rewrites from X-Forwarded-For only when the peer is a
+# trusted proxy (FORWARDED_ALLOW_IPS). The application itself must never trust
+# the header directly: it is attacker-chosen.
+# ---------------------------------------------------------------------------
+
+def _auth_app():
+    """A minimal app mounting only the auth router (mirrors the client fixture)."""
+    from fastapi import FastAPI
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+
+    from rate_limit import limiter
+    from routers import auth as auth_module
+
+    limiter.enabled = False
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.include_router(auth_module.router)
+    return app
+
+
+def test_get_client_ip_uses_the_socket_peer_not_the_header():
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [(b"x-forwarded-for", b"1.2.3.4")],
+        "client": ("10.0.0.9", 1),
+    }
+    assert get_client_ip(Request(scope)) == "10.0.0.9"
+
+
+async def test_failed_login_audit_row_records_the_peer_ip(db):
+    """An attacker-supplied X-Forwarded-For must not end up in the audit log."""
+    transport = ASGITransport(app=_auth_app(), client=("10.0.0.9", 1))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post(
+            "/api/auth/login",
+            json={"username": "ghost", "password": "x"},
+            headers={"X-Forwarded-For": "1.2.3.4"},
+        )
+    assert r.status_code == 401
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].ip_address == "10.0.0.9"
+
+
+async def test_failed_login_audit_row_uses_forwarded_ip_behind_trusted_proxy(db):
+    """With uvicorn's ProxyHeadersMiddleware trusting the peer, scope["client"]
+    is rewritten from X-Forwarded-For and the audit row records the real client."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app = ProxyHeadersMiddleware(_auth_app(), trusted_hosts="10.0.0.9")
+    transport = ASGITransport(app=app, client=("10.0.0.9", 1))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post(
+            "/api/auth/login",
+            json={"username": "ghost", "password": "x"},
+            headers={"X-Forwarded-For": "1.2.3.4"},
+        )
+    assert r.status_code == 401
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].ip_address == "1.2.3.4"
+
+
+async def test_login_rate_limit_is_per_client_ip():
+    """Six bad logins from A must 429 A but leave B at a plain 401.
+
+    Pins the limiter key: if it ever stops being the (proxy-corrected) socket
+    peer, one client exhausting the bucket locks out everyone (issue #156).
+    """
+    from rate_limit import limiter
+
+    app = _auth_app()  # sets limiter.enabled = False; re-enable below
+    limiter.enabled = True
+    limiter.reset()
+    try:
+        ta = ASGITransport(app=app, client=("10.1.1.1", 1))
+        tb = ASGITransport(app=app, client=("10.2.2.2", 1))
+        async with AsyncClient(transport=ta, base_url="http://test") as a, AsyncClient(
+            transport=tb, base_url="http://test"
+        ) as b:
+            last = None
+            for _ in range(6):
+                last = await a.post(
+                    "/api/auth/login", json={"username": "ghost", "password": "x"}
+                )
+            assert last.status_code == 429
+            r = await b.post(
+                "/api/auth/login", json={"username": "ghost", "password": "x"}
+            )
+            assert r.status_code == 401
+    finally:
+        limiter.enabled = False
+        limiter.reset()
