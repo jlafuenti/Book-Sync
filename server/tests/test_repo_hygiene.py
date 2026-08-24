@@ -105,3 +105,17 @@ def test_no_tracked_file_over_1mb_outside_allowlist():
         f"Tracked files over 1 MB outside the allowlist: {offenders}. "
         "Large binaries bloat every clone forever — keep them out of git."
     )
+
+
+def test_license_file_present_and_named_in_readme():
+    """Issue #154: the repo ships AGPL-3.0 and the README says so."""
+    license_path = os.path.join(_REPO_ROOT, "LICENSE")
+    assert os.path.isfile(license_path), "LICENSE file missing at repo root"
+    with open(license_path, encoding="utf-8") as fh:
+        license_text = fh.read()
+    assert "GNU AFFERO GENERAL PUBLIC LICENSE" in license_text
+
+    readme_path = os.path.join(_REPO_ROOT, "README.md")
+    with open(readme_path, encoding="utf-8") as fh:
+        readme_text = fh.read()
+    assert "## License" in readme_text, "README.md lacks a '## License' heading"

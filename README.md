@@ -189,3 +189,10 @@ Sync-matching logic exists on both server and Android and is pinned by shared go
 `server/tests/fixtures/sync_parity/` — a change to one platform must update both.
 
 Contributions should include tests for new/changed behavior — the PR template has the checklist.
+
+## License
+
+The entire repository is licensed under **AGPL-3.0-only** — see [LICENSE](LICENSE). Under §13,
+anyone who runs a modified Tandem server for other users must offer those users the corresponding
+source code. The license choice follows the server's AGPL/GPL dependencies (ebooklib, mobi,
+audible, audible-cli).
