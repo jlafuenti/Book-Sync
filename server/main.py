@@ -18,7 +18,13 @@ from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 
 from database import bootstrap_superadmin
-from config import settings, check_jwt_secret, check_db_credentials, check_cors_origins
+from config import (
+    settings,
+    check_jwt_secret,
+    check_db_credentials,
+    check_cors_origins,
+    check_forwarded_allow_ips,
+)
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
@@ -85,6 +91,7 @@ async def lifespan(app: FastAPI):
     check_jwt_secret(settings)
     check_db_credentials(settings)
     check_cors_origins(settings)
+    check_forwarded_allow_ips(settings)  # warns only — bare deployments are fine
     validate_credential_keys()
 
     # Schema is owned by Alembic now (issue #53): `alembic upgrade head` runs in
