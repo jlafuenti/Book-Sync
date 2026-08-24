@@ -162,6 +162,7 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 | Doc | Covers |
 |---|---|
 | [docs/library-conventions.md](docs/library-conventions.md) | Supported formats, folder/filename patterns, metadata precedence, auto-pairing rules, format conversion |
+| [docs/import-sources.md](docs/import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
 | [docs/transcription.md](docs/transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
 | [docs/android.md](docs/android.md) | Building the app, pointing it at your server, downloads/offline, Android Auto |
 | [docs/operations.md](docs/operations.md) | Logs, upgrades, password rotation, restart policies |

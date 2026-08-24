@@ -119,3 +119,76 @@ def test_license_file_present_and_named_in_readme():
     with open(readme_path, encoding="utf-8") as fh:
         readme_text = fh.read()
     assert "## License" in readme_text, "README.md lacks a '## License' heading"
+
+
+# DRM plugin binaries and per-user key material must never be tracked (issue
+# #152). Source files that merely *reference* these strings are fine — this
+# matches filename components only.
+_FORBIDDEN_DRM_NAME_PATTERNS = [
+    "DeDRM*",
+    "DeACSM*",
+    "*.der",
+    "*adobekey*",
+    "*.voucher",
+    "*activation_bytes*",
+]
+
+
+def test_no_drm_plugin_binaries_or_keys_tracked():
+    tracked = _git_ls_files()
+    offenders = []
+    for path in tracked:
+        for component in path.split("/"):
+            if any(
+                fnmatch.fnmatch(component, pat)
+                for pat in _FORBIDDEN_DRM_NAME_PATTERNS
+            ):
+                offenders.append(path)
+                break
+    assert not offenders, (
+        f"Tracked DRM plugin binaries or key material: {offenders}. "
+        "These must never be committed."
+    )
+
+
+def test_dockerfile_drm_block_is_opt_in():
+    """Issue #152: the default server image ships no DRM plugins.
+
+    The DeACSM/DeDRM install must be gated behind INSTALL_DRM_PLUGINS
+    (default off), same pattern as INSTALL_LOCAL_WHISPER. Pragmatic line
+    scan: the ARG must default to false/0, and every calibre-customize
+    invocation must appear after an `if` guard on INSTALL_DRM_PLUGINS
+    within its RUN block.
+    """
+    dockerfile_path = os.path.join(_REPO_ROOT, "server", "Dockerfile")
+    with open(dockerfile_path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    assert any(
+        line.strip() in ("ARG INSTALL_DRM_PLUGINS=false", "ARG INSTALL_DRM_PLUGINS=0")
+        for line in lines
+    ), "server/Dockerfile must declare ARG INSTALL_DRM_PLUGINS defaulting off"
+
+    # Walk RUN blocks (a RUN plus its backslash continuations); every
+    # calibre-customize line must be preceded, within the same block, by an
+    # if-guard on INSTALL_DRM_PLUGINS.
+    guarded = False
+    in_run = False
+    unguarded_uses = []
+    for idx, raw in enumerate(lines, start=1):
+        stripped = raw.strip()
+        if not in_run and stripped.startswith("RUN "):
+            in_run = True
+            guarded = False
+        if in_run:
+            if "if" in stripped and "INSTALL_DRM_PLUGINS" in stripped:
+                guarded = True
+            if "calibre-customize" in stripped and not guarded:
+                unguarded_uses.append(f"line {idx}: {stripped}")
+            if not stripped.endswith("\\"):
+                in_run = False
+    assert not unguarded_uses, (
+        "calibre-customize (DRM plugin install) runs unconditionally in "
+        f"server/Dockerfile: {unguarded_uses}. Gate it behind "
+        "INSTALL_DRM_PLUGINS."
+    )

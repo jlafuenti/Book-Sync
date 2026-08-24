@@ -127,7 +127,9 @@ in **System → Troubleshoot Library**. Converting one runs Calibre's `ebook-con
 container, writing an `.epub` sibling next to the original (5-minute timeout). Failures are
 reported specifically for the two cases worth acting on:
 
-- **DRM-protected** — cannot be converted; you need a DRM-free copy.
+- **DRM-protected** — `ebook-convert` cannot convert it; you need a DRM-free copy. For books you
+  purchased as `.acsm` downloads (Google Play Books, Nook), the supported import path is described
+  in [import-sources.md](import-sources.md).
 - **Corrupt or an unsupported MOBI variant** — the source file needs replacing.
 
 If the server image was built without Calibre, conversion reports that `ebook-convert` is missing
