@@ -1,4 +1,8 @@
-fastapi==0.115.0
+fastapi==0.116.1
+# Explicit pin: starlette was previously an unpinned transitive dep and drifted
+# to 0.38.6, vulnerable to CVE-2024-47874 (multipart DoS) and CVE-2025-54121
+# (blocking spool of large multipart files). 0.47.2 fixes both (issue #151).
+starlette==0.47.2
 uvicorn[standard]==0.30.0
 sqlalchemy[asyncio]==2.0.35
 asyncpg==0.30.0
@@ -8,7 +12,8 @@ psycopg2-binary==2.9.9
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-multipart==0.0.9
+# 0.0.9 has multipart parsing DoS CVEs (fixed in 0.0.18; issue #151).
+python-multipart==0.0.31
 aiofiles==24.1.0
 # numpy + tqdm are needed by services/alignment.py and services/transcription.py
 # (imported at module load even on the remote-transcription path). Local Whisper
