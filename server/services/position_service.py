@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -548,6 +548,181 @@ async def apply_position(
         if reloaded is not None:
             return reloaded, True
     return bookmark, True
+
+
+def _beats(challenger: Optional[datetime], champion: Optional[datetime]) -> bool:
+    """Whether [challenger]'s `captured_at` is strictly newer than [champion]'s.
+
+    None counts as oldest: a row nobody ever stamped loses to any stamped row,
+    and a tie (including None vs None) goes to the champion.
+    """
+    if challenger is None:
+        return False
+    return champion is None or challenger > champion
+
+
+async def _claim_standalone_scope(
+    db: AsyncSession, bookmark: Bookmark,
+    ebook_id: Optional[int], audiobook_id: Optional[int],
+    *, clear_sync_map_version: bool = True,
+) -> None:
+    """Move [bookmark] onto the standalone media scopes.
+
+    Sets `book_pair_id = NULL` and the given media ids. A pre-existing
+    standalone row for the same (user, medium) collides on the partial unique
+    indexes (`ux_bookmarks_user_ebook` / `_user_audiobook`); read-then-write
+    cannot be made race-free, so — like `_insert_or_reread` — the write is
+    attempted inside a savepoint and the conflict is resolved only when the
+    index actually reports it. Each contested medium goes to whichever row has
+    the newer `captured_at` (None counts as oldest); the loser is deleted, and
+    the moving row is deleted outright when it ends up claiming no medium.
+    """
+    if ebook_id is None and audiobook_id is None:
+        await db.delete(bookmark)
+        await db.flush()
+        return
+
+    # Snapshot before the savepoint attempt: a rollback expires the instance,
+    # and reading an expired attribute lazy-loads outside the async context.
+    bookmark_id = bookmark.id
+    user_id = bookmark.user_id
+    captured_at = bookmark.captured_at
+
+    def _apply(eb_id: Optional[int], ab_id: Optional[int]) -> None:
+        bookmark.book_pair_id = None
+        bookmark.ebook_id = eb_id
+        bookmark.audiobook_id = ab_id
+        if clear_sync_map_version:
+            bookmark.sync_map_version = None
+
+    savepoint = await db.begin_nested()
+    try:
+        _apply(ebook_id, audiobook_id)
+        await db.flush()
+        return
+    except IntegrityError:
+        # The rollback restores the row's stored scope for us.
+        await savepoint.rollback()
+
+    async def _incumbent(id_col, media_id: int) -> Optional[Bookmark]:
+        return (await db.execute(
+            select(Bookmark)
+            .options(selectinload(Bookmark.hints))
+            .where(
+                Bookmark.user_id == user_id,
+                Bookmark.book_pair_id.is_(None),
+                id_col == media_id,
+                Bookmark.id != bookmark_id,
+            )
+        )).scalar_one_or_none()
+
+    keep_ebook_id, keep_audiobook_id = ebook_id, audiobook_id
+    if ebook_id is not None:
+        other = await _incumbent(Bookmark.ebook_id, ebook_id)
+        if other is not None:
+            if _beats(other.captured_at, captured_at):
+                keep_ebook_id = None
+            else:
+                await db.delete(other)
+    if audiobook_id is not None:
+        other = await _incumbent(Bookmark.audiobook_id, audiobook_id)
+        if other is not None:
+            if _beats(other.captured_at, captured_at):
+                keep_audiobook_id = None
+            else:
+                await db.delete(other)
+    await db.flush()
+
+    if keep_ebook_id is None and keep_audiobook_id is None:
+        # A newer standalone row exists for every medium this row could have
+        # claimed — those rows *are* the position now.
+        await db.delete(bookmark)
+    else:
+        _apply(keep_ebook_id, keep_audiobook_id)
+    await db.flush()
+
+
+async def demote_pair_positions(
+    db: AsyncSession, pair_id: int,
+    *, keep_ebook: bool = True, keep_audiobook: bool = True,
+) -> None:
+    """Re-scope every user's pair-scoped position to the standalone media
+    before the pair row is deleted (issue #155).
+
+    Unpairing is the normal way to correct a mis-matched pair; the canonical
+    `Bookmark` rows used to die with it via the ORM cascade, wiping every
+    user's position in *both* books. Instead, each pair-scoped bookmark is
+    demoted (`book_pair_id = NULL`, media ids set to the surviving rows) so
+    `GET /position/ebook/...` and `/audiobook/...` keep answering. The caller
+    that is also deleting one medium passes `keep_ebook=False` /
+    `keep_audiobook=False` so the demoted row never references the dead id.
+
+    `sync_map_version` is cleared: the sentence index is a sync-map coordinate
+    and the map dies with the pair. Chapter, percent, audio position, hints and
+    logs are all kept — same media, still valid. `user_progress` rows are keyed
+    by media and remain the projection of the demoted bookmark, so they are
+    unlinked from the pair rather than deleted.
+
+    Runs in the caller's transaction (flushes, never commits). Call it before
+    deleting the pair — the demoted rows must be flushed out of the pair's
+    cascade before the ORM collects it.
+    """
+    pair = (await db.execute(
+        select(BookPair).where(BookPair.id == pair_id)
+    )).scalar_one_or_none()
+    if pair is None:
+        return
+    target_ebook_id = pair.ebook_id if keep_ebook else None
+    target_audiobook_id = pair.audiobook_id if keep_audiobook else None
+
+    rows = (await db.execute(
+        select(Bookmark)
+        .options(selectinload(Bookmark.hints))
+        .where(Bookmark.book_pair_id == pair_id)
+    )).scalars().all()
+    for bookmark in rows:
+        await _claim_standalone_scope(
+            db, bookmark, target_ebook_id, target_audiobook_id)
+
+    await db.execute(
+        update(UserProgress)
+        .where(UserProgress.book_pair_id == pair_id)
+        .values(book_pair_id=None)
+    )
+    await db.flush()
+
+
+async def release_standalone_positions(
+    db: AsyncSession, *,
+    ebook_id: Optional[int] = None, audiobook_id: Optional[int] = None,
+) -> None:
+    """Detach standalone bookmark rows from a medium that is being deleted.
+
+    A demoted row can reference both media at once; when one of them is
+    deleted the row must let go of that id (the FK would otherwise block the
+    delete on Postgres) while keeping the surviving medium's position. A row
+    that references *only* the dying medium has nothing left to describe and
+    is removed with its hints and logs.
+
+    Runs in the caller's transaction (flushes, never commits).
+    """
+    for id_col, dying_id, other_col in (
+        (Bookmark.ebook_id, ebook_id, "audiobook_id"),
+        (Bookmark.audiobook_id, audiobook_id, "ebook_id"),
+    ):
+        if dying_id is None:
+            continue
+        rows = (await db.execute(
+            select(Bookmark)
+            .options(selectinload(Bookmark.hints))
+            .where(Bookmark.book_pair_id.is_(None), id_col == dying_id)
+        )).scalars().all()
+        for row in rows:
+            if getattr(row, other_col) is not None:
+                setattr(row, id_col.key, None)
+            else:
+                await db.delete(row)
+    await db.flush()
 
 
 def to_response_dict(bookmark: Bookmark, ref: ScopeRef) -> dict:

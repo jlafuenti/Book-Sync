@@ -214,6 +214,46 @@ class TestConversionRealignsThePair:
         )).scalar_one()
         assert sm.version == 1, "a failed rebuild leaves the old map in place"
 
+    async def test_cleanup_without_replacement_keeps_the_audiobook_position(
+        self, db, tmp_path, make_client, make_user, auth_header
+    ):
+        """Force-deleting an unsupported ebook dissolves its pairs with no EPUB
+        replacement (`_relink_or_cleanup_pairs(eb_id, None, db)`). The pair dies,
+        but each user's position must be demoted onto the surviving audiobook —
+        not cascaded away with the pair (issue #155)."""
+        from models.bookmark import Bookmark
+        from routers import library
+
+        pair_id, ebook_id = await _mobi_pair(
+            db, tmp_path, with_transcript=False, with_map=False
+        )
+        pair = await db.get(BookPair, pair_id)
+        audiobook_id = pair.audiobook_id
+
+        reader = await make_user(username="reader")
+        db.add(Bookmark(
+            user_id=reader.id, book_pair_id=pair_id,
+            epub_chapter=2, epub_progress_percent=33.0, audio_position_ms=90000,
+        ))
+        await db.commit()
+
+        admin = await make_user(username="admin", role="admin")
+        async with make_client(library.router) as c:
+            r = await c.delete(
+                f"/api/library/unsupported/{ebook_id}/force",
+                headers=auth_header(admin),
+            )
+        assert r.status_code == 200, r.text
+
+        db.expire_all()
+        row = (await db.execute(
+            select(Bookmark).where(Bookmark.user_id == reader.id)
+        )).scalar_one()
+        assert row.book_pair_id is None
+        assert row.ebook_id is None
+        assert row.audiobook_id == audiobook_id
+        assert row.audio_position_ms == 90000
+
     async def test_convert_all_reports_realign_failures_without_aborting(
         self, db, tmp_path, monkeypatch, make_client, make_user, auth_header
     ):
