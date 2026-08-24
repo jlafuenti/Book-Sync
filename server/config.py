@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # Auto-transcribe
     auto_transcribe_enabled: bool = Field(default=False, alias="AUTO_TRANSCRIBE_ENABLED")
 
+    # Upload size caps (issue #151). The fronting proxy (Caddyfile.example) enforces the
+    # transport-level cap; these are the in-app backstop applied while streaming to disk.
+    max_upload_bytes: int = Field(default=4 * 1024**3, alias="MAX_UPLOAD_BYTES")
+    max_cover_bytes: int = Field(default=16 * 1024**2, alias="MAX_COVER_BYTES")
+
     # File Paths
     ebook_dir: str = Field(default="/data/ebooks", alias="EBOOK_DIR")
     audiobook_dir: str = Field(default="/data/audiobooks", alias="AUDIOBOOK_DIR")
