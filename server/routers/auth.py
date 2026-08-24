@@ -163,8 +163,14 @@ def get_client_ip(request: Request) -> str:
     reverse proxy, uvicorn's ProxyHeadersMiddleware already rewrites
     ``scope["client"]`` from that header, but only when the socket peer is a
     trusted proxy (``FORWARDED_ALLOW_IPS``). See issue #156.
+
+    Fall back to "unknown" when there is no peer or its host is empty:
+    ProxyHeadersMiddleware sets the client to ``(None, 0)`` when *every* hop
+    in X-Forwarded-For is trusted (real docker NAT topologies, where the
+    proxy only ever sees the bridge gateway IP) — without the fallback the
+    audit row stored NULL.
     """
-    return request.client.host if request.client else "unknown"
+    return request.client.host if request.client and request.client.host else "unknown"
 
 
 # ---------------------------------------------------------------------------
