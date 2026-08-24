@@ -85,6 +85,36 @@ export function planRestore(position, { spineCount, deviceId, hintKind }) {
 }
 
 /**
+ * Whether the reader is still sitting at the very start of the book.
+ *
+ * Missing values count as the start (fail safe): a write we cannot prove is
+ * off page one must be treated as page one, because writing chapter 0 over a
+ * real anchor is the exact data-loss bug the write gate exists to prevent.
+ */
+export function isStartOfBook({ spineIndex, chapterProgression }) {
+    return (spineIndex ?? 0) <= 0 && (chapterProgression ?? 0) <= 0
+}
+
+/**
+ * The contract's navigation clause (§ The write gate) — web mirror of
+ * Android's `PositionSavePolicy.verdictForSave`.
+ *
+ * A deliberate user navigation makes the current position the truth, so an
+ * unresolved restore stops blocking saves once the user turns a page — EXCEPT
+ * while the view still sits at the start of the book (the start-of-book
+ * backstop): no navigation signal is trustworthy enough to let a start-of-book
+ * write replace a real anchor, and a genuine forward page-turn moves off the
+ * start on its own.
+ *
+ * `userNavigated` must reflect actual user input (next/prev, keyboard, TOC) —
+ * never `relocated` emissions from the restore or the text-nav pass.
+ */
+export function navigationEstablishesPosition({ userNavigated, spineIndex, chapterProgression }) {
+    if (!userNavigated) return false
+    return !isStartOfBook({ spineIndex, chapterProgression })
+}
+
+/**
  * Whether `position` records a place in the book at all.
  *
  * Deliberately separate from executing the ladder: it distinguishes "we don't

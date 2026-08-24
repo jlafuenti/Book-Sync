@@ -55,19 +55,27 @@ const player = vi.hoisted(() => ({
 vi.mock('../contexts/AudioPlayerContext', () => ({
     useAudioPlayer: () => player,
 }))
+// The reader exposes its pending-save flush through a ref the page hands it
+// (issue #158) — the mock installs a spy there so call ordering against
+// player.play can be asserted.
+const readerFlushSpy = vi.hoisted(() => vi.fn())
+
 vi.mock('../components/EbookReader', () => ({
-    default: (props) => (
-        <div
-            data-testid="reader"
-            data-ebook-id={String(props.ebookId)}
-            data-chapter={String(props.initialChapter)}
-            data-preview={String(props.initialTextPreview)}
-        >
-            {props.onSwitchToAudio && (
-                <button onClick={props.onSwitchToAudio}>to-audio</button>
-            )}
-        </div>
-    ),
+    default: (props) => {
+        if (props.saveFlushRef) props.saveFlushRef.current = readerFlushSpy
+        return (
+            <div
+                data-testid="reader"
+                data-ebook-id={String(props.ebookId)}
+                data-chapter={String(props.initialChapter)}
+                data-preview={String(props.initialTextPreview)}
+            >
+                {props.onSwitchToAudio && (
+                    <button onClick={props.onSwitchToAudio}>to-audio</button>
+                )}
+            </div>
+        )
+    },
 }))
 vi.mock('../components/AudioPlayer', () => ({
     AudioPlayerView: (props) => (
@@ -94,6 +102,7 @@ beforeEach(() => {
     resetPositionMock.mockReset().mockResolvedValue({ status: 'ok' })
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
+    readerFlushSpy.mockReset()
     player.play.mockReset()
     player.pause.mockReset()
     player.currentAudiobook = null
@@ -306,6 +315,22 @@ describe('HomePage reader/player handoff', () => {
         await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 20))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
             20, expect.anything(), 9000, 10))
+    })
+
+    it('issues the reader flush before starting the audiobook (issue #158)', async () => {
+        // Without this ordering the reader's pending page-turn save is dropped
+        // and the player's first write stamps source=audiobook, so the pair
+        // reopens in the audiobook at a stale text position.
+        setupPair()
+        getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalled())
+        expect(readerFlushSpy).toHaveBeenCalled()
+        expect(Math.min(...readerFlushSpy.mock.invocationCallOrder))
+            .toBeLessThan(Math.min(...player.play.mock.invocationCallOrder))
     })
 
     it('starts at 0 rather than throwing when both reads fail offline', async () => {

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { planRestore, hasAnchor } from './positionLadder'
+import {
+    planRestore, hasAnchor, isStartOfBook, navigationEstablishesPosition,
+} from './positionLadder'
 
 /**
  * Cross-platform parity: this suite and the Python one
@@ -70,5 +72,44 @@ describe('step payloads', () => {
         expect(byKind.text.seedChapter).toBe(12)
         expect(byKind.chapter.chapter).toBe(12)
         expect(byKind.percent.percent).toBe(46.81)
+    })
+})
+
+describe('the navigation clause (issue #159)', () => {
+    // Web mirror of Android's PositionSavePolicy: a deliberate user
+    // navigation makes the current position the truth and reopens the write
+    // gate after an unresolved restore — EXCEPT while still sitting at the
+    // start of the book (the start-of-book backstop): no navigation signal is
+    // trustworthy enough to let a start-of-book write replace a real anchor,
+    // and a genuine forward page-turn moves off the start anyway.
+
+    it('a user navigation off the start establishes the position', () => {
+        expect(navigationEstablishesPosition({
+            userNavigated: true, spineIndex: 0, chapterProgression: 0.25,
+        })).toBe(true)
+        expect(navigationEstablishesPosition({
+            userNavigated: true, spineIndex: 3, chapterProgression: 0,
+        })).toBe(true)
+    })
+
+    it('never establishes while still at the start of the book', () => {
+        expect(navigationEstablishesPosition({
+            userNavigated: true, spineIndex: 0, chapterProgression: 0,
+        })).toBe(false)
+    })
+
+    it('never establishes without a user navigation, wherever the view sits', () => {
+        // The restore/text-nav pass relocates the view too; those relocations
+        // are the reader's own guesses, not the user's choice.
+        expect(navigationEstablishesPosition({
+            userNavigated: false, spineIndex: 7, chapterProgression: 0.5,
+        })).toBe(false)
+    })
+
+    it('isStartOfBook treats missing values as the start (fail safe)', () => {
+        expect(isStartOfBook({ spineIndex: null, chapterProgression: null })).toBe(true)
+        expect(isStartOfBook({ spineIndex: 0, chapterProgression: 0 })).toBe(true)
+        expect(isStartOfBook({ spineIndex: 0, chapterProgression: 0.1 })).toBe(false)
+        expect(isStartOfBook({ spineIndex: 1, chapterProgression: 0 })).toBe(false)
     })
 })
