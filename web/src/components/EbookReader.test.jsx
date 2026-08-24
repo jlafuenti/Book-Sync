@@ -558,7 +558,9 @@ describe('EbookReader — pending save flushes on unmount (issue #158)', () => {
     it('flushes the last relocated position exactly once on unmount, before the 2s debounce', async () => {
         const { handlers, unmount } = await setupReader(LONG_TEXT)
 
-        // A second page turn: the flush must carry the LATEST position.
+        // A second, USER page turn: the flush must carry the LATEST position,
+        // and a user-navigated session claims the format.
+        fireEvent.click(screen.getByTitle('Next page'))
         act(() => {
             handlers.relocated({
                 start: { cfi: 'cfi-test-2', percentage: 0.75, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
@@ -631,6 +633,9 @@ describe('EbookReader — page-lifecycle keepalive (issue #158)', () => {
 
     it('pagehide sends the ebook anchor via keepalive — once, until the position moves', async () => {
         const { handlers } = await setupReader(LONG_TEXT)
+        // The user actually read (turned a page), so this session claims the
+        // format on its writes.
+        fireEvent.click(screen.getByTitle('Next page'))
 
         act(() => { window.dispatchEvent(new Event('pagehide')) })
 
@@ -659,7 +664,7 @@ describe('EbookReader — page-lifecycle keepalive (issue #158)', () => {
         expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(2)
     })
 
-    it('visibilitychange → hidden sends the same keepalive, idempotently', async () => {
+    it('visibilitychange → hidden sends the same keepalive, idempotently — and a settle-only session omits source', async () => {
         await setupReader(LONG_TEXT)
         Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
         try {
@@ -667,10 +672,13 @@ describe('EbookReader — page-lifecycle keepalive (issue #158)', () => {
 
             expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
             expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 42, expect.objectContaining({
-                source: 'ebook',
                 epub_chapter: 0,
                 hint: { kind: 'epubjs_cfi', value: 'cfi-test' },
             }))
+            // No user navigation happened in this session — an automatic
+            // write must not claim the format (schemas.PositionUpdate:
+            // only a foreground, user-initiated write claims `source`).
+            expect(sendPositionKeepaliveMock.mock.calls[0][2].source).toBeUndefined()
 
             act(() => { document.dispatchEvent(new Event('visibilitychange')) })
             expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
@@ -734,23 +742,57 @@ describe('EbookReader — unresolved restore is told and recoverable (issue #159
         expect(updatePositionMock).not.toHaveBeenCalled()
     })
 
-    it('resolves an audio-only record through audio→epub and allows saving after landing', async () => {
-        // The most common unresolved trigger: a pair only ever LISTENED to.
-        // The record holds audio_position_ms and nothing else; the web used to
-        // open at page one AND block saving for the whole session.
+})
+
+// A fake book whose spine sections can be text-searched WITHOUT rendering,
+// mirroring epub.js Section.load(). Lets the text-nav pass search the whole
+// reading order the way Android's findSpineIndexForText does.
+function makeSearchableFakeBook(bodyText, chapterTexts) {
+    const { book, rendition, handlers, doc } = makeFakeBook(bodyText)
+    book.load = vi.fn()
+    book.spine.items = chapterTexts.map((text, i) => ({
+        href: `ch${i}.xhtml`,
+        load: vi.fn(async () => ({ textContent: text })),
+        unload: vi.fn(),
+    }))
+    return { book, rendition, handlers, doc }
+}
+
+describe('EbookReader — an audio-derived restore is only a landing when the text confirms it (prod regression)', () => {
+    // Live failure (pair 260, "The Aeronaut's Windlass"): the audio rung
+    // resolved 600000ms → map chapter 5 + a real preview, the reader
+    // displayed spine 5, the text-nav pass searched only ±2 chapters, missed
+    // the preview (the map's chapter axis was offset from the spine by the
+    // front matter), gave up on the Copyright page — and because the derived
+    // chapter display had already "landed", the settle relocations then WROTE
+    // chapter 3 / source=ebook / audio_position_ms 1530 over the user's
+    // 10-minute listening position. No banner ever showed.
+
+    function audioOnlyRecord() {
         getPositionMock.mockResolvedValue({
             anchor_revision: 0,
-            audio_position_ms: 42000,
+            source: 'audiobook',
+            audio_position_ms: 600000,
             hints: [],
         })
         audioToEpubMock.mockResolvedValue({
-            epub_chapter: 0,
-            epub_sentence_index: 3,
-            preview: 'quick brown fox jumps over the lazy dog',
-            sync_map_version: 2,
+            epub_chapter: 1,
+            epub_sentence_index: 69,
+            preview: 'gwendolyn felt herself smile slightly',
+            sync_map_version: 1,
         })
+    }
+
+    it('failed text confirmation ⇒ unresolved: banner shown, gate closed, nothing auto-written', async () => {
+        audioOnlyRecord()
         matchTextToAudioMock.mockResolvedValue(null)
-        const { book, rendition, handlers } = makeFakeBook(LONG_TEXT)
+        // Preview exists nowhere in this book (stale map / unsearchable
+        // sections): the derived chapter display alone must NOT count as a
+        // landing.
+        const { book, rendition, handlers } = makeSearchableFakeBook(
+            'completely different front matter content here',
+            ['roc published by the penguin group', 'still not the preview text at all'],
+        )
         ePubMock.mockReturnValue(book)
         render(
             <EbookReader
@@ -759,24 +801,140 @@ describe('EbookReader — unresolved restore is told and recoverable (issue #159
                 bookTitle="Test Book" onClose={vi.fn()}
             />
         )
-
-        // The resolved chapter seeds the display...
         await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml'))
-        expect(audioToEpubMock).toHaveBeenCalledWith(42, 42000)
+        expect(audioToEpubMock).toHaveBeenCalledWith(42, 600000)
 
         act(() => {
             handlers.relocated({
-                start: { cfi: 'cfi-audio', percentage: 0.1, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+                start: { cfi: 'cfi-settle', percentage: 0.001, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
             })
         })
-        // ...and the text-nav pass (seeded from the resolved preview) must
-        // finish before a save can go through.
-        await act(async () => { await new Promise(r => setTimeout(r, 300)) })
 
+        // The text-nav pass must conclude (and fail) → banner.
+        expect(await screen.findByText(/Couldn't find your saved place/)).toBeInTheDocument()
+
+        // The settle relocations must not write — not via the debounce...
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+        expect(updatePositionMock).not.toHaveBeenCalled()
+
+        // ...and not via a manual save either (gate closed).
+        fireEvent.click(screen.getByTitle('Save position'))
+        await new Promise(r => setTimeout(r, 50))
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('finds the preview anywhere in the spine (Android parity) and confirms the landing', async () => {
+        audioOnlyRecord()
+        matchTextToAudioMock.mockResolvedValue(null)
+        // The preview lives at spine 4 — outside the old ±2 window around the
+        // derived seed (map chapter 1), which is exactly what the live repro
+        // hit. The whole-spine outward search must still find it.
+        const texts = [
+            'cover page', 'title page', 'roc published by the penguin group',
+            'table of contents listing', 'and then gwendolyn felt herself smile slightly at the thought',
+            'chapter two text', 'chapter three text',
+        ]
+        const { book, rendition, handlers } = makeSearchableFakeBook(LONG_TEXT, texts)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        // Derived chapter seeds the initial display...
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml'))
+
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-seed', percentage: 0.01, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        // ...and the text-nav pass finds the preview at spine 4 and navigates there.
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch4.xhtml'))
+        await act(async () => { await new Promise(r => setTimeout(r, 500)) })
+
+        // Confirmed landing: no banner, and saving is allowed.
         expect(screen.queryByText(/Couldn't find your saved place/)).not.toBeInTheDocument()
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-confirmed', percentage: 0.3, displayed: { page: 1, total: 1 }, href: 'ch4.xhtml' },
+            })
+        })
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+    })
+
+    it('a save after an unconfirmed landing never carries matcher-derived fields', async () => {
+        // The worst live outcome: the matcher "upgraded" wrong copyright text
+        // to audio_position_ms 1530 and overwrote 600000. After a failed or
+        // unconfirmed landing, saves stick to chapter + preview — the stored
+        // audio anchor is left alone (omission means "leave alone").
+        const { handlers } = await setupUnresolvedReader()
+        matchTextToAudioMock.mockResolvedValue({
+            epub_chapter: 3, epub_sentence_index: 0,
+            audio_position_ms: 1530, sync_map_version: 1,
+        })
+
+        // The user turns a page — the navigation clause reopens the gate.
+        fireEvent.click(screen.getByTitle('Next page'))
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-2', percentage: 0.02, displayed: { page: 2, total: 5 }, href: 'ch1.xhtml' },
+            })
+        })
 
         fireEvent.click(screen.getByTitle('Save position'))
         await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+
+        expect(matchTextToAudioMock).not.toHaveBeenCalled()
+        const body = updatePositionMock.mock.calls[0][2]
+        expect(body.audio_position_ms).toBeUndefined()
+        expect(body.epub_sentence_index).toBeUndefined()
+        expect(body.sync_map_version).toBeUndefined()
+        // The page turn is user consumption — this write may claim the format.
+        expect(body.source).toBe('ebook')
+    })
+
+    it('an automatic settle save omits source; a manual save claims it', async () => {
+        // The live repro flipped a listen-only pair to source=ebook from a
+        // settle relocation the user never asked for. schemas.PositionUpdate:
+        // only a foreground, user-initiated write claims `source`.
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+
+        // The debounced auto-save from the (non-user) relocated event.
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+        expect(updatePositionMock.mock.calls[0][2].source).toBeUndefined()
+
+        // The manual save is an explicit user command — it claims ebook.
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(2))
+        expect(updatePositionMock.mock.calls[1][2].source).toBe('ebook')
+    })
+
+    it('locations-refinement drift at the same cfi does not produce a second auto-write', async () => {
+        // Two auto-writes fired 8s apart in production with zero movement —
+        // percent 0.0 → 0.1 from book.locations.generate() re-reporting the
+        // same spot. Percent drift at an unchanged cfi is not movement.
+        const { handlers } = await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+
+        // Same cfi, refined percent (locations generation settled).
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-test', percentage: 0.501, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+        await act(async () => { await new Promise(r => setTimeout(r, 2300)) })
+
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
     })
 })
 
