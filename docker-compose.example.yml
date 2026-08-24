@@ -51,6 +51,10 @@ services:
     # Without this, a host reboot leaves `server` down for good and `web` nginx
     # crash-looping on a missing upstream (issue #105). Same for `db` below.
     restart: unless-stopped
+    # Cap the blast radius of oversized request bodies (issue #151): 4g fits the
+    # 4 GiB MAX_UPLOAD_BYTES ceiling plus the app's working set.
+    mem_limit: 4g
+    pids_limit: 512
     # /api/health is a readiness probe (503 while the DB is unreachable), so
     # Docker sees a broken backend instead of a false "up" (issue #47).
     healthcheck:
