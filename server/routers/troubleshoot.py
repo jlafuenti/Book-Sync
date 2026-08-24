@@ -33,6 +33,7 @@ from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from services import chapter_repair, library_verify
+from services.position_service import demote_pair_positions, release_standalone_positions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/troubleshoot", tags=["troubleshoot"])
@@ -318,13 +319,22 @@ async def _delete_item_core(db: AsyncSession, item_type: str, item_id: int, dele
     pair_col = BookPair.ebook_id if item_type == "ebook" else BookPair.audiobook_id
     pairs = (await db.execute(select(BookPair).where(pair_col == item_id))).scalars().all()
     for pair in pairs:
+        # Sibling of library.delete_ebook/_audiobook: demote each user's
+        # pair-scoped position onto the surviving medium before the pair
+        # cascade takes it (issue #155).
+        await demote_pair_positions(
+            db, pair.id,
+            keep_ebook=item_type != "ebook",
+            keep_audiobook=item_type != "audiobook",
+        )
         await db.execute(sa_delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-        await db.execute(sa_delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
         await db.execute(sa_delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
     if item_type == "ebook":
+        await release_standalone_positions(db, ebook_id=item_id)
         await db.execute(sa_delete(UserProgress).where(UserProgress.ebook_id == item_id))
     else:
+        await release_standalone_positions(db, audiobook_id=item_id)
         await db.execute(sa_delete(UserProgress).where(UserProgress.audiobook_id == item_id))
 
     await db.execute(sa_delete(LibraryCheckResult).where(

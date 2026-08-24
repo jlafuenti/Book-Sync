@@ -51,6 +51,7 @@ from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 from services.audio_duration import probe_duration_seconds
+from services.position_service import demote_pair_positions, release_standalone_positions
 from services import multi_file_audiobooks
 from utils import resolve_cover_url, safe_join, utcnow
 
@@ -2050,8 +2051,11 @@ async def delete_pair(
             ab_excluded.append(ebook.file_hash)
             audiobook.auto_pair_excluded_hashes = ab_excluded
 
+    # Unpairing must not destroy anyone's reading position (issue #155): every
+    # user's pair-scoped bookmark is demoted to the standalone media scopes
+    # (and `user_progress` unlinked, not deleted) before the pair row goes.
+    await demote_pair_positions(db, pair_id)
     await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair_id))
-    await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair_id))
     await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair_id))
     await db.delete(pair)
 
@@ -2953,18 +2957,23 @@ async def delete_ebook(
 
     file_path = ebook.file_path
 
-    # Remove associated transcription queue items and user progress for any pairs this ebook is in
+    # Remove associated transcription queue items for any pairs this ebook is
+    # in — but demote each user's pair-scoped position onto the surviving
+    # audiobook first (issue #155): the pair cascade must not take the
+    # canonical bookmark rows with it.
     pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == ebook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
+        await demote_pair_positions(db, pair.id, keep_ebook=False)
         await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
         await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
-    # Remove any user progress referencing this ebook directly
+    # Standalone bookmark rows must let go of the dying ebook id (keeping any
+    # audiobook side they carry); then remove progress referencing it directly.
+    await release_standalone_positions(db, ebook_id=ebook_id)
     await db.execute(delete(UserProgress).where(UserProgress.ebook_id == ebook_id))
 
-    # Delete the ebook (cascades to BookPair → SyncMap, Bookmarks)
+    # Delete the ebook (cascades to BookPair → SyncMap)
     await db.delete(ebook)
     await db.commit()
 
@@ -2992,18 +3001,22 @@ async def delete_audiobook(
 
     file_path = audiobook.file_path
 
-    # Remove associated transcription queue items and user progress for any pairs this audiobook is in
+    # Remove associated transcription queue items for any pairs this audiobook
+    # is in — but demote each user's pair-scoped position onto the surviving
+    # ebook first (issue #155).
     pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == audiobook_id))
     pairs = pairs_result.scalars().all()
     for pair in pairs:
+        await demote_pair_positions(db, pair.id, keep_audiobook=False)
         await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-        await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
         await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
-    # Remove any user progress referencing this audiobook directly
+    # Standalone bookmark rows must let go of the dying audiobook id (keeping
+    # any ebook side they carry); then remove progress referencing it directly.
+    await release_standalone_positions(db, audiobook_id=audiobook_id)
     await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == audiobook_id))
 
-    # Delete the audiobook (cascades to BookPair → SyncMap, Bookmarks)
+    # Delete the audiobook (cascades to BookPair → SyncMap)
     await db.delete(audiobook)
     await db.commit()
 
@@ -3086,9 +3099,12 @@ async def cleanup_orphans(
         if ebook:
             pairs_result = await db.execute(select(BookPair).where(BookPair.ebook_id == eid))
             for pair in pairs_result.scalars().all():
+                # Same rule as delete_ebook: demote positions, don't cascade
+                # them away with the pair (issue #155).
+                await demote_pair_positions(db, pair.id, keep_ebook=False)
                 await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
                 await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await release_standalone_positions(db, ebook_id=eid)
             await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eid))
             await db.delete(ebook)
             deleted_ebooks += 1
@@ -3099,9 +3115,10 @@ async def cleanup_orphans(
         if audiobook:
             pairs_result = await db.execute(select(BookPair).where(BookPair.audiobook_id == aid))
             for pair in pairs_result.scalars().all():
+                await demote_pair_positions(db, pair.id, keep_audiobook=False)
                 await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-                await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
                 await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
+            await release_standalone_positions(db, audiobook_id=aid)
             await db.execute(delete(UserProgress).where(UserProgress.audiobook_id == aid))
             await db.delete(audiobook)
             deleted_audiobooks += 1
@@ -3413,10 +3430,15 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
             db.add(pair)
             relinked.append(pair.id)
         else:
+            # No replacement EPUB: the pair dies, but each user's position is
+            # demoted onto the surviving audiobook first (issue #155).
+            await demote_pair_positions(db, pair.id, keep_ebook=False)
             await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-            await db.execute(delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
             await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
             await db.delete(pair)
+    # The source ebook row is deleted by every caller; standalone bookmark rows
+    # must let go of its id (keeping any audiobook side they carry).
+    await release_standalone_positions(db, ebook_id=eb_id)
     await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
     return relinked
 
