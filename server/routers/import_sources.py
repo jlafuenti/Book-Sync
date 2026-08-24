@@ -16,7 +16,6 @@ Endpoints:
 
 import json
 import logging
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -26,12 +25,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database import get_db
 from models.import_source import ImportSource, ImportJob
 from models.user import User
 from routers.auth import get_admin_user
 from services import import_scheduler
 from services.import_sources import get_source, list_sources
+from services.uploads import stream_upload_to_file
 from services.import_sources.acsm import (
     process_file as acsm_process_file,
     is_adobe_id_authorized,
@@ -306,9 +307,15 @@ async def acsm_upload(
     if suffix not in (".acsm", ".epub"):
         raise HTTPException(400, "only .acsm and .epub are accepted")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = Path(tmp.name)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp_path = Path(tmp.name)
+    try:
+        with tmp:
+            await stream_upload_to_file(file, tmp, settings.max_upload_bytes)
+    except BaseException:
+        # The finally below only covers the post-write path; clean up here too.
+        tmp_path.unlink(missing_ok=True)
+        raise
 
     try:
         result = await acsm_process_file(db, tmp_path, original_filename=file.filename)
