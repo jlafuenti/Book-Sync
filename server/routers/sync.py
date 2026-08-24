@@ -6,7 +6,7 @@ The sync engine automatically converts between ebook and audio positions.
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, delete, or_
@@ -20,7 +20,7 @@ from models.bookmark import Bookmark, BookmarkLog
 from models.sync_map import SyncMap
 from models.progress import UserProgress, ProgressType
 from schemas import (
-    BookmarkLogResponse, ProgressResponse,
+    AudioToEpubResponse, BookmarkLogResponse, ProgressResponse,
     PositionScope, PositionUpdate, PositionResponse,
     TextMatchRequest, TextMatchResponse
 )
@@ -255,6 +255,7 @@ from services.sync_matcher import (  # noqa: E402
     match_text_to_sync_points as _match_text_to_sync_points,
     normalize_for_search as _normalize_for_search,
 )
+from services.sync_engine import audio_to_epub as _audio_to_epub  # noqa: E402
 
 
 
@@ -290,6 +291,49 @@ async def match_text_to_audio(
         epub_chapter=matched_point.epub_chapter,
         epub_sentence_index=matched_point.epub_sentence_index,
         preview=matched_point.epub_text_preview,
+        sync_map_version=sync_map.version,
+    )
+
+
+@router.get("/audio-to-epub/{pair_id}", response_model=AudioToEpubResponse)
+async def audio_position_to_epub(
+    pair_id: int,
+    audio_ms: int = Query(..., ge=0),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Resolve an audio position to its EPUB coordinates through the sync map.
+
+    The audio rung of the restore ladder (issue #159): a pair only ever
+    *listened* to holds `audio_position_ms` and no ebook anchor. Android
+    executes this rung against its cached sync points; the web has no local
+    map, so it asks here and seeds its chapter display and text-nav pass from
+    the answer. Pure translation via `services.sync_engine.audio_to_epub` —
+    nothing is written.
+    """
+    result = await db.execute(
+        select(SyncMap)
+        .options(selectinload(SyncMap.sync_points))
+        .where(SyncMap.book_pair_id == pair_id)
+    )
+    sync_map = result.scalar_one_or_none()
+
+    if not sync_map or not sync_map.sync_points:
+        raise HTTPException(status_code=404, detail="No sync map found for this pair")
+
+    # audio_to_epub walks the list in audio order and stops early — hand it
+    # the points sorted by audio_start_ms, not by (chapter, sentence).
+    points = sorted(sync_map.sync_points, key=lambda p: p.audio_start_ms)
+    chapter, sentence_index = _audio_to_epub(points, audio_ms)
+    preview = next(
+        (p.epub_text_preview for p in points
+         if p.epub_chapter == chapter and p.epub_sentence_index == sentence_index),
+        None,
+    )
+    return AudioToEpubResponse(
+        epub_chapter=chapter,
+        epub_sentence_index=sentence_index,
+        preview=preview,
         sync_map_version=sync_map.version,
     )
 

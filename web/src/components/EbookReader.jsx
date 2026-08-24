@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
-import { fetchEbookBlob, getPosition, updatePosition, matchTextToAudio, getDeviceId, getDeviceName } from '../api'
-import { planRestore } from '../lib/positionLadder'
+import {
+    fetchEbookBlob, getPosition, updatePosition, matchTextToAudio,
+    sendPositionKeepalive, audioToEpub, getDeviceId, getDeviceName,
+} from '../api'
+import { planRestore, hasAnchor, navigationEstablishesPosition } from '../lib/positionLadder'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
@@ -84,7 +87,7 @@ export async function executeRestore(book, rendition, steps) {
     return false
 }
 
-function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio }) {
+function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio, saveFlushRef }) {
     const viewerRef = useRef(null)
     const bookRef = useRef(null)
     const renditionRef = useRef(null)
@@ -110,7 +113,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // [ebookId]-only load effect and must always read the current palette.
     const paletteRef = useRef(palette)
     paletteRef.current = palette
-    const [savedIndicator, setSavedIndicator] = useState(false)
+    // Save-button feedback: 'saved' shows the ✓, 'error' shows "Not saved".
+    // The ✓ only ever means a write actually landed (issue #159) — it used to
+    // flash success even while the gate silently swallowed every save.
+    const [saveState, setSaveState] = useState(null)
     // Stale-conflict affordance (issue #54): set when the progress write in
     // doSave() comes back `rejected: true` with a newer position from a
     // genuinely different device. { cfi, deviceName }. Only cleared via the
@@ -137,6 +143,40 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // True when the record held a position we could not resolve. Distinct from
     // "unread": saving stays blocked and the reader is told.
     const [unresolvedPosition, setUnresolvedPosition] = useState(false)
+    // Latest relocated position, readable from cleanup/lifecycle handlers that
+    // would otherwise close over stale state (issue #158).
+    const latestPositionRef = useRef({ cfi: null, percent: 0, spineIndex: initialChapter ?? 0 })
+    // CFI of the last position write actually issued (debounced save, manual
+    // save, unmount flush or lifecycle keepalive). Flushes skip when the
+    // position hasn't moved since — visibilitychange fires on every tab
+    // switch, and a duplicate write buys nothing.
+    const lastIssuedSaveRef = useRef(null)
+    // The user deliberately navigated (next/prev, keyboard, TOC) since open.
+    // The contract's navigation clause: that makes the current position the
+    // truth, so it may reopen the write gate after an unresolved restore —
+    // never set from `relocated` events, which the restore and the text-nav
+    // pass also emit (issue #159).
+    const userNavigatedRef = useRef(false)
+
+    // Opens the write gate if it may open, and says whether it is open.
+    // Reads only refs so the mount-time `relocated` handler can call it.
+    const maybeOpenGate = useCallback(() => {
+        if (positionEstablishedRef.current) return true
+        if (navigationEstablishesPosition({
+            userNavigated: userNavigatedRef.current,
+            spineIndex: latestPositionRef.current.spineIndex,
+            chapterProgression: currentChapterProgressionRef.current,
+        })) {
+            positionEstablishedRef.current = true
+            setUnresolvedPosition(false)
+            return true
+        }
+        return false
+    }, [])
+
+    const noteUserNavigation = useCallback(() => {
+        userNavigatedRef.current = true
+    }, [])
 
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
@@ -194,16 +234,22 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     }, [bookTitle])
 
 
+    // Writes the position. Returns true only when a write was actually
+    // adjudicated by the server — false when the gate/text-nav suppressed it
+    // or the request failed — so callers can be honest about what happened
+    // (issue #159: the ✓ used to flash regardless).
     const doSave = useCallback(async (cfi, percent, spineIndex) => {
-        if (!cfi) return
+        if (!cfi) return false
         // Don't save while text nav is hopping between chapters looking for text
-        if (textNavInProgressRef.current) return
+        if (textNavInProgressRef.current) return false
         // Nothing may be written until we know where the reader actually is.
         // A restore that failed and left the book at page one would otherwise
         // persist chapter 0 over a real position set on another device.
-        if (!positionEstablishedRef.current) {
+        // `maybeOpenGate` applies the contract's navigation clause first: a
+        // deliberate user page-turn (off the start of the book) reopens it.
+        if (!maybeOpenGate()) {
             console.warn('[EbookReader] save suppressed: position not established yet')
-            return
+            return false
         }
         const chapter = spineIndex ?? currentSpineIndexRef.current
         const capturedAt = new Date().toISOString()
@@ -243,6 +289,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             }
             const scope = pairId ? 'pair' : 'ebook'
             const result = await updatePosition(scope, pairId || ebookId, position)
+            // The write reached the server and was adjudicated; a later flush
+            // for the same CFI would be a pure duplicate.
+            lastIssuedSaveRef.current = cfi
 
             // A genuinely different device wrote something newer. Surface it;
             // never navigate on the user's behalf.
@@ -259,24 +308,123 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     deviceName: result.device_name || result.device_id,
                 })
             }
+            return true
         } catch (e) {
             console.warn('Failed to save reading progress:', e)
+            return false
         }
-    }, [ebookId, pairId, extractVisibleText])
+    }, [ebookId, pairId, extractVisibleText, maybeOpenGate])
 
 
     // Debounced progress save (auto-save on page turn)
     const saveProgress = useCallback((cfi, percent) => {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = setTimeout(() => doSave(cfi, percent), 2000)
+        saveTimerRef.current = setTimeout(() => {
+            saveTimerRef.current = null
+            doSave(cfi, percent)
+        }, 2000)
     }, [doSave])
 
-    // Manual immediate save
+    // Builds the whole-position payload synchronously from the latest
+    // relocated state. Shared by the unmount flush and the page-lifecycle
+    // keepalive (issue #158), which must not await anything: chapter +
+    // preview is a full position per the contract, so the sync-map matcher
+    // upgrade doSave performs is deliberately skipped here.
+    const buildFlushPayload = useCallback(() => {
+        const { cfi, percent, spineIndex } = latestPositionRef.current
+        if (!cfi) return null
+        const textPreview = extractVisibleText()
+        return {
+            cfi,
+            payload: {
+                source: 'ebook',
+                epub_chapter: spineIndex ?? currentSpineIndexRef.current,
+                epub_text_preview: textPreview || undefined,
+                epub_progress_percent: Math.round(percent * 100) / 100,
+                hint: { kind: 'epubjs_cfi', value: cfi },
+                device_id: getDeviceId(),
+                device_name: getDeviceName(),
+                captured_at: new Date().toISOString(),
+            },
+        }
+    }, [extractVisibleText])
+
+    // Common core of the two flush paths. Clears the debounce timer, applies
+    // the same gate as doSave, and skips when nothing moved since the last
+    // issued write (idempotence). Returns the built payload to send, or null.
+    const takeFlushablePosition = useCallback(() => {
+        if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
+        }
+        if (textNavInProgressRef.current) return null
+        if (!maybeOpenGate()) return null
+        const built = buildFlushPayload()
+        if (!built) return null
+        if (built.cfi === lastIssuedSaveRef.current) return null
+        lastIssuedSaveRef.current = built.cfi
+        return built
+    }, [maybeOpenGate, buildFlushPayload])
+
+    // Issue the pending position write immediately, fire-and-forget. Called
+    // from the unmount cleanup (close, Escape, handoff, route change) — the
+    // debounce timer used to be cancelled there with nothing flushed, so the
+    // last page read was never written (issue #158). Must run while the epub
+    // iframe still exists: extractVisibleText() needs its DOM.
+    const flushPendingSave = useCallback(() => {
+        const built = takeFlushablePosition()
+        if (!built) return
+        updatePosition(pairId ? 'pair' : 'ebook', pairId || ebookId, built.payload)
+            .catch(e => console.warn('[EbookReader] unmount flush failed:', e?.message || e))
+    }, [takeFlushablePosition, pairId, ebookId])
+
+    // Ref mirror so the [ebookId] effect cleanup and the saveFlushRef prop
+    // always call the current flush without re-running effects.
+    const flushRef = useRef(() => {})
+    flushRef.current = flushPendingSave
+
+    // Let the parent force the flush BEFORE it starts the audio player, so
+    // the reader's write is issued before the player's first
+    // `source: 'audiobook'` write (issue #158 — the handoff used to drop the
+    // ebook anchor and reopen the pair in the audiobook at a stale position).
+    useEffect(() => {
+        if (!saveFlushRef) return
+        saveFlushRef.current = () => flushRef.current()
+        return () => { saveFlushRef.current = null }
+    }, [saveFlushRef])
+
+    // Last-guaranteed-event flushes (issue #158): on iOS the PWA is the app —
+    // beforeunload never fires and pagehide is unreliable; visibilitychange →
+    // hidden is the last event that reliably runs. Regular fetch is aborted
+    // during unload, so these go through the keepalive helper.
+    useEffect(() => {
+        const flushViaKeepalive = () => {
+            const built = takeFlushablePosition()
+            if (!built) return
+            sendPositionKeepalive(pairId ? 'pair' : 'ebook', pairId || ebookId, built.payload)
+        }
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') flushViaKeepalive()
+        }
+        window.addEventListener('pagehide', flushViaKeepalive)
+        document.addEventListener('visibilitychange', onVisibilityChange)
+        return () => {
+            window.removeEventListener('pagehide', flushViaKeepalive)
+            document.removeEventListener('visibilitychange', onVisibilityChange)
+        }
+    }, [takeFlushablePosition, pairId, ebookId])
+
+    // Manual immediate save. The ✓ appears only when the write really went
+    // through; otherwise a short "Not saved" — including while the gate is
+    // closed after an unresolved restore (issue #159).
     const saveNow = useCallback(async () => {
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-        await doSave(currentCfi, progressPercent)
-        setSavedIndicator(true)
-        setTimeout(() => setSavedIndicator(false), 1500)
+        if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
+        }
+        const wrote = await doSave(currentCfi, progressPercent)
+        setSaveState(wrote ? 'saved' : 'error')
+        setTimeout(() => setSaveState(null), 1500)
     }, [doSave, currentCfi, progressPercent])
 
     // Initialize epub
@@ -340,7 +488,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 // taken when the *page* loaded meant a position set on another
                 // device in the meantime was never seen.
                 const scope = pairId ? 'pair' : 'ebook'
-                const position = await getPosition(scope, pairId || ebookId).catch(e => {
+                let position = await getPosition(scope, pairId || ebookId).catch(e => {
                     console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
                     // Offline: fall back to the portable anchor the caller
                     // passed in. No CFI hint is threaded through any more —
@@ -357,20 +505,52 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         : null
                 })
                 if (destroyed) return
-                positionRef.current = position
 
-                const steps = planRestore(position, {
+                const ladderContext = {
                     spineCount: book.spine?.items?.length ?? 0,
                     deviceId: getDeviceId(),
                     hintKind: 'epubjs_cfi',
-                })
+                }
+                let steps = planRestore(position, ladderContext)
+
+                // The audio rung (ladder step 5) — a pair only ever LISTENED
+                // to has a record with `audio_position_ms` and no ebook
+                // anchor. Android executes this rung through its cached sync
+                // map; the web has none, so it asks the server
+                // (`audio_to_epub`, issue #159) and re-plans from the
+                // resolved chapter + preview, which then seed the chapter
+                // display and the text-nav pass below. Audio is always
+                // planned last, so it being FIRST means it is the only rung.
+                if (pairId && steps.length > 0 && steps[0].kind === 'audio') {
+                    const resolved = await audioToEpub(pairId, steps[0].audioPositionMs)
+                        .catch(() => null)
+                    if (destroyed) return
+                    if (resolved) {
+                        position = {
+                            ...position,
+                            epub_chapter: resolved.epub_chapter,
+                            epub_text_preview: resolved.preview || position.epub_text_preview,
+                        }
+                        steps = planRestore(position, ladderContext)
+                    }
+                }
+                positionRef.current = position
+
                 const landed = await executeRestore(book, rendition, steps)
 
                 // A position we could not resolve is NOT the same as no
                 // position. Saving stays blocked in that case, so a failed
                 // restore can never overwrite a real position with page one.
-                positionEstablishedRef.current = landed || steps.length === 0
-                if (!destroyed) setUnresolvedPosition(!landed && steps.length > 0)
+                //
+                // An ANCHORED record whose plan came out empty (e.g. a
+                // re-parsed EPUB left `epub_chapter` past this spine, with
+                // nothing else to fall back on) is unresolved too — planning
+                // drops the un-navigable rung, and treating the empty plan as
+                // "unread" was exactly the silent gate-open that let page one
+                // overwrite a real position (issue #159).
+                const unresolved = !landed || (steps.length === 0 && hasAnchor(position))
+                positionEstablishedRef.current = !unresolved
+                if (!destroyed) setUnresolvedPosition(unresolved)
 
                 if (!destroyed) setLoading(false)
 
@@ -396,6 +576,19 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         item.href.endsWith('/' + location.start.href))
                     )
                     if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
+
+                    // Keep the latest position readable from the unmount
+                    // flush and the lifecycle keepalive, which cannot rely on
+                    // state (the cleanup closes over the first render's).
+                    latestPositionRef.current = {
+                        cfi,
+                        percent,
+                        spineIndex: spineIndex >= 0 ? spineIndex : currentSpineIndexRef.current,
+                    }
+                    // A user-initiated relocation may reopen the write gate
+                    // (navigation clause) — do it here, not just at save
+                    // time, so the unresolved banner clears on the page turn.
+                    maybeOpenGate()
 
                     saveProgress(cfi, percent, spineIndex >= 0 ? spineIndex : undefined)
 
@@ -559,6 +752,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
 
         return () => {
             destroyed = true
+            // Flush the pending save BEFORE destroying the book: the payload's
+            // text preview is extracted from the epub iframe DOM, which
+            // destroy() tears down. Fire-and-forget — the write is issued
+            // synchronously, its response nobody needs (issue #158).
+            try { flushRef.current() } catch (e) {}
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
             if (bookRef.current) {
                 try { bookRef.current.destroy() } catch (e) {}
@@ -571,9 +769,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         function handleKey(e) {
             if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
                 e.preventDefault()
+                noteUserNavigation()
                 renditionRef.current?.prev()
             } else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
                 e.preventDefault()
+                noteUserNavigation()
                 renditionRef.current?.next()
             } else if (e.key === 'Escape') {
                 onClose()
@@ -581,7 +781,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         }
         window.addEventListener('keydown', handleKey)
         return () => window.removeEventListener('keydown', handleKey)
-    }, [onClose])
+    }, [onClose, noteUserNavigation])
 
     // Font size changes — inject via <style> tag to avoid blob URL MIME rejection
     useEffect(() => {
@@ -627,6 +827,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     }, [])
 
     const handleTocClick = (href) => {
+        noteUserNavigation()
         renditionRef.current?.display(href)
         setShowToc(false)
     }
@@ -698,12 +899,17 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         <button onClick={() => setFontSize(s => Math.min(MAX_FONT, s + 10))} title="Increase font">A+</button>
                     </div>
                     <span className="ebook-progress-text">{progressPercent.toFixed(1)}%</span>
+                    {saveState === 'error' && (
+                        <span className="ebook-progress-text" style={{ color: 'var(--error)' }}>
+                            Not saved
+                        </span>
+                    )}
                     <button
-                        className={`btn-icon${savedIndicator ? ' saved' : ''}`}
+                        className={`btn-icon${saveState === 'saved' ? ' saved' : ''}`}
                         onClick={saveNow}
                         title="Save position"
                     >
-                        {savedIndicator ? (
+                        {saveState === 'saved' ? (
                             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
                                 <polyline points="20 6 9 17 4 12" />
                             </svg>
@@ -746,6 +952,26 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 </div>
             )}
 
+            {/* Unresolved-restore banner (issue #159): the record holds a
+                position this reader could not resolve. Saving is blocked (so
+                page one can't overwrite a real anchor) until the user turns a
+                page — say so instead of failing silently. Dismiss hides the
+                banner; the gate itself only reopens via the navigation
+                clause. */}
+            {unresolvedPosition && (
+                <div className="alert alert-warning" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1 }}>
+                        Couldn't find your saved place in this book. Turn a page to save from here.
+                    </span>
+                    <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setUnresolvedPosition(false)}
+                    >
+                        Dismiss
+                    </button>
+                </div>
+            )}
+
             {/* Reader area */}
             <div className="ebook-reader-container">
                 {loading && (
@@ -761,7 +987,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                     </div>
                 )}
 
-                <button className="ebook-nav-btn prev" onClick={() => renditionRef.current?.prev()} title="Previous page">
+                <button className="ebook-nav-btn prev" onClick={() => { noteUserNavigation(); renditionRef.current?.prev() }} title="Previous page">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
                         <polyline points="15 18 9 12 15 6" />
                     </svg>
@@ -769,7 +995,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
 
                 <div ref={viewerRef} className="ebook-viewer" />
 
-                <button className="ebook-nav-btn next" onClick={() => renditionRef.current?.next()} title="Next page">
+                <button className="ebook-nav-btn next" onClick={() => { noteUserNavigation(); renditionRef.current?.next() }} title="Next page">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
                         <polyline points="9 18 15 12 9 6" />
                     </svg>

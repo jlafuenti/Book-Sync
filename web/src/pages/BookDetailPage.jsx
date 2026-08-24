@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, getPosition, updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName } from '../api'
 import ReactMarkdown from 'react-markdown'
@@ -61,6 +61,10 @@ function BookDetailPage() {
     const [readerInitialChapter, setReaderInitialChapter] = useState(null)
     const [playerOpen, setPlayerOpen] = useState(false)
     const audioPlayer = useAudioPlayer()
+    // The reader installs its pending-save flush here (issue #158), so the
+    // Listen handoff can issue the ebook write BEFORE the player's first
+    // `source: 'audiobook'` write.
+    const readerSaveFlushRef = useRef(null)
 
     useEffect(() => {
         setLoading(true)
@@ -435,12 +439,18 @@ function BookDetailPage() {
                     pairId={book.pair_id || null}
                     initialChapter={readerInitialChapter}
                     bookTitle={book.title}
+                    saveFlushRef={readerSaveFlushRef}
                     onClose={() => {
                         setReaderOpen(false)
                         setReaderInitialChapter(null)
                         getProgress(type, id).then(setProgress).catch(() => {})
                     }}
                     onSwitchToAudio={book.pair_id && book.paired_with ? async () => {
+                        // Issue the reader's pending position write first —
+                        // otherwise the handoff drops the last page turn and
+                        // the player's `source: 'audiobook'` write reopens
+                        // the pair at a stale text position (issue #158).
+                        readerSaveFlushRef.current?.()
                         const pos = await getPosition('pair', book.pair_id).catch(() => null)
                         let audioPositionMs = pos?.audio_position_ms || 0
                         if (!audioPositionMs) {

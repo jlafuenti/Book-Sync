@@ -604,6 +604,38 @@ describe('updatePosition()', () => {
     })
 })
 
+describe('audioToEpub()', () => {
+    // The audio rung of the restore ladder, executed server-side (issue
+    // #159). A missing sync map (404) means "this rung cannot land", never an
+    // error — the reader falls through to its unresolved handling.
+
+    it('GETs the pair endpoint with a floored, clamped audio_ms and returns the coordinates', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ epub_chapter: 4, epub_sentence_index: 2, preview: 'p', sync_map_version: 3 }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { audioToEpub } = await import('./api')
+        const result = await audioToEpub(42, 42000.7)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/sync/audio-to-epub/42?audio_ms=42000',
+            expect.anything(),
+        )
+        expect(result).toEqual({ epub_chapter: 4, epub_sentence_index: 2, preview: 'p', sync_map_version: 3 })
+    })
+
+    it('returns null when the pair has no sync map (404)', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) }))
+
+        const { audioToEpub } = await import('./api')
+        expect(await audioToEpub(42, 1000)).toBe(null)
+    })
+})
+
 describe('sendPositionKeepalive()', () => {
     // Fire-and-forget save used on tab close; must never throw into the
     // caller and must omit nothing the canonical PositionUpdate schema needs.

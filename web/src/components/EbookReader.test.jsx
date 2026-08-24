@@ -4,7 +4,7 @@ import EbookReader, { executeRestore } from './EbookReader'
 
 const {
     fetchEbookBlobMock, getPositionMock, updatePositionMock, matchTextToAudioMock,
-    getDeviceIdMock, getDeviceNameMock, ePubMock,
+    getDeviceIdMock, getDeviceNameMock, ePubMock, sendPositionKeepaliveMock, audioToEpubMock,
 } = vi.hoisted(() => ({
     fetchEbookBlobMock: vi.fn(),
     getPositionMock: vi.fn(),
@@ -13,6 +13,8 @@ const {
     getDeviceIdMock: vi.fn(() => 'device-abc'),
     getDeviceNameMock: vi.fn(() => 'Web · Chrome'),
     ePubMock: vi.fn(),
+    sendPositionKeepaliveMock: vi.fn(),
+    audioToEpubMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -22,6 +24,8 @@ vi.mock('../api', () => ({
     matchTextToAudio: matchTextToAudioMock,
     getDeviceId: getDeviceIdMock,
     getDeviceName: getDeviceNameMock,
+    sendPositionKeepalive: sendPositionKeepaliveMock,
+    audioToEpub: audioToEpubMock,
 }))
 
 // Lean fake for epubjs -- a real epub.js needs canvas/iframe machinery jsdom
@@ -86,6 +90,8 @@ beforeEach(() => {
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
     ePubMock.mockReset()
+    sendPositionKeepaliveMock.mockReset()
+    audioToEpubMock.mockReset().mockResolvedValue(null)
 })
 
 const LONG_TEXT = 'The quick brown fox jumps over the lazy dog and then runs away quickly into the forest without looking back at all.'
@@ -94,7 +100,7 @@ async function setupReader(bodyText) {
     const { book, rendition, handlers, doc } = makeFakeBook(bodyText)
     ePubMock.mockReturnValue(book)
 
-    render(
+    const view = render(
         <EbookReader
             ebookId={7}
             pairId={42}
@@ -115,7 +121,34 @@ async function setupReader(bodyText) {
         })
     })
 
-    return { book, rendition, doc }
+    return { book, rendition, handlers, doc, unmount: view.unmount }
+}
+
+// A record whose only anchor cannot be resolved against this book (chapter
+// past the spine, no hint/preview/percent): the reader opens at page one with
+// the gate closed. The state issues #158/#159 both hinge on.
+async function setupUnresolvedReader() {
+    getPositionMock.mockResolvedValue({
+        anchor_revision: 5,
+        epub_chapter: 900,
+        hints: [],
+    })
+    const { book, rendition, handlers, doc } = makeFakeBook(LONG_TEXT)
+    ePubMock.mockReturnValue(book)
+    const view = render(
+        <EbookReader
+            ebookId={7} pairId={42}
+            initialChapter={null} initialTextPreview={null}
+            bookTitle="Test Book" onClose={vi.fn()}
+        />
+    )
+    await waitFor(() => expect(rendition.display).toHaveBeenCalled())
+    act(() => {
+        handlers.relocated({
+            start: { cfi: 'cfi-start', percentage: 0, displayed: { page: 1, total: 5 }, href: 'ch1.xhtml' },
+        })
+    })
+    return { book, rendition, handlers, doc, unmount: view.unmount }
 }
 
 describe('EbookReader doSave — one atomic write', () => {
@@ -513,6 +546,259 @@ describe('EbookReader — persisted display preferences', () => {
         expect(style).toBeTruthy()
         expect(style.textContent).toContain('#0f0f1a')
         expect(style.textContent).toContain('#a78bfa')
+    })
+})
+
+describe('EbookReader — pending save flushes on unmount (issue #158)', () => {
+    // A page turn schedules the write 2s later; closing the reader (X, Escape,
+    // "Listen" handoff, browser back) unmounts the component, whose cleanup
+    // used to cancel the timer without flushing — the last page read was
+    // never written.
+
+    it('flushes the last relocated position exactly once on unmount, before the 2s debounce', async () => {
+        const { handlers, unmount } = await setupReader(LONG_TEXT)
+
+        // A second page turn: the flush must carry the LATEST position.
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-test-2', percentage: 0.75, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        unmount()
+
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+        expect(updatePositionMock).toHaveBeenCalledWith('pair', 42, expect.objectContaining({
+            source: 'ebook',
+            epub_chapter: 0,
+            epub_progress_percent: 75,
+            hint: { kind: 'epubjs_cfi', value: 'cfi-test-2' },
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+        expect(updatePositionMock.mock.calls[0][2].epub_text_preview).toBeTruthy()
+    })
+
+    it('holds the gate on the flush path: an unresolved restore flushes nothing', async () => {
+        const { unmount } = await setupUnresolvedReader()
+
+        unmount()
+
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('does not flush when nothing moved since the last successful write', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledTimes(1))
+
+        // No relocation since the manual save: a keepalive-style flush must
+        // be a no-op, not a duplicate write.
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+
+        expect(sendPositionKeepaliveMock).not.toHaveBeenCalled()
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('still flushes on unmount while the matcher hangs (the flush must not block on it)', async () => {
+        const { unmount } = await setupReader(LONG_TEXT)
+        // A manual save that never finishes: matchTextToAudio hangs forever.
+        matchTextToAudioMock.mockReturnValue(new Promise(() => {}))
+        fireEvent.click(screen.getByTitle('Save position'))
+        await act(async () => {})
+        expect(updatePositionMock).not.toHaveBeenCalled()
+
+        unmount()
+
+        // The unmount flush skips the matcher: chapter + preview is a full
+        // position per the contract; the sentence upgrade is optional.
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+        const body = updatePositionMock.mock.calls[0][2]
+        expect(body.epub_chapter).toBe(0)
+        expect(body.epub_text_preview).toBeTruthy()
+        expect(body.audio_position_ms).toBeUndefined()
+    })
+})
+
+describe('EbookReader — page-lifecycle keepalive (issue #158)', () => {
+    // On iOS the PWA is the app: beforeunload never fires and pagehide is
+    // unreliable; visibilitychange → hidden is the last guaranteed event.
+    // Regular fetch is aborted during unload, so both go through the
+    // keepalive helper.
+
+    it('pagehide sends the ebook anchor via keepalive — once, until the position moves', async () => {
+        const { handlers } = await setupReader(LONG_TEXT)
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 42, expect.objectContaining({
+            source: 'ebook',
+            epub_chapter: 0,
+            epub_progress_percent: 50,
+            hint: { kind: 'epubjs_cfi', value: 'cfi-test' },
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+
+        // Idempotent: a second fire with no relocation between writes nothing.
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+
+        // The position moves → the next event writes again.
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-test-2', percentage: 0.6, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('visibilitychange → hidden sends the same keepalive, idempotently', async () => {
+        await setupReader(LONG_TEXT)
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+        try {
+            act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+
+            expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+            expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 42, expect.objectContaining({
+                source: 'ebook',
+                epub_chapter: 0,
+                hint: { kind: 'epubjs_cfi', value: 'cfi-test' },
+            }))
+
+            act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+            expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+        } finally {
+            delete document.visibilityState
+        }
+    })
+
+    it('keepalive respects the write gate: nothing is sent for an unresolved restore', async () => {
+        await setupUnresolvedReader()
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+
+        expect(sendPositionKeepaliveMock).not.toHaveBeenCalled()
+    })
+})
+
+describe('EbookReader — unresolved restore is told and recoverable (issue #159)', () => {
+    it('shows a persistent, dismissible banner when the stored position cannot be resolved', async () => {
+        await setupUnresolvedReader()
+
+        expect(await screen.findByText(/Couldn't find your saved place/)).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+        expect(screen.queryByText(/Couldn't find your saved place/)).not.toBeInTheDocument()
+    })
+
+    it('a user page turn away from the start opens the gate and clears the banner', async () => {
+        const { handlers } = await setupUnresolvedReader()
+        matchTextToAudioMock.mockResolvedValue(null)
+        await screen.findByText(/Couldn't find your saved place/)
+
+        fireEvent.click(screen.getByTitle('Next page'))
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-2', percentage: 0.02, displayed: { page: 2, total: 5 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+        expect(screen.queryByText(/Couldn't find your saved place/)).not.toBeInTheDocument()
+    })
+
+    it('a user page turn still at the start of the book keeps the gate closed', async () => {
+        // Mirror of PositionSavePolicy's start-of-book backstop: no navigation
+        // signal is trustworthy enough to let a start-of-book write replace a
+        // real anchor; a genuine forward turn moves off the start anyway.
+        const { handlers } = await setupUnresolvedReader()
+
+        fireEvent.click(screen.getByTitle('Previous page'))
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-still-start', percentage: 0, displayed: { page: 1, total: 5 }, href: 'ch1.xhtml' },
+            })
+        })
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await new Promise(r => setTimeout(r, 50))
+
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('resolves an audio-only record through audio→epub and allows saving after landing', async () => {
+        // The most common unresolved trigger: a pair only ever LISTENED to.
+        // The record holds audio_position_ms and nothing else; the web used to
+        // open at page one AND block saving for the whole session.
+        getPositionMock.mockResolvedValue({
+            anchor_revision: 0,
+            audio_position_ms: 42000,
+            hints: [],
+        })
+        audioToEpubMock.mockResolvedValue({
+            epub_chapter: 0,
+            epub_sentence_index: 3,
+            preview: 'quick brown fox jumps over the lazy dog',
+            sync_map_version: 2,
+        })
+        matchTextToAudioMock.mockResolvedValue(null)
+        const { book, rendition, handlers } = makeFakeBook(LONG_TEXT)
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+
+        // The resolved chapter seeds the display...
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml'))
+        expect(audioToEpubMock).toHaveBeenCalledWith(42, 42000)
+
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-audio', percentage: 0.1, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+        // ...and the text-nav pass (seeded from the resolved preview) must
+        // finish before a save can go through.
+        await act(async () => { await new Promise(r => setTimeout(r, 300)) })
+
+        expect(screen.queryByText(/Couldn't find your saved place/)).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+    })
+})
+
+describe('EbookReader — the ✓ only appears for a real write (issue #159)', () => {
+    it('shows "Not saved" and no ✓ when the write rejects', async () => {
+        await setupReader(LONG_TEXT)
+        matchTextToAudioMock.mockResolvedValue(null)
+        updatePositionMock.mockRejectedValue(new Error('server down'))
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        expect(await screen.findByText('Not saved')).toBeInTheDocument()
+        expect(screen.getByTitle('Save position').className).not.toContain('saved')
+    })
+
+    it('shows "Not saved" instead of ✓ while the gate is closed, and writes nothing', async () => {
+        await setupUnresolvedReader()
+
+        fireEvent.click(screen.getByTitle('Save position'))
+
+        expect(await screen.findByText('Not saved')).toBeInTheDocument()
+        expect(updatePositionMock).not.toHaveBeenCalled()
     })
 })
 

@@ -340,6 +340,19 @@ class TextMatchResponse(BaseModel):
     sync_map_version: Optional[int] = None
 
 
+class AudioToEpubResponse(BaseModel):
+    """An audio position re-expressed in EPUB coordinates via the sync map.
+
+    The audio rung of the restore ladder, made executable from the web
+    (issue #159): Android resolves it through its cached sync points, the web
+    has no local map and asks the server instead.
+    """
+    epub_chapter: int
+    epub_sentence_index: int
+    preview: Optional[str] = None
+    sync_map_version: Optional[int] = None
+
+
 class BookmarkLogResponse(BaseModel):
     id: int
     source: BookmarkSource
