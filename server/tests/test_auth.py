@@ -434,6 +434,39 @@ def test_get_client_ip_uses_the_socket_peer_not_the_header():
     assert get_client_ip(Request(scope)) == "10.0.0.9"
 
 
+def test_get_client_ip_falls_back_when_the_peer_host_is_none():
+    """ProxyHeadersMiddleware sets the client to (None, 0) when every hop in
+    X-Forwarded-For is trusted (real docker NAT topologies) — audit rows must
+    store "unknown", not NULL."""
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [],
+        "client": (None, 0),
+    }
+    assert get_client_ip(Request(scope)) == "unknown"
+
+
+def test_get_client_ip_falls_back_when_there_is_no_peer_at_all():
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [],
+        "client": None,
+    }
+    assert get_client_ip(Request(scope)) == "unknown"
+
+
 async def test_failed_login_audit_row_records_the_peer_ip(db):
     """An attacker-supplied X-Forwarded-For must not end up in the audit log."""
     transport = ASGITransport(app=_auth_app(), client=("10.0.0.9", 1))
