@@ -19,6 +19,7 @@ from rate_limit import limiter
 
 from database import bootstrap_superadmin
 from config import settings, check_jwt_secret, check_db_credentials, check_cors_origins
+from middleware import MultipartBodyLimitMiddleware
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
@@ -149,6 +150,10 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Refuse oversized multipart bodies with 413 before the parser runs — FastAPI
+# parses multipart before auth, so this is reachable unauthenticated (#157).
+app.add_middleware(MultipartBodyLimitMiddleware)
 
 # CORS — controlled by CORS_ORIGINS env var (comma-separated); defaults to * for dev
 _cors_origins = settings.cors_origins_list

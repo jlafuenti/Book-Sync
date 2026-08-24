@@ -45,6 +45,10 @@ services:
       # Generate with:
       #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
       - CREDENTIAL_ENC_KEYS=
+      # Multipart uploads whose Content-Length exceeds this are refused with
+      # 413 before the body is parsed (issue #157). Default is 10 GiB —
+      # audiobook uploads are multi-GB, so keep it generous.
+      # - UPLOAD_MAX_BYTES=10737418240
     depends_on:
       db:
         condition: service_healthy
