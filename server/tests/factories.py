@@ -6,10 +6,49 @@ re-implementing seeding per test file. (User creation lives in the `make_user`
 fixture in conftest.py.)
 """
 
+import zipfile
+
 from sqlalchemy import text
 
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
+
+
+def write_epub(path, spine_docs, *, manifest_order=None):
+    """Build a minimal but valid EPUB at `path` and return its path as a str.
+
+    `spine_docs` is [(filename, html)] in spine order. `manifest_order` lets a
+    test declare the manifest in a *different* order than the spine — the case
+    that separates a spine walk from a manifest walk.
+    """
+    names = [name for name, _ in spine_docs]
+    manifest_names = manifest_order or names
+    manifest = "".join(
+        f'<item id="id{names.index(n)}" href="{n}" media-type="application/xhtml+xml"/>'
+        for n in manifest_names
+    )
+    spine = "".join(f'<itemref idref="id{i}"/>' for i in range(len(names)))
+    opf = (
+        '<?xml version="1.0"?>'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:title>Axis Test</dc:title><dc:identifier id="bookid">urn:uuid:axis</dc:identifier>'
+        '<dc:language>en</dc:language></metadata>'
+        f"<manifest>{manifest}</manifest><spine>{spine}</spine></package>"
+    )
+    container = (
+        '<?xml version="1.0"?>'
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">'
+        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", container)
+        z.writestr("OEBPS/content.opf", opf)
+        for name, html in spine_docs:
+            z.writestr(f"OEBPS/{name}", html)
+    return str(path)
 
 
 async def suspend_user_progress_uniqueness(db):
@@ -72,12 +111,17 @@ DEFAULT_SYNC_POINTS = [
 ]
 
 
-async def make_sync_map(db, book_pair_id=1, points=None):
-    """Create a SyncMap + ordered SyncPoints for a pair and return the map."""
+async def make_sync_map(db, book_pair_id=1, points=None, *, epub_file_hash=None):
+    """Create a SyncMap + ordered SyncPoints for a pair and return the map.
+
+    `epub_file_hash` defaults to None — the legacy "unknown provenance" state a
+    map written before issue #295 is in.
+    """
     points = DEFAULT_SYNC_POINTS if points is None else points
     chapters = {ch for ch, *_ in points}
     sm = SyncMap(book_pair_id=book_pair_id, version=1,
-                 total_sentences=len(points), total_chapters=len(chapters))
+                 total_sentences=len(points), total_chapters=len(chapters),
+                 epub_file_hash=epub_file_hash)
     db.add(sm)
     await db.flush()
     for ch, si, ms, preview in points:
