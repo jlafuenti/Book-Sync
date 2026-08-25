@@ -565,6 +565,7 @@ async def _claim_standalone_scope(
     db: AsyncSession, bookmark: Bookmark,
     ebook_id: Optional[int], audiobook_id: Optional[int],
     *, clear_sync_map_version: bool = True,
+    extra_values: Optional[dict] = None,
 ) -> None:
     """Move [bookmark] onto the standalone media scopes.
 
@@ -576,6 +577,13 @@ async def _claim_standalone_scope(
     index actually reports it. Each contested medium goes to whichever row has
     the newer `captured_at` (None counts as oldest); the loser is deleted, and
     the moving row is deleted outright when it ends up claiming no medium.
+
+    [extra_values] are further column values to set on the moving row. They go
+    through the same path as the scope itself because a savepoint rollback
+    reverts *every* pending change on the instance, so anything set outside it
+    would silently vanish on the conflict path. Pass finished values, never
+    ones derived from reading the row back: after a rollback the instance is
+    expired, and reading it lazy-loads outside the async context.
     """
     if ebook_id is None and audiobook_id is None:
         await db.delete(bookmark)
@@ -594,6 +602,8 @@ async def _claim_standalone_scope(
         bookmark.audiobook_id = ab_id
         if clear_sync_map_version:
             bookmark.sync_map_version = None
+        for field, value in (extra_values or {}).items():
+            setattr(bookmark, field, value)
 
     savepoint = await db.begin_nested()
     try:
@@ -754,6 +764,105 @@ async def invalidate_parse_coordinates_for_ebook(db: AsyncSession, ebook_id: int
             "position(s) and marked their hints stale.", ebook_id, len(rows),
         )
     return len(rows)
+
+
+async def _repoint_ebook_progress(
+    db: AsyncSession, old_ebook_id: int, new_ebook_id: int
+) -> None:
+    """Move the `user_progress` ebook projection onto [new_ebook_id].
+
+    Same collision rule as the canonical row it projects — `user_progress`
+    carries its own partial unique index (`ux_user_progress_user_ebook`), and
+    the winner is the newer `captured_at`, which is copied from the bookmark
+    and so agrees with the decision made there.
+
+    Every row naming the ebook moves, not just the `EBOOK`-typed ones: the
+    source row is about to be deleted, and a stray row of another type still
+    holding the id would dangle its foreign key. Only an `EBOOK` row can
+    collide — the index is partial on that type.
+    """
+    rows = (await db.execute(
+        select(UserProgress).where(UserProgress.ebook_id == old_ebook_id)
+    )).scalars().all()
+
+    for row in rows:
+        # Snapshot before the savepoint: a rollback expires the instance.
+        user_id, captured_at = row.user_id, row.captured_at
+
+        savepoint = await db.begin_nested()
+        try:
+            row.ebook_id = new_ebook_id
+            await db.flush()
+            continue
+        except IntegrityError:
+            # The rollback restores the row's stored ebook id for us.
+            await savepoint.rollback()
+
+        incumbent = await latest_progress_row(
+            db, user_id, ProgressType.EBOOK, new_ebook_id)
+        if incumbent is not None and _beats(incumbent.captured_at, captured_at):
+            await db.delete(row)
+        else:
+            if incumbent is not None:
+                await db.delete(incumbent)
+                await db.flush()
+            row.ebook_id = new_ebook_id
+        await db.flush()
+
+
+async def repoint_standalone_positions_to_ebook(
+    db: AsyncSession, *, old_ebook_id: int, new_ebook_id: int
+) -> None:
+    """Move standalone positions on one ebook onto its replacement (issue #298).
+
+    Converting an unsupported ebook registers the converted EPUB as a *new*
+    `EBook` row and deletes the source. A pair is re-pointed at the new row, so
+    pair-scoped positions travel with it — but standalone rows referencing the
+    source used to go to `release_standalone_positions`, which drops the id and
+    deletes any row left describing nothing. That treats a conversion like a
+    deletion, when in fact the converted EPUB *is* the same book.
+
+    What survives, and why:
+
+    * `epub_chapter`, `epub_progress_percent`, `epub_text_preview`, hints,
+      `captured_at`, the audiobook side — a chapter/percent anchor is roughly
+      right across a conversion, and the reader's restore ladder does the fine
+      landing from the preview.
+    * `epub_sentence_index` and `sync_map_version` are cleared: both are
+      coordinates of the *old* parse and its map, and would silently name
+      different text on the new one.
+    * `anchor_revision` is bumped, which marks every hint of the row stale
+      without deleting one. A Readium locator or epub.js CFI addresses the DOM
+      of the file it was captured in; the converted EPUB is a different file.
+      Deleting them instead is the failure the contract warns about — a client
+      that finds no hint reads it as "no position" and writes chapter 0 over a
+      real one.
+
+    Collisions with a position already held on the replacement resolve exactly
+    as a demotion does: newer `captured_at` wins (None counts as oldest), the
+    loser is deleted. `user_progress` follows the same way.
+
+    Runs in the caller's transaction (flushes, never commits).
+    """
+    if old_ebook_id == new_ebook_id:
+        return
+
+    rows = (await db.execute(
+        select(Bookmark)
+        .options(selectinload(Bookmark.hints))
+        .where(Bookmark.book_pair_id.is_(None), Bookmark.ebook_id == old_ebook_id)
+    )).scalars().all()
+    for bookmark in rows:
+        await _claim_standalone_scope(
+            db, bookmark, new_ebook_id, bookmark.audiobook_id,
+            extra_values={
+                "epub_sentence_index": None,
+                "anchor_revision": (bookmark.anchor_revision or 0) + 1,
+            },
+        )
+
+    await _repoint_ebook_progress(db, old_ebook_id, new_ebook_id)
+    await db.flush()
 
 
 async def release_standalone_positions(
