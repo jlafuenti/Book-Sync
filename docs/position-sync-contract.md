@@ -203,6 +203,30 @@ costs a single `version` lookup. `PositionResponse.sync_map_version` reports the
 stored value so a client that pulls a position and later pushes it back attests
 the right one.
 
+## Map provenance and drift
+
+A sync map is only meaningful against the ebook file it was aligned from.
+Re-converting the book, replacing the file with another edition, or changing how
+it parses leaves the map's coordinates naming text that is not in the document
+the reader renders. `sync_maps.version` does not catch this: the map is still
+internally consistent, just about a different file.
+
+`sync_maps.epub_file_hash` records the composite hash
+(`services/file_hash.py`) of the ebook at alignment time. `save_sync_map` stamps
+it, so every producer — transcription, re-alignment, the Convert flow — records
+provenance without having to remember to. **NULL means unknown**, not healthy:
+maps written before issue #295 have no stamp.
+
+`GET /api/troubleshoot/sync-map-audit` (editor-gated, read-only) reports drift
+per pair from two signals — the stored hash against the file's hash now, and the
+share of a sampled set of the map's stored previews that still occur in the
+book's whole-spine text. Whole-spine on purpose: a front-matter offset shifts
+every chapter number without invalidating anything, so checking a preview
+against the chapter it *claims* would flag a healthy map. A flagged pair is
+fixed through the endpoint that already rebuilds maps,
+`POST /api/transcription/{pair_id}/realign`; a pair with no cached transcript
+has nothing to rebuild from and is flagged for full re-transcription instead.
+
 ## Reset
 
 `DELETE /api/sync/position/{scope}/{ident}` is a true reset: it deletes the
