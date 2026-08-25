@@ -5,6 +5,9 @@ import {
     sendPositionKeepalive, audioToEpub, getDeviceId, getDeviceName,
 } from '../api'
 import { planRestore, hasAnchor, navigationEstablishesPosition } from '../lib/positionLadder'
+import {
+    normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
+} from '../lib/textSearch'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
@@ -248,16 +251,12 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             rawText = bodyText.substring(Math.max(0, charIndex - 20), Math.min(charIndex + 200, bodyText.length))
         }
 
-        // Normalize: lowercase, whitespace→spaces, strip non-alphanumeric, collapse spaces
-        let text = rawText.substring(0, 300)
-            .toLowerCase()
-            .replace(/[\n\r\t]/g, ' ')
-            .replace(/[^a-z0-9 ]/g, '')
-            .replace(/ +/g, ' ')
-            .trim()
+        // Normalize with the shared matcher-parity pipeline (issue #305):
+        // unicode whitespace variants become spaces instead of vanishing.
+        let text = normalizeForSearch(rawText.substring(0, 300))
         // Strip book title from start (epub.js includes <title> text at top of chapters)
         if (bookTitle) {
-            const titleNorm = bookTitle.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
+            const titleNorm = normalizeForSearch(bookTitle)
             if (titleNorm && text.startsWith(titleNorm)) {
                 text = text.slice(titleNorm.length).trim()
                 if (text.startsWith(titleNorm)) text = text.slice(titleNorm.length).trim()
@@ -683,8 +682,11 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                         textNavDoneRef.current = true
                         textNavInProgressRef.current = true
 
-                        const targetNorm = previewText.toLowerCase()
-                            .replace(/[\n\r\t]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ').trim()
+                        // The preview is SERVER-extracted text; normalize it
+                        // with the matcher-parity pipeline or a needle
+                        // containing (say) an nbsp-adjacent word can never be
+                        // found in identically normalized section text.
+                        const targetNorm = normalizeForSearch(previewText)
                         const shortTarget = targetNorm.substring(0, 30)
 
                         if (shortTarget.length >= 5) {
@@ -703,8 +705,12 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                                     let accumulated = ''
                                     let n
                                     while ((n = walker.nextNode())) {
-                                        const norm = n.textContent.toLowerCase()
-                                            .replace(/[\n\r\t]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/ +/g, ' ')
+                                        const norm = normalizeForSearch(n.textContent)
+                                        // Separator between text nodes — the server
+                                        // extracts previews with a separator at every
+                                        // tag boundary (get_text(separator="\n")), so
+                                        // inline markup must not glue words here either.
+                                        if (accumulated && !accumulated.endsWith(' ')) accumulated += ' '
                                         boundaries.push({ node: n, start: accumulated.length, len: norm.length })
                                         accumulated += norm
                                     }
@@ -723,7 +729,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                                     let normCount = 0
                                     for (let i = 0; i < origText.length && normCount < nodeOffset; i++) {
                                         const ch = origText[i].toLowerCase()
-                                        const isKept = /[a-z0-9 ]/.test(ch) || /[\n\r\t]/.test(ch)
+                                        const isKept = /[a-z0-9 ]/.test(ch) || WHITESPACE_VARIANT_CHAR_RE.test(ch)
                                         if (isKept) normCount++
                                         realOffset = i + 1
                                     }
@@ -748,9 +754,12 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                             }
 
                             // Load one spine document's text WITHOUT rendering
-                            // it (epub.js Section.load), normalized the same
-                            // way as the search target. Null when the section
-                            // can't be loaded.
+                            // it (epub.js Section.load), extracted and
+                            // normalized exactly like the server built the
+                            // previews we search for (issue #305): a
+                            // separator at every tag boundary, then the
+                            // matcher-parity normalization. Null when the
+                            // section can't be loaded.
                             const loadSectionText = async (idx) => {
                                 const b = bookRef.current
                                 const item = b?.spine?.items?.[idx]
@@ -759,13 +768,10 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                                     const contents = await item.load(
                                         typeof b.load === 'function' ? b.load.bind(b) : undefined
                                     )
-                                    const raw = contents?.textContent
-                                        ?? contents?.body?.textContent ?? ''
+                                    const raw = extractSearchableText(contents)
+                                        || String(contents?.body?.textContent ?? '')
                                     item.unload?.()
-                                    return String(raw).toLowerCase()
-                                        .replace(/[\n\r\t]/g, ' ')
-                                        .replace(/[^a-z0-9 ]/g, '')
-                                        .replace(/ +/g, ' ')
+                                    return normalizeForSearch(raw)
                                 } catch (e) {
                                     return null
                                 }
