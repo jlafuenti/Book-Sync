@@ -193,6 +193,8 @@ function ResetPasswordModal({ user, onClose, onReset }) {
 const ACTION_LABELS = {
     login: 'Login',
     login_failed: 'Login Failed',
+    // Per-username throttle refused the attempt with 429 (issue #296).
+    login_locked: 'Login Locked',
     register_request: 'Access Request',
     password_changed: 'Password Changed',
     password_reset: 'Password Reset',
@@ -206,6 +208,7 @@ const ACTION_LABELS = {
 const ACTION_COLORS = {
     login: 'badge-active',
     login_failed: 'badge-error',
+    login_locked: 'badge-error',
     register_request: 'badge-pending',
     password_changed: 'badge-editor',
     password_reset: 'badge-editor',

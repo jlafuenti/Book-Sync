@@ -56,6 +56,14 @@ services:
       # 413 before the body is parsed (issue #157). Default is 10 GiB —
       # audiobook uploads are multi-GB, so keep it generous.
       # - UPLOAD_MAX_BYTES=10737418240
+      # Failed logins allowed per username before that username is refused with
+      # 429 for the rest of the window (issue #296). Only failures count and a
+      # success clears the counter. Keying on the username means anyone who
+      # knows one can lock the real user out for the window, so the default is
+      # deliberately high and the window short — see docs/operations.md,
+      # "Login throttling", before changing either.
+      # - LOGIN_FAILURE_LIMIT=10
+      # - LOGIN_FAILURE_WINDOW_SECONDS=900
     depends_on:
       db:
         condition: service_healthy

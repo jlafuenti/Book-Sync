@@ -126,6 +126,7 @@ bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#rev
 | `WHISPER_MODEL` / `WHISPER_DEVICE` | `medium` / `auto` | Local Whisper model and device (`auto`/`cpu`/`cuda`) |
 | `AUTO_TRANSCRIBE_ENABLED` | `false` | Queue newly auto-matched pairs automatically |
 | `ALLOW_PUBLIC_REGISTRATION` | `true` | Self-registration; new accounts still need admin approval |
+| `LOGIN_FAILURE_LIMIT` / `LOGIN_FAILURE_WINDOW_SECONDS` | `10` / `900` | Failed logins per username before that username is 429'd for the rest of the window. Complements the per-IP limit; note that keying on the username lets anyone who knows one lock the real user out for the window, so don't lower it casually. See [docs/operations.md](docs/operations.md#login-throttling) |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` (uvicorn default) | Reverse-proxy peer(s) whose `X-Forwarded-For` uvicorn trusts. **Required behind any proxy** — unset, all clients share the proxy's IP, so the login rate limit is one global bucket and audit logs record the proxy. Never `*`. See [docs/operations.md](docs/operations.md#reverse-proxy) |
 | `GOOGLE_BOOKS_API_KEY` | — | Raises the rate limit on the manual Google Books metadata search |
 | `ABS_URL` / `ABS_API_TOKEN` / `ABS_AUDIOBOOKS_PREFIX` | — | Audiobookshelf metadata enrichment |

@@ -266,8 +266,57 @@ one by PUTting zeros through the legacy progress adapter, which left the
 canonical record in place for the next write to resurrect — the same failure
 mode the pair reset fixed (issue #6).
 
+**Converting an unsupported ebook re-points instead of releasing.** The
+converted EPUB is registered as a new `EBook` row and the source is deleted, so
+the pair is re-pointed at it — and every standalone position on the source is
+carried over the same way (`repoint_standalone_positions_to_ebook`, issue #298):
+`ebook_id` moves to the converted row, `epub_sentence_index` and
+`sync_map_version` are cleared (both are coordinates of the old parse), and
+`anchor_revision` is bumped so the hints go **stale, not deleted** — a locator
+or CFI addresses the DOM of the file it was captured in. Chapter, percent,
+preview, audio side and `captured_at` are kept: a chapter/percent anchor is
+roughly right across a conversion and the restore ladder lands it precisely from
+the preview. Collisions with a position already on the replacement resolve by
+`captured_at` exactly as a demotion does, `user_progress` included. Force-delete
+has no replacement to point at, so it still releases, as above.
+
 The "hints are never deleted" rule above governs position **writes**; an
 explicit user reset is the one sanctioned deletion path.
+
+## Replacing a file
+
+**A new file behind the same row invalidates that row's parse coordinates.**
+`POST /troubleshoot/replace/ebook/{id}` swaps the EPUB and keeps the `EBook`
+id, so every position still points at it — but the new file is a different
+parse. `position_service.invalidate_parse_coordinates_for_ebook` runs in the
+same transaction as the swap, over every position referencing the ebook
+(standalone rows *and* the pair-scoped rows of every pair containing it):
+
+| Field | What happens |
+|---|---|
+| `epub_sentence_index`, `sync_map_version` | **cleared** — coordinates of the outgoing parse and the map built from it; on the new file the same index names different text |
+| `anchor_revision` | **bumped**, so every hint goes stale: a locator or CFI addresses the DOM of the file that is gone |
+| `epub_chapter`, `epub_progress_percent`, `epub_text_preview`, audio side, `captured_at` | kept — a chapter/percent anchor is roughly right across a re-parse, and the reader's whole-spine text search lands the preview precisely |
+
+Same reasoning as a conversion re-point (issue #298), minus the change of id:
+the book is the same, the artifact describing it is not. Hints go **stale, not
+deleted**, per the rule above. `captured_at` is untouched for the same reason a
+re-map leaves it alone — this is a server-side invalidation, not a device
+capture (issue #303).
+
+An ebook replacement queues no re-alignment, so the live map keeps describing
+the old parse until someone re-queues the pair. That ordering is what keeps the
+two mechanisms from fighting: a later `remap_bookmarks_for_pair` re-derives
+coordinates from the surviving text preview and the new map's points, so a
+cleared row is *upgraded* onto the new map, never resurrected onto the old one.
+
+The **audiobook** branch of the same endpoint is deliberately exempt: the ebook
+parse and the live map are both unchanged, so the epub coordinates still mean
+what they said. What a new recording invalidates is `audio_position_ms`, and
+the re-transcription it forces (the cached transcript is dropped and a synced
+pair returns to `manual_matched`) re-derives the epub side through the re-map.
+Metadata rescans (`/library/{type}s/{id}/rescan`, `/library/rescan-all`) re-read
+the *same* file and change no coordinate, so they invalidate nothing.
 
 ## Reads never create
 
