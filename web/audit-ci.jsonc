@@ -20,16 +20,8 @@
     "GHSA-2v35-w6hq-6mfw", // uncontrolled recursion in XML serialization (DoS)
     "GHSA-f6ww-3ggp-fr8h", // XML injection via DocumentType serialization
     "GHSA-x6wf-f3px-wcqx", // node injection via processing-instruction serialization
-    "GHSA-j759-j44w-7fr8", // node injection via comment serialization
-    // ---- react-router 6.x (fix is the breaking 7.18 major) -----------------
-    // GHSA-337j-9hxr-rhxg is SSR-only (deserializeErrors in hydration); this
-    // app is a pure client-side Vite SPA with no SSR, so the code path is
-    // unreachable. GHSA-wrjc-x8rr-h8h6 is an open redirect via a backslash in
-    // <Link>/useNavigate targets; all navigation targets in this app are
-    // internal constants, never attacker-controlled. Both fixed by the
-    // react-router 7 migration — tracked as follow-up work, out of scope for
-    // the dependency-bump PR.
-    "GHSA-337j-9hxr-rhxg",
-    "GHSA-wrjc-x8rr-h8h6"
+    "GHSA-j759-j44w-7fr8" // node injection via comment serialization
+    // react-router was upgraded 6 -> 7 (issue #297), clearing GHSA-337j-9hxr-rhxg
+    // and GHSA-wrjc-x8rr-h8h6 — no longer allow-listed.
   ]
 }
