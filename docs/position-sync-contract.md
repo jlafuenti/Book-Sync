@@ -219,6 +219,24 @@ not symmetric — it must not wipe the pair's record, and it leaves the shared
 `DELETE /api/sync/progress/pair/{pair_id}` is an alias for the pair form, kept
 so existing clients did not have to change their reset call.
 
+## Unpairing
+
+Unpairing **demotes** pair-scoped positions to standalone; it never deletes
+them. Deleting a pair (or a paired ebook/audiobook, which dissolves its pairs)
+re-scopes every user's pair-scoped bookmark onto the surviving media rows —
+`book_pair_id = NULL`, `ebook_id`/`audiobook_id` set — in the same transaction,
+before the pair row goes (`services/position_service.demote_pair_positions`,
+issue #155). Unpairing is the *normal* way to correct a mis-matched pair; the
+cascade used to take the canonical record for every user with it. If a
+standalone row for the same (user, medium) already exists, the newer
+`captured_at` wins (None counts as oldest) and the loser is deleted.
+`sync_map_version` is cleared on the demoted row — the sentence index is a
+sync-map coordinate and the map dies with the pair — while chapter, percent,
+audio position, hints and logs are kept: same media, still valid. The
+`user_progress` rows are keyed by media and remain the projection of the
+demoted bookmark, so they are unlinked from the pair, not deleted. An explicit
+user reset (above) stays the only path that deletes a position.
+
 Standalone media had no reset endpoint at all before this; the web client faked
 one by PUTting zeros through the legacy progress adapter, which left the
 canonical record in place for the next write to resurrect — the same failure
