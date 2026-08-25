@@ -119,6 +119,30 @@ python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 Keep every key you've ever used until you're certain no stored credential still needs it. Losing
 them means the encrypted Audible/ABS credentials in your backups can't be decrypted.
 
+## Upload size limits
+
+The server refuses any `multipart/form-data` request whose declared `Content-Length` exceeds
+`UPLOAD_MAX_BYTES` (default 10 GiB) with **413**, *before* the multipart parser touches the body.
+This matters because FastAPI parses an upload body before it resolves the route's auth
+dependency — without the cap, an unauthenticated caller could feed the parser arbitrarily large
+bodies (issue #157). Uploads are multi-GB audiobooks, so keep the value generous.
+
+The in-app cap only sees requests that declare a `Content-Length`. If you front the server with a
+reverse proxy, add a body limit there too — it also bounds chunked (no-length) bodies before they
+reach uvicorn. For Caddy:
+
+```caddy
+tandem.example.com {
+    request_body {
+        max_size 10GB
+    }
+    reverse_proxy server:8000
+}
+```
+
+Keep the proxy limit at or above `UPLOAD_MAX_BYTES`, or the proxy will reject uploads the app
+would have accepted.
+
 ## Storage
 
 | Mount | Grows with | Notes |

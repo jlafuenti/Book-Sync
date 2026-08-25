@@ -61,9 +61,9 @@ def _python_sources(include_tests: bool = False):
 
 
 def test_no_source_file_still_calls_datetime_utcnow():
-    """The ratchet, and the only gate on this — `pytest.ini` can only `ignore`
-    the deprecation, because the pinned python-jose 3.3.0 raises it from its
-    own internals and a runtime filter can't tell whose frame it came from.
+    """The ratchet, and the only gate on this. (A runtime warning filter can't
+    tell our frames from a dependency's — the since-removed python-jose used
+    to call utcnow() internally, which is why pytest.ini once ignored it.)
 
     Static beats runtime here anyway: this covers files no test executes.
     Tests are included too, so a fixture can't quietly reintroduce the call.

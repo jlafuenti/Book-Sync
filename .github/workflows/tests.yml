@@ -76,6 +76,35 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$diff_exit"
 
+  audit:
+    # Dependency-vulnerability gate (issue #157): fail on any known advisory
+    # against requirements.txt that is not explicitly allow-listed — with a
+    # written justification — in server/audit-ignore.txt.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+
+      - name: pip-audit (strict, with allow-list)
+        run: |
+          # Expand audit-ignore.txt (advisory IDs, one per line, # comments
+          # allowed) into --ignore-vuln flags. `|| true` because an empty
+          # allow-list makes grep exit 1, which is the normal healthy state.
+          IGNORE_FLAGS=$(grep -vE '^\s*(#|$)' audit-ignore.txt | sed 's/^/--ignore-vuln /' | tr '\n' ' ' || true)
+          pip-audit -r requirements.txt --strict $IGNORE_FLAGS
+
   migrations:
     # Exercises the Alembic migrations against real Postgres (the SQLite job
     # can't — they use JSONB / native enums). Runs the migration test suite

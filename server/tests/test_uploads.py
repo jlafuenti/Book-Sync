@@ -23,7 +23,12 @@ import routers.library as library
 
 @contextlib.asynccontextmanager
 async def _library_client():
+    from middleware import MultipartBodyLimitMiddleware
+
     app = FastAPI()
+    # Mirror production (main.py): the pre-parse multipart size guard sits in
+    # front of every route, so the upload tests exercise the same stack.
+    app.add_middleware(MultipartBodyLimitMiddleware)
     app.include_router(library.router)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -267,6 +272,50 @@ async def test_upload_ebook_duplicate_path_rejected(
     assert (ebook_dir / "book.epub").read_bytes() == original_content
     rows = (await db.execute(select(EBook).where(EBook.filename == "book.epub"))).scalars().all()
     assert len(rows) == 1
+
+
+# --- Pre-auth multipart body cap (issue #157) -----------------------------
+#
+# FastAPI parses a multipart/form-data body (`await request.form()`) BEFORE it
+# resolves the route's auth dependency, so an unauthenticated caller can drive
+# the multipart parser with an arbitrarily large body. The
+# MultipartBodyLimitMiddleware must refuse oversized bodies with 413 before any
+# parsing — proven here by getting 413 (not 401) with NO token attached.
+
+async def test_oversized_multipart_is_rejected_before_auth(monkeypatch, temp_library_dirs):
+    monkeypatch.setattr(settings, "upload_max_bytes", 64)
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            # No Authorization header on purpose.
+            files={"file": ("big.epub", b"x" * 1024, "application/epub+zip")},
+        )
+    assert r.status_code == 413, r.text
+    assert "exceeds" in r.json()["detail"]
+
+
+async def test_under_cap_multipart_still_reaches_auth(temp_library_dirs):
+    """A multipart request under the cap passes the middleware untouched and
+    fails on auth (401), not on size — no false positives."""
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            files={"file": ("small.epub", b"tiny", "application/epub+zip")},
+        )
+    assert r.status_code == 401
+
+
+async def test_oversized_non_multipart_is_not_blocked(monkeypatch, temp_library_dirs):
+    """The cap targets the multipart parser only: a non-multipart body over the
+    cap is left for the route/framework to judge (here: 401 at auth)."""
+    monkeypatch.setattr(settings, "upload_max_bytes", 8)
+    async with _library_client() as client:
+        r = await client.post(
+            "/api/library/upload/ebook",
+            content=b"{" + b"x" * 1024 + b"}",
+            headers={"Content-Type": "application/json"},
+        )
+    assert r.status_code == 401
 
 
 async def test_upload_ebook_rejects_empty_basename_after_traversal(

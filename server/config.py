@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     # manual). Mounted read-write into the server. See docs/backup-restore.md.
     backups_dir: str = Field(default="/backups", alias="BACKUPS_DIR")
 
+    # Upload guard (issue #157) — multipart/form-data requests whose declared
+    # Content-Length exceeds this are refused with 413 BEFORE the multipart
+    # parser runs (see middleware.py). Uploads are multi-GB audiobooks, so the
+    # default is generous: 10 GiB.
+    upload_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
+
     # Credential encryption — comma-separated list of Fernet keys.
     # First key is used to encrypt new writes; all keys are tried for decryption,
     # so rotation is "prepend a new key" with no migration step.
