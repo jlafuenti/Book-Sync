@@ -40,6 +40,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        # Dependency-vulnerability gate (issue #157): `npm audit --omit=dev`
+        # semantics with an allow-list, which npm audit lacks natively —
+        # audit-ci reads web/audit-ci.jsonc (skip-dev is set there), where
+        # every allow-listed advisory carries its written justification.
+        # Dev-only deps (vite, vitest, eslint...) never ship to the browser.
+        run: npx --yes audit-ci@^7 --config audit-ci.jsonc
+
       - name: Run tests + coverage
         run: npm run coverage
 
