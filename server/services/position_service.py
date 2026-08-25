@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -700,6 +700,70 @@ async def demote_pair_positions(
         .values(book_pair_id=None)
     )
     await db.flush()
+
+
+async def invalidate_parse_coordinates_for_ebook(db: AsyncSession, ebook_id: int) -> int:
+    """Drop the coordinates that only meant something in an ebook's *old* file
+    (issue #303).
+
+    `POST /troubleshoot/replace/ebook/{id}` swaps the file behind an existing
+    `EBook` row and keeps the row id, so every position still points at it —
+    but the new file is a different parse. This is the same treatment a
+    conversion gives a position (`repoint_standalone_positions_to_ebook`,
+    issue #298), minus the change of id: the book is the same, the artifact
+    describing it is not.
+
+    Every position referencing the ebook — standalone rows, and the
+    pair-scoped rows of every pair containing it — has:
+
+    * `epub_sentence_index` and `sync_map_version` **cleared**: both are
+      coordinates of the outgoing parse and the map built from it, and on the
+      new file the same index silently names different text.
+    * `anchor_revision` **bumped**, which marks every hint of the row stale
+      without deleting one. A Readium locator or an epub.js CFI addresses the
+      DOM of the file it was captured in, and that file is gone. Deleting them
+      is the failure the contract warns about — a client that finds no hint
+      reads it as "no position" and writes chapter 0 over a real one.
+
+    What survives: `epub_chapter`, `epub_progress_percent`,
+    `epub_text_preview`, the audio side, and `captured_at`. A chapter/percent
+    anchor is roughly right across a re-parse, and the reader's whole-spine
+    text search lands the preview precisely. `captured_at` is untouched for the
+    same reason the re-map leaves it alone — this is a server-side
+    invalidation, not a device capture, and stamping it would let it beat a
+    genuinely newer write from a phone.
+
+    `user_progress` is not re-projected: it carries chapter, percent and the
+    completion flag, none of which this touches.
+
+    Runs in the caller's transaction (flushes, never commits). Returns the
+    number of rows invalidated.
+    """
+    pair_ids = (await db.execute(
+        select(BookPair.id).where(BookPair.ebook_id == ebook_id)
+    )).scalars().all()
+
+    scopes = [and_(Bookmark.book_pair_id.is_(None), Bookmark.ebook_id == ebook_id)]
+    if pair_ids:
+        scopes.append(Bookmark.book_pair_id.in_(pair_ids))
+
+    rows = (await db.execute(
+        select(Bookmark).where(or_(*scopes))
+    )).scalars().all()
+
+    for bookmark in rows:
+        bookmark.epub_sentence_index = None
+        bookmark.sync_map_version = None
+        bookmark.anchor_revision = (bookmark.anchor_revision or 0) + 1
+        bookmark.updated_at = utcnow()
+
+    await db.flush()
+    if rows:
+        logger.info(
+            "Ebook %s got a new file: invalidated the parse coordinates of %s "
+            "position(s) and marked their hints stale.", ebook_id, len(rows),
+        )
+    return len(rows)
 
 
 async def _repoint_ebook_progress(
