@@ -52,14 +52,22 @@ const player = vi.hoisted(() => ({
     currentTime: 0,
 }))
 
+// The reader exposes its pending-save flush through a ref the page hands it
+// (issue #158) — the mock installs a spy there so call ordering against
+// player.play can be asserted.
+const readerFlushSpy = vi.hoisted(() => vi.fn())
+
 vi.mock('../components/EbookReader', () => ({
-    default: (props) => (
-        <div data-testid="reader" data-chapter={String(props.initialChapter)}>
-            {props.onSwitchToAudio && (
-                <button onClick={props.onSwitchToAudio}>to-audio</button>
-            )}
-        </div>
-    ),
+    default: (props) => {
+        if (props.saveFlushRef) props.saveFlushRef.current = readerFlushSpy
+        return (
+            <div data-testid="reader" data-chapter={String(props.initialChapter)}>
+                {props.onSwitchToAudio && (
+                    <button onClick={props.onSwitchToAudio}>to-audio</button>
+                )}
+            </div>
+        )
+    },
 }))
 vi.mock('../components/AudioPlayer', () => ({
     AudioPlayerView: (props) => (
@@ -86,6 +94,7 @@ function renderPage() {
 
 beforeEach(() => {
     getEbookMock.mockReset()
+    readerFlushSpy.mockReset()
     player.play.mockReset()
     player.pause.mockReset()
     player.currentAudiobook = null
@@ -229,6 +238,21 @@ describe('BookDetailPage reader/player handoff', () => {
         await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 1538))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
             1538, expect.anything(), 9000, 900))
+    })
+
+    it('issues the reader flush before starting the audiobook (issue #158)', async () => {
+        // Without this ordering the reader's pending page-turn save is dropped
+        // and the player's first write stamps source=audiobook, so the pair
+        // reopens in the audiobook at a stale text position.
+        getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalled())
+        expect(readerFlushSpy).toHaveBeenCalled()
+        expect(Math.min(...readerFlushSpy.mock.invocationCallOrder))
+            .toBeLessThan(Math.min(...player.play.mock.invocationCallOrder))
     })
 
     it('switching to the ebook saves the audio position and opens at the returned chapter', async () => {
