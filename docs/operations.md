@@ -79,6 +79,45 @@ The `web` nginx proxy forwards `X-Forwarded-For` (appending to any incoming chai
 `$proxy_add_x_forwarded_for`) and `X-Forwarded-Proto`, so a client's real address survives both
 the Caddy → web → server and the direct web → server topologies.
 
+## Login throttling
+
+`POST /api/auth/login` is guarded by two independent limits.
+
+| Layer | Keyed on | Default | Tune with |
+|---|---|---|---|
+| slowapi bucket | client IP | 5 requests/minute | code (`server/rate_limit.py`) |
+| Failed-attempt tracker | username | 10 **failed** attempts per 15 minutes | `LOGIN_FAILURE_LIMIT`, `LOGIN_FAILURE_WINDOW_SECONDS` |
+
+The per-IP layer is only as good as the client address — see "Reverse proxy" above; behind
+docker NAT it can collapse into one bucket for everybody, which is what the username layer is
+there to cover. Both stay on: the IP bucket also meters *spraying* (many accounts, one guess
+each), which the username bucket by design does not.
+
+The username layer counts **failures only**, in a sliding window, keyed on the username
+case-folded and stripped (`Alice`, `alice` and `" alice "` are one bucket). A correct password
+clears the counter. Once the bucket is at the limit, further attempts for that username get
+**429** with a `Retry-After` header (seconds until it drops back below the limit) and a
+`login_locked` audit row — checked *before* the password is verified, so a locked bucket answers
+429 whether or not the password was right. That is deliberate: otherwise the response would be a
+password oracle.
+
+**The trade-off to understand before retuning:** because the bucket is keyed on the username,
+anyone who knows a username can hold it at the limit and keep the real user out for the window.
+That is inherent to username keying, and the defaults are chosen around it — a short window (a
+delay, never a takeover) and a high threshold (10 is far more consecutive failures than a real
+user's typos, and any success in between resets it). Lowering `LOGIN_FAILURE_LIMIT` makes that
+lockout cheaper to inflict; raising it weakens brute-force protection. There is no admin "unlock"
+action: wait out the window, or restart the server (the counters are in memory).
+
+Counters live in the server process, so they reset on restart and are **per worker**. Tandem runs
+a single uvicorn worker; if you ever scale that up, each worker keeps its own counts and the
+effective threshold multiplies — replace `FailedLoginTracker` in `server/rate_limit.py` with a
+shared backend before doing so.
+
+Both `login_failed` and `login_locked` rows land in the audit log, so a sustained attack on one
+account is visible in the web UI's user-management **Audit Log** tab, filterable by action (and it
+grows that table; the per-IP limit is what bounds how fast).
+
 ## Restart policies
 
 Every service in `docker-compose.example.yml` carries `restart: unless-stopped`. Keep it that way

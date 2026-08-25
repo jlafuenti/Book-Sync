@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     # require admin approval (is_active=False) unless disabled here entirely.
     allow_public_registration: bool = Field(default=True, alias="ALLOW_PUBLIC_REGISTRATION")
 
+    # Per-username login throttle (issue #296). Counts only FAILED logins in a
+    # sliding window; a success clears the counter. Complements the per-IP
+    # slowapi bucket, which docker NAT can collapse into one bucket (#294).
+    # The limit is deliberately high and the window short: keying on the
+    # username means an attacker who knows one can lock the real user out for
+    # the window, so the threshold must sit far above any run of typos. See
+    # rate_limit.FailedLoginTracker and docs/operations.md, "Login throttling".
+    login_failure_limit: int = Field(default=10, alias="LOGIN_FAILURE_LIMIT")
+    login_failure_window_seconds: int = Field(
+        default=15 * 60, alias="LOGIN_FAILURE_WINDOW_SECONDS"
+    )
+
     # Whisper Transcription
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisper_device: str = Field(
