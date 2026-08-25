@@ -21,7 +21,7 @@ from schemas import (
     UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
     PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
-from rate_limit import limiter
+from rate_limit import failed_logins, limiter
 from utils import utcnow
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -229,12 +229,36 @@ async def register(user_data: UserCreate, request: Request, db: AsyncSession = D
 @limiter.limit("5/minute")
 async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     """Authenticate a user and return JWT tokens."""
+    # Per-username throttle (issue #296), checked before the user is even looked
+    # up: the whole point is to refuse without spending a bcrypt verify, and
+    # checking before the password means a locked bucket answers 429 whatever
+    # the password was — so it can never be used as a password oracle.
+    retry_after = failed_logins.retry_after(credentials.username)
+    if retry_after is not None:
+        # Commit for the same reason as login_failed below: the raise unwinds
+        # through get_db, which rolls the session back (PR #289).
+        await log_audit(
+            db, "login_locked",
+            details=(
+                f"Login temporarily locked for username '{credentials.username}' "
+                f"after repeated failures"
+            ),
+            ip_address=get_client_ip(request),
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     result = await db.execute(
         select(User).where(User.username == credentials.username)
     )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(credentials.password, user.hashed_password):
+        failed_logins.record_failure(credentials.username)
         # Log failed attempt. Commit explicitly: the 401 below propagates into
         # get_db, whose error path rolls the session back — without this the
         # login_failed row silently never persisted (issue #156).
@@ -248,6 +272,11 @@ async def login(credentials: UserLogin, request: Request, db: AsyncSession = Dep
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    # Right password: the account is not under attack, so drop its counter.
+    # Done before the is_active gate — a pending user typing the correct
+    # password shouldn't accumulate toward a lockout either.
+    failed_logins.clear(credentials.username)
 
     if not user.is_active:
         raise HTTPException(
