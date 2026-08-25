@@ -44,6 +44,41 @@ docker compose run --rm server alembic stamp head
 When the template changes, diff `docker-compose.example.yml` against your copy and port over what
 you want.
 
+## Reverse proxy
+
+If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is
+one already), every request reaches the API from the proxy's address. Unless uvicorn is told to
+trust that peer, all clients look like one: the `5/minute` rate limit on login/registration
+becomes a single global bucket (five bad logins a minute from anyone keeps *everyone* at 429),
+and audit-log rows record the proxy's IP instead of the client's.
+
+Set `FORWARDED_ALLOW_IPS` on the `server` service to the address your proxy connects from —
+check the server log's `request.client.host` if unsure; a CIDR or comma-separated list is
+accepted (the template ships `172.16.0.0/12`, covering Docker's default bridge networks):
+
+```yaml
+  server:
+    environment:
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12
+```
+
+uvicorn then rewrites the client address from `X-Forwarded-For`, but **only** for requests
+arriving from those peers. Never set it to `*` — that trusts an attacker-chosen header from
+anywhere, letting one client dodge rate limits and forge audit IPs. With `APP_ENV=prod`, the
+server logs a startup warning when the variable is unset.
+
+Two hardening notes for an internet-facing deployment:
+
+- Prefer running your outer proxy (e.g. Caddy) **on the compose network**, pointed directly at
+  `server:8000` — one proxy hop, one address to trust, and the API port never needs publishing.
+- Bind any published ports to loopback or your LAN (`127.0.0.1:8000:8000`-style) or firewall
+  them, so clients can't bypass the proxy and hand uvicorn a spoofed header from a "trusted"
+  network path — and so the un-proxied ports aren't reachable from the internet at all.
+
+The `web` nginx proxy forwards `X-Forwarded-For` (appending to any incoming chain via
+`$proxy_add_x_forwarded_for`) and `X-Forwarded-Proto`, so a client's real address survives both
+the Caddy → web → server and the direct web → server topologies.
+
 ## Restart policies
 
 Every service in `docker-compose.example.yml` carries `restart: unless-stopped`. Keep it that way
