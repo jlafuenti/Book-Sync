@@ -242,6 +242,20 @@ one by PUTting zeros through the legacy progress adapter, which left the
 canonical record in place for the next write to resurrect — the same failure
 mode the pair reset fixed (issue #6).
 
+**Converting an unsupported ebook re-points instead of releasing.** The
+converted EPUB is registered as a new `EBook` row and the source is deleted, so
+the pair is re-pointed at it — and every standalone position on the source is
+carried over the same way (`repoint_standalone_positions_to_ebook`, issue #298):
+`ebook_id` moves to the converted row, `epub_sentence_index` and
+`sync_map_version` are cleared (both are coordinates of the old parse), and
+`anchor_revision` is bumped so the hints go **stale, not deleted** — a locator
+or CFI addresses the DOM of the file it was captured in. Chapter, percent,
+preview, audio side and `captured_at` are kept: a chapter/percent anchor is
+roughly right across a conversion and the restore ladder lands it precisely from
+the preview. Collisions with a position already on the replacement resolve by
+`captured_at` exactly as a demotion does, `user_progress` included. Force-delete
+has no replacement to point at, so it still releases, as above.
+
 The "hints are never deleted" rule above governs position **writes**; an
 explicit user reset is the one sanctioned deletion path.
 

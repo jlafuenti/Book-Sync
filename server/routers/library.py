@@ -51,7 +51,11 @@ from routers.auth import get_current_user, get_editor_user
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 from services.audio_duration import probe_duration_seconds
-from services.position_service import demote_pair_positions, release_standalone_positions
+from services.position_service import (
+    demote_pair_positions,
+    release_standalone_positions,
+    repoint_standalone_positions_to_ebook,
+)
 from services import multi_file_audiobooks
 from utils import resolve_cover_url, safe_join, utcnow
 
@@ -3415,7 +3419,11 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
     For every BookPair whose ebook_id == eb_id:
       - If epub_eb is given: re-point pair.ebook_id to the new EPUB (keeps pair + all data intact).
       - If epub_eb is None: delete the pair and all its dependent rows.
-    Also removes UserProgress rows that reference eb_id directly.
+
+    Standalone (`ebook`-scoped) positions on the source follow the same split:
+    re-pointed at the replacement when there is one (issue #298), released when
+    there isn't (issue #155). Either way the source ebook row is about to be
+    deleted by the caller, so nothing may still reference its id.
 
     Returns the ids of the pairs that were re-pointed. Their sync maps were
     built from the *source* file and no longer describe the ebook the reader
@@ -3436,10 +3444,19 @@ async def _relink_or_cleanup_pairs(eb_id: int, epub_eb: Optional[EBook], db: Asy
             await db.execute(delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
             await db.execute(delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
             await db.delete(pair)
-    # The source ebook row is deleted by every caller; standalone bookmark rows
-    # must let go of its id (keeping any audiobook side they carry).
-    await release_standalone_positions(db, ebook_id=eb_id)
-    await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
+
+    if epub_eb is not None:
+        # The converted EPUB *is* the same book, so a position on the source is
+        # carried over to it rather than dropped — chapter, percent, preview and
+        # hints intact, map coordinates cleared, hints marked stale (issue #298).
+        await repoint_standalone_positions_to_ebook(
+            db, old_ebook_id=eb_id, new_ebook_id=epub_eb.id)
+    else:
+        # Nothing to carry the position to: standalone bookmark rows let go of
+        # the dying id (keeping any audiobook side they carry), and the ebook
+        # projection goes with it.
+        await release_standalone_positions(db, ebook_id=eb_id)
+        await db.execute(delete(UserProgress).where(UserProgress.ebook_id == eb_id))
     return relinked
 
 
