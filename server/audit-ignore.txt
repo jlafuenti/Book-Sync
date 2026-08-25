@@ -1,0 +1,10 @@
+# Allow-list for the pip-audit CI gate (tests.yml "audit" job).
+#
+# One advisory ID per line (PYSEC-... or GHSA-...); blank lines and #-comments
+# are skipped. CI expands each entry into a `pip-audit --ignore-vuln` flag, so
+# anything listed here is deliberately accepted — every entry MUST carry a
+# comment explaining why the advisory is unreachable or otherwise justified,
+# and should be re-checked whenever the owning pin changes. See issue #157.
+#
+# Currently empty: as of the issue-157 upgrade, `pip-audit -r requirements.txt
+# --strict` reports no known vulnerabilities.
