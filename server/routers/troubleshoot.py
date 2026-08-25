@@ -33,7 +33,11 @@ from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from services import chapter_repair, library_verify
-from services.position_service import demote_pair_positions, release_standalone_positions
+from services.position_service import (
+    demote_pair_positions,
+    invalidate_parse_coordinates_for_ebook,
+    release_standalone_positions,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/troubleshoot", tags=["troubleshoot"])
@@ -439,6 +443,14 @@ async def replace_file(
     # replaced file's duration forward would leave a silently wrong end zone.
     if item_type == "audiobook" and new_meta.get("duration_seconds"):
         item.duration_seconds = new_meta["duration_seconds"]
+
+    # Replacing an ebook keeps the row id, so every position still points at
+    # it — but its `epub_sentence_index`, its `sync_map_version` and every
+    # device hint describe the file that was just overwritten (issue #303).
+    # Same transaction as the swap: a commit that stores the new file must not
+    # leave the old coordinates behind.
+    if item_type == "ebook":
+        await invalidate_parse_coordinates_for_ebook(db, item_id)
 
     # Replacing an audiobook invalidates the cached transcript & sync.
     if item_type == "audiobook":
