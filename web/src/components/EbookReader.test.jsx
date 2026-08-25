@@ -758,6 +758,103 @@ function makeSearchableFakeBook(bodyText, chapterTexts) {
     return { book, rendition, handlers, doc }
 }
 
+describe('EbookReader — spine search parity with the server matcher (issue #305)', () => {
+    // The needles the spine search hunts for are SERVER-derived sync-point
+    // previews (extracted with get_text(separator="\n") and matched with
+    // normalize_for_search). Live failure: pair 260's preview "Gwendolyn felt
+    // herself smile slightly." exists in the EPUB — the server finds it — but
+    // the web search missed it, because the web (a) deleted unicode
+    // whitespace variants instead of converting them to spaces and (b) read
+    // section text via textContent, which glues text at inline tag
+    // boundaries. The genuinely-absent case (banner, closed gate) is pinned
+    // by the confirmation suite below.
+
+    function audioOnlyRecordWithPreview() {
+        getPositionMock.mockResolvedValue({
+            anchor_revision: 0,
+            source: 'audiobook',
+            audio_position_ms: 600000,
+            hints: [],
+        })
+        audioToEpubMock.mockResolvedValue({
+            epub_chapter: 1,
+            epub_sentence_index: 69,
+            preview: 'Gwendolyn felt herself smile slightly.',
+            sync_map_version: 1,
+        })
+    }
+
+    async function renderAndLand(book, rendition, handlers, targetHref) {
+        ePubMock.mockReturnValue(book)
+        render(
+            <EbookReader
+                ebookId={7} pairId={42}
+                initialChapter={null} initialTextPreview={null}
+                bookTitle="Test Book" onClose={vi.fn()}
+            />
+        )
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith('ch1.xhtml'))
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-seed', percentage: 0.01, displayed: { page: 1, total: 1 }, href: 'ch1.xhtml' },
+            })
+        })
+        await waitFor(() => expect(rendition.display).toHaveBeenCalledWith(targetHref))
+        await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+        expect(screen.queryByText(/Couldn't find your saved place/)).not.toBeInTheDocument()
+    }
+
+    it('finds a sentence whose words are separated by non-breaking spaces', async () => {
+        audioOnlyRecordWithPreview()
+        matchTextToAudioMock.mockResolvedValue(null)
+        const { book, rendition, handlers } = makeSearchableFakeBook(LONG_TEXT, [
+            'cover page', 'title page', 'copyright text',
+            'and then Gwendolyn\u00a0felt herself\u00a0smile slightly. more of the chapter follows',
+            'another chapter',
+        ])
+
+        await renderAndLand(book, rendition, handlers, 'ch3.xhtml')
+
+        // The landing is confirmed, so saving is allowed.
+        act(() => {
+            handlers.relocated({
+                start: { cfi: 'cfi-found', percentage: 0.3, displayed: { page: 1, total: 1 }, href: 'ch3.xhtml' },
+            })
+        })
+        fireEvent.click(screen.getByTitle('Save position'))
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+    })
+
+    it('finds a sentence spanning inline markup with no literal space at the tag boundary', async () => {
+        audioOnlyRecordWithPreview()
+        matchTextToAudioMock.mockResolvedValue(null)
+        // Server-side, get_text(separator="\n") puts whitespace at every tag
+        // boundary, so the stored preview reads "Gwendolyn felt herself smile
+        // slightly." — textContent of the same markup glues the words.
+        const sectionEl = document.createElement('div')
+        sectionEl.innerHTML =
+            '<p>And then <i>Gwendolyn</i>felt herself <em>smile</em>slightly. More of the chapter follows.</p>'
+        const { book, rendition, handlers } = makeSearchableFakeBook(LONG_TEXT, [
+            'cover page', 'title page', 'copyright text', 'placeholder', 'another chapter',
+        ])
+        book.spine.items[3].load = vi.fn(async () => sectionEl)
+
+        await renderAndLand(book, rendition, handlers, 'ch3.xhtml')
+    })
+
+    it('finds a sentence wrapped in smart quotes and dashes', async () => {
+        audioOnlyRecordWithPreview()
+        matchTextToAudioMock.mockResolvedValue(null)
+        const { book, rendition, handlers } = makeSearchableFakeBook(LONG_TEXT, [
+            'cover page', 'title page', 'copyright text',
+            'and then “Gwendolyn felt herself smile slightly.”—she read on',
+            'another chapter',
+        ])
+
+        await renderAndLand(book, rendition, handlers, 'ch3.xhtml')
+    })
+})
+
 describe('EbookReader — an audio-derived restore is only a landing when the text confirms it (prod regression)', () => {
     // Live failure (pair 260, "The Aeronaut's Windlass"): the audio rung
     // resolved 600000ms → map chapter 5 + a real preview, the reader
