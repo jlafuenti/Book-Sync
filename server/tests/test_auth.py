@@ -9,7 +9,7 @@ future refactors of the auth surface can't silently regress.
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
+import jwt
 from sqlalchemy import select
 
 from config import settings
