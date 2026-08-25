@@ -33,6 +33,7 @@ from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from services import chapter_repair, library_verify
+from services import sync_map_audit as sync_map_audit_service
 from services.position_service import (
     demote_pair_positions,
     invalidate_parse_coordinates_for_ebook,
@@ -549,6 +550,51 @@ async def requeue_pair(
     from services.queue_manager import add_to_queue
     await add_to_queue([pair_id])
     return {"status": "queued", "pair_id": pair_id}
+
+
+# ---------------------------------------------------------------------------
+# Sync-map drift audit (issue #295)
+# ---------------------------------------------------------------------------
+
+@router.get("/sync-map-audit")
+async def sync_map_audit(
+    sample_size: int = Query(sync_map_audit_service.DEFAULT_SAMPLE_SIZE, ge=0, le=100),
+    pair_id: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=1000),
+    flagged_only: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Which pairs' sync maps no longer describe the ebook on disk (issue #295).
+
+    A map is only meaningful against the file it was aligned from. Pair 260's
+    resolved audio positions to sentences that occur nowhere in its current
+    EPUB, and nothing could tell an operator that — or which other pairs were in
+    the same state. Two signals per pair: the ebook hash recorded at alignment
+    time versus the file's hash now, and the share of a sampled set of the map's
+    stored sentences that can still be found in the book's whole-spine text.
+    See `services/sync_map_audit.py` for how the verdict is reached.
+
+    Read-only. A flagged pair is re-aligned through the endpoint that already
+    does that — `POST /api/transcription/{pair_id}/realign` — which each stale
+    row names in `realign_path`; a pair with no cached transcript is flagged
+    `retranscribe` instead, because re-alignment has nothing to rebuild from.
+
+    `sample_size=0` skips EPUB parsing for a fast provenance-only pass;
+    `pair_id` audits one pair. Editor-gated like its troubleshoot siblings: the
+    full audit hashes and parses every paired ebook on disk.
+    """
+    rows = await sync_map_audit_service.audit_sync_maps(
+        db, sample_size=sample_size, pair_id=pair_id, limit=limit
+    )
+    flagged = [r for r in rows if r["status"] == "stale"]
+    return {
+        "sample_size": sample_size,
+        "checked": len(rows),
+        "flagged": len(flagged),
+        "realign_endpoint": sync_map_audit_service.REALIGN_ENDPOINT,
+        "pairs": flagged if flagged_only else rows,
+    }
 
 
 class DeleteCoversRequest(BaseModel):
