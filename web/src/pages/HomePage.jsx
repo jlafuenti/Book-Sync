@@ -197,6 +197,10 @@ function HomePage() {
     const [loading, setLoading] = useState(true)
     const [readerOpen, setReaderOpen] = useState(null)
     const [playerOpen, setPlayerOpen] = useState(false)
+    // The reader installs its pending-save flush here (issue #158), so the
+    // Listen handoff can issue the ebook write BEFORE the player's first
+    // `source: 'audiobook'` write.
+    const readerSaveFlushRef = useRef(null)
 
     const loadData = useCallback(async () => {
         try {
@@ -507,8 +511,14 @@ function HomePage() {
                 initialChapter={readerOpen.chapter != null && readerOpen.chapter >= 0 ? readerOpen.chapter : null}
                 initialTextPreview={readerOpen.textPreview || null}
                 bookTitle={readerOpen.title}
+                saveFlushRef={readerSaveFlushRef}
                 onClose={() => { setReaderOpen(null); loadData() }}
                 onSwitchToAudio={readerOpen.pairedAudiobookId ? async () => {
+                    // Issue the reader's pending position write first —
+                    // otherwise the handoff drops the last page turn and the
+                    // player's `source: 'audiobook'` write reopens the pair
+                    // at a stale text position (issue #158).
+                    readerSaveFlushRef.current?.()
                     const pos = await getPosition('pair', readerOpen.pairId).catch(() => null)
                     let audioPositionMs = pos?.audio_position_ms || 0
                     if (!audioPositionMs) {

@@ -836,6 +836,21 @@ export function sendPositionKeepalive(scope, id, data) {
     } catch {}
 }
 
+/**
+ * Resolve an audio position to its EPUB coordinates through the pair's sync
+ * map (issue #159) — the audio rung of the restore ladder, executable from
+ * the web. Returns `{ epub_chapter, epub_sentence_index, preview,
+ * sync_map_version }`, or null when the pair has no sync map (or the call
+ * fails): the caller treats null as "this rung cannot land", never an error.
+ */
+export async function audioToEpub(pairId, audioPositionMs) {
+    const resp = await fetchWithAuth(
+        `${API_BASE}/sync/audio-to-epub/${pairId}?audio_ms=${Math.max(0, Math.floor(audioPositionMs))}`
+    );
+    if (!resp.ok) return null;
+    return resp.json();
+}
+
 export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/match-text/${pairId}`, {
         method: 'POST',
