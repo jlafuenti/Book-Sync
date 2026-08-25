@@ -30,6 +30,13 @@ class SyncMap(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     total_sentences: Mapped[int] = mapped_column(Integer, default=0)
     total_chapters: Mapped[int] = mapped_column(Integer, default=0)
+    #: Composite hash (`services.file_hash`) of the ebook file this map was
+    #: aligned against — the map's provenance (issue #295). A map whose stored
+    #: hash no longer matches the file on disk describes a *different* document:
+    #: its sentence coordinates resolve to text the reader will never find.
+    #: NULL means the map predates this column — unknown provenance, not
+    #: healthy; the drift audit falls back to sampling its previews.
+    epub_file_hash: Mapped[str] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
     )
