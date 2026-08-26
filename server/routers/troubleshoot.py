@@ -34,6 +34,12 @@ from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from routers.auth import get_current_user, get_editor_user
 from services import chapter_repair, library_verify
+from services import sync_map_audit as sync_map_audit_service
+from services.position_service import (
+    demote_pair_positions,
+    invalidate_parse_coordinates_for_ebook,
+    release_standalone_positions,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/troubleshoot", tags=["troubleshoot"])
@@ -319,13 +325,22 @@ async def _delete_item_core(db: AsyncSession, item_type: str, item_id: int, dele
     pair_col = BookPair.ebook_id if item_type == "ebook" else BookPair.audiobook_id
     pairs = (await db.execute(select(BookPair).where(pair_col == item_id))).scalars().all()
     for pair in pairs:
+        # Sibling of library.delete_ebook/_audiobook: demote each user's
+        # pair-scoped position onto the surviving medium before the pair
+        # cascade takes it (issue #155).
+        await demote_pair_positions(
+            db, pair.id,
+            keep_ebook=item_type != "ebook",
+            keep_audiobook=item_type != "audiobook",
+        )
         await db.execute(sa_delete(TranscriptionQueueItem).where(TranscriptionQueueItem.book_pair_id == pair.id))
-        await db.execute(sa_delete(UserProgress).where(UserProgress.book_pair_id == pair.id))
         await db.execute(sa_delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
 
     if item_type == "ebook":
+        await release_standalone_positions(db, ebook_id=item_id)
         await db.execute(sa_delete(UserProgress).where(UserProgress.ebook_id == item_id))
     else:
+        await release_standalone_positions(db, audiobook_id=item_id)
         await db.execute(sa_delete(UserProgress).where(UserProgress.audiobook_id == item_id))
 
     await db.execute(sa_delete(LibraryCheckResult).where(
@@ -396,7 +411,7 @@ async def replace_file(
     base = Path(old_path).stem if old_path else Path(safe_join(dest_dir, file.filename).name).stem
     dest_path = str(safe_join(dest_dir, base + new_ext))
 
-    new_size = await stream_upload_to_path(file, Path(dest_path), settings.max_upload_bytes)
+    new_size = await stream_upload_to_path(file, Path(dest_path), settings.max_upload_file_bytes)
 
     # Remove the old file if its path differs from the new one.
     if old_path and os.path.abspath(old_path) != os.path.abspath(dest_path) and os.path.isfile(old_path):
@@ -429,6 +444,14 @@ async def replace_file(
     # replaced file's duration forward would leave a silently wrong end zone.
     if item_type == "audiobook" and new_meta.get("duration_seconds"):
         item.duration_seconds = new_meta["duration_seconds"]
+
+    # Replacing an ebook keeps the row id, so every position still points at
+    # it — but its `epub_sentence_index`, its `sync_map_version` and every
+    # device hint describe the file that was just overwritten (issue #303).
+    # Same transaction as the swap: a commit that stores the new file must not
+    # leave the old coordinates behind.
+    if item_type == "ebook":
+        await invalidate_parse_coordinates_for_ebook(db, item_id)
 
     # Replacing an audiobook invalidates the cached transcript & sync.
     if item_type == "audiobook":
@@ -527,6 +550,51 @@ async def requeue_pair(
     from services.queue_manager import add_to_queue
     await add_to_queue([pair_id])
     return {"status": "queued", "pair_id": pair_id}
+
+
+# ---------------------------------------------------------------------------
+# Sync-map drift audit (issue #295)
+# ---------------------------------------------------------------------------
+
+@router.get("/sync-map-audit")
+async def sync_map_audit(
+    sample_size: int = Query(sync_map_audit_service.DEFAULT_SAMPLE_SIZE, ge=0, le=100),
+    pair_id: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=1000),
+    flagged_only: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_editor_user),
+):
+    """Which pairs' sync maps no longer describe the ebook on disk (issue #295).
+
+    A map is only meaningful against the file it was aligned from. Pair 260's
+    resolved audio positions to sentences that occur nowhere in its current
+    EPUB, and nothing could tell an operator that — or which other pairs were in
+    the same state. Two signals per pair: the ebook hash recorded at alignment
+    time versus the file's hash now, and the share of a sampled set of the map's
+    stored sentences that can still be found in the book's whole-spine text.
+    See `services/sync_map_audit.py` for how the verdict is reached.
+
+    Read-only. A flagged pair is re-aligned through the endpoint that already
+    does that — `POST /api/transcription/{pair_id}/realign` — which each stale
+    row names in `realign_path`; a pair with no cached transcript is flagged
+    `retranscribe` instead, because re-alignment has nothing to rebuild from.
+
+    `sample_size=0` skips EPUB parsing for a fast provenance-only pass;
+    `pair_id` audits one pair. Editor-gated like its troubleshoot siblings: the
+    full audit hashes and parses every paired ebook on disk.
+    """
+    rows = await sync_map_audit_service.audit_sync_maps(
+        db, sample_size=sample_size, pair_id=pair_id, limit=limit
+    )
+    flagged = [r for r in rows if r["status"] == "stale"]
+    return {
+        "sample_size": sample_size,
+        "checked": len(rows),
+        "flagged": len(flagged),
+        "realign_endpoint": sync_map_audit_service.REALIGN_ENDPOINT,
+        "pairs": flagged if flagged_only else rows,
+    }
 
 
 class DeleteCoversRequest(BaseModel):

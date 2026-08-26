@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import select
 
 from config import settings
+from models.book import AudioBook, BookPair, EBook
 from models.sync_map import SyncMap, SyncPoint
 from services.alignment import AlignedPoint
 from services.sync_engine import audio_to_epub, epub_to_audio, save_sync_map
@@ -101,6 +102,67 @@ async def test_save_sync_map_creates_map_and_points(db):
         select(SyncPoint).where(SyncPoint.sync_map_id == sm.id)
     )).scalars().all()
     assert len(stored) == 3
+
+
+async def test_save_sync_map_stamps_the_ebook_file_hash(db, tmp_path):
+    """Provenance for the drift audit (issue #295).
+
+    Every map is written through this one function, so stamping here is what
+    makes "was this map built from the file now on disk?" answerable for maps
+    produced by transcription, by re-alignment, and by the Convert flow alike.
+    """
+    from services.file_hash import hash_file
+    from tests.factories import write_epub
+
+    path = write_epub(
+        tmp_path / "e.epub",
+        [("c1.xhtml", "<html><body><p>The harbour lay still.</p></body></html>")],
+    )
+    eb = EBook(title="E", filename="e.epub", file_path=path)
+    ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a.m4b")
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id)
+    db.add(pair)
+    await db.commit()
+
+    sm = await save_sync_map(db, pair.id, [_aligned(0, 0, 0)])
+
+    assert sm.epub_file_hash == hash_file(path)
+
+
+async def test_save_sync_map_leaves_the_hash_null_when_the_file_is_gone(db):
+    """A missing or unreadable ebook must not fail the save — the map is still
+    the best thing we have; it just has no provenance to record."""
+    eb = EBook(title="E", filename="e.epub", file_path="/nope/missing.epub")
+    ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a.m4b")
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id)
+    db.add(pair)
+    await db.commit()
+
+    sm = await save_sync_map(db, pair.id, [_aligned(0, 0, 0)])
+
+    assert sm.epub_file_hash is None
+
+
+async def test_save_sync_map_leaves_the_hash_null_when_the_file_wont_open(db, tmp_path):
+    """A path that exists but can't be read — a directory, a permission-denied
+    file — must not fail the save either."""
+    directory = tmp_path / "not-a-file"
+    directory.mkdir()
+    eb = EBook(title="E", filename="e.epub", file_path=str(directory))
+    ab = AudioBook(title="A", filename="a.m4b", file_path="/x/a.m4b")
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id)
+    db.add(pair)
+    await db.commit()
+
+    sm = await save_sync_map(db, pair.id, [_aligned(0, 0, 0)])
+
+    assert sm.epub_file_hash is None
 
 
 async def test_save_sync_map_replaces_and_bumps_version(db):

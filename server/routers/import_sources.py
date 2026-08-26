@@ -311,7 +311,7 @@ async def acsm_upload(
     tmp_path = Path(tmp.name)
     try:
         with tmp:
-            await stream_upload_to_file(file, tmp, settings.max_upload_bytes)
+            await stream_upload_to_file(file, tmp, settings.max_upload_file_bytes)
     except BaseException:
         # The finally below only covers the post-write path; clean up here too.
         tmp_path.unlink(missing_ok=True)

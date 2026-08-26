@@ -146,7 +146,14 @@ object AppModule {
             com.booksync.data.local.MIGRATION_17_18,
             com.booksync.data.local.MIGRATION_18_19,
         )
-         .fallbackToDestructiveMigration(dropAllTables = true)
+         // Destructive fallback ONLY for pre-position-work installs (< v12,
+         // before MIGRATION_12_13 — those versions predate the migration
+         // chain entirely). From v12 on, a missing migration must CRASH, not
+         // silently drop every table: `bookmarks`/`user_progress` rows with
+         // syncedToServer=false and the whole `pending_sync` offline queue
+         // are user data the server has never seen (issue #168).
+         // MigrationCoverageTest pins the chain and forbids the blanket form.
+         .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
          .build()
 
     @Provides

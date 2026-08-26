@@ -21,7 +21,7 @@ CAP = 1024  # bytes; the tiny test-time upload cap
 
 @pytest.fixture
 def tiny_caps(monkeypatch):
-    monkeypatch.setattr(settings, "max_upload_bytes", CAP)
+    monkeypatch.setattr(settings, "max_upload_file_bytes", CAP)
     monkeypatch.setattr(settings, "max_cover_bytes", CAP)
 
 
@@ -241,13 +241,13 @@ async def test_oversized_audiobook_cover_413(
 async def test_small_cover_uses_cover_cap_not_upload_cap(
     make_user, auth_header, monkeypatch, temp_covers_dir, upload_client, tmp_path,
 ):
-    """Covers are governed by max_cover_bytes; a tiny max_upload_bytes must not
+    """Covers are governed by max_cover_bytes; a tiny max_upload_file_bytes must not
     reject them."""
-    monkeypatch.setattr(settings, "max_upload_bytes", CAP)
+    monkeypatch.setattr(settings, "max_upload_file_bytes", CAP)
     monkeypatch.setattr(settings, "max_cover_bytes", 64 * 1024)
     book_id = await _seed_ebook(tmp_path)
     editor = await make_user(username="ed", role="editor")
-    content = b"x" * (CAP * 4)  # over max_upload_bytes, under max_cover_bytes
+    content = b"x" * (CAP * 4)  # over max_upload_file_bytes, under max_cover_bytes
 
     async with upload_client() as client:
         r = await client.post(

@@ -217,6 +217,26 @@ def _extract_epub_documents_via_ebooklib(epub_path: str) -> List[str]:
     return documents
 
 
+def _load_epub_documents(epub_path: str) -> List[str]:
+    """The EPUB's content documents in spine order, one entry per itemref.
+
+    The zip+OPF spine walk is primary: it is spine-accurate by construction and
+    immune to ebooklib's NCX crash. ebooklib is the fallback for archives the
+    direct walk can't make sense of.
+    """
+    try:
+        return _extract_epub_documents_via_zip(epub_path)
+    except Exception as e:
+        logger.warning(f"zip+OPF walk failed on '{epub_path}' ({e}); trying ebooklib")
+        try:
+            return _extract_epub_documents_via_ebooklib(epub_path)
+        except Exception as fallback_err:
+            raise RuntimeError(
+                f"Failed to open EPUB '{epub_path}': {e} "
+                f"(ebooklib fallback also failed: {fallback_err})"
+            ) from e
+
+
 def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
     """
     Extract all sentences from an EPUB file, organized by chapter.
@@ -229,20 +249,7 @@ def extract_epub_sentences(epub_path: str) -> List[EpubSentence]:
     """
     logger.info(f"Parsing EPUB: {epub_path}")
 
-    # The zip+OPF spine walk is primary: it is spine-accurate by construction
-    # and immune to ebooklib's NCX crash. ebooklib is the fallback for archives
-    # the direct walk can't make sense of.
-    try:
-        documents = _extract_epub_documents_via_zip(epub_path)
-    except Exception as e:
-        logger.warning(f"zip+OPF walk failed on '{epub_path}' ({e}); trying ebooklib")
-        try:
-            documents = _extract_epub_documents_via_ebooklib(epub_path)
-        except Exception as fallback_err:
-            raise RuntimeError(
-                f"Failed to open EPUB '{epub_path}': {e} "
-                f"(ebooklib fallback also failed: {fallback_err})"
-            ) from e
+    documents = _load_epub_documents(epub_path)
 
     sentences = _build_sentences_from_documents(documents)
 
@@ -333,3 +340,17 @@ def extract_book_sentences(path: str) -> List[EpubSentence]:
     if ext == ".mobi":
         return extract_mobi_sentences(path)
     return extract_epub_sentences(path)
+
+
+def extract_book_text(path: str) -> str:
+    """The whole book's readable text, spine order, as one string.
+
+    Deliberately stops short of sentence tokenization: the drift audit only asks
+    "does this stored sentence occur anywhere in the book?", and NLTK over a
+    whole novel is the expensive half of parsing. Same extraction as
+    `extract_book_sentences` otherwise, so the two agree on what the text *is*.
+    """
+    if Path(path).suffix.lower() == ".mobi":
+        return "\n".join(s.text for s in extract_mobi_sentences(path))
+    documents = _load_epub_documents(path)
+    return "\n".join(_extract_text_from_html(doc) for doc in documents)
