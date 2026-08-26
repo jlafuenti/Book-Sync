@@ -49,10 +49,16 @@ RUN if [ "$INSTALL_LOCAL_WHISPER" = "true" ] || [ "$INSTALL_LOCAL_WHISPER" = "1"
         echo "Skipping local Whisper (torch/openai-whisper) — remote-transcription-only image." ; \
     fi
 
-# Install the acsm-calibre-plugin (DeACSM) so Calibre can convert .acsm
-# files (Google Play Books / Nook downloads) into DRM-free EPUBs headlessly.
-# The plugin runs through Calibre's standard `ebook-convert` (DeACSM is a
-# file-type plugin that transforms .acsm at conversion time).
+# DRM plugins (DeACSM + DeDRM) are opt-in and NOT installed in the default
+# image — see docs/import-sources.md. Enable only if this deployment uses the
+# ACSM (Adobe ADEPT) or Audible import sources, with:
+#   docker compose build --build-arg INSTALL_DRM_PLUGINS=1
+ARG INSTALL_DRM_PLUGINS=false
+
+# acsm-calibre-plugin (DeACSM) lets Calibre convert .acsm files (Google Play
+# Books / Nook downloads) into EPUBs headlessly. The plugin runs through
+# Calibre's standard `ebook-convert` (DeACSM is a file-type plugin that
+# transforms .acsm at conversion time).
 #
 # v0.0.16 (2022) was released before Calibre moved to Python 3.11+, and
 # libadobe.py:249 has a bytes/str concat bug that breaks anonymous and
@@ -61,32 +67,39 @@ RUN if [ "$INSTALL_LOCAL_WHISPER" = "true" ] || [ "$INSTALL_LOCAL_WHISPER" = "1"
 # on the (str + str) path, so it stays correct if upstream ever fixes
 # this and we bump the version pin.
 ARG ACSM_PLUGIN_VERSION=0.0.16
-RUN curl -L --fail -o /tmp/acsm-plugin.zip \
-      https://github.com/Leseratte10/acsm-calibre-plugin/releases/download/v${ACSM_PLUGIN_VERSION}/DeACSM_${ACSM_PLUGIN_VERSION}.zip && \
-    mkdir -p /tmp/acsm-unpacked && \
-    cd /tmp/acsm-unpacked && \
-    unzip -q /tmp/acsm-plugin.zip && \
-    sed -i 's|str_to_hash = serial + devkey_bytes\.decode|str_to_hash = (serial.decode("latin-1") if isinstance(serial, bytes) else serial) + devkey_bytes.decode|' libadobe.py && \
-    grep -q 'isinstance(serial, bytes)' libadobe.py || (echo "DeACSM patch did not apply" && exit 1) && \
-    zip -qr /tmp/acsm-plugin-patched.zip . && \
-    calibre-customize -a /tmp/acsm-plugin-patched.zip && \
-    cd / && \
-    rm -rf /tmp/acsm-plugin.zip /tmp/acsm-plugin-patched.zip /tmp/acsm-unpacked
+RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; then \
+        curl -L --fail -o /tmp/acsm-plugin.zip \
+          https://github.com/Leseratte10/acsm-calibre-plugin/releases/download/v${ACSM_PLUGIN_VERSION}/DeACSM_${ACSM_PLUGIN_VERSION}.zip && \
+        mkdir -p /tmp/acsm-unpacked && \
+        cd /tmp/acsm-unpacked && \
+        unzip -q /tmp/acsm-plugin.zip && \
+        sed -i 's|str_to_hash = serial + devkey_bytes\.decode|str_to_hash = (serial.decode("latin-1") if isinstance(serial, bytes) else serial) + devkey_bytes.decode|' libadobe.py && \
+        { grep -q 'isinstance(serial, bytes)' libadobe.py || (echo "DeACSM patch did not apply" && exit 1) ; } && \
+        zip -qr /tmp/acsm-plugin-patched.zip . && \
+        calibre-customize -a /tmp/acsm-plugin-patched.zip && \
+        cd / && \
+        rm -rf /tmp/acsm-plugin.zip /tmp/acsm-plugin-patched.zip /tmp/acsm-unpacked ; \
+    else \
+        echo "Skipping DeACSM plugin — default image ships no DRM tooling." ; \
+    fi
 
-# Install the DeDRM plugin (noDRM fork) so ACSM-fulfilled Adobe ADEPT EPUBs can
-# actually be decrypted. DeACSM only *fulfills* — it downloads the still-
+# DeDRM plugin (noDRM fork): DeACSM only *fulfills* — it downloads the still-
 # encrypted book plus the license token; the AES/RSA decryption is a separate
 # step that DeDRM performs (its ineptepub auto-discovers the DeACSM account
 # key). Without this the pipeline stored encrypted EPUBs as if DRM-free.
 ARG DEDRM_VERSION=10.0.3
-RUN curl -L --fail -o /tmp/dedrm_tools.zip \
-      https://github.com/noDRM/DeDRM_tools/releases/download/v${DEDRM_VERSION}/DeDRM_tools_${DEDRM_VERSION}.zip && \
-    mkdir -p /tmp/dedrm-unpacked && \
-    unzip -q /tmp/dedrm_tools.zip -d /tmp/dedrm-unpacked && \
-    DEDRM_PLUGIN="$(find /tmp/dedrm-unpacked -name 'DeDRM_plugin.zip' | head -1)" && \
-    test -n "$DEDRM_PLUGIN" && \
-    calibre-customize -a "$DEDRM_PLUGIN" && \
-    rm -rf /tmp/dedrm_tools.zip /tmp/dedrm-unpacked
+RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; then \
+        curl -L --fail -o /tmp/dedrm_tools.zip \
+          https://github.com/noDRM/DeDRM_tools/releases/download/v${DEDRM_VERSION}/DeDRM_tools_${DEDRM_VERSION}.zip && \
+        mkdir -p /tmp/dedrm-unpacked && \
+        unzip -q /tmp/dedrm_tools.zip -d /tmp/dedrm-unpacked && \
+        DEDRM_PLUGIN="$(find /tmp/dedrm-unpacked -name 'DeDRM_plugin.zip' | head -1)" && \
+        test -n "$DEDRM_PLUGIN" && \
+        calibre-customize -a "$DEDRM_PLUGIN" && \
+        rm -rf /tmp/dedrm_tools.zip /tmp/dedrm-unpacked ; \
+    else \
+        echo "Skipping DeDRM plugin — default image ships no DRM tooling." ; \
+    fi
 
 # Copy application code
 COPY . .
