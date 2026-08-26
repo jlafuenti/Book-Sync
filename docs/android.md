@@ -14,6 +14,11 @@ cd android && ./gradlew assembleDebug
 The APK lands in `android/app/build/outputs/apk/debug/`. Use `assembleRelease` for a minified
 build (you'll need your own signing config).
 
+**Keep your keystore outside the checkout** and never name its path or password in a tracked
+file — put both in `android/local.properties` or an environment variable. `.gitignore` refuses
+`*.jks`/`*.keystore`/`*.p12` as a backstop, but a Play upload key cannot be rotated without
+Google's help, so don't rely on the backstop.
+
 Unit tests:
 
 ```bash

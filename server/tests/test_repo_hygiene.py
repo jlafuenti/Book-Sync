@@ -192,3 +192,83 @@ def test_dockerfile_drm_block_is_opt_in():
         f"server/Dockerfile: {unguarded_uses}. Gate it behind "
         "INSTALL_DRM_PLUGINS."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #187: .gitignore must fence off the file shapes that carry secrets.
+#
+# The bare `.env` and `/docker-compose.yml` rules match by exact name only, so a
+# `docker-compose.yml.bak` (which carries the same JWT_SECRET_KEY,
+# POSTGRES_PASSWORD and CREDENTIAL_ENC_KEYS as the original — one already exists
+# untracked on the production host), an `.env.prod`, or an upload keystore would
+# all be staged by a careless `git add -A`. Once pushed to a public repo that is
+# permanent, even if the next commit deletes it. Nothing is leaked today; this
+# test is the fence that keeps it that way.
+# ---------------------------------------------------------------------------
+
+# Paths that must be ignored. None of these exist in the tree — `git check-ignore`
+# answers from the rules alone, so no fixture files are needed.
+_MUST_BE_IGNORED = [
+    # Backup/scratch copies of secret-bearing config
+    "docker-compose.yml.bak",
+    "server/.env.bak",
+    "docker-compose.yml.orig",
+    # Environment files of every flavour
+    ".env.prod",
+    ".env.production",
+    "server/.env.local",
+    # Signing material (Play upload/release keys)
+    "android/app/release.keystore",
+    "android/app/upload.jks",
+    "certs/client.p12",
+    "server/private.pem",
+    "server/private.key",
+]
+
+# The `!.env.example` negative rule has to survive the `.env.*` glob, or the
+# template a fresh clone copies from would stop being committable.
+_MUST_NOT_BE_IGNORED = [
+    ".env.example",
+    "server/.env.example",
+]
+
+
+def _check_ignore(path: str) -> bool:
+    """True if git would ignore `path`. Skips when git is unavailable."""
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=_REPO_ROOT,
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("git unavailable or not a git checkout")
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", path],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+    )
+    # 0 = ignored, 1 = not ignored, 128 = error.
+    assert result.returncode in (0, 1), (
+        f"git check-ignore failed on {path!r}: {result.stderr!r}"
+    )
+    return result.returncode == 0
+
+
+@pytest.mark.parametrize("path", _MUST_BE_IGNORED)
+def test_secret_bearing_paths_are_gitignored(path):
+    assert _check_ignore(path), (
+        f"{path!r} is not covered by .gitignore. Backup copies, env variants and "
+        "signing keys carry live secrets; one `git add -A` puts them in a public "
+        "repo permanently. Add the matching pattern to .gitignore."
+    )
+
+
+@pytest.mark.parametrize("path", _MUST_NOT_BE_IGNORED)
+def test_env_example_templates_stay_committable(path):
+    assert not _check_ignore(path), (
+        f"{path!r} is ignored, but example/template env files must stay tracked — "
+        "they are what a fresh clone copies from. Keep the `!.env.example` "
+        "exception after the `.env.*` rule in .gitignore."
+    )
