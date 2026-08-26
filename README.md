@@ -169,6 +169,7 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 | Doc | Covers |
 |---|---|
 | [docs/library-conventions.md](docs/library-conventions.md) | Supported formats, folder/filename patterns, metadata precedence, auto-pairing rules, format conversion |
+| [docs/import-sources.md](docs/import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
 | [docs/transcription.md](docs/transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
 | [docs/android.md](docs/android.md) | Building the app, pointing it at your server, downloads/offline, Android Auto |
 | [docs/operations.md](docs/operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, restart policies |
@@ -196,3 +197,10 @@ Sync-matching logic exists on both server and Android and is pinned by shared go
 `server/tests/fixtures/sync_parity/` — a change to one platform must update both.
 
 Contributions should include tests for new/changed behavior — the PR template has the checklist.
+
+## License
+
+The entire repository is licensed under **AGPL-3.0-only** — see [LICENSE](LICENSE). Under §13,
+anyone who runs a modified Tandem server for other users must offer those users the corresponding
+source code. The license choice follows the server's AGPL/GPL dependencies (ebooklib, mobi,
+audible, audible-cli).

@@ -44,6 +44,11 @@ docker compose run --rm server alembic stamp head
 When the template changes, diff `docker-compose.example.yml` against your copy and port over what
 you want.
 
+**DRM plugins are opt-in.** A deployment that uses the ACSM or Audible import sources must build
+the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` — the default image
+ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
+them. See [import-sources.md](import-sources.md).
+
 ## Reverse proxy
 
 If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is
