@@ -57,6 +57,7 @@ from services.position_service import (
     repoint_standalone_positions_to_ebook,
 )
 from services import multi_file_audiobooks
+from services.uploads import stream_upload_to_path
 from utils import resolve_cover_url, safe_join, utcnow
 
 logger = logging.getLogger(__name__)
@@ -2085,9 +2086,7 @@ async def upload_ebook(
             detail=f"A file named '{filepath.name}' already exists in the library",
         )
 
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
+    await stream_upload_to_path(file, filepath, settings.max_upload_file_bytes)
 
     # Delegate to the same ingest path the directory scanner uses, so uploads
     # get cover extraction, metadata enrichment, and auto-matching for free.
@@ -2119,9 +2118,7 @@ async def upload_audiobook(
             detail=f"A file named '{filepath.name}' already exists in the library",
         )
 
-    content = await file.read()
-    with open(filepath, "wb") as f:
-        f.write(content)
+    await stream_upload_to_path(file, filepath, settings.max_upload_file_bytes)
 
     # Delegate to the same ingest path the directory scanner uses, so uploads
     # get cover extraction, metadata enrichment, and auto-matching for free.
@@ -2464,8 +2461,7 @@ async def upload_ebook_cover(
 
     old_path = resolve_cover_url(book.cover_path, covers_path)
 
-    with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    await stream_upload_to_path(file, dest_path, settings.max_cover_bytes)
 
     if old_path and old_path.is_file() and old_path != dest_path:
         try:
@@ -2545,8 +2541,7 @@ async def upload_audiobook_cover(
 
     old_path = resolve_cover_url(book.cover_path, covers_path)
 
-    with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    await stream_upload_to_path(file, dest_path, settings.max_cover_bytes)
 
     if old_path and old_path.is_file() and old_path != dest_path:
         try:
