@@ -33,10 +33,20 @@
             </intent-filter>
         </activity>
 
-        <!-- EPUB Reader Activity (Readium) -->
+        <!-- EPUB Reader Activity (Readium).
+             configChanges: the process-death guard in onCreate finishes the
+             activity on ANY recreation (it cannot restore the reflective
+             EpubNavigatorFragment state), so recreation-causing config changes
+             are handled in place instead — otherwise the first rotation,
+             dark-mode toggle or split-screen closed the book (issue #163).
+             The reader's theme is its own preference, not uiMode, and
+             Readium's WebView re-lays itself out. Do NOT swap this for an
+             orientation lock: Android 16 ignores orientation restrictions on
+             large screens. -->
         <activity
             android:name=".ui.reader.ReaderActivity"
             android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|fontScale|density|locale|layoutDirection"
             android:theme="@style/Theme.Tandem" />
 
         <!-- Audio Playback + Android Auto Library Service (single consolidated service) -->
