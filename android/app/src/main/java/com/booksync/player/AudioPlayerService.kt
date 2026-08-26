@@ -31,6 +31,7 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.diagnostics.LogChannel
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -55,12 +56,6 @@ import java.net.Inet4Address
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.withTimeoutOrNull
-
-/**
- * How long a resume waits for the server's position before falling back to
- * the local cache. Mirrors PlayerScreen's bound.
- */
-private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Foreground media playback service using Media3 MediaLibraryService.
@@ -88,6 +83,13 @@ class AudioPlayerService : MediaLibraryService() {
         const val CMD_SET_SLEEP_TIMER = "SET_SLEEP_TIMER"
         const val CMD_GET_SPEED = "GET_SPEED"
         const val CMD_GET_CHAPTERS = "GET_CHAPTERS"
+        // Sent by PlayerViewModel right before a programmatic RESTORE seek so
+        // the seek flush (issue #166) skips it. The has-played gate alone is
+        // not enough: reopening the player while its item is still loaded
+        // means no media-item transition, so hasPlayedSinceItemTransition is
+        // still true from the previous session — and the restore seek was
+        // flushed with claimFormat=true on a mere screen open (found live).
+        const val CMD_SUPPRESS_NEXT_SEEK_FLUSH = "SUPPRESS_NEXT_SEEK_FLUSH"
 
         private const val TAG = "AudioPlayerService"
         private const val PREFS_NAME = "audio_player_prefs"
@@ -102,6 +104,9 @@ class AudioPlayerService : MediaLibraryService() {
         // cadence before changing either.
         private const val AUTO_SAVE_INTERVAL_MS = 5_000L
         private const val NETWORK_SAVE_INTERVAL_MS = 30_000L
+        // User seeks flush after this quiet window (issue #166) — same number
+        // as the web player's SEEK_FLUSH_DEBOUNCE_MS in AudioPlayerContext.
+        private const val SEEK_FLUSH_DEBOUNCE_MS = 1_000L
         // Generous socket read timeout for slow Cast receivers downloading big audiobook files.
         private const val NanoHTTPDSocketReadTimeoutMs = 60_000
         // Write a history-log entry every 30 min of continuous playback
@@ -132,6 +137,17 @@ class AudioPlayerService : MediaLibraryService() {
     private val heartbeatThrottle = HeartbeatThrottle(NETWORK_SAVE_INTERVAL_MS)
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
+
+    // The session player's rewind-on-resume wrapper (local playback only; Cast
+    // is unwrapped). Kept as a field so the seek flush (issue #166) can tell
+    // its programmatic rewind — and the restore seek at open — from user seeks.
+    private var resumeRewindPlayer: ResumeRewindPlayer? = null
+    // Trailing-edge debounce for the user-seek flush: a scrub burst collapses
+    // into one save at its final position, like the web player's.
+    private var seekFlushJob: Job? = null
+    // One-shot: armed by CMD_SUPPRESS_NEXT_SEEK_FLUSH, consumed by the next
+    // REASON_SEEK discontinuity. See the command's doc in the companion.
+    private var suppressNextSeekFlush = false
 
     // Local HTTP server that serves downloaded audiobooks to the Cast receiver over the LAN.
     // Started in castSessionListener.onSessionStarted, torn down in onSessionEnded. Avoids
@@ -251,13 +267,41 @@ class AudioPlayerService : MediaLibraryService() {
                     // them apart, so it can't be trusted to claim the format —
                     // this is the exact background-save-hijacks-routing bug
                     // the claimFormat split exists to fix.
-                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
+                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false, detached = true)
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // A different book: don't make its first heartbeat wait out the
                 // previous book's push window (issue #65).
                 heartbeatThrottle.reset()
+            }
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                // User seeks flush the position (issue #166, contract § "Save
+                // cadence") — debounced like the web player, so a scrub burst
+                // produces one save at its final position. Two programmatic
+                // seeks must NOT flush (their claimFormat=true save would
+                // claim the format without any user command — the exact
+                // hijack the claim rule forbids):
+                //  - the wrapper's own 5s resume rewind, and
+                //  - the restore seek when the player opens (no playback has
+                //    been heard yet). Cast is exempt from that gate: the
+                //    unwrapped CastPlayer never sees the restore seek.
+                if (reason != Player.DISCONTINUITY_REASON_SEEK) return
+                if (suppressNextSeekFlush) {
+                    // A restore seek the PlayerViewModel announced — not a
+                    // user scrub, regardless of what the gates below think.
+                    suppressNextSeekFlush = false
+                    return
+                }
+                val rewind = resumeRewindPlayer
+                if (rewind != null && rewind.consumeResumeRewindSeek()) return
+                val isCast = mediaLibrarySession?.player is CastPlayer
+                if (!isCast && rewind?.hasPlayedSinceItemTransition != true) return
+                scheduleSeekFlush()
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // Track/audiobook reached its natural end (fires on both
@@ -266,25 +310,23 @@ class AudioPlayerService : MediaLibraryService() {
                 // the player is not playing at this moment (state is ENDED),
                 // same conservative rule as the pause listener above.
                 if (playbackState == Player.STATE_ENDED) {
-                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
+                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false, detached = true)
                     val player = mediaLibrarySession?.player ?: return
                     val mediaId = player.currentMediaItem?.mediaId ?: return
                     serviceScope.launch {
                         try {
-                            when {
-                                mediaId.startsWith("pair_") -> {
-                                    val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
-                                    val pair = repository.getPairById(pairId) ?: return@launch
+                            when (val id = MediaId.parse(mediaId)) {
+                                is MediaId.Pair -> {
+                                    val pair = repository.getPairById(id.pairId) ?: return@launch
                                     // One pair-scoped write (issue #56) — this
                                     // listener is the single end-of-book
                                     // completion path; PlayerScreen no longer
                                     // duplicates it.
                                     repository.markPairComplete(pair.id, pair.ebookId, pair.audiobookId)
                                 }
-                                mediaId.startsWith("audiobook_") -> {
-                                    val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
-                                    repository.markComplete("audiobook", audiobookId)
-                                }
+                                is MediaId.Audiobook ->
+                                    repository.markComplete("audiobook", id.audiobookId)
+                                null -> {}
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to mark complete on end", e)
@@ -315,6 +357,7 @@ class AudioPlayerService : MediaLibraryService() {
         // phone screen. Note the CastPlayer below is deliberately left unwrapped —
         // see ResumeRewindPlayer's docs and switchToPlayer's `is CastPlayer` checks.
         val resumeRewindPlayer = ResumeRewindPlayer(localPlayer)
+        this.resumeRewindPlayer = resumeRewindPlayer
         // Android Auto on some head units renders rewind/fast-forward buttons based on
         // SEEK_TO_PREVIOUS/SEEK_TO_NEXT rather than SEEK_BACK/SEEK_FORWARD.
         // We wrap the player so those "track-style" commands behave like seeking by
@@ -475,6 +518,12 @@ class AudioPlayerService : MediaLibraryService() {
         sleepTimerJob?.cancel()
         stopAutoPositionSave()
         stopLocalCastServer()
+        // Final flush BEFORE the scope dies (issue #164): detached, so
+        // cancelling serviceScope on the next line can't abort it. The
+        // saveLastPosition below writes only the SharedPreferences hint for
+        // Cast resumption — it is not a position save. claimFormat=false: the
+        // service can't tell why it is being destroyed.
+        saveCurrentPositionForAuto(appendToLog = false, claimFormat = false, detached = true)
         serviceScope.cancel()
         try {
             CastContext.getSharedInstance()?.sessionManager
@@ -595,7 +644,7 @@ class AudioPlayerService : MediaLibraryService() {
         // (the ExoPlayer<->CastPlayer switch, not a play/pause/seek), and
         // this path also fires during e.g. connection loss, so it gets the
         // same conservative treatment as the other background boundary saves.
-        if (savePosition) saveCurrentPositionForAuto(appendToLog = true, claimFormat = false)
+        if (savePosition) saveCurrentPositionForAuto(appendToLog = true, claimFormat = false, detached = true)
 
         val currentItem = currentPlayer.currentMediaItem
         val rawPositionMs = currentPlayer.currentPosition
@@ -658,16 +707,12 @@ class AudioPlayerService : MediaLibraryService() {
         }
 
         val mediaId = original.mediaId
-        val filename = when {
-            mediaId.startsWith("pair_") -> {
-                val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
-                runBlocking { repository.getPairById(pairId) }?.audiobookFilename
-            }
-            mediaId.startsWith("audiobook_") -> {
-                val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
-                runBlocking { repository.getAudiobookById(audiobookId) }?.filename
-            }
-            else -> null
+        val filename = when (val id = MediaId.parse(mediaId)) {
+            is MediaId.Pair ->
+                runBlocking { repository.getPairById(id.pairId) }?.audiobookFilename
+            is MediaId.Audiobook ->
+                runBlocking { repository.getAudiobookById(id.audiobookId) }?.filename
+            null -> null
         } ?: run {
             Log.w(TAG, "buildCastMediaItem: no filename for mediaId=$mediaId")
             return null
@@ -795,18 +840,16 @@ class AudioPlayerService : MediaLibraryService() {
      */
     private fun buildLocalMediaItem(original: MediaItem): MediaItem? {
         val mediaId = original.mediaId
-        val audioFile = when {
-            mediaId.startsWith("pair_") -> {
-                val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
-                val pair = runBlocking { repository.getPairById(pairId) } ?: return null
+        val audioFile = when (val id = MediaId.parse(mediaId)) {
+            is MediaId.Pair -> {
+                val pair = runBlocking { repository.getPairById(id.pairId) } ?: return null
                 File(filesDir, "audiobooks/${pair.audiobookFilename}")
             }
-            mediaId.startsWith("audiobook_") -> {
-                val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
-                val audio = runBlocking { repository.getAudiobookById(audiobookId) } ?: return null
+            is MediaId.Audiobook -> {
+                val audio = runBlocking { repository.getAudiobookById(id.audiobookId) } ?: return null
                 File(filesDir, "audiobooks/${audio.filename}")
             }
-            else -> return null
+            null -> return null
         }
         if (!audioFile.exists()) return null
         return original.buildUpon().setUri(Uri.fromFile(audioFile)).build()
@@ -850,45 +893,93 @@ class AudioPlayerService : MediaLibraryService() {
         // False = a throttled heartbeat tick (issue #65): Room only, no network.
         // Every boundary save leaves this true.
         pushToServer: Boolean = true,
+        // The heartbeat's 0-guard drops saves from a player that hasn't
+        // started yet; a user SEEK to 0 (skip back to the start) is a real
+        // position, so the seek flush opts out of it (issue #166).
+        allowZeroPosition: Boolean = false,
+        // Boundary saves (pause, STATE_ENDED, cast switch, disconnect, seek
+        // flush, onDestroy) run on the repository's app scope under
+        // NonCancellable, because serviceScope is cancelled in onDestroy and
+        // a save still inside the network call lost its Room write too
+        // (issue #164). The throttled heartbeat stays on serviceScope — a
+        // lost tick is recovered by the next one.
+        detached: Boolean = false,
     ) {
         val player = mediaLibrarySession?.player ?: return
         val mediaId = player.currentMediaItem?.mediaId ?: return
         val posMs = player.currentPosition.toInt()
-        if (posMs <= 0) return
+        if (posMs <= 0 && !allowZeroPosition) return
 
         if (appendToLog) continuousPlaybackLog.onLogged(System.currentTimeMillis())
 
+        if (detached) {
+            when (val id = MediaId.parse(mediaId)) {
+                is MediaId.Pair -> repository.savePlaybackPositionDetached(
+                    pairId = id.pairId,
+                    audioPositionMs = posMs,
+                    appendToLog = appendToLog,
+                    claimFormat = claimFormat,
+                )
+                is MediaId.Audiobook -> repository.savePlaybackPositionStandaloneDetached(
+                    audiobookId = id.audiobookId,
+                    audioPositionMs = posMs,
+                    claimFormat = claimFormat,
+                )
+                null -> {}
+            }
+            // Boundary saves don't advance the heartbeat throttle: the next
+            // tick may push once more, which is harmless — the reverse (a
+            // boundary counting as a push that then gets lost) is not.
+            return
+        }
+
         serviceScope.launch {
             try {
-                val pushed = when {
-                    mediaId.startsWith("pair_") -> {
-                        val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return@launch
+                val pushed = when (val id = MediaId.parse(mediaId)) {
+                    is MediaId.Pair ->
                         repository.savePlaybackPosition(
-                            pairId = pairId,
+                            pairId = id.pairId,
                             audioPositionMs = posMs,
                             appendToLog = appendToLog,
                             claimFormat = claimFormat,
                             pushToServer = pushToServer,
                         )
-                    }
-                    mediaId.startsWith("audiobook_") -> {
+                    is MediaId.Audiobook ->
                         // Standalone audiobooks: no pair → no bookmark_log entry to
                         // worry about. updateProgress only writes UserProgress.
-                        val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return@launch
                         repository.savePlaybackPositionStandalone(
-                            audiobookId = audiobookId,
+                            audiobookId = id.audiobookId,
                             audioPositionMs = posMs,
                             claimFormat = claimFormat,
                             pushToServer = pushToServer,
                         )
-                    }
-                    else -> false
+                    null -> false
                 }
                 // Only a push that actually landed advances the throttle window.
                 if (pushed) heartbeatThrottle.onPushed(System.currentTimeMillis())
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to save Auto position", e)
             }
+        }
+    }
+
+    /**
+     * Debounced flush for user seeks (issue #166): each new seek restarts the
+     * quiet window; SEEK_FLUSH_DEBOUNCE_MS after the last one, the position is
+     * saved — read at save time, so a scrub burst lands on its final position.
+     * claimFormat=true: a seek is an explicit user playback command, one of
+     * the actions the claim rule names (contract § "Who may claim source").
+     */
+    private fun scheduleSeekFlush() {
+        seekFlushJob?.cancel()
+        seekFlushJob = serviceScope.launch {
+            delay(SEEK_FLUSH_DEBOUNCE_MS)
+            saveCurrentPositionForAuto(
+                appendToLog = false,
+                claimFormat = true,
+                allowZeroPosition = true,
+                detached = true,
+            )
         }
     }
 
@@ -1028,6 +1119,7 @@ class AudioPlayerService : MediaLibraryService() {
                 .add(SessionCommand(CMD_SET_SLEEP_TIMER, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_CHAPTERS, Bundle.EMPTY))
+                .add(SessionCommand(CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle.EMPTY))
                 .build()
             // AudiobookPlayer (ForwardingPlayer) already removes SEEK_TO_PREVIOUS/NEXT globally,
             // so no per-controller command restriction is needed here.
@@ -1064,6 +1156,10 @@ class AudioPlayerService : MediaLibraryService() {
                     val result = getChaptersBundle(session.player)
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, result))
                 }
+                CMD_SUPPRESS_NEXT_SEEK_FLUSH -> {
+                    suppressNextSeekFlush = true
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
         }
@@ -1077,7 +1173,7 @@ class AudioPlayerService : MediaLibraryService() {
             // disconnect on car shutoff). claimFormat=false: a disconnect is a
             // teardown boundary, not a playback command — the same
             // background-save treatment as the other boundary calls above.
-            saveCurrentPositionForAuto(claimFormat = false)
+            saveCurrentPositionForAuto(claimFormat = false, detached = true)
         }
 
         // --- Browse tree ---
@@ -1162,19 +1258,21 @@ class AudioPlayerService : MediaLibraryService() {
                         Log.w(TAG, "Cast resumption: cannot build cast item for $mediaId")
                         return@launch
                     }
-                    val positionMs = when {
-                        mediaId.startsWith("pair_") -> {
-                            val pairId = mediaId.removePrefix("pair_").toIntOrNull()
-                            pairId?.let { refreshPositionBeforeResume(it) }
-                            pairId?.let { repository.getBookmark(it)?.audioPositionMs?.toLong() }
+                    val positionMs = when (val id = MediaId.parse(mediaId)) {
+                        is MediaId.Pair -> {
+                            refreshPositionBeforeResume("pair", id.pairId)
+                            repository.getBookmark(id.pairId)?.audioPositionMs?.toLong()
                                 ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                         }
-                        mediaId.startsWith("audiobook_") -> {
-                            val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull()
-                            audiobookId?.let { repository.getProgressOnce("audiobook", it)?.audioPositionMs?.toLong() }
+                        is MediaId.Audiobook -> {
+                            // Same rule as the pair branch (issue #162): this
+                            // decides where Cast playback starts, so pull the
+                            // server's position first — bounded, cache fallback.
+                            refreshPositionBeforeResume("audiobook", id.audiobookId)
+                            repository.getProgressOnce("audiobook", id.audiobookId)?.audioPositionMs?.toLong()
                                 ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                         }
-                        else -> sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
+                        null -> sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                     }
                     // CastContext.getSharedInstance() requires the main thread.
                     withContext(Dispatchers.Main) {
@@ -1371,45 +1469,56 @@ class AudioPlayerService : MediaLibraryService() {
      * builders deliberately don't: they render a list and would otherwise fire
      * one request per row on every browse.
      */
-    private suspend fun refreshPositionBeforeResume(pairId: Int) {
-        withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
-            repository.refreshBookmark(pairId)
-        } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
+    private suspend fun refreshPositionBeforeResume(scope: String, id: Int) {
+        when (scope) {
+            "pair" -> {
+                withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                    repository.refreshBookmark(id)
+                } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
 
-        // Re-fetch the sync map if a re-transcription invalidated the cached one
-        // (issue #55) — the synced-page display converts through these points,
-        // and a stale cache resolves to audio timestamps that no longer exist.
-        // Bounded like the position pull above: playback must not wait on it.
-        withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
-            repository.ensureSyncMapCached(pairId)
-        } ?: Log.w(TAG, "resume: sync map not available in time — using local cache")
+                // Re-fetch the sync map if a re-transcription invalidated the cached one
+                // (issue #55) — the synced-page display converts through these points,
+                // and a stale cache resolves to audio timestamps that no longer exist.
+                // Bounded like the position pull above: playback must not wait on it.
+                withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                    repository.ensureSyncMapCached(id)
+                } ?: Log.w(TAG, "resume: sync map not available in time — using local cache")
+            }
+            // Standalone audiobooks have no pair and no sync map — one bounded
+            // pull of the canonical progress record (issue #162).
+            "audiobook" -> {
+                withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                    repository.refreshProgress("audiobook", id)
+                } ?: Log.w(TAG, "resume: server position unavailable in time — using local cache")
+            }
+        }
     }
 
     private suspend fun resolveMediaItem(mediaId: String): MediaItem? {
-        return when {
-            mediaId.startsWith("pair_") -> {
-                val pairId = mediaId.removePrefix("pair_").toIntOrNull() ?: return null
-                val pair = repository.getPairById(pairId) ?: return null
+        return when (val id = MediaId.parse(mediaId)) {
+            is MediaId.Pair -> {
+                val pair = repository.getPairById(id.pairId) ?: return null
                 // This is the playback-start path — what it returns is where
                 // audio actually begins — so pull the server's position first.
                 // Reading only the local cache meant a position set on another
                 // device was never seen here. Bounded, so an unreachable server
                 // falls back to the cache instead of stalling playback.
-                refreshPositionBeforeResume(pairId)
-                val bookmark = repository.getBookmark(pairId)
+                refreshPositionBeforeResume("pair", id.pairId)
+                val bookmark = repository.getBookmark(id.pairId)
                 val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                 val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)
                 buildPairMediaItem(pair, resumeMs, coverUri)
             }
-            mediaId.startsWith("audiobook_") -> {
-                val audiobookId = mediaId.removePrefix("audiobook_").toIntOrNull() ?: return null
-                val audio = repository.getAudiobookById(audiobookId) ?: return null
-                val progress = repository.getProgressOnce("audiobook", audiobookId)
+            is MediaId.Audiobook -> {
+                val audio = repository.getAudiobookById(id.audiobookId) ?: return null
+                // Same rule as the pair branch (issue #162).
+                refreshPositionBeforeResume("audiobook", id.audiobookId)
+                val progress = repository.getProgressOnce("audiobook", id.audiobookId)
                 val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                val coverUri = coverArtHelper.getCoverUri(audiobookId, audio.filename)
+                val coverUri = coverArtHelper.getCoverUri(id.audiobookId, audio.filename)
                 buildAudiobookMediaItem(audio, resumeMs, coverUri)
             }
-            else -> null
+            null -> null
         }
     }
 
@@ -1425,7 +1534,7 @@ class AudioPlayerService : MediaLibraryService() {
             putInt("pairId", pair.id)
         }
         return MediaItem.Builder()
-            .setMediaId("pair_${pair.id}")
+            .setMediaId(MediaId.Pair(pair.id).value)
             .setUri(Uri.fromFile(File(filesDir, "audiobooks/${pair.audiobookFilename}")))
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -1453,7 +1562,7 @@ class AudioPlayerService : MediaLibraryService() {
             putInt("audiobookId", audio.id)
         }
         return MediaItem.Builder()
-            .setMediaId("audiobook_${audio.id}")
+            .setMediaId(MediaId.Audiobook(audio.id).value)
             .setUri(Uri.fromFile(File(filesDir, "audiobooks/${audio.filename}")))
             .setMediaMetadata(
                 MediaMetadata.Builder()

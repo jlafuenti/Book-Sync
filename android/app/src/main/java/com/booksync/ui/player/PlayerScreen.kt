@@ -2,7 +2,6 @@ package com.booksync.ui.player
 
 import android.content.ComponentName
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -53,7 +52,9 @@ import com.booksync.SyncState
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.BookmarkLogResponse
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS
 import com.booksync.player.AudioPlayerService
+import com.booksync.player.MediaId
 import com.booksync.player.PlaybackOffsets
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
@@ -73,17 +74,21 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
 
-/**
- * How long the player waits for the server's position before falling back to
- * the local cache. Long enough for a normal request, short enough that an
- * unreachable server doesn't visibly delay playback.
- */
-private const val SERVER_POSITION_TIMEOUT_MS = 1500L
 
 /**
  * Represents a chapter marker in an M4B audiobook.
  */
 data class Chapter(val title: String, val startMs: Long)
+
+/**
+ * The media id the phone player gives a standalone audiobook. Must be the id
+ * [AudioPlayerService.buildAudiobookMediaItem] builds for the same entity —
+ * every service dispatcher (heartbeat, pause flush, completion, Cast) keys on
+ * it, and a divergent id makes them all silently no-op (issue #141).
+ * Pinned by StandaloneMediaIdParityTest.
+ */
+internal fun standaloneMediaId(audio: com.booksync.data.local.entity.AudioBookEntity): String =
+    MediaId.Audiobook(audio.id).value
 
 /**
  * Audio Player ViewModel.
@@ -219,6 +224,7 @@ class PlayerViewModel @Inject constructor(
 
     private var controller: MediaController? = null
     private var positionPollingJob: kotlinx.coroutines.Job? = null
+    private var coverArtJob: kotlinx.coroutines.Job? = null
     private var savedPositionFromBookmark: Long = 0L
     private var bookmarkLoaded = false
     private var pendingSeekPosition: Long = -1L  // Seek deferred until player is ready
@@ -245,11 +251,41 @@ class PlayerViewModel @Inject constructor(
         }
 
         if (isStandalone) {
-            // Standalone audiobook mode — load by audiobookId, skip pair/bookmark loading
+            // Standalone audiobook mode — load by audiobookId, skip pair loading
             viewModelScope.launch {
                 val audio = repository.getAudiobookById(standaloneAudiobookId)
                 _standaloneAudio.value = audio
                 audio?.durationSeconds?.let { _durationMs.value = it * 1000L }
+
+                // Restore before load (issue #142) — mirror of the paired path
+                // below. Contract § "Resume paths refresh first": bounded pull
+                // of the server position, then the local row. Skipped when a
+                // sentence-sync seek already pre-seeded the position above.
+                if (!bookmarkLoaded) {
+                    withTimeoutOrNull(SERVER_POSITION_TIMEOUT_MS) {
+                        repository.refreshProgress("audiobook", standaloneAudiobookId)
+                    } ?: Log.w("PlayerViewModel", "server position not available in time — using local cache")
+
+                    repository.getProgressOnce("audiobook", standaloneAudiobookId)
+                        ?.audioPositionMs?.let { pos ->
+                            savedPositionFromBookmark = pos.toLong()
+                            _positionMs.value = pos.toLong()
+                            controller?.let { ctrl ->
+                                if (ctrl.isConnected && pos > 0) {
+                                    if (ctrl.playbackState == Player.STATE_READY) {
+                                        restoreSeek(ctrl, pos.toLong())
+                                    } else {
+                                        pendingSeekPosition = pos.toLong()
+                                    }
+                                }
+                            }
+                        }
+                    // True even when there is no saved row at all: the restore
+                    // has been *attempted*, which is what opens the write gate
+                    // in saveBookmark. A genuinely empty record may save.
+                    bookmarkLoaded = true
+                }
+
                 controller?.let { ctrl ->
                     if (audio != null) loadStandaloneAudio(audio, ctrl)
                 }
@@ -298,7 +334,7 @@ class PlayerViewModel @Inject constructor(
                             if (ctrl.isConnected && pos > 0) {
                                 if (ctrl.playbackState == Player.STATE_READY) {
                                     Log.d("PlayerViewModel", "Seeking to bookmark pos=$pos (controller already ready)")
-                                    ctrl.seekTo(pos.toLong())
+                                    restoreSeek(ctrl, pos.toLong())
                                 } else {
                                     Log.d("PlayerViewModel", "Deferring seek to pos=$pos (state=${ctrl.playbackState})")
                                     pendingSeekPosition = pos.toLong()
@@ -315,10 +351,20 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun connectToService() {
-        val sessionToken = SessionToken(
-            appContext,
-            ComponentName(appContext, AudioPlayerService::class.java)
-        )
+        // Resolving the session token throws when the service can't be found
+        // (a broken install; also the JVM, where tests construct this
+        // ViewModel with a mocked context). The screen still functions
+        // without a controller — transport is inert — so degrade rather than
+        // crash the whole player.
+        val sessionToken = try {
+            SessionToken(
+                appContext,
+                ComponentName(appContext, AudioPlayerService::class.java)
+            )
+        } catch (e: Exception) {
+            Log.w("PlayerViewModel", "MediaController unavailable — session token failed", e)
+            return
+        }
         val futureController = MediaController.Builder(appContext, sessionToken).buildAsync()
         futureController.addListener({
             try {
@@ -338,7 +384,7 @@ class PlayerViewModel @Inject constructor(
                         if (playbackState == Player.STATE_READY && pendingSeekPosition >= 0) {
                             val pos = pendingSeekPosition
                             pendingSeekPosition = -1L
-                            mediaController.seekTo(pos)
+                            restoreSeek(mediaController, pos)
                             _positionMs.value = pos
                         }
                         // Track / audiobook reached its natural end — log a
@@ -354,11 +400,17 @@ class PlayerViewModel @Inject constructor(
                         }
                     }
                     override fun onMediaMetadataChanged(metadata: MediaMetadata) {
-                        // Extract embedded album art from audio file
+                        // Session-provided album art: decode sampled and off
+                        // the main thread (issue #161) — a full-size decode of
+                        // a 3000 px cover on the UI thread is visible jank.
                         metadata.artworkData?.let { artData ->
-                            try {
-                                _coverArtBitmap.value = BitmapFactory.decodeByteArray(artData, 0, artData.size)
-                            } catch (_: Exception) {}
+                            coverArtJob?.cancel()
+                            coverArtJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                try {
+                                    com.booksync.auto.decodeEmbeddedArt(artData, maxPx = 1024)
+                                        ?.let { _coverArtBitmap.value = it }
+                                } catch (_: Exception) {}
+                            }
                         }
                     }
                 })
@@ -393,7 +445,7 @@ class PlayerViewModel @Inject constructor(
                 if (bookmarkLoaded && savedPositionFromBookmark > 0) {
                     Log.d("PlayerViewModel", "connectToService: bookmark already loaded, seeking to $savedPositionFromBookmark, playbackState=${mediaController.playbackState}")
                     if (mediaController.playbackState == Player.STATE_READY) {
-                        mediaController.seekTo(savedPositionFromBookmark)
+                        restoreSeek(mediaController, savedPositionFromBookmark)
                         _positionMs.value = savedPositionFromBookmark
                     } else {
                         pendingSeekPosition = savedPositionFromBookmark
@@ -406,27 +458,29 @@ class PlayerViewModel @Inject constructor(
         }, { it.run() })
     }
 
+    /**
+     * Extract embedded cover art off the main thread (issue #161): the old
+     * inline blocks parsed a hundreds-of-MB container header and decoded the
+     * art at full size on the UI thread on every player open. One in-flight
+     * job; _coverArtBitmap is a StateFlow, safe to set from IO.
+     */
+    private fun loadCoverArt(audioFile: java.io.File) {
+        if (_coverArtBitmap.value != null || coverArtJob?.isActive == true) return
+        coverArtJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.booksync.auto.extractEmbeddedArt(audioFile)?.let { _coverArtBitmap.value = it }
+        }
+    }
+
     private fun loadAudio(pair: BookPairEntity, mediaController: MediaController) {
         if (!pair.audiobookDownloaded) return
 
         val audioFile = repository.getAudiobookFile(pair)
         if (!audioFile.exists()) return
 
-        // Extract cover art from audio file if not already loaded
-        if (_coverArtBitmap.value == null) {
-            try {
-                val retriever = android.media.MediaMetadataRetriever()
-                retriever.setDataSource(audioFile.absolutePath)
-                val artBytes = retriever.embeddedPicture
-                if (artBytes != null) {
-                    _coverArtBitmap.value = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size)
-                }
-                retriever.release()
-            } catch (_: Exception) {}
-        }
+        loadCoverArt(audioFile)
 
         val mediaItem = MediaItem.Builder()
-            .setMediaId("pair_${pair.id}")
+            .setMediaId(MediaId.Pair(pair.id).value)
             .setUri(Uri.fromFile(audioFile))
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -459,21 +513,10 @@ class PlayerViewModel @Inject constructor(
         val audioFile = java.io.File(appContext.filesDir, "audiobooks/${audio.filename}")
         if (!audioFile.exists()) return
 
-        // Extract cover art from audio file if not already loaded
-        if (_coverArtBitmap.value == null) {
-            try {
-                val retriever = android.media.MediaMetadataRetriever()
-                retriever.setDataSource(audioFile.absolutePath)
-                val artBytes = retriever.embeddedPicture
-                if (artBytes != null) {
-                    _coverArtBitmap.value = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size)
-                }
-                retriever.release()
-            } catch (_: Exception) {}
-        }
+        loadCoverArt(audioFile)
 
         val mediaItem = MediaItem.Builder()
-            .setMediaId("standalone_${audio.id}")
+            .setMediaId(standaloneMediaId(audio))
             .setUri(Uri.fromFile(audioFile))
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -487,7 +530,16 @@ class PlayerViewModel @Inject constructor(
         if (currentUri != Uri.fromFile(audioFile)) {
             mediaController.setMediaItem(mediaItem)
             mediaController.prepare()
-            mediaController.play()
+
+            // No autoplay, same as the paired path: open at the restored
+            // position, paused. The old unconditional play() here started
+            // from 0:00 before the restore could land, and the boundary
+            // saves then overwrote the real position (issue #142).
+            val savedPosition = savedPositionFromBookmark
+            if (savedPosition > 0) {
+                pendingSeekPosition = savedPosition
+                _positionMs.value = savedPosition
+            }
         }
     }
 
@@ -565,6 +617,22 @@ class PlayerViewModel @Inject constructor(
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs)
         _positionMs.value = positionMs
+    }
+
+    /**
+     * A programmatic RESTORE seek (open-time position apply). Announces
+     * itself to the service first so the user-seek flush (issue #166) skips
+     * it — the has-played gate alone misses a reopen whose media item is
+     * still loaded from the previous session (found live: the restore seek
+     * was flushed with claimFormat=true on a mere screen open). User seeks
+     * go through [seekTo], never through this.
+     */
+    private fun restoreSeek(ctrl: MediaController, positionMs: Long) {
+        ctrl.sendCustomCommand(
+            SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle.EMPTY),
+            Bundle.EMPTY,
+        )
+        ctrl.seekTo(positionMs)
     }
 
     fun skipForward() {
@@ -724,32 +792,35 @@ class PlayerViewModel @Inject constructor(
      */
     private fun saveBookmark(appendToLog: Boolean = false, claimFormat: Boolean) {
         if (isStandalone) {
+            // Write gate (issue #142): no save until the restore has been
+            // *attempted* — a save issued first would write ~0 with a fresh
+            // captured_at and destroy the real position everywhere. The
+            // paired path is protected implicitly (it never autoplays and
+            // its collect sets bookmarkLoaded); standalone is explicit.
+            if (!bookmarkLoaded) return
             // Standalone audiobooks track progress locally only (no pair-linked bookmark)
             val audio = _standaloneAudio.value ?: return
-            viewModelScope.launch {
-                try {
-                    repository.savePlaybackPositionStandalone(
-                        audiobookId = audio.id,
-                        audioPositionMs = _positionMs.value.toInt(),
-                        claimFormat = claimFormat,
-                    )
-                } catch (_: Exception) {}
-            }
+            // State is read synchronously here, then the save runs detached on
+            // the repository's app scope under NonCancellable (issue #165):
+            // onCleared calls this AFTER viewModelScope is already cancelled,
+            // so a viewModelScope.launch from there never ran its body.
+            repository.savePlaybackPositionStandaloneDetached(
+                audiobookId = audio.id,
+                audioPositionMs = _positionMs.value.toInt(),
+                claimFormat = claimFormat,
+            )
             return
         }
-        viewModelScope.launch {
-            try {
-                // One write. The server converts audio <-> epub position via the
-                // SyncMap and projects the progress row the Continue list reads,
-                // so there is no second call to keep in step.
-                repository.savePlaybackPosition(
-                    pairId = pairId,
-                    audioPositionMs = _positionMs.value.toInt(),
-                    appendToLog = appendToLog,
-                    claimFormat = claimFormat,
-                )
-            } catch (_: Exception) {}
-        }
+        // One write. The server converts audio <-> epub position via the
+        // SyncMap and projects the progress row the Continue list reads,
+        // so there is no second call to keep in step. Detached for the same
+        // reason as the standalone branch above.
+        repository.savePlaybackPositionDetached(
+            pairId = pairId,
+            audioPositionMs = _positionMs.value.toInt(),
+            appendToLog = appendToLog,
+            claimFormat = claimFormat,
+        )
     }
 
     /**

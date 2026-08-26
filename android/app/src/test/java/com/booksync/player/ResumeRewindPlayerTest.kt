@@ -5,6 +5,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -136,5 +137,47 @@ class ResumeRewindPlayerTest {
     @Test
     fun `wraps the delegate it was given`() {
         assertTrue(player.wrappedPlayer === delegate)
+    }
+
+    // ============ Seek-flush support (issue #166) ============
+    //
+    // The service flushes the position on user seeks via
+    // onPositionDiscontinuity(REASON_SEEK), with claimFormat=true — the claim
+    // rule allows an explicit user command to claim the format. The wrapper's
+    // own resume rewind and the restore seek at open are NOT user commands:
+    // flushing them would claim "audiobook" on a mere screen-open, the exact
+    // hijack the rule forbids. The wrapper exposes what the service needs to
+    // tell them apart.
+
+    @Test
+    fun `the resume rewind seek is flagged as programmatic, consumed once`() {
+        startPlayingAt(90_000L)
+
+        player.play()
+
+        assertTrue("the rewind's own seek must be flagged", player.consumeResumeRewindSeek())
+        assertFalse("the flag is one-shot", player.consumeResumeRewindSeek())
+    }
+
+    @Test
+    fun `a user seek is not flagged as the resume rewind`() {
+        startPlayingAt(90_000L)
+
+        player.seekTo(50_000L)
+
+        assertFalse(player.consumeResumeRewindSeek())
+    }
+
+    @Test
+    fun `exposes whether playback has been heard since the item loaded`() {
+        // False at open (a discontinuity now is the restore seek, not a user
+        // scrub); true once heard; false again when a new item loads.
+        assertFalse(player.hasPlayedSinceItemTransition)
+
+        listener.onIsPlayingChanged(true)
+        assertTrue(player.hasPlayedSinceItemTransition)
+
+        listener.onMediaItemTransition(null, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
+        assertFalse(player.hasPlayedSinceItemTransition)
     }
 }
