@@ -13,6 +13,10 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -265,5 +269,110 @@ class SavePlaybackPositionTest {
         assertEquals(9_000, sentRequest.captured.audio_position_ms)
         assertEquals("2026-08-15T10:00:00Z", sentRequest.captured.captured_at)
         assertTrue(savedBookmark.captured.syncedToServer)
+    }
+
+    // ============ Room-first ordering (issue #164) ============
+    //
+    // Contract § "The write gate": "Saves must survive teardown … the local
+    // write *before* the server call." The audio path used to run the PUT
+    // first, so a boundary save cancelled mid-network-call (paused swipe-away,
+    // offline pause burning the connect timeout) lost the Room row too — no
+    // local position, and nothing for the reconcile/sweep to deliver.
+
+    @Test
+    fun `paired save writes the Room row before the server call`() = runTest {
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { api.updatePosition(any(), any(), any()) } coAnswers { awaitCancellation() }
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        val saveJob = launch {
+            repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
+        }
+        runCurrent() // the save is now parked inside the (hanging) PUT
+
+        assertTrue("Room row must be written before the PUT", savedBookmark.isCaptured)
+        assertFalse(
+            "the pre-PUT row must be unsynced — the server has not seen it",
+            savedBookmark.captured.syncedToServer,
+        )
+        saveJob.cancel()
+    }
+
+    @Test
+    fun `standalone save writes the progress row before the server call`() = runTest {
+        coEvery { api.updatePosition(any(), any(), any()) } coAnswers { awaitCancellation() }
+        val savedProgress = slot<UserProgressEntity>()
+        coEvery { userProgressDao.upsertProgress(capture(savedProgress)) } returns Unit
+
+        val saveJob = launch {
+            repository().savePlaybackPositionStandalone(audiobookId = 7, audioPositionMs = 3_000)
+        }
+        runCurrent()
+
+        assertTrue("progress row must be written before the PUT", savedProgress.isCaptured)
+        assertFalse(savedProgress.captured.syncedToServer)
+        saveJob.cancel()
+    }
+
+    @Test
+    fun `a successful paired push flips the row to synced`() = runTest {
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
+
+        coVerify(exactly = 1) { bookmarkDao.markSynced(42) }
+    }
+
+    @Test
+    fun `a successful standalone push flips the progress row to synced`() = runTest {
+        coEvery { api.updatePosition("audiobook", 7, any()) } returns
+            Response.success(positionResponse(scope = "audiobook", pairId = null, audiobookId = 7))
+
+        repository().savePlaybackPositionStandalone(audiobookId = 7, audioPositionMs = 3_000)
+
+        coVerify(exactly = 1) { userProgressDao.markSynced("audiobook", 7) }
+    }
+
+    @Test
+    fun `a failed paired push leaves the row unsynced`() = runTest {
+        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { api.updatePosition("pair", 42, any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
+
+        coVerify(exactly = 0) { bookmarkDao.markSynced(any()) }
+    }
+
+    // A cancelled save must be reported as cancellation, not logged as
+    // "offline" and swallowed — the old catch (e: Exception) let the caller
+    // continue into a Room write on an already-cancelled coroutine.
+
+    @Test
+    fun `updatePosition rethrows CancellationException`() = runTest {
+        coEvery { api.updatePosition(any(), any(), any()) } throws CancellationException("cancelled")
+
+        var thrown = false
+        try {
+            repository().updatePosition("pair", 42, PositionUpdateRequest())
+        } catch (_: CancellationException) {
+            thrown = true
+        }
+        assertTrue("CancellationException must propagate, not be logged as offline", thrown)
+    }
+
+    @Test
+    fun `fetchPosition rethrows CancellationException`() = runTest {
+        coEvery { api.getPosition(any(), any()) } throws CancellationException("cancelled")
+
+        var thrown = false
+        try {
+            repository().fetchPosition("pair", 42)
+        } catch (_: CancellationException) {
+            thrown = true
+        }
+        assertTrue(thrown)
     }
 }
