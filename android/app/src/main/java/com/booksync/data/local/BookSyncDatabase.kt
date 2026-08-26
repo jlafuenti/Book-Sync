@@ -22,7 +22,10 @@ import com.booksync.data.local.entity.*
         BookmarkLogEntity::class
     ],
     version = 19,
-    exportSchema = false
+    // Exported to app/schemas/ (room.schemaLocation in build.gradle.kts) so
+    // schema changes show up in diffs and MigrationTestHelper tests become
+    // possible (issue #168). Commit the generated JSON with every version bump.
+    exportSchema = true
 )
 abstract class BookSyncDatabase : RoomDatabase() {
     abstract fun bookPairDao(): BookPairDao
