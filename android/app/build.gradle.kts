@@ -132,6 +132,14 @@ android {
         )
     }
 
+    // Room schema export (issue #168): with exportSchema = true on
+    // BookSyncDatabase, each build writes app/schemas/<db>/<version>.json —
+    // commit it, so schema changes are reviewable and MigrationTestHelper
+    // tests are possible.
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
