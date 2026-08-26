@@ -27,7 +27,8 @@ from models.library_issue import LibraryCheckResult, MultiFileAudiobookFolder
 from models.progress import UserProgress
 from models.sync_map import SyncMap
 from models.transcript import AudioTranscript
-from services.file_hash import hash_bytes
+from services.file_hash import hash_file
+from services.uploads import stream_upload_to_path
 from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
@@ -410,9 +411,7 @@ async def replace_file(
     base = Path(old_path).stem if old_path else Path(safe_join(dest_dir, file.filename).name).stem
     dest_path = str(safe_join(dest_dir, base + new_ext))
 
-    content = await file.read()
-    with open(dest_path, "wb") as f:
-        f.write(content)
+    new_size = await stream_upload_to_path(file, Path(dest_path), settings.max_upload_file_bytes)
 
     # Remove the old file if its path differs from the new one.
     if old_path and os.path.abspath(old_path) != os.path.abspath(dest_path) and os.path.isfile(old_path):
@@ -431,8 +430,9 @@ async def replace_file(
 
     item.file_path = dest_path
     item.filename = base + new_ext
-    item.file_size = len(content)
-    item.file_hash = hash_bytes(content)
+    item.file_size = new_size
+    # hash_file matches hash_bytes exactly (composite scheme) — see test_file_hash.py.
+    item.file_hash = hash_file(dest_path)
     item.format = new_ext.lstrip(".")
     for field in ("title", "author", "series", "series_index"):
         val = new_meta.get(field)

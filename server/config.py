@@ -71,6 +71,20 @@ class Settings(BaseSettings):
     # Auto-transcribe
     auto_transcribe_enabled: bool = Field(default=False, alias="AUTO_TRANSCRIBE_ENABLED")
 
+    # Per-file upload size caps (issue #151). Layered defense for uploads:
+    #   1. the fronting proxy caps the raw request body at the edge
+    #      (request_body in Caddyfile.example);
+    #   2. UPLOAD_MAX_BYTES (below, issue #157) refuses a declared
+    #      Content-Length over the whole-multipart-body cap BEFORE parsing
+    #      (middleware.py);
+    #   3. these caps bound each uploaded FILE while it streams to disk
+    #      (services/uploads.py) — authoritative even for chunked or lying
+    #      Content-Length, since the byte count, not the header, is enforced.
+    # Keep the per-file cap ≤ the whole-body cap (UPLOAD_MAX_BYTES) or layer 3
+    # can never be reached at its own limit.
+    max_upload_file_bytes: int = Field(default=4 * 1024**3, alias="MAX_UPLOAD_FILE_BYTES")
+    max_cover_bytes: int = Field(default=16 * 1024**2, alias="MAX_COVER_BYTES")
+
     # File Paths
     ebook_dir: str = Field(default="/data/ebooks", alias="EBOOK_DIR")
     audiobook_dir: str = Field(default="/data/audiobooks", alias="AUDIOBOOK_DIR")

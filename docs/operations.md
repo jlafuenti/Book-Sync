@@ -171,21 +171,21 @@ This matters because FastAPI parses an upload body before it resolves the route'
 dependency — without the cap, an unauthenticated caller could feed the parser arbitrarily large
 bodies (issue #157). Uploads are multi-GB audiobooks, so keep the value generous.
 
-The in-app cap only sees requests that declare a `Content-Length`. If you front the server with a
-reverse proxy, add a body limit there too — it also bounds chunked (no-length) bodies before they
-reach uvicorn. For Caddy:
+That pre-parse cap is one of three layers (issue #151):
 
-```caddy
-tandem.example.com {
-    request_body {
-        max_size 10GB
-    }
-    reverse_proxy server:8000
-}
-```
+1. **Proxy edge cap** — the fronting reverse proxy bounds the raw request body, including
+   chunked (no-length) bodies, before anything reaches uvicorn. A ready-made Caddy template
+   with per-route caps (4GB for the big-upload routes, 16MB for the rest of `/api/*`) ships
+   as `Caddyfile.example` at the repo root — copy and adapt it rather than writing your own.
+2. **Pre-parse whole-body cap** — `UPLOAD_MAX_BYTES` above, enforced by `server/middleware.py`
+   on the declared `Content-Length` before the multipart parser runs.
+3. **Per-file streamed caps** — `MAX_UPLOAD_FILE_BYTES` (default 4 GiB) and `MAX_COVER_BYTES`
+   (default 16 MiB) bound each uploaded file while it streams to disk
+   (`server/services/uploads.py`). These count actual bytes, so they hold even when the
+   `Content-Length` header is missing or lying.
 
-Keep the proxy limit at or above `UPLOAD_MAX_BYTES`, or the proxy will reject uploads the app
-would have accepted.
+Keep the proxy limit at or above `UPLOAD_MAX_BYTES`, and the per-file cap at or below it —
+otherwise one layer rejects uploads another would have accepted.
 
 ## Storage
 

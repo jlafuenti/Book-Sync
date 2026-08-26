@@ -1,0 +1,30 @@
+# Tandem reverse-proxy template (issue #151). uvicorn enforces no request-body
+# limit — the app caps each uploaded file (MAX_UPLOAD_BYTES / MAX_COVER_BYTES)
+# but only after bytes arrive, so the proxy must stop oversized bodies at the edge.
+# Replace hostname and upstreams to match your deployment.
+
+your-hostname.example.com {
+	@big_uploads path \
+		/api/library/upload/* \
+		/api/library/ebooks/*/cover \
+		/api/library/audiobooks/*/cover \
+		/api/troubleshoot/replace/* \
+		/api/import/acsm/upload
+	handle @big_uploads {
+		request_body {
+			max_size 4GB
+		}
+		reverse_proxy localhost:8000
+	}
+
+	handle /api/* {
+		request_body {
+			max_size 16MB
+		}
+		reverse_proxy localhost:8000
+	}
+
+	handle {
+		reverse_proxy localhost:3000
+	}
+}
