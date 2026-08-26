@@ -102,3 +102,54 @@ class CoverArtHelper @Inject constructor(
     private fun uriFor(file: File): Uri =
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
 }
+
+/**
+ * Extract the embedded cover art from an audio file, downsampled to roughly
+ * [maxPx] (issue #161). Blocking media/disk work — call from Dispatchers.IO.
+ * The retriever is released in `finally`: the old inline copies in
+ * PlayerScreen skipped release() whenever setDataSource threw.
+ */
+fun extractEmbeddedArt(audioFile: File, maxPx: Int = 1024): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(audioFile.absolutePath)
+        retriever.embeddedPicture?.let { decodeEmbeddedArt(it, maxPx) }
+    } catch (_: Exception) {
+        null
+    } finally {
+        try { retriever.release() } catch (_: Exception) {}
+    }
+}
+
+/**
+ * Decode embedded art without ever materialising the full-size bitmap: a
+ * bounds-only pass, then a sampled decode via [coverArtInSampleSize]. A
+ * 3000 px cover decoded at full size is ~36 MB of bitmap for a screen slot a
+ * fraction of that — and the player used to do it on the main thread.
+ */
+fun decodeEmbeddedArt(bytes: ByteArray, maxPx: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = coverArtInSampleSize(bounds.outWidth, bounds.outHeight, maxPx)
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+}
+
+/**
+ * Standard power-of-two sampling (Android docs shape): the largest
+ * inSampleSize that keeps BOTH dimensions at least [maxPx], so the decoded
+ * bitmap never undershoots the target size. Pure math so the JVM suite can
+ * pin it — BitmapFactory itself is stubbed on the JVM.
+ */
+internal fun coverArtInSampleSize(width: Int, height: Int, maxPx: Int): Int {
+    var inSampleSize = 1
+    if (height > maxPx || width > maxPx) {
+        val halfHeight = height / 2
+        val halfWidth = width / 2
+        while (halfHeight / inSampleSize >= maxPx && halfWidth / inSampleSize >= maxPx) {
+            inSampleSize *= 2
+        }
+    }
+    return inSampleSize
+}

@@ -9,7 +9,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 from fastapi.security import OAuth2PasswordBearer
 
@@ -20,7 +21,7 @@ from schemas import (
     UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
     PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
-from rate_limit import limiter
+from rate_limit import failed_logins, limiter
 from utils import utcnow
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -157,11 +158,20 @@ async def log_audit(
 
 
 def get_client_ip(request: Request) -> str:
-    """Extract client IP from request, respecting X-Forwarded-For."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Return the client address from the socket peer (``scope["client"]``).
+
+    Never read X-Forwarded-For here — it is attacker-chosen. Behind the
+    reverse proxy, uvicorn's ProxyHeadersMiddleware already rewrites
+    ``scope["client"]`` from that header, but only when the socket peer is a
+    trusted proxy (``FORWARDED_ALLOW_IPS``). See issue #156.
+
+    Fall back to "unknown" when there is no peer or its host is empty:
+    ProxyHeadersMiddleware sets the client to ``(None, 0)`` when *every* hop
+    in X-Forwarded-For is trusted (real docker NAT topologies, where the
+    proxy only ever sees the bridge gateway IP) — without the fallback the
+    audit row stored NULL.
+    """
+    return request.client.host if request.client and request.client.host else "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -219,22 +229,54 @@ async def register(user_data: UserCreate, request: Request, db: AsyncSession = D
 @limiter.limit("5/minute")
 async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     """Authenticate a user and return JWT tokens."""
+    # Per-username throttle (issue #296), checked before the user is even looked
+    # up: the whole point is to refuse without spending a bcrypt verify, and
+    # checking before the password means a locked bucket answers 429 whatever
+    # the password was — so it can never be used as a password oracle.
+    retry_after = failed_logins.retry_after(credentials.username)
+    if retry_after is not None:
+        # Commit for the same reason as login_failed below: the raise unwinds
+        # through get_db, which rolls the session back (PR #289).
+        await log_audit(
+            db, "login_locked",
+            details=(
+                f"Login temporarily locked for username '{credentials.username}' "
+                f"after repeated failures"
+            ),
+            ip_address=get_client_ip(request),
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     result = await db.execute(
         select(User).where(User.username == credentials.username)
     )
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(credentials.password, user.hashed_password):
-        # Log failed attempt
+        failed_logins.record_failure(credentials.username)
+        # Log failed attempt. Commit explicitly: the 401 below propagates into
+        # get_db, whose error path rolls the session back — without this the
+        # login_failed row silently never persisted (issue #156).
         await log_audit(
             db, "login_failed",
             details=f"Failed login for username '{credentials.username}'",
             ip_address=get_client_ip(request),
         )
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    # Right password: the account is not under attack, so drop its counter.
+    # Done before the is_active gate — a pending user typing the correct
+    # password shouldn't accumulate toward a lockout either.
+    failed_logins.clear(credentials.username)
 
     if not user.is_active:
         raise HTTPException(

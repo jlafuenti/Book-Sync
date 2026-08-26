@@ -97,6 +97,20 @@ Cross-request DB state: the app commits per request via its own session, so read
 **fresh** `async_session()` (not the `db` fixture, which holds its own snapshot) — see
 `test_queue_manager.py::_get`.
 
+## Dependency audit gates (CI)
+
+Both CI pipelines fail on known vulnerabilities in production dependencies (issue #157):
+
+- **Server** — the `audit` job in `tests.yml` runs `pip-audit -r requirements.txt --strict`.
+  Advisories that are justified-unreachable can be allow-listed in `server/audit-ignore.txt`
+  (one ID per line, with a comment explaining why).
+- **Web** — `web-tests.yml` runs `audit-ci` (npm audit with `--omit=dev` semantics plus an
+  allow-list, which npm lacks natively). The allow-list and its per-advisory justifications
+  live in `web/audit-ci.jsonc`.
+
+Every allow-list entry must carry a written justification and gets re-checked whenever the
+owning dependency is next touched.
+
 ## Coverage gates (CI)
 
 Coverage is measured with `pytest-cov` and enforced by **two independent gates** in the

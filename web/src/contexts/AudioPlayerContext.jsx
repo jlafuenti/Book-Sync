@@ -348,6 +348,13 @@ export function AudioPlayerProvider({ children }) {
     // user command — this teardown is neither when the player is paused/idle
     // in the background). `PositionUpdate.source` is optional precisely so
     // this save can move the position without re-claiming the format.
+    // Idempotence for the lifecycle flush below (issue #158): what the last
+    // keepalive sent, as `scope:id:positionMs`. visibilitychange → hidden
+    // fires on every tab switch and the payload carries `append_to_log:
+    // true`, so an un-deduped handler would spam the session history with
+    // identical entries. Playback moving on changes the key and re-arms it.
+    const lastKeepaliveRef = useRef(null)
+
     useEffect(() => {
         const onUnload = () => {
             const audio = audioRef.current
@@ -355,21 +362,32 @@ export function AudioPlayerProvider({ children }) {
             if (!ab || !audio) return
             const claimFormat = playingRef.current
             const [scope, id] = positionTarget(ab)
+            const positionMs = Math.floor(audio.currentTime * 1000)
+            const key = `${scope}:${id}:${positionMs}`
+            if (lastKeepaliveRef.current === key) return
+            lastKeepaliveRef.current = key
             sendPositionKeepalive(scope, id, {
                 source: claimFormat ? 'audiobook' : undefined,
-                audio_position_ms: Math.floor(audio.currentTime * 1000),
+                audio_position_ms: positionMs,
                 append_to_log: true,
                 device_id: getDeviceId(),
                 device_name: getDeviceName(),
                 captured_at: new Date().toISOString(),
             })
         }
-        // pagehide fires more reliably than beforeunload on mobile Safari.
+        // pagehide fires more reliably than beforeunload on mobile Safari; on
+        // an iOS PWA neither is guaranteed — visibilitychange → hidden is the
+        // last event that reliably runs there (issue #158).
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') onUnload()
+        }
         window.addEventListener('pagehide', onUnload)
         window.addEventListener('beforeunload', onUnload)
+        document.addEventListener('visibilitychange', onVisibilityChange)
         return () => {
             window.removeEventListener('pagehide', onUnload)
             window.removeEventListener('beforeunload', onUnload)
+            document.removeEventListener('visibilitychange', onVisibilityChange)
         }
     }, [])
 

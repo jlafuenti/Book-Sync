@@ -493,6 +493,71 @@ describe('AudioPlayerProvider unload keepalive', () => {
         expect(call[2].source).toBeUndefined()
         expect(call[2].audio_position_ms).toBe(55000)
     })
+
+    // Issue #158: on iOS the PWA is the app — beforeunload never fires and
+    // pagehide is unreliable; visibilitychange → hidden is the last
+    // guaranteed event, and nothing listened for it.
+    it('visibilitychange → hidden sends the same keepalive as pagehide', async () => {
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 55
+
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+        try {
+            act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+
+            expect(sendPositionKeepaliveMock).toHaveBeenCalledWith('pair', 99, expect.objectContaining({
+                source: 'audiobook',
+                audio_position_ms: 55000,
+                append_to_log: true,
+                device_id: 'device-123',
+                device_name: 'Web · Chrome',
+                captured_at: expect.any(String),
+            }))
+        } finally {
+            delete document.visibilityState
+        }
+    })
+
+    it('a repeated lifecycle event with no playback in between writes nothing', async () => {
+        // visibilitychange fires on every tab switch and the payload carries
+        // append_to_log: true — without idempotence each one would spam the
+        // session history.
+        render(
+            <AudioPlayerProvider>
+                <Harness audiobook={{ title: 'A Book', cover_path: null, pair_id: 99 }} />
+            </AudioPlayerProvider>
+        )
+        fireEvent.click(screen.getByText('play'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
+        const audio = audioInstances[0]
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 55
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(1)
+
+        // Playback moved on → the next event writes again.
+        audio.currentTime = 60
+        act(() => { window.dispatchEvent(new Event('pagehide')) })
+        expect(sendPositionKeepaliveMock).toHaveBeenCalledTimes(2)
+    })
 })
 
 describe('AudioPlayerProvider pause()', () => {

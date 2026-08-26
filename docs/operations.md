@@ -49,6 +49,80 @@ the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` �
 ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
 them. See [import-sources.md](import-sources.md).
 
+## Reverse proxy
+
+If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is
+one already), every request reaches the API from the proxy's address. Unless uvicorn is told to
+trust that peer, all clients look like one: the `5/minute` rate limit on login/registration
+becomes a single global bucket (five bad logins a minute from anyone keeps *everyone* at 429),
+and audit-log rows record the proxy's IP instead of the client's.
+
+Set `FORWARDED_ALLOW_IPS` on the `server` service to the address your proxy connects from —
+check the server log's `request.client.host` if unsure; a CIDR or comma-separated list is
+accepted (the template ships `172.16.0.0/12`, covering Docker's default bridge networks):
+
+```yaml
+  server:
+    environment:
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12
+```
+
+uvicorn then rewrites the client address from `X-Forwarded-For`, but **only** for requests
+arriving from those peers. Never set it to `*` — that trusts an attacker-chosen header from
+anywhere, letting one client dodge rate limits and forge audit IPs. With `APP_ENV=prod`, the
+server logs a startup warning when the variable is unset.
+
+Two hardening notes for an internet-facing deployment:
+
+- Prefer running your outer proxy (e.g. Caddy) **on the compose network**, pointed directly at
+  `server:8000` — one proxy hop, one address to trust, and the API port never needs publishing.
+- Bind any published ports to loopback or your LAN (`127.0.0.1:8000:8000`-style) or firewall
+  them, so clients can't bypass the proxy and hand uvicorn a spoofed header from a "trusted"
+  network path — and so the un-proxied ports aren't reachable from the internet at all.
+
+The `web` nginx proxy forwards `X-Forwarded-For` (appending to any incoming chain via
+`$proxy_add_x_forwarded_for`) and `X-Forwarded-Proto`, so a client's real address survives both
+the Caddy → web → server and the direct web → server topologies.
+
+## Login throttling
+
+`POST /api/auth/login` is guarded by two independent limits.
+
+| Layer | Keyed on | Default | Tune with |
+|---|---|---|---|
+| slowapi bucket | client IP | 5 requests/minute | code (`server/rate_limit.py`) |
+| Failed-attempt tracker | username | 10 **failed** attempts per 15 minutes | `LOGIN_FAILURE_LIMIT`, `LOGIN_FAILURE_WINDOW_SECONDS` |
+
+The per-IP layer is only as good as the client address — see "Reverse proxy" above; behind
+docker NAT it can collapse into one bucket for everybody, which is what the username layer is
+there to cover. Both stay on: the IP bucket also meters *spraying* (many accounts, one guess
+each), which the username bucket by design does not.
+
+The username layer counts **failures only**, in a sliding window, keyed on the username
+case-folded and stripped (`Alice`, `alice` and `" alice "` are one bucket). A correct password
+clears the counter. Once the bucket is at the limit, further attempts for that username get
+**429** with a `Retry-After` header (seconds until it drops back below the limit) and a
+`login_locked` audit row — checked *before* the password is verified, so a locked bucket answers
+429 whether or not the password was right. That is deliberate: otherwise the response would be a
+password oracle.
+
+**The trade-off to understand before retuning:** because the bucket is keyed on the username,
+anyone who knows a username can hold it at the limit and keep the real user out for the window.
+That is inherent to username keying, and the defaults are chosen around it — a short window (a
+delay, never a takeover) and a high threshold (10 is far more consecutive failures than a real
+user's typos, and any success in between resets it). Lowering `LOGIN_FAILURE_LIMIT` makes that
+lockout cheaper to inflict; raising it weakens brute-force protection. There is no admin "unlock"
+action: wait out the window, or restart the server (the counters are in memory).
+
+Counters live in the server process, so they reset on restart and are **per worker**. Tandem runs
+a single uvicorn worker; if you ever scale that up, each worker keeps its own counts and the
+effective threshold multiplies — replace `FailedLoginTracker` in `server/rate_limit.py` with a
+shared backend before doing so.
+
+Both `login_failed` and `login_locked` rows land in the audit log, so a sustained attack on one
+account is visible in the web UI's user-management **Audit Log** tab, filterable by action (and it
+grows that table; the per-IP limit is what bounds how fast).
+
 ## Restart policies
 
 Every service in `docker-compose.example.yml` carries `restart: unless-stopped`. Keep it that way
@@ -88,6 +162,30 @@ python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Keep every key you've ever used until you're certain no stored credential still needs it. Losing
 them means the encrypted Audible/ABS credentials in your backups can't be decrypted.
+
+## Upload size limits
+
+The server refuses any `multipart/form-data` request whose declared `Content-Length` exceeds
+`UPLOAD_MAX_BYTES` (default 10 GiB) with **413**, *before* the multipart parser touches the body.
+This matters because FastAPI parses an upload body before it resolves the route's auth
+dependency — without the cap, an unauthenticated caller could feed the parser arbitrarily large
+bodies (issue #157). Uploads are multi-GB audiobooks, so keep the value generous.
+
+The in-app cap only sees requests that declare a `Content-Length`. If you front the server with a
+reverse proxy, add a body limit there too — it also bounds chunked (no-length) bodies before they
+reach uvicorn. For Caddy:
+
+```caddy
+tandem.example.com {
+    request_body {
+        max_size 10GB
+    }
+    reverse_proxy server:8000
+}
+```
+
+Keep the proxy limit at or above `UPLOAD_MAX_BYTES`, or the proxy will reject uploads the app
+would have accepted.
 
 ## Storage
 

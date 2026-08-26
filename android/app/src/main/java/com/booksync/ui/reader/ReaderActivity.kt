@@ -64,6 +64,17 @@ class ReaderActivity : AppCompatActivity() {
         private const val TAG = "ReaderActivity"
         private const val NAV_FRAGMENT_TAG = "EpubNavigatorFragment"
         private const val SAVE_INTERVAL_MS = 5000L
+        // How long after onConfigurationChanged a locator emission is treated
+        // as Readium's re-layout echo rather than a user page turn. The
+        // re-layout recomputes pagination and can emit a chapter-top-quantized
+        // locator; saving it regressed the anchor (observed live after issue
+        // #163 made rotation survivable — the emission landed ~200 ms after
+        // the re-layout finished drawing).
+        private const val RELAYOUT_ECHO_WINDOW_MS = 2000L
+        // How long after a configuration change to wait before re-anchoring
+        // the view to the pre-change locator (re-layout finishes drawing in
+        // ~200-400 ms; the go() must land after it or Readium re-lays again).
+        private const val RELAYOUT_RESTORE_DELAY_MS = 800L
         /** If audio moved less than this since the locator was captured, reuse it verbatim. */
         private const val LOCATOR_REUSE_THRESHOLD_MS = 30_000
         private const val PREFS_NAME = "reader_display"
@@ -167,6 +178,19 @@ class ReaderActivity : AppCompatActivity() {
      * an echo".
      */
     private var programmaticTarget: Locator? = null
+
+    // Set by onConfigurationChanged; emissions within RELAYOUT_ECHO_WINDOW_MS
+    // of it are re-layout echoes, not navigation (issue #163 companion fix).
+    private var lastConfigChangeAtMs = 0L
+
+    // Where the user actually was before the configuration change. Readium's
+    // re-layout can settle at the top of the chapter — merely suppressing the
+    // save is not enough, because the exit's onPause save persists whatever
+    // the view shows. Captured on the FIRST config change of a burst (a
+    // rotate-back inside the window must not capture the drifted position),
+    // then re-navigated to once the re-layout settles.
+    private var relayoutRestoreTarget: Locator? = null
+    private var relayoutRestoreJob: kotlinx.coroutines.Job? = null
 
     // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
     private var lastSelectedText: String = ""
@@ -322,27 +346,16 @@ class ReaderActivity : AppCompatActivity() {
                 Log.d(TAG, "Publication opened: ${pub.metadata.title}, readingOrder=${pub.readingOrder.size} items")
                 publication = pub
 
-                // Pull the server's position before restoring (issue #40). The
-                // reader used to read only the local cache, so a position set
-                // on another device was never seen and the phone reopened at
-                // its own last page — the locator checks below can't catch
-                // that, since a stale local bookmark agrees with itself.
-                // Offline-safe and unsynced-local-safe: refreshBookmark keeps
-                // the local row in both cases.
-                repository.refreshBookmark(pairId)
-
-                // Re-fetch the sync map if a re-transcription invalidated the
-                // cached one (issue #55). The restore path below turns the
-                // stored sentence anchor back into text through these points,
-                // and every ebook->audio jump matches against them. Single
-                // request, best-effort — an offline open just restores without
-                // sentence precision, as it always has.
-                repository.ensureSyncMapCached(pairId)
-
-                // Fetch the canonical record before restoring. Reading only the
-                // local cache meant a position set on another device was never
-                // seen, so the reader confidently reopened at its own old page.
-                val fetch = repository.fetchPosition("pair", pairId)
+                // Pull the server's position before restoring (issue #40) —
+                // bounded (issue #167), so a black-hole network can't stall a
+                // downloaded book's open; on timeout the local cache stands,
+                // like the player. The reader used to read only the local
+                // cache, so a position set on another device was never seen
+                // and the phone reopened at its own last page — the locator
+                // checks below can't catch that, since a stale local bookmark
+                // agrees with itself. The helper also refreshes the sync-map
+                // cache (issue #55) and fetches the canonical record.
+                val fetch = prefetchBeforeRestore(repository, pairId)
                 canonicalPosition = fetch.position?.toStoredPosition()
                     ?: repository.getBookmark(pairId)
                         ?.toStoredPosition(repository.deviceId)
@@ -536,6 +549,18 @@ class ReaderActivity : AppCompatActivity() {
             nav.currentLocator.collect { locator ->
                 // Update progress UI
                 updateProgressUI(locator)
+
+                // A configuration change (rotation, dark-mode toggle, split
+                // screen — handled in place since issue #163) re-lays out the
+                // WebView, which re-emits a recomputed locator with NO user
+                // input — often quantized to the top of the chapter. Adopting
+                // it as the new programmatic target and skipping the save
+                // keeps the re-layout from regressing the anchor; the user's
+                // next real page turn saves normally.
+                if (System.currentTimeMillis() - lastConfigChangeAtMs < RELAYOUT_ECHO_WINDOW_MS) {
+                    programmaticTarget = locator
+                    return@collect
+                }
 
                 // Readium's currentLocator emits again right after ANY
                 // programmatic display settles (initial restore, or a
@@ -1765,6 +1790,37 @@ class ReaderActivity : AppCompatActivity() {
         // Retry interceptor install in case the WebView appeared after the initial
         // polling window closed (common for large EPUBs like DCC). No-op if already installed.
         installSelectionInterceptor()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Received instead of a recreation because the manifest declares
+        // android:configChanges (issue #163 — recreation tripped the
+        // process-death guard and closed the book). Mark the moment: Readium's
+        // re-layout will re-emit a locator shortly, and the collector must
+        // treat it as an echo, not a page turn — saving it regressed the
+        // anchor to the top of the chapter (found live).
+        val now = System.currentTimeMillis()
+        // First change of a burst: the view still shows the user's real
+        // position — capture it. A rotate-back arriving inside the window
+        // must NOT re-capture (the view may be showing the drifted page).
+        if (now - lastConfigChangeAtMs > RELAYOUT_ECHO_WINDOW_MS) {
+            relayoutRestoreTarget = navigator?.currentLocator?.value
+        }
+        lastConfigChangeAtMs = now
+
+        // Re-anchor once the re-layout settles: without this the view stays
+        // at the chapter top and the exit's onPause save persists the
+        // regression (verified live). The go()'s own emission matches
+        // programmaticTarget and is swallowed as an echo.
+        relayoutRestoreJob?.cancel()
+        relayoutRestoreJob = lifecycleScope.launch {
+            kotlinx.coroutines.delay(RELAYOUT_RESTORE_DELAY_MS)
+            relayoutRestoreTarget?.let { target ->
+                programmaticTarget = target
+                navigator?.go(target, animated = false)
+            }
+        }
     }
 
     override fun onPause() {
