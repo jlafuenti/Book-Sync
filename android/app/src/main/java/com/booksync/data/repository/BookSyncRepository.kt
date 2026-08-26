@@ -500,36 +500,73 @@ class BookSyncRepository @Inject constructor(
 
     // ============ Downloads ============
 
+    /**
+     * Shared streaming core for the four download entry points (issue #160):
+     * status check, throw on empty body, buffered copy with de-duplicated
+     * progress. The four functions were hand-copied ~35-line loops that had
+     * already drifted — `downloadStandaloneAudiobook` lost the status check
+     * entirely, so a 401/404/500 wrote nothing yet still flipped the
+     * downloaded flag, and `downloadEbook` lost the progress de-dup.
+     *
+     * Streams into a `.part` sibling and renames on completion, so an
+     * interrupted transfer never leaves a truncated file under the real name
+     * (the player and buildCastMediaItem only check the file exists).
+     */
+    private suspend fun streamToFile(
+        response: retrofit2.Response<okhttp3.ResponseBody>,
+        target: File,
+        onProgress: (Int) -> Unit,
+    ): File {
+        if (!response.isSuccessful) {
+            logE("download failed — HTTP ${response.code()} for ${target.name}")
+            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
+        }
+        val body = response.body() ?: throw Exception("Empty response body")
+        target.parentFile?.mkdirs()
+        val part = File(target.parentFile, target.name + ".part")
+        withContext(Dispatchers.IO) {
+            try {
+                val contentLength = body.contentLength()
+                body.byteStream().use { input ->
+                    part.outputStream().use { output ->
+                        val buffer = ByteArray(8 * 1024)
+                        var bytesCopied = 0L
+                        var lastProgress = -1
+                        var bytes = input.read(buffer)
+                        while (bytes >= 0) {
+                            output.write(buffer, 0, bytes)
+                            bytesCopied += bytes
+                            if (contentLength > 0) {
+                                val progress = (bytesCopied * 100 / contentLength).toInt()
+                                if (progress != lastProgress) {
+                                    lastProgress = progress
+                                    onProgress(progress)
+                                }
+                            }
+                            bytes = input.read(buffer)
+                        }
+                    }
+                }
+                if (!part.renameTo(target)) {
+                    part.copyTo(target, overwrite = true)
+                    part.delete()
+                }
+            } catch (e: Exception) {
+                part.delete()
+                throw e
+            }
+        }
+        return target
+    }
+
     /** Download the ebook file for a book pair. */
     suspend fun downloadEbook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         log("downloadEbook — pairId=${pair.id} file=${pair.ebookFilename}")
-        val response = api.downloadEbook(pair.ebookId)
-        if (!response.isSuccessful) {
-            logE("downloadEbook failed — HTTP ${response.code()}")
-            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
-        }
-        val dir = File(context.filesDir, "ebooks")
-        dir.mkdirs()
-        val file = File(dir, pair.ebookFilename)
-        withContext(Dispatchers.IO) {
-            val body = response.body() ?: throw Exception("Empty response body")
-            val contentLength = body.contentLength()
-            body.byteStream().use { input ->
-                file.outputStream().use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var bytesCopied = 0L
-                    var bytes = input.read(buffer)
-                    while(bytes >= 0) {
-                        output.write(buffer, 0, bytes)
-                        bytesCopied += bytes
-                        if (contentLength > 0) {
-                            onProgress((bytesCopied * 100 / contentLength).toInt())
-                        }
-                        bytes = input.read(buffer)
-                    }
-                }
-            }
-        }
+        val file = streamToFile(
+            api.downloadEbook(pair.ebookId),
+            File(File(context.filesDir, "ebooks"), pair.ebookFilename),
+            onProgress,
+        )
         bookPairDao.setEbookDownloaded(pair.id, true)
         log("downloadEbook complete — ${file.length() / 1024}KB")
         return file
@@ -537,37 +574,11 @@ class BookSyncRepository @Inject constructor(
 
     /** Download a standalone ebook file. */
     suspend fun downloadStandaloneEbook(ebook: EBookEntity, onProgress: (Int) -> Unit = {}): File {
-        val response = api.downloadEbook(ebook.id)
-        if (!response.isSuccessful) {
-            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
-        }
-        val dir = File(context.filesDir, "ebooks")
-        dir.mkdirs()
-        val file = File(dir, ebook.filename)
-        withContext(Dispatchers.IO) {
-            val body = response.body() ?: throw Exception("Empty response body")
-            val contentLength = body.contentLength()
-            body.byteStream().use { input ->
-                file.outputStream().use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var bytesCopied = 0L
-                    var lastProgress = -1
-                    var bytes = input.read(buffer)
-                    while(bytes >= 0) {
-                        output.write(buffer, 0, bytes)
-                        bytesCopied += bytes
-                        if (contentLength > 0) {
-                            val progress = (bytesCopied * 100 / contentLength).toInt()
-                            if (progress != lastProgress) {
-                                lastProgress = progress
-                                onProgress(progress)
-                            }
-                        }
-                        bytes = input.read(buffer)
-                    }
-                }
-            }
-        }
+        val file = streamToFile(
+            api.downloadEbook(ebook.id),
+            File(File(context.filesDir, "ebooks"), ebook.filename),
+            onProgress,
+        )
         eBookDao.setDownloaded(ebook.id, true)
         return file
     }
@@ -575,38 +586,11 @@ class BookSyncRepository @Inject constructor(
     /** Download the audiobook file for a book pair. */
     suspend fun downloadAudiobook(pair: BookPairEntity, onProgress: (Int) -> Unit = {}): File {
         log("downloadAudiobook — pairId=${pair.id} file=${pair.audiobookFilename}")
-        val response = api.downloadAudiobook(pair.audiobookId)
-        if (!response.isSuccessful) {
-            logE("downloadAudiobook failed — HTTP ${response.code()}")
-            throw Exception("HTTP ${response.code()}: ${response.errorBody()?.string()}")
-        }
-        val dir = File(context.filesDir, "audiobooks")
-        dir.mkdirs()
-        val file = File(dir, pair.audiobookFilename)
-        withContext(Dispatchers.IO) {
-            val body = response.body() ?: throw Exception("Empty response body")
-            val contentLength = body.contentLength()
-            body.byteStream().use { input ->
-                file.outputStream().use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var bytesCopied = 0L
-                    var lastProgress = -1
-                    var bytes = input.read(buffer)
-                    while(bytes >= 0) {
-                        output.write(buffer, 0, bytes)
-                        bytesCopied += bytes
-                        if (contentLength > 0) {
-                            val progress = (bytesCopied * 100 / contentLength).toInt()
-                            if (progress != lastProgress) {
-                                lastProgress = progress
-                                onProgress(progress)
-                            }
-                        }
-                        bytes = input.read(buffer)
-                    }
-                }
-            }
-        }
+        val file = streamToFile(
+            api.downloadAudiobook(pair.audiobookId),
+            File(File(context.filesDir, "audiobooks"), pair.audiobookFilename),
+            onProgress,
+        )
         bookPairDao.setAudiobookDownloaded(pair.id, true)
         log("downloadAudiobook complete — ${file.length() / 1024}KB")
         return file
@@ -614,34 +598,11 @@ class BookSyncRepository @Inject constructor(
 
     /** Download a standalone audiobook file. */
     suspend fun downloadStandaloneAudiobook(audio: AudioBookEntity, onProgress: (Int) -> Unit = {}): File {
-        val response = api.downloadAudiobook(audio.id)
-        val dir = File(context.filesDir, "audiobooks")
-        dir.mkdirs()
-        val file = File(dir, audio.filename)
-        withContext(Dispatchers.IO) {
-            val body = response.body() ?: return@withContext
-            val contentLength = body.contentLength()
-            body.byteStream().use { input ->
-                file.outputStream().use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var bytesCopied = 0L
-                    var lastProgress = -1
-                    var bytes = input.read(buffer)
-                    while(bytes >= 0) {
-                        output.write(buffer, 0, bytes)
-                        bytesCopied += bytes
-                        if (contentLength > 0) {
-                            val progress = (bytesCopied * 100 / contentLength).toInt()
-                            if (progress != lastProgress) {
-                                lastProgress = progress
-                                onProgress(progress)
-                            }
-                        }
-                        bytes = input.read(buffer)
-                    }
-                }
-            }
-        }
+        val file = streamToFile(
+            api.downloadAudiobook(audio.id),
+            File(File(context.filesDir, "audiobooks"), audio.filename),
+            onProgress,
+        )
         audioBookDao.setDownloaded(audio.id, true)
         return file
     }
@@ -968,6 +929,9 @@ class BookSyncRepository @Inject constructor(
                     PositionFetch(null, reachable = false)
                 }
             }
+        } catch (e: CancellationException) {
+            // A cancelled fetch is not "offline" — let the caller's scope see it.
+            throw e
         } catch (e: Exception) {
             logW("fetchPosition $scope/$id: offline (${e.message})")
             PositionFetch(null, reachable = false)
@@ -1001,6 +965,11 @@ class BookSyncRepository @Inject constructor(
                     null
                 }
             }
+        } catch (e: CancellationException) {
+            // A cancelled save must propagate as cancellation, not be logged
+            // as "offline" — the caller would otherwise continue into a Room
+            // write on an already-cancelled coroutine (issue #164).
+            throw e
         } catch (e: Exception) {
             logW("updatePosition $scope/$id: offline (${e.message})")
             null
@@ -1053,18 +1022,22 @@ class BookSyncRepository @Inject constructor(
         val hasExistingRow = bookmarkDao.getBookmark(pairId) != null
         val effectiveClaim = claimFormat || !hasExistingRow
 
-        if (!pushToServer) {
-            updateBookmark(
-                pairId = pairId,
-                source = "audiobook",
-                audioPositionMs = audioPositionMs,
-                appendToLog = false,
-                pushToServer = false,
-                stampSource = effectiveClaim,
-                markSynced = false,
-            )
-            return false
-        }
+        // Room-first (issue #164, contract § "The write gate"): the local row
+        // must land even if the coroutine is cancelled inside the network call
+        // below (paused swipe-away, offline pause burning the connect
+        // timeout). Written unsynced; flipped to synced only when the PUT
+        // actually succeeds, so a crash in between leaves a row the startup
+        // reconcile / WorkManager sweep still delivers.
+        updateBookmark(
+            pairId = pairId,
+            source = "audiobook",
+            audioPositionMs = audioPositionMs,
+            appendToLog = false,
+            pushToServer = false,
+            stampSource = effectiveClaim,
+            markSynced = false,
+        )
+        if (!pushToServer) return false
 
         val result = updatePosition(
             "pair", pairId,
@@ -1077,16 +1050,21 @@ class BookSyncRepository @Inject constructor(
                 device_name = deviceName,
             ),
         )
-        // Room stays warm for offline opens; only issue a second push when the
-        // canonical write above didn't get through.
-        updateBookmark(
-            pairId = pairId,
-            source = "audiobook",
-            audioPositionMs = audioPositionMs,
-            appendToLog = appendToLog,
-            pushToServer = result == null,
-            stampSource = effectiveClaim,
-        )
+        if (result == null) {
+            // Canonical write failed — re-run the legacy push (which queues
+            // pending_sync on failure) and mirror the history entry locally,
+            // exactly as the pre-Room-first code did on this path.
+            updateBookmark(
+                pairId = pairId,
+                source = "audiobook",
+                audioPositionMs = audioPositionMs,
+                appendToLog = appendToLog,
+                pushToServer = true,
+                stampSource = effectiveClaim,
+            )
+        } else {
+            bookmarkDao.markSynced(pairId)
+        }
         return result != null
     }
 
@@ -1099,16 +1077,16 @@ class BookSyncRepository @Inject constructor(
         claimFormat: Boolean = true,
         pushToServer: Boolean = true,
     ): Boolean {
-        if (!pushToServer) {
-            updateProgress(
-                mediaType = "audiobook",
-                mediaId = audiobookId,
-                audioPositionMs = audioPositionMs,
-                pushToServer = false,
-                markSynced = false,
-            )
-            return false
-        }
+        // Room-first, mirroring savePlaybackPosition above (issue #164).
+        updateProgress(
+            mediaType = "audiobook",
+            mediaId = audiobookId,
+            audioPositionMs = audioPositionMs,
+            pushToServer = false,
+            markSynced = false,
+        )
+        if (!pushToServer) return false
+
         val result = updatePosition(
             "audiobook", audiobookId,
             PositionUpdateRequest(
@@ -1119,13 +1097,61 @@ class BookSyncRepository @Inject constructor(
                 device_name = deviceName,
             ),
         )
-        updateProgress(
-            mediaType = "audiobook",
-            mediaId = audiobookId,
-            audioPositionMs = audioPositionMs,
-            pushToServer = result == null,
-        )
+        if (result == null) {
+            // Failed canonical write — the legacy push path leaves the row
+            // unsynced for the sweep when it fails too.
+            updateProgress(
+                mediaType = "audiobook",
+                mediaId = audiobookId,
+                audioPositionMs = audioPositionMs,
+                pushToServer = true,
+            )
+        } else {
+            userProgressDao.markSynced("audiobook", audiobookId)
+        }
         return result != null
+    }
+
+    /**
+     * Boundary-save variant of [savePlaybackPosition] that survives the
+     * caller's teardown (issue #164): pause, STATE_ENDED, cast switch,
+     * controller disconnect, service onDestroy and PlayerViewModel.onCleared
+     * all fire at moments where the launching scope is about to be cancelled.
+     * Runs on [appScope] under [NonCancellable], the same shape as
+     * [saveReaderPosition]. The throttled heartbeat deliberately does NOT use
+     * this — a lost heartbeat is recovered by the next tick.
+     *
+     * Returns the [Job] so tests can await completion; callers fire and forget.
+     */
+    fun savePlaybackPositionDetached(
+        pairId: Int,
+        audioPositionMs: Int,
+        appendToLog: Boolean = false,
+        claimFormat: Boolean = true,
+    ): Job = appScope.launch {
+        withContext(NonCancellable) {
+            savePlaybackPosition(
+                pairId = pairId,
+                audioPositionMs = audioPositionMs,
+                appendToLog = appendToLog,
+                claimFormat = claimFormat,
+            )
+        }
+    }
+
+    /** Same, for a standalone audiobook. See [savePlaybackPositionDetached]. */
+    fun savePlaybackPositionStandaloneDetached(
+        audiobookId: Int,
+        audioPositionMs: Int,
+        claimFormat: Boolean = true,
+    ): Job = appScope.launch {
+        withContext(NonCancellable) {
+            savePlaybackPositionStandalone(
+                audiobookId = audiobookId,
+                audioPositionMs = audioPositionMs,
+                claimFormat = claimFormat,
+            )
+        }
     }
 
     /**
@@ -1562,19 +1588,37 @@ class BookSyncRepository @Inject constructor(
     fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?> =
         userProgressDao.getProgressFlow(mediaType, mediaId)
 
-    /** Refresh progress from the server's canonical record for this medium. */
+    /**
+     * Refresh progress from the server's canonical record for this medium,
+     * respecting unsynced and newer local data — the same decision rules as
+     * [refreshBookmark] (issue #162). A 204 (never opened) and an unreachable
+     * server both come back null: nothing to pull, the local cache stands.
+     */
     suspend fun refreshProgress(mediaType: String, mediaId: Int) {
-        try {
-            val remote = fetchPosition(mediaType, mediaId).position ?: return
-            val existing = userProgressDao.getProgress(mediaType, mediaId)
+        val remote = fetchPosition(mediaType, mediaId).position ?: return
+        val existing = userProgressDao.getProgress(mediaType, mediaId)
+
+        // Never overwrite unsynced local data — offline progress must survive.
+        if (existing != null && !existing.syncedToServer) {
+            log("refreshProgress $mediaType/$mediaId: local has unsynced changes, skipping server pull")
+            return
+        }
+
+        // Only pull if the server record is at least as new as the local one.
+        // Compare capture moments (falling back to updatedAt), the same axis
+        // syncAllBookmarksAndProgress adjudicates with.
+        val remoteTs = parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at))
+        val localTs = existing?.let { it.capturedAt?.let { c -> parseSyncTimestamp(c) } ?: it.updatedAt } ?: 0L
+
+        if (existing == null || remoteTs >= localTs) {
             userProgressDao.upsertProgress(
                 // `updatedAt` is deliberately local wall-clock rather than the
                 // remote string: it only orders the local Continue list.
                 remote.toProgressEntity(mediaType, mediaId, existing)
                     .copy(updatedAt = System.currentTimeMillis())
             )
-        } catch (_: Exception) {
-            // Offline - use local cache
+        } else {
+            log("refreshProgress $mediaType/$mediaId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
         }
     }
 

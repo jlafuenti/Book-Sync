@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     # require admin approval (is_active=False) unless disabled here entirely.
     allow_public_registration: bool = Field(default=True, alias="ALLOW_PUBLIC_REGISTRATION")
 
+    # Per-username login throttle (issue #296). Counts only FAILED logins in a
+    # sliding window; a success clears the counter. Complements the per-IP
+    # slowapi bucket, which docker NAT can collapse into one bucket (#294).
+    # The limit is deliberately high and the window short: keying on the
+    # username means an attacker who knows one can lock the real user out for
+    # the window, so the threshold must sit far above any run of typos. See
+    # rate_limit.FailedLoginTracker and docs/operations.md, "Login throttling".
+    login_failure_limit: int = Field(default=10, alias="LOGIN_FAILURE_LIMIT")
+    login_failure_window_seconds: int = Field(
+        default=15 * 60, alias="LOGIN_FAILURE_WINDOW_SECONDS"
+    )
+
     # Whisper Transcription
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisper_device: str = Field(
@@ -69,6 +81,12 @@ class Settings(BaseSettings):
     # manual). Mounted read-write into the server. See docs/backup-restore.md.
     backups_dir: str = Field(default="/backups", alias="BACKUPS_DIR")
 
+    # Upload guard (issue #157) — multipart/form-data requests whose declared
+    # Content-Length exceeds this are refused with 413 BEFORE the multipart
+    # parser runs (see middleware.py). Uploads are multi-GB audiobooks, so the
+    # default is generous: 10 GiB.
+    upload_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, alias="UPLOAD_MAX_BYTES")
+
     # Credential encryption — comma-separated list of Fernet keys.
     # First key is used to encrypt new writes; all keys are tried for decryption,
     # so rotation is "prepend a new key" with no migration step.
@@ -80,6 +98,14 @@ class Settings(BaseSettings):
 
     # CORS — comma-separated list of allowed origins; defaults to wildcard for dev
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
+
+    # Reverse-proxy trust (issue #156). uvicorn itself consumes this env var:
+    # ProxyHeadersMiddleware rewrites scope["client"] from X-Forwarded-For only
+    # when the socket peer is listed here (default trust list: 127.0.0.1).
+    # The app never parses the header — it only mirrors the var to warn when a
+    # prod deployment behind a proxy forgot to set it, which silently collapses
+    # the auth rate limit into one global bucket. Never set this to "*".
+    forwarded_allow_ips: Optional[str] = Field(default=None, alias="FORWARDED_ALLOW_IPS")
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -189,4 +215,30 @@ def check_cors_origins(s: "Settings") -> None:
         )
     logger.warning(
         "Using wildcard CORS origin (dev mode). Set CORS_ORIGINS for production!"
+    )
+
+
+def check_forwarded_allow_ips(s: "Settings") -> None:
+    """Warn (never raise) when prod runs without FORWARDED_ALLOW_IPS.
+
+    Behind a reverse proxy every request shares one socket peer; unless uvicorn
+    is told to trust that peer's X-Forwarded-For, the per-IP auth rate limit
+    becomes one global bucket (five bad logins a minute lock everyone out) and
+    audit rows record the proxy's address. Warn rather than refuse: a bare
+    deployment with no proxy is still legitimate. See issue #156.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    if s.app_env != "prod":
+        return
+    if s.forwarded_allow_ips and s.forwarded_allow_ips.strip():
+        return
+    logger.warning(
+        "FORWARDED_ALLOW_IPS is unset. If this server sits behind a reverse "
+        "proxy (Caddy, the shipped nginx web container), all clients share the "
+        "proxy's IP: the login/register rate limit becomes one global bucket "
+        "and audit logs record the proxy's address. Set FORWARDED_ALLOW_IPS to "
+        "the address your proxy connects from (see docs/operations.md, "
+        "'Reverse proxy')."
     )

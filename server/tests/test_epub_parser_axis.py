@@ -14,13 +14,15 @@ the phone and the browser, or a position resolved through it lands on the
 wrong page.
 """
 
-import os
 import zipfile
 
 import pytest
 
+from tests.factories import write_epub as _write_epub
+
 from services.epub_parser import (
     _build_sentences_from_documents,
+    extract_book_text,
     extract_epub_sentences,
     old_chapter_to_spine_index,
 )
@@ -37,43 +39,6 @@ MORE_PROSE = (
 )
 BLANK = "<html><body></body></html>"
 IMAGE_ONLY = '<html><body><img src="plate01.jpg"/></body></html>'
-
-
-def _write_epub(path, spine_docs, *, manifest_order=None):
-    """Build a minimal but valid EPUB.
-
-    `spine_docs` is [(filename, html)] in spine order. `manifest_order` lets a
-    test declare the manifest in a *different* order than the spine — the case
-    that separates a spine walk from a manifest walk.
-    """
-    names = [name for name, _ in spine_docs]
-    manifest_names = manifest_order or names
-    manifest = "".join(
-        f'<item id="id{names.index(n)}" href="{n}" media-type="application/xhtml+xml"/>'
-        for n in manifest_names
-    )
-    spine = "".join(f'<itemref idref="id{i}"/>' for i in range(len(names)))
-    opf = (
-        '<?xml version="1.0"?>'
-        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">'
-        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
-        '<dc:title>Axis Test</dc:title><dc:identifier id="bookid">urn:uuid:axis</dc:identifier>'
-        '<dc:language>en</dc:language></metadata>'
-        f"<manifest>{manifest}</manifest><spine>{spine}</spine></package>"
-    )
-    container = (
-        '<?xml version="1.0"?>'
-        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">'
-        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
-        'media-type="application/oebps-package+xml"/></rootfiles></container>'
-    )
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr("mimetype", "application/epub+zip")
-        z.writestr("META-INF/container.xml", container)
-        z.writestr("OEBPS/content.opf", opf)
-        for name, html in spine_docs:
-            z.writestr(f"OEBPS/{name}", html)
-    return str(path)
 
 
 # ---------- _build_sentences_from_documents ----------
@@ -166,3 +131,60 @@ def test_unreadable_spine_item_still_occupies_its_index(tmp_path):
     sentences = extract_epub_sentences(stripped)
 
     assert {s.chapter for s in sentences} == {1}
+
+
+# ---------- extract_book_text ----------
+
+def test_extract_book_text_returns_every_spine_document(tmp_path):
+    """The drift audit's haystack (issue #295): whole-book text, spine order,
+    no sentence tokenization."""
+    path = _write_epub(
+        tmp_path / "text.epub",
+        [("ch1.xhtml", PROSE), ("blank.xhtml", BLANK), ("ch2.xhtml", MORE_PROSE)],
+    )
+
+    text = extract_book_text(path)
+
+    assert "The harbour lay still under a flat grey sky." in text
+    assert "He set his shoulder to the capstan and heaved." in text
+    # Spine order, not manifest or alphabetical.
+    assert text.index("The harbour lay still") < text.index("Brashen kept his own")
+
+
+def test_extract_book_text_agrees_with_the_sentence_extractor(tmp_path):
+    """Both paths must see the same document, or the audit would flag maps the
+    aligner built correctly."""
+    path = _write_epub(
+        tmp_path / "agree.epub", [("ch1.xhtml", PROSE), ("ch2.xhtml", MORE_PROSE)],
+    )
+
+    text = extract_book_text(path)
+
+    for sentence in extract_epub_sentences(path):
+        assert sentence.text in text
+
+
+def test_extract_book_text_dispatches_on_the_mobi_extension(monkeypatch):
+    """A pair can still be aligned against a .mobi (the Convert flow exists to
+    move them off it), so the audit has to be able to read one."""
+    from services import epub_parser
+
+    monkeypatch.setattr(
+        epub_parser, "extract_mobi_sentences",
+        lambda path: [
+            epub_parser.EpubSentence(0, 0, "The harbour lay still."),
+            epub_parser.EpubSentence(0, 1, "One ship was missing."),
+        ],
+    )
+
+    text = extract_book_text("/library/book.MOBI")
+
+    assert text == "The harbour lay still.\nOne ship was missing."
+
+
+def test_extract_book_text_raises_on_an_unreadable_file(tmp_path):
+    path = tmp_path / "broken.epub"
+    path.write_bytes(b"not a zip archive at all")
+
+    with pytest.raises(RuntimeError):
+        extract_book_text(str(path))

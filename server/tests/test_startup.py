@@ -4,10 +4,18 @@ default secrets/credentials/wildcard CORS in prod, and never seeding a
 guessable superadmin password.
 """
 
+import logging
+
 import pytest
 from sqlalchemy import select, func
 
-from config import settings, check_jwt_secret, check_db_credentials, check_cors_origins
+from config import (
+    settings,
+    check_jwt_secret,
+    check_db_credentials,
+    check_cors_origins,
+    check_forwarded_allow_ips,
+)
 from database import bootstrap_superadmin
 from models.user import User
 from routers.auth import verify_password
@@ -68,6 +76,32 @@ def test_check_cors_origins_allows_explicit_origin_in_prod(monkeypatch):
     monkeypatch.setattr(settings, "cors_origins", "http://localhost:3000")
     monkeypatch.setattr(settings, "app_env", "prod")
     check_cors_origins(settings)  # should not raise
+
+
+def test_prod_warns_when_forwarded_allow_ips_is_unset(monkeypatch, caplog):
+    """Behind a reverse proxy, an unset FORWARDED_ALLOW_IPS silently collapses
+    the auth rate limit into one global bucket (issue #156) — prod must warn."""
+    monkeypatch.setattr(settings, "forwarded_allow_ips", None)
+    monkeypatch.setattr(settings, "app_env", "prod")
+    with caplog.at_level(logging.WARNING, logger="config"):
+        check_forwarded_allow_ips(settings)  # warns, never raises
+    assert any("FORWARDED_ALLOW_IPS" in r.getMessage() for r in caplog.records)
+
+
+def test_prod_is_silent_when_forwarded_allow_ips_is_set(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "forwarded_allow_ips", "172.18.0.5")
+    monkeypatch.setattr(settings, "app_env", "prod")
+    with caplog.at_level(logging.WARNING, logger="config"):
+        check_forwarded_allow_ips(settings)
+    assert not caplog.records
+
+
+def test_dev_is_silent_when_forwarded_allow_ips_is_unset(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "forwarded_allow_ips", None)
+    monkeypatch.setattr(settings, "app_env", "dev")
+    with caplog.at_level(logging.WARNING, logger="config"):
+        check_forwarded_allow_ips(settings)
+    assert not caplog.records
 
 
 async def test_bootstrap_superadmin_password_is_not_admin(db):

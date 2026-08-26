@@ -27,19 +27,39 @@ class ResumeRewindPlayer(delegate: Player) : ForwardingPlayer(delegate) {
      * fresh start, not a resume, and rewinding it would cost 5s every time the
      * app is opened. Only once playback has been heard does a subsequent
      * paused→playing transition count as a resume.
+     *
+     * Exposed for the service's seek flush (issue #166): a REASON_SEEK
+     * discontinuity before playback has been heard is the restore seek at
+     * open, not a user scrub, and must not be flushed (let alone claim the
+     * format).
      */
-    private var hasPlayed = false
+    var hasPlayedSinceItemTransition = false
+        private set
+
+    /**
+     * One-shot marker for the wrapper's own rewind seek (issue #166): set just
+     * before [setPlayWhenReady] issues it, consumed by the service's
+     * onPositionDiscontinuity so the programmatic rewind is not flushed as if
+     * the user had scrubbed. Both run in order on the application looper.
+     */
+    private var rewindSeekInFlight = false
+
+    fun consumeResumeRewindSeek(): Boolean {
+        val wasRewind = rewindSeekInFlight
+        rewindSeekInFlight = false
+        return wasRewind
+    }
 
     init {
         delegate.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) hasPlayed = true
+                if (isPlaying) hasPlayedSinceItemTransition = true
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // New book (or a re-load of this one): the next play is a fresh
                 // start again, not a resume.
-                hasPlayed = false
+                hasPlayedSinceItemTransition = false
             }
         })
     }
@@ -51,7 +71,8 @@ class ResumeRewindPlayer(delegate: Player) : ForwardingPlayer(delegate) {
      * this method twice and jump back 10s instead of 5s.
      */
     override fun setPlayWhenReady(playWhenReady: Boolean) {
-        if (playWhenReady && hasPlayed && !getPlayWhenReady()) {
+        if (playWhenReady && hasPlayedSinceItemTransition && !getPlayWhenReady()) {
+            rewindSeekInFlight = true
             seekTo(PlaybackOffsets.resumePosition(currentPosition))
         }
         super.setPlayWhenReady(playWhenReady)

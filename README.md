@@ -106,6 +106,11 @@ Set in the `server` service's `environment:` block. Everything the server reads 
 
 Set `APP_ENV=dev` for local development to allow the insecure zero-config defaults. Never in prod.
 
+**Exposing the stack behind a reverse proxy?** Set `FORWARDED_ALLOW_IPS` to your proxy's address,
+prefer putting the proxy (e.g. Caddy) on the compose network pointed at `server:8000`, and bind
+the published `8000`/`3000` ports to `127.0.0.1` or your LAN firewall so the proxy can't be
+bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#reverse-proxy).
+
 **Optional** — all have working defaults:
 
 | Variable | Default | What it does |
@@ -121,6 +126,8 @@ Set `APP_ENV=dev` for local development to allow the insecure zero-config defaul
 | `WHISPER_MODEL` / `WHISPER_DEVICE` | `medium` / `auto` | Local Whisper model and device (`auto`/`cpu`/`cuda`) |
 | `AUTO_TRANSCRIBE_ENABLED` | `false` | Queue newly auto-matched pairs automatically |
 | `ALLOW_PUBLIC_REGISTRATION` | `true` | Self-registration; new accounts still need admin approval |
+| `LOGIN_FAILURE_LIMIT` / `LOGIN_FAILURE_WINDOW_SECONDS` | `10` / `900` | Failed logins per username before that username is 429'd for the rest of the window. Complements the per-IP limit; note that keying on the username lets anyone who knows one lock the real user out for the window, so don't lower it casually. See [docs/operations.md](docs/operations.md#login-throttling) |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` (uvicorn default) | Reverse-proxy peer(s) whose `X-Forwarded-For` uvicorn trusts. **Required behind any proxy** — unset, all clients share the proxy's IP, so the login rate limit is one global bucket and audit logs record the proxy. Never `*`. See [docs/operations.md](docs/operations.md#reverse-proxy) |
 | `GOOGLE_BOOKS_API_KEY` | — | Raises the rate limit on the manual Google Books metadata search |
 | `ABS_URL` / `ABS_API_TOKEN` / `ABS_AUDIOBOOKS_PREFIX` | — | Audiobookshelf metadata enrichment |
 
@@ -165,7 +172,7 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 | [docs/import-sources.md](docs/import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
 | [docs/transcription.md](docs/transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
 | [docs/android.md](docs/android.md) | Building the app, pointing it at your server, downloads/offline, Android Auto |
-| [docs/operations.md](docs/operations.md) | Logs, upgrades, password rotation, restart policies |
+| [docs/operations.md](docs/operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, restart policies |
 | [docs/backup-restore.md](docs/backup-restore.md) | Backup schedule, restore procedure, test drills |
 | [docs/position-sync-contract.md](docs/position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |
 | [docs/web-pwa.md](docs/web-pwa.md) | Web app as a PWA: lock-screen controls, home-screen install, service-worker caching policy |
