@@ -46,6 +46,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.booksync.player.AudioPlayerService
+import com.booksync.player.MediaId
 import com.booksync.ui.theme.Tandem
 import kotlinx.coroutines.delay
 
@@ -232,4 +233,4 @@ fun MiniPlayerBar(
  * relevant integer id. Returns null when the id doesn't match the expected prefix.
  */
 fun decodePairIdFromMediaId(mediaId: String): Int? =
-    mediaId.takeIf { it.startsWith("pair_") }?.removePrefix("pair_")?.toIntOrNull()
+    (MediaId.parse(mediaId) as? MediaId.Pair)?.pairId

@@ -9,7 +9,7 @@ future refactors of the auth surface can't silently regress.
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
+import jwt
 from sqlalchemy import select
 
 from config import settings
@@ -390,3 +390,356 @@ async def test_media_token_batch_skips_invalid_resource_type(client, make_user, 
     )
     assert r.status_code == 200
     assert list(r.json()["tokens"].keys()) == ["cover:a.jpg"]
+
+
+# ---------------------------------------------------------------------------
+# Client IP: audit rows + rate-limit buckets (issue #156)
+#
+# Behind a reverse proxy every request shares one socket peer, so the client
+# address must come from `scope["client"]` — which uvicorn's
+# ProxyHeadersMiddleware rewrites from X-Forwarded-For only when the peer is a
+# trusted proxy (FORWARDED_ALLOW_IPS). The application itself must never trust
+# the header directly: it is attacker-chosen.
+# ---------------------------------------------------------------------------
+
+def _auth_app():
+    """A minimal app mounting only the auth router (mirrors the client fixture)."""
+    from fastapi import FastAPI
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+
+    from rate_limit import limiter
+    from routers import auth as auth_module
+
+    limiter.enabled = False
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.include_router(auth_module.router)
+    return app
+
+
+def test_get_client_ip_uses_the_socket_peer_not_the_header():
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [(b"x-forwarded-for", b"1.2.3.4")],
+        "client": ("10.0.0.9", 1),
+    }
+    assert get_client_ip(Request(scope)) == "10.0.0.9"
+
+
+def test_get_client_ip_falls_back_when_the_peer_host_is_none():
+    """ProxyHeadersMiddleware sets the client to (None, 0) when every hop in
+    X-Forwarded-For is trusted (real docker NAT topologies) — audit rows must
+    store "unknown", not NULL."""
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [],
+        "client": (None, 0),
+    }
+    assert get_client_ip(Request(scope)) == "unknown"
+
+
+def test_get_client_ip_falls_back_when_there_is_no_peer_at_all():
+    from starlette.requests import Request
+
+    from routers.auth import get_client_ip
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/login",
+        "headers": [],
+        "client": None,
+    }
+    assert get_client_ip(Request(scope)) == "unknown"
+
+
+async def test_failed_login_audit_row_records_the_peer_ip(db):
+    """An attacker-supplied X-Forwarded-For must not end up in the audit log."""
+    transport = ASGITransport(app=_auth_app(), client=("10.0.0.9", 1))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post(
+            "/api/auth/login",
+            json={"username": "ghost", "password": "x"},
+            headers={"X-Forwarded-For": "1.2.3.4"},
+        )
+    assert r.status_code == 401
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].ip_address == "10.0.0.9"
+
+
+async def test_failed_login_audit_row_uses_forwarded_ip_behind_trusted_proxy(db):
+    """With uvicorn's ProxyHeadersMiddleware trusting the peer, scope["client"]
+    is rewritten from X-Forwarded-For and the audit row records the real client."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app = ProxyHeadersMiddleware(_auth_app(), trusted_hosts="10.0.0.9")
+    transport = ASGITransport(app=app, client=("10.0.0.9", 1))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post(
+            "/api/auth/login",
+            json={"username": "ghost", "password": "x"},
+            headers={"X-Forwarded-For": "1.2.3.4"},
+        )
+    assert r.status_code == 401
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].ip_address == "1.2.3.4"
+
+
+async def test_login_rate_limit_is_per_client_ip():
+    """Six bad logins from A must 429 A but leave B at a plain 401.
+
+    Pins the limiter key: if it ever stops being the (proxy-corrected) socket
+    peer, one client exhausting the bucket locks out everyone (issue #156).
+    """
+    from rate_limit import limiter
+
+    app = _auth_app()  # sets limiter.enabled = False; re-enable below
+    limiter.enabled = True
+    limiter.reset()
+    try:
+        ta = ASGITransport(app=app, client=("10.1.1.1", 1))
+        tb = ASGITransport(app=app, client=("10.2.2.2", 1))
+        async with AsyncClient(transport=ta, base_url="http://test") as a, AsyncClient(
+            transport=tb, base_url="http://test"
+        ) as b:
+            last = None
+            for _ in range(6):
+                last = await a.post(
+                    "/api/auth/login", json={"username": "ghost", "password": "x"}
+                )
+            assert last.status_code == 429
+            r = await b.post(
+                "/api/auth/login", json={"username": "ghost", "password": "x"}
+            )
+            assert r.status_code == 401
+    finally:
+        limiter.enabled = False
+        limiter.reset()
+
+
+# ---------------------------------------------------------------------------
+# Per-username failed-login bucket (issue #296)
+#
+# The slowapi limiter above keys on the client IP, which docker NAT can collapse
+# into one bucket (issue #294). A second, username-keyed layer counts *failed*
+# attempts in-route and returns 429 before the password is ever verified.
+# ---------------------------------------------------------------------------
+
+
+async def _fail_login(c, username, times, password="wrong"):
+    """POST `times` bad logins for `username`; return the last response."""
+    last = None
+    for _ in range(times):
+        last = await c.post(
+            "/api/auth/login", json={"username": username, "password": password}
+        )
+    return last
+
+
+async def test_repeated_failures_lock_that_username_only(client, make_user):
+    """N failures for A → A is 429'd; B is untouched (401 wrong pw, 200 right pw)."""
+    from config import settings as s
+    from rate_limit import failed_logins
+
+    n = s.login_failure_limit
+    await make_user(username="lockme", password="pw")
+    await make_user(username="bystander", password="pw")
+
+    last = await _fail_login(client, "lockme", n)
+    assert last.status_code == 401  # the Nth failure still reads as a plain 401
+
+    r = await client.post("/api/auth/login", json={"username": "lockme", "password": "pw"})
+    assert r.status_code == 429
+    retry_after = int(r.headers["Retry-After"])
+    assert 0 < retry_after <= s.login_failure_window_seconds
+
+    # A different username shares neither the counter nor the lock.
+    assert failed_logins.failure_count("bystander") == 0
+    r = await client.post("/api/auth/login", json={"username": "bystander", "password": "nope"})
+    assert r.status_code == 401
+    r = await client.post("/api/auth/login", json={"username": "bystander", "password": "pw"})
+    assert r.status_code == 200
+
+
+async def test_correct_password_while_locked_is_still_429(client, make_user):
+    """No oracle: the lock is checked before the password is verified."""
+    from config import settings as s
+
+    await make_user(username="locked", password="correcthorse")
+    await _fail_login(client, "locked", s.login_failure_limit)
+
+    r = await client.post(
+        "/api/auth/login", json={"username": "locked", "password": "correcthorse"}
+    )
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+async def test_successful_login_clears_the_failure_counter(client, make_user):
+    """N-1 failures, a success, then N-1 more failures must not trip the lock."""
+    from config import settings as s
+    from rate_limit import failed_logins
+
+    n = s.login_failure_limit
+    await make_user(username="clearme", password="pw")
+
+    await _fail_login(client, "clearme", n - 1)
+    assert failed_logins.failure_count("clearme") == n - 1
+
+    r = await client.post("/api/auth/login", json={"username": "clearme", "password": "pw"})
+    assert r.status_code == 200
+    assert failed_logins.failure_count("clearme") == 0
+
+    last = await _fail_login(client, "clearme", n - 1)
+    assert last.status_code == 401  # still short of the threshold
+
+
+async def test_lock_expires_after_the_window(client, make_user):
+    """With a controlled clock, the bucket unlocks once the window passes."""
+    from config import settings as s
+    from rate_limit import failed_logins
+
+    now = [1000.0]
+    failed_logins.clock = lambda: now[0]
+
+    await make_user(username="waiter", password="pw")
+    await _fail_login(client, "waiter", s.login_failure_limit)
+
+    r = await client.post("/api/auth/login", json={"username": "waiter", "password": "pw"})
+    assert r.status_code == 429
+
+    now[0] += s.login_failure_window_seconds + 1
+    r = await client.post("/api/auth/login", json={"username": "waiter", "password": "pw"})
+    assert r.status_code == 200
+
+
+async def test_username_bucket_is_case_and_whitespace_normalized(client, make_user):
+    """'Alice', 'alice' and ' alice ' all share one bucket."""
+    from config import settings as s
+
+    n = s.login_failure_limit
+    await make_user(username="Alice", password="pw")
+
+    # Spread the failures across spellings; each is a distinct DB lookup that
+    # misses (usernames are stored case-sensitively) but one shared bucket.
+    await _fail_login(client, "alice", n - 1)
+    last = await _fail_login(client, " ALICE ", 1)
+    assert last.status_code == 401
+
+    r = await client.post("/api/auth/login", json={"username": "Alice", "password": "pw"})
+    assert r.status_code == 429
+
+
+async def test_locked_login_writes_a_persisted_audit_row(client, make_user, db):
+    """The login_locked row must survive the 429 (commit-before-raise, PR #289)."""
+    from config import settings as s
+
+    await make_user(username="audited", password="pw")
+    await _fail_login(client, "audited", s.login_failure_limit)
+
+    r = await client.post("/api/auth/login", json={"username": "audited", "password": "pw"})
+    assert r.status_code == 429
+
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_locked"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert "audited" in rows[0].details
+    # The failed attempts that built the lock are still logged separately.
+    failed = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(failed) == s.login_failure_limit
+
+
+async def test_lock_does_not_fire_on_the_inactive_account_path(client, make_user):
+    """A correct password for a pending account clears the counter (403, not 429)."""
+    from config import settings as s
+    from rate_limit import failed_logins
+
+    await make_user(username="pendinguser", password="pw", is_active=False)
+    await _fail_login(client, "pendinguser", s.login_failure_limit - 1)
+
+    r = await client.post(
+        "/api/auth/login", json={"username": "pendinguser", "password": "pw"}
+    )
+    assert r.status_code == 403
+    assert failed_logins.failure_count("pendinguser") == 0
+
+
+# --- FailedLoginTracker unit tests ------------------------------------------
+
+
+def test_tracker_stays_quiet_below_the_threshold():
+    from rate_limit import FailedLoginTracker
+
+    t = FailedLoginTracker()
+    for _ in range(t.limit - 1):
+        t.record_failure("u")
+    assert t.retry_after("u") is None
+    t.record_failure("u")
+    assert t.retry_after("u") is not None
+
+
+def test_tracker_retry_after_counts_down_as_entries_age_out():
+    from rate_limit import FailedLoginTracker
+
+    now = [0.0]
+    t = FailedLoginTracker(clock=lambda: now[0])
+    for i in range(t.limit):
+        now[0] = float(i)
+        t.record_failure("u")
+
+    first = t.retry_after("u")
+    now[0] += 10
+    second = t.retry_after("u")
+    assert second is not None and second < first
+
+
+def test_tracker_reset_clears_every_bucket():
+    from rate_limit import FailedLoginTracker
+
+    t = FailedLoginTracker()
+    for _ in range(t.limit):
+        t.record_failure("a")
+        t.record_failure("b")
+    assert t.retry_after("a") and t.retry_after("b")
+    t.reset()
+    assert t.retry_after("a") is None
+    assert t.failure_count("b") == 0
+
+
+def test_tracker_evicts_stale_buckets_so_a_username_spray_cannot_grow_forever():
+    from rate_limit import FailedLoginTracker
+
+    now = [0.0]
+    t = FailedLoginTracker(clock=lambda: now[0], max_tracked=50)
+    for i in range(500):
+        t.record_failure(f"user{i}")
+    assert t.tracked_usernames <= 50
+
+
+def test_tracker_clear_is_safe_for_an_unknown_username():
+    from rate_limit import FailedLoginTracker
+
+    FailedLoginTracker().clear("never-seen")  # must not raise

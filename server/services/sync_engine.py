@@ -5,18 +5,21 @@ Handles saving sync maps and converting between ebook positions
 and audio positions — the bridge that makes cross-mode sync work.
 """
 
+import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.book import BookPair
+from models.book import BookPair, EBook
 from models.bookmark import Bookmark, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
 from schemas import PositionScope
 from services.alignment import AlignedPoint
+from services.file_hash import hash_file
 from services.position_service import ScopeRef, _sync_derived_progress
 from services.sync_matcher import match_text_to_sync_points
 from config import settings
@@ -39,6 +42,28 @@ class OldPoint:
     epub_text_preview: Optional[str]
 
 
+async def _ebook_file_hash(db: AsyncSession, book_pair_id: int) -> Optional[str]:
+    """Composite hash of the ebook file this pair's map is being built from.
+
+    Returns None — "no provenance recorded" — for a pair with no ebook row, no
+    path, or a file that can't be read. A map is still worth saving without its
+    provenance; refusing to save one would trade a usable map for a stamp.
+    """
+    path = (await db.execute(
+        select(EBook.file_path)
+        .join(BookPair, BookPair.ebook_id == EBook.id)
+        .where(BookPair.id == book_pair_id)
+    )).scalar_one_or_none()
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        return await asyncio.to_thread(hash_file, path)
+    except OSError as e:
+        logger.warning("Could not hash ebook '%s' for pair %s: %s",
+                       path, book_pair_id, e)
+        return None
+
+
 async def save_sync_map(
     db: AsyncSession,
     book_pair_id: int,
@@ -50,6 +75,12 @@ async def save_sync_map(
     If a SyncMap already exists for this pair, it is replaced — and the
     bookmarks that referenced it are re-mapped onto the new coordinates
     (issue #55). Flushes but does not commit; the caller owns the transaction.
+
+    The ebook file's hash is stamped on the map as its provenance (issue #295).
+    Every producer of a sync map — transcription, re-alignment, the Convert
+    flow — funnels through here, so stamping at this one point is what keeps the
+    drift audit's question ("was this map built from the file now on disk?")
+    answerable for all of them.
     """
     # Delete existing sync map for this pair
     result = await db.execute(
@@ -93,6 +124,7 @@ async def save_sync_map(
         version=new_version,
         total_sentences=len(aligned_points),
         total_chapters=len(chapters),
+        epub_file_hash=await _ebook_file_hash(db, book_pair_id),
     )
     db.add(sync_map)
     await db.flush()

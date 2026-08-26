@@ -115,6 +115,27 @@ async def _fresh_schema():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_failed_login_tracker():
+    """Clear the per-username login lockout between tests (issue #296).
+
+    Unlike the slowapi limiter — which conftest simply disables — this layer
+    stays *enabled* in tests so the real behavior is exercised. Its state is
+    process-global, so without this fixture one test's bad logins would leak
+    into the next. The injected clock is restored too, for the tests that
+    fast-forward it.
+    """
+    import time as _time
+
+    from rate_limit import failed_logins
+
+    failed_logins.reset()
+    failed_logins.clock = _time.monotonic
+    yield
+    failed_logins.reset()
+    failed_logins.clock = _time.monotonic
+
+
 @pytest_asyncio.fixture
 async def db():
     """A raw AsyncSession for tests that build/inspect DB rows directly."""

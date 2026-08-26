@@ -33,6 +33,13 @@ services:
       # refuses to start with the wildcard default — set this to your actual
       # web frontend origin(s).
       - CORS_ORIGINS=http://localhost:3000
+      # Reverse-proxy trust: the address your reverse proxy (Caddy, the `web`
+      # nginx container) connects from — check the server log's
+      # `request.client.host`; a CIDR/comma list is accepted. uvicorn only
+      # honors X-Forwarded-For from these peers; unset, all proxied clients
+      # share the proxy's IP and the login rate limit becomes one global
+      # bucket. NEVER "*" — that trusts an attacker-chosen header.
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12
       - WHISPER_MODEL=small
       - WHISPER_DEVICE=auto
       - EBOOK_DIR=/data/ebooks
@@ -45,6 +52,18 @@ services:
       # Generate with:
       #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
       - CREDENTIAL_ENC_KEYS=
+      # Multipart uploads whose Content-Length exceeds this are refused with
+      # 413 before the body is parsed (issue #157). Default is 10 GiB —
+      # audiobook uploads are multi-GB, so keep it generous.
+      # - UPLOAD_MAX_BYTES=10737418240
+      # Failed logins allowed per username before that username is refused with
+      # 429 for the rest of the window (issue #296). Only failures count and a
+      # success clears the counter. Keying on the username means anyone who
+      # knows one can lock the real user out for the window, so the default is
+      # deliberately high and the window short — see docs/operations.md,
+      # "Login throttling", before changing either.
+      # - LOGIN_FAILURE_LIMIT=10
+      # - LOGIN_FAILURE_WINDOW_SECONDS=900
     depends_on:
       db:
         condition: service_healthy

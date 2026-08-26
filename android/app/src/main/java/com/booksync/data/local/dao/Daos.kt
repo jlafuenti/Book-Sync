@@ -261,6 +261,13 @@ interface UserProgressDao {
     @Query("UPDATE user_progress SET syncedToServer = 0 WHERE mediaType = :mediaType AND mediaId = :mediaId")
     suspend fun markUnsynced(mediaType: String, mediaId: Int)
 
+    // Companion to markUnsynced, mirroring BookmarkDao.markSynced:
+    // savePlaybackPositionStandalone writes the row unsynced BEFORE the
+    // canonical PUT (issue #164 — the write must survive a cancelled network
+    // call), then calls this once the PUT actually succeeds.
+    @Query("UPDATE user_progress SET syncedToServer = 1 WHERE mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun markSynced(mediaType: String, mediaId: Int)
+
     // A pair-level progress reset (issue #61/#40 fix 3) must remove these rows
     // too — otherwise a stale, unsynced local row can be picked up by
     // syncAllBookmarksAndProgress/processPendingSync and pushed back to the
