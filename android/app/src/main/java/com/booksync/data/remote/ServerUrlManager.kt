@@ -56,9 +56,19 @@ class ServerUrlManager @Inject constructor(
     val serverUrlFlow: Flow<String> =
         dataStore.data.map { it[KEY_SERVER_URL] ?: defaultUrl }
 
-    suspend fun setServerUrl(url: String) {
-        val normalized = url.trimEnd('/')
+    /**
+     * Persist a new server URL, or refuse it.
+     *
+     * Returns false and changes nothing when [normalizeServerUrl] can't turn the
+     * input into an http(s) origin. Callers must not restart the app on false —
+     * that is exactly how issue #149 bricked installs: the raw string was stored,
+     * the process was killed, and Retrofit then threw inside Hilt on every launch
+     * with no UI left to correct it from.
+     */
+    suspend fun setServerUrl(url: String): Boolean {
+        val normalized = normalizeServerUrl(url) ?: return false
         currentUrl = normalized
         dataStore.edit { it[KEY_SERVER_URL] = normalized }
+        return true
     }
 }
