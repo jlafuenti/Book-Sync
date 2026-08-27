@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import android.content.Context
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DeviceIdManager
+import com.booksync.data.remote.PasswordResetGate
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.UserResponse
@@ -95,7 +96,7 @@ class ServerUrlSaveGateTest {
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
         return AccountViewModel(
             dataStore, api, mockk<TokenManager>(relaxed = true),
-            serverUrlManager, deviceIdManager, networkMonitor,
+            serverUrlManager, deviceIdManager, PasswordResetGate(), networkMonitor,
         )
     }
 

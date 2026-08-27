@@ -48,7 +48,7 @@ import com.booksync.ui.theme.Tandem
 @Composable
 fun ForcePasswordResetScreen(
     onPasswordChanged: () -> Unit,
-    onLogout: () -> Unit,
+    onLogout: () -> Unit = {},
     viewModel: AccountViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -108,7 +108,14 @@ fun ForcePasswordResetScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
         ) {
-            TextButton(onClick = onLogout) {
+            TextButton(onClick = {
+                // The real logout, not just a local token wipe: /api/auth/logout is
+                // on the server's allow-list precisely so this escape hatch can bump
+                // token_version. Clearing locally alone would leave the temporary
+                // password's access token valid server-side for its full 24 hours.
+                viewModel.logout()
+                onLogout()
+            }) {
                 Text(
                     "Sign out instead",
                     color = colors.textSecondary,

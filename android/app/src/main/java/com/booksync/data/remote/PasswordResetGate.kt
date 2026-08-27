@@ -10,10 +10,17 @@ import javax.inject.Singleton
  * Whether the server is refusing this session until the password is changed
  * (issue #209).
  *
- * Two things raise it: `getMe()` reporting `must_reset_password`, and any request
- * coming back `403 password_reset_required` — the second matters because an admin
- * can reset a password while the app is running, and without it every screen
- * would simply start failing with no explanation.
+ * Two things raise it, and the redundancy is deliberate:
+ *
+ *  - any request answering `403 password_reset_required` (`AuthInterceptor`), which
+ *    is what covers the app being opened with a temporary password already stored;
+ *  - `AccountViewModel.loadProfile` seeing the flag on `GET /api/auth/me`, which is
+ *    the one authenticated call the server allow-lists for a flagged user and so
+ *    the only one that *reports* the flag rather than refusing.
+ *
+ * One trigger would be enough on paper. Two means a dropped signal degrades into a
+ * delay rather than stranding the user in an app where every screen 403s and none
+ * of them explain why.
  *
  * Deliberately in-memory rather than DataStore-backed. It is re-derived from the
  * server on every launch, and a stale persisted `true` would strand the app on a

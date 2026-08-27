@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DeviceIdManager
+import com.booksync.data.remote.PasswordResetGate
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.UserResponse
@@ -92,6 +93,7 @@ class AccountViewModelLogoutTest {
             tokenManager = tokenManager,
             serverUrlManager = serverUrlManager,
             deviceIdManager = deviceIdManager,
+            passwordResetGate = PasswordResetGate(),
             networkMonitor = networkMonitor,
         )
     }

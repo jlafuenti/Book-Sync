@@ -11,6 +11,7 @@ import android.content.Context
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.DeviceIdManager
+import com.booksync.data.remote.PasswordResetGate
 import com.booksync.data.remote.PasswordChangeRequest
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
@@ -57,6 +58,7 @@ class AccountViewModel @Inject constructor(
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
     private val deviceIdManager: DeviceIdManager,
+    private val passwordResetGate: PasswordResetGate,
     networkMonitor: NetworkMonitor,
 ) : ViewModel() {
 
@@ -130,8 +132,17 @@ class AccountViewModel @Inject constructor(
     fun loadProfile() {
         viewModelScope.launch {
             try {
-                _user.value = api.getMe()
+                val me = api.getMe()
+                _user.value = me
                 _userError.value = null
+                // Second trigger for the forced-reset gate (issue #209). The 403
+                // interceptor is the primary one, but /api/auth/me is on the
+                // server's allow-list and so answers 200 for a flagged user —
+                // meaning this is the one authenticated call that reports the flag
+                // instead of being refused. Without it the gate has a single
+                // trigger, and anything that drops that one signal strands the user
+                // in an app where every other screen fails.
+                if (me.must_reset_password) passwordResetGate.raise()
             } catch (e: Exception) {
                 _userError.value = e.message
             }

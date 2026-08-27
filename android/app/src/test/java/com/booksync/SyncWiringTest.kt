@@ -153,6 +153,24 @@ class SyncWiringTest {
                 "navigating to it throws.",
             nav.any { it.contains("ForcePasswordResetScreen") },
         )
+        // The effect reads `startDestination`, which resolves asynchronously from
+        // DataStore. If it is not also a *key*, an already-raised gate — raised by
+        // SyncWorker through the same interceptor, from WorkManager, with no
+        // Activity alive — fires the effect once while startDestination is still
+        // null, the guard swallows it, and StateFlow conflation means it never
+        // emits again. The user lands on MAIN with every screen 403ing and no way
+        // out. Every assertion above passes in that state, which is why this one
+        // exists.
+        assertTrue(
+            "LaunchedEffect must key on startDestination as well as resetRequired, " +
+                "or a gate raised before the start destination resolves is lost.",
+            nav.any { it.contains("LaunchedEffect(resetRequired, startDestination)") },
+        )
+        assertTrue(
+            "Clearing tokens must lower the gate: otherwise a 403 arriving after " +
+                "logout drags the login screen to the reset screen.",
+            nav.any { it.contains("passwordResetGate.clear()") },
+        )
     }
 
     @Test
@@ -177,6 +195,14 @@ class SyncWiringTest {
         assertTrue(
             "It must not be a dismissible sheet.",
             screen.none { it.contains("ModalBottomSheet") },
+        )
+        // /api/auth/logout is on the server's allow-list precisely so this escape
+        // hatch can bump token_version. A local-only token wipe would leave the
+        // temporary password's access token valid server-side for a further 24h.
+        assertTrue(
+            "The sign-out affordance must call the view-model logout (which hits " +
+                "/api/auth/logout), not merely clear tokens locally.",
+            screen.any { it.contains("viewModel.logout()") },
         )
     }
 }
