@@ -45,18 +45,23 @@ class ServerUrlPolicyTest {
     // first-run lockout: the value persisted, the app restarted, and Retrofit
     // then threw inside Hilt on every launch with no UI to fix it from.
 
+    // The IPv4 samples use 203.0.113.x (RFC 5737 TEST-NET-3, the documentation
+    // range) rather than a realistic 192.168.x.y. Not cosmetic: the repo-wide
+    // guard in server/tests/test_android_no_personal_hosts.py fails the build on
+    // an RFC1918 literal anywhere in the Android sources, tests included. The
+    // parser does not care which address this is.
     @Test
     fun `a bare host gets https rather than being rejected`() {
         // What a real user types on first run. Rejecting these would be correct
         // and useless; https is the right guess.
         assertEquals("https://tandem.example.com", normalizeServerUrl("tandem.example.com"))
-        assertEquals("https://192.168.1.5:8000", normalizeServerUrl("192.168.1.5:8000"))
+        assertEquals("https://203.0.113.5:8000", normalizeServerUrl("203.0.113.5:8000"))
         assertEquals("https://host", normalizeServerUrl("  host  "))
     }
 
     @Test
     fun `an explicit scheme is preserved`() {
-        assertEquals("http://192.168.1.5:8000", normalizeServerUrl("http://192.168.1.5:8000"))
+        assertEquals("http://203.0.113.5:8000", normalizeServerUrl("http://203.0.113.5:8000"))
         assertEquals("https://host:8443", normalizeServerUrl("https://host:8443"))
     }
 
@@ -85,7 +90,7 @@ class ServerUrlPolicyTest {
         assertNull(normalizeServerUrl("http:/host"))
         assertNull(normalizeServerUrl("https//host"))
         assertNull(normalizeServerUrl("HTTPS:/host"))
-        assertNull(normalizeServerUrl("https:/192.168.1.5:8000"))
+        assertNull(normalizeServerUrl("https:/203.0.113.5:8000"))
         assertNull(normalizeServerUrl("https:host"))
     }
 
@@ -96,7 +101,7 @@ class ServerUrlPolicyTest {
         // host:port. A digit after the colon is what separates the two.
         assertEquals("https://host.com:8000", normalizeServerUrl("host.com:8000"))
         assertEquals("https://host.com/tandem", normalizeServerUrl("host.com/tandem"))
-        assertEquals("https://192.168.1.5:8000", normalizeServerUrl("192.168.1.5:8000"))
+        assertEquals("https://203.0.113.5:8000", normalizeServerUrl("203.0.113.5:8000"))
     }
 
     @Test
