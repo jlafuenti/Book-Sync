@@ -32,6 +32,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
+import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.data.remote.shouldExpandAdvanced
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.ServerUrlManager
@@ -61,6 +62,11 @@ class LoginViewModel @Inject constructor(
 
     val currentServerUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
+
+    /** The error Card is shared with login failures; editing either field clears it. */
+    fun clearError() {
+        _error.value = null
+    }
 
     fun login(username: String, password: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
@@ -231,7 +237,12 @@ fun LoginScreen(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = serverUrlEdit,
-                        onValueChange = { serverUrlEdit = it },
+                        onValueChange = {
+                            serverUrlEdit = it
+                            // Otherwise a refusal stays on screen while the user is
+                            // busy correcting the very thing it complains about.
+                            viewModel.clearError()
+                        },
                         label = { Text("Server URL") },
                         singleLine = true,
                         modifier = Modifier
@@ -244,7 +255,13 @@ fun LoginScreen(
                     )
                     Button(
                         onClick = { viewModel.saveServerUrlAndRestart(context, serverUrlEdit.trim()) },
-                        enabled = serverUrlEdit.isNotBlank() && serverUrlEdit.trim() != currentServerUrl,
+                        // Compare the normalized form: "tandem.example.com" and
+                        // "https://tandem.example.com" are the same server, and
+                        // restarting the process to store an identical value is pure
+                        // loss. Still enabled when it doesn't normalize at all, so
+                        // pressing it produces the error rather than nothing.
+                        enabled = serverUrlEdit.isNotBlank() &&
+                            normalizeServerUrl(serverUrlEdit).let { it == null || it != currentServerUrl },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                     ) {
                         Text("Save & Restart")
