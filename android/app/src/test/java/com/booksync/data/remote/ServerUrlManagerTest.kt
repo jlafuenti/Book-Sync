@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -93,5 +96,41 @@ class ServerUrlManagerTest {
 
         assertEquals("https://my.own.server:8443", manager.serverUrlFlow.first())
         assertEquals("https://my.own.server:8443", manager.currentUrl)
+    }
+
+    @Test
+    fun `an unusable url is refused and nothing is persisted`() = runBlocking {
+        // Issue #149: this used to be stored verbatim, and the app then crashed
+        // inside Hilt on every launch with reinstall as the only way out.
+        val dataStore = newDataStore()
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+
+        assertFalse(manager.setServerUrl("not a url"))
+
+        assertEquals("https://tandem.example.com", manager.currentUrl)
+        assertNull(dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `a refused url does not clobber an already-configured server`() = runBlocking {
+        val dataStore = newDataStore()
+        dataStore.edit { it[key] = "https://my.own.server:8443" }
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+
+        assertFalse(manager.setServerUrl("ftp://nope"))
+
+        assertEquals("https://my.own.server:8443", manager.currentUrl)
+        assertEquals("https://my.own.server:8443", dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `a scheme-less host is normalised before it is persisted`() = runBlocking {
+        val dataStore = newDataStore()
+        val manager = ServerUrlManager(dataStore, "")
+
+        assertTrue(manager.setServerUrl("tandem.example.com"))
+
+        assertEquals("https://tandem.example.com", manager.currentUrl)
+        assertEquals("https://tandem.example.com", dataStore.data.first()[key])
     }
 }

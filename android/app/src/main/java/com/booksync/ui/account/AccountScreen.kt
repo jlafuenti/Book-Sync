@@ -339,6 +339,9 @@ fun AccountScreen(
             item {
                 val context = LocalContext.current
                 var serverUrlEdit by remember(serverUrl) { mutableStateOf(serverUrl) }
+                // Issue #149: a refused URL leaves the app running on the old server,
+                // so the failure has to be said out loud — nothing else changes.
+                val serverUrlError by viewModel.serverUrlError.collectAsState()
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -349,9 +352,13 @@ fun AccountScreen(
                 ) {
                     OutlinedTextField(
                         value = serverUrlEdit,
-                        onValueChange = { serverUrlEdit = it },
+                        onValueChange = {
+                            serverUrlEdit = it
+                            viewModel.clearServerUrlError()
+                        },
                         label = { Text("Server URL") },
                         singleLine = true,
+                        isError = serverUrlError != null,
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Uri,
@@ -366,8 +373,8 @@ fun AccountScreen(
                         Text("Save & Restart")
                     }
                     Text(
-                        "Changing this restarts the app to apply the new server.",
-                        color = colors.textMuted,
+                        serverUrlError ?: "Changing this restarts the app to apply the new server.",
+                        color = if (serverUrlError != null) colors.statusError else colors.textMuted,
                         fontSize = 12.sp,
                     )
                 }

@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PasswordChangeRequest
 import com.booksync.data.remote.ServerUrlManager
@@ -62,10 +63,23 @@ class AccountViewModel @Inject constructor(
     val serverUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
+    /** Non-null while the last Save & Restart was refused; see [saveServerUrlAndRestart]. */
+    private val _serverUrlError = MutableStateFlow<String?>(null)
+    val serverUrlError = _serverUrlError.asStateFlow()
+
+    fun clearServerUrlError() {
+        _serverUrlError.value = null
+    }
+
     fun saveServerUrlAndRestart(context: Context, url: String) {
         viewModelScope.launch {
-            serverUrlManager.setServerUrl(url)
-            restartApp(context)
+            // Issue #149: only restart if the URL was actually accepted. Restarting
+            // on a value Retrofit can't parse is what made the app un-launchable.
+            if (serverUrlManager.setServerUrl(url)) {
+                restartApp(context)
+            } else {
+                _serverUrlError.value = INVALID_SERVER_URL_MESSAGE
+            }
         }
     }
 
