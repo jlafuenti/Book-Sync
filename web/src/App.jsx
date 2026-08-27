@@ -324,6 +324,21 @@ function App() {
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+    // The flag is only read once, at mount. When an admin resets your password
+    // while the tab is open the server starts refusing every route with 403
+    // password_reset_required (issue #209) and this tab would otherwise carry on
+    // as though nothing had happened — every action failing with no explanation
+    // and no route to the reset screen short of a reload. api.js announces the
+    // refusal; setting the flag here reuses the existing gate below rather than
+    // introducing a second one.
+    useEffect(() => {
+        const onGated = () => setUser(u => (u && !u.must_reset_password
+            ? { ...u, must_reset_password: true }
+            : u))
+        window.addEventListener('tandem:password-reset-required', onGated)
+        return () => window.removeEventListener('tandem:password-reset-required', onGated)
+    }, [])
+
     if (loading) {
         return (
             <div className="loading-page">

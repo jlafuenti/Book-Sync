@@ -743,3 +743,126 @@ def test_tracker_clear_is_safe_for_an_unknown_username():
     from rate_limit import FailedLoginTracker
 
     FailedLoginTracker().clear("never-seen")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# must_reset_password is enforced server-side (issue #209)
+#
+# The flag is set by admin-create, admin-reset and the fresh-install bootstrap,
+# and until now the only thing that honoured it was a React early-return in
+# App.jsx. So the temporary password the admin typed — and, for the bootstrap
+# account, one that is printed to the logs — stayed a fully working credential
+# for curl and for Android, which has no concept of the flag at all.
+# ---------------------------------------------------------------------------
+
+
+async def test_must_reset_user_is_refused_on_ordinary_routes(
+    client, make_user, auth_header,
+):
+    user = await make_user(username="temp", must_reset_password=True)
+
+    r = await client.get("/api/auth/media-token?resource_type=cover&resource_id=x.jpg",
+                         headers=auth_header(user))
+
+    assert r.status_code == 403
+    assert r.json()["detail"] == "password_reset_required"
+
+
+async def test_must_reset_user_can_reach_me_change_password_and_logout(
+    client, make_user, auth_header,
+):
+    """The allow-list has to be exactly big enough to complete the reset."""
+    user = await make_user(username="temp", password="temporary1", must_reset_password=True)
+    header = auth_header(user)
+
+    assert (await client.get("/api/auth/me", headers=header)).status_code == 200
+
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"old_password": "temporary1", "new_password": "brand-new-pw-99"},
+        headers=header,
+    )
+    assert r.status_code == 200
+
+    # logout is on the list too, so a user who would rather not reset can leave.
+    other = await make_user(username="temp2", must_reset_password=True)
+    assert (await client.post("/api/auth/logout",
+                              headers=auth_header(other))).status_code == 200
+
+
+async def test_must_reset_user_cannot_edit_their_profile(client, make_user, auth_header):
+    """PUT /me shares a path with GET /me, so the allow-list is keyed on
+    (method, path): a temp credential must not be able to change the account's
+    email before the password is reset."""
+    user = await make_user(username="temp", must_reset_password=True)
+
+    r = await client.put("/api/auth/me", json={"theme": "ember"},
+                         headers=auth_header(user))
+
+    assert r.status_code == 403
+    assert r.json()["detail"] == "password_reset_required"
+
+
+async def test_role_gated_route_also_refuses_must_reset_user(
+    make_client, make_user, auth_header,
+):
+    """require_role derives from get_current_user, so it inherits the gate —
+    an admin with a temp password is still a temp password.
+
+    Uses the real users router rather than a synthetic route so this pins the
+    inheritance as actually wired, not as re-declared in a test.
+    """
+    from routers import users as users_router
+
+    admin = await make_user(username="tempadmin", role="admin", must_reset_password=True)
+
+    async with make_client(users_router.router) as c:
+        r = await c.get("/api/users/", headers=auth_header(admin))
+
+    assert r.status_code == 403
+    assert r.json()["detail"] == "password_reset_required"
+
+
+async def test_role_gated_route_still_serves_an_unflagged_admin(
+    make_client, make_user, auth_header,
+):
+    """Counterweight: the gate must not be refusing admins in general."""
+    from routers import users as users_router
+
+    admin = await make_user(username="realadmin", role="admin")
+
+    async with make_client(users_router.router) as c:
+        r = await c.get("/api/users/", headers=auth_header(admin))
+
+    assert r.status_code == 200
+
+
+async def test_change_password_lifts_the_gate(client, make_user, auth_header):
+    user = await make_user(username="temp", password="temporary1", must_reset_password=True)
+
+    assert (await client.post(
+        "/api/auth/change-password",
+        json={"old_password": "temporary1", "new_password": "brand-new-pw-99"},
+        headers=auth_header(user),
+    )).status_code == 200
+
+    # change_password bumps token_version, so the caller needs a fresh token —
+    # exactly what the web flow does after a successful reset.
+    login = await client.post("/api/auth/login",
+                              json={"username": "temp", "password": "brand-new-pw-99"})
+    assert login.status_code == 200
+    fresh = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    r = await client.get("/api/auth/media-token?resource_type=cover&resource_id=x.jpg",
+                         headers=fresh)
+    assert r.status_code != 403
+
+
+async def test_unflagged_user_is_unaffected(client, make_user, auth_header):
+    """The gate must not fire for everybody else."""
+    user = await make_user(username="normal", must_reset_password=False)
+
+    r = await client.get("/api/auth/media-token?resource_type=cover&resource_id=x.jpg",
+                         headers=auth_header(user))
+
+    assert r.status_code != 403

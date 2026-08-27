@@ -43,6 +43,12 @@ async def _load_active_user(db: AsyncSession, payload: dict) -> User:
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid token")
+    # This resolver bypasses `get_current_user` entirely, so the gate it applies
+    # for issue #209 has to be repeated here or a temporary credential could
+    # still stream the whole library. No media route is on the allow-list, so
+    # there is nothing to check the path against — the flag alone refuses.
+    if user.must_reset_password:
+        raise HTTPException(status_code=403, detail="password_reset_required")
     return user
 
 

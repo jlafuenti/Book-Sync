@@ -276,3 +276,25 @@ async def test_download_audiobook_rejects_access_token_with_stale_token_version(
         r = await client.get(f"/api/files/audiobook/{book.id}", headers=header)
 
     assert r.status_code == 401
+
+
+async def test_media_endpoints_refuse_a_must_reset_user(
+    make_user, auth_header, temp_covers_dir, db, tmp_path,
+):
+    """Issue #209: `_resolve_media_user` does its own token decoding rather than
+    going through `get_current_user`, so a gate placed only in that dependency
+    would leave covers and audio streaming open to the temporary credential."""
+    (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
+    audio_file = tmp_path / "a.m4b"
+    audio_file.write_bytes(b"audio-bytes")
+    book = await _make_audiobook(db, audio_file)
+    user = await make_user(username="temp", must_reset_password=True)
+    header = auth_header(user)
+
+    async with _files_client() as client:
+        cover = await client.get("/api/files/covers/cover.jpg", headers=header)
+        audio = await client.get(f"/api/files/audiobook/{book.id}", headers=header)
+
+    assert cover.status_code == 403
+    assert cover.json()["detail"] == "password_reset_required"
+    assert audio.status_code == 403

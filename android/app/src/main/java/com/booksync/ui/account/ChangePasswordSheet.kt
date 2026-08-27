@@ -65,6 +65,77 @@ fun ChangePasswordSheet(
     val colors = Tandem.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    ModalBottomSheet(
+        onDismissRequest = {
+            viewModel.resetChangePasswordState()
+            onDismiss()
+        },
+        sheetState = sheetState,
+        containerColor = colors.bgSecondary,
+        shape = Tandem.shapes.modal,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.size(10.dp))
+                Text(
+                    "Change password",
+                    color = colors.textPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                "New password must be at least 8 characters.",
+                color = colors.textSecondary,
+                fontSize = 13.sp,
+            )
+
+            ChangePasswordForm(
+                isOnline = isOnline,
+                onSuccess = onSuccess,
+                onCancel = {
+                    viewModel.resetChangePasswordState()
+                    onDismiss()
+                },
+                viewModel = viewModel,
+            )
+        }
+    }
+}
+
+/**
+ * The password-change form itself: three fields, validation, submit.
+ *
+ * Extracted from [ChangePasswordSheet] for issue #209, which needs the same form
+ * as a full screen the user cannot leave. Sharing it keeps one definition of a
+ * valid password and one offline rule; duplicating them is how two surfaces
+ * drift apart.
+ *
+ * [onCancel] is nullable rather than defaulted on purpose: null is the
+ * forced-reset case and renders no way out, so a new caller has to decide which
+ * it wants rather than inherit an escape hatch by omission.
+ */
+@Composable
+fun ChangePasswordForm(
+    isOnline: Boolean,
+    onSuccess: () -> Unit,
+    onCancel: (() -> Unit)?,
+    viewModel: AccountViewModel = hiltViewModel(),
+) {
+    val colors = Tandem.colors
+
     var currentPw    by remember { mutableStateOf("") }
     var newPw        by remember { mutableStateOf("") }
     var confirmPw    by remember { mutableStateOf("") }
@@ -75,7 +146,6 @@ fun ChangePasswordSheet(
 
     val state by viewModel.changePasswordState.collectAsState()
 
-    // Bubble success back to the parent and close.
     LaunchedEffect(state) {
         if (state is ChangePasswordState.Success) {
             viewModel.resetChangePasswordState()
@@ -100,126 +170,89 @@ fun ChangePasswordSheet(
         if (clientError == null) viewModel.changePassword(currentPw, newPw)
     }
 
-    ModalBottomSheet(
-        onDismissRequest = {
-            viewModel.resetChangePasswordState()
-            onDismiss()
-        },
-        sheetState = sheetState,
-        containerColor = colors.bgSecondary,
-        shape = Tandem.shapes.modal,
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+        if (!isOnline) {
+            OfflineChip()
+        }
+
+        PasswordField(
+            value = currentPw,
+            onChange = { currentPw = it; clientError = null; viewModel.resetChangePasswordState() },
+            label = "Current password",
+            revealed = showCurrent,
+            onToggleReveal = { showCurrent = !showCurrent },
+            imeAction = ImeAction.Next,
+            enabled = !submitting,
+        )
+        PasswordField(
+            value = newPw,
+            onChange = { newPw = it; clientError = null; viewModel.resetChangePasswordState() },
+            label = "New password",
+            revealed = showNew,
+            onToggleReveal = { showNew = !showNew },
+            imeAction = ImeAction.Next,
+            enabled = !submitting,
+        )
+        PasswordField(
+            value = confirmPw,
+            onChange = { confirmPw = it; clientError = null; viewModel.resetChangePasswordState() },
+            label = "Confirm new password",
+            revealed = showConfirm,
+            onToggleReveal = { showConfirm = !showConfirm },
+            imeAction = ImeAction.Done,
+            onImeAction = { submit() },
+            enabled = !submitting,
+            isError = confirmPw.isNotEmpty() && !passwordsMatch,
+        )
+
+        val errorToShow = clientError ?: serverError
+        if (errorToShow != null) {
+            Text(errorToShow, color = colors.statusError, fontSize = 13.sp)
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Header
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Lock,
-                    contentDescription = null,
-                    tint = colors.accent,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.size(10.dp))
-                Text(
-                    "Change password",
-                    color = colors.textPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Text(
-                "New password must be at least 8 characters.",
-                color = colors.textSecondary,
-                fontSize = 13.sp,
-            )
-
-            if (!isOnline) {
-                OfflineChip()
-            }
-
-            PasswordField(
-                value = currentPw,
-                onChange = { currentPw = it; clientError = null; viewModel.resetChangePasswordState() },
-                label = "Current password",
-                revealed = showCurrent,
-                onToggleReveal = { showCurrent = !showCurrent },
-                imeAction = ImeAction.Next,
-                enabled = !submitting,
-            )
-            PasswordField(
-                value = newPw,
-                onChange = { newPw = it; clientError = null; viewModel.resetChangePasswordState() },
-                label = "New password",
-                revealed = showNew,
-                onToggleReveal = { showNew = !showNew },
-                imeAction = ImeAction.Next,
-                enabled = !submitting,
-            )
-            PasswordField(
-                value = confirmPw,
-                onChange = { confirmPw = it; clientError = null; viewModel.resetChangePasswordState() },
-                label = "Confirm new password",
-                revealed = showConfirm,
-                onToggleReveal = { showConfirm = !showConfirm },
-                imeAction = ImeAction.Done,
-                onImeAction = { submit() },
-                enabled = !submitting,
-                isError = confirmPw.isNotEmpty() && !passwordsMatch,
-            )
-
-            val errorToShow = clientError ?: serverError
-            if (errorToShow != null) {
-                Text(errorToShow, color = colors.statusError, fontSize = 13.sp)
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = {
-                        viewModel.resetChangePasswordState()
-                        onDismiss()
-                    },
-                ) {
+            if (onCancel != null) {
+                TextButton(onClick = onCancel) {
                     Text("Cancel", color = colors.textSecondary)
                 }
                 Spacer(Modifier.size(8.dp))
-                Button(
-                    onClick = { submit() },
-                    enabled = isOnline && formValid && !submitting,
-                    shape = Tandem.shapes.button,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.accent,
-                        contentColor = Color.White,
-                        disabledContainerColor = colors.bgInput,
-                        disabledContentColor = colors.textMuted,
-                    ),
-                ) {
-                    if (submitting) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.size(8.dp))
-                        Text("Saving…")
-                    } else {
-                        Text("Update password")
-                    }
+            }
+            Button(
+                onClick = { submit() },
+                enabled = isOnline && formValid && !submitting,
+                shape = Tandem.shapes.button,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.accent,
+                    contentColor = Color.White,
+                    disabledContainerColor = colors.bgInput,
+                    disabledContentColor = colors.textMuted,
+                ),
+            ) {
+                if (submitting) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text("Saving…")
+                } else {
+                    Text("Update password")
                 }
             }
         }
     }
 }
+
 
 @Composable
 private fun PasswordField(
