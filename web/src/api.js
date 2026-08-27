@@ -175,6 +175,27 @@ async function fetchWithAuth(url, options = {}) {
         }
     }
 
+    // The server refuses everything except /auth/me, /auth/change-password and
+    // /auth/logout while must_reset_password is set (issue #209). App.jsx gates
+    // on the flag, but only from the getMe() it runs at mount — so an admin
+    // resetting your password while your tab is open left that tab fully usable
+    // until something reloaded it. Announce it here, the one place every call
+    // passes through, and let App.jsx reuse its existing gate.
+    //
+    // Cloned, because the caller still needs to read this body: several callers
+    // surface `detail` as the error message.
+    if (response.status === 403) {
+        try {
+            const body = await response.clone().json();
+            if (body?.detail === 'password_reset_required') {
+                window.dispatchEvent(new CustomEvent('tandem:password-reset-required'));
+            }
+        } catch {
+            // A 403 from the proxy rather than the app is HTML, not JSON.
+            // Nothing to sniff — leave it entirely to the caller.
+        }
+    }
+
     return response;
 }
 

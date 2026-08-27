@@ -126,4 +126,57 @@ class SyncWiringTest {
             service.none { it.contains("lastAutoLogTimeMs") },
         )
     }
+
+    @Test
+    fun `navigation acts on the forced-password-reset gate`() {
+        // Issue #209. PasswordResetGate is raised from AuthInterceptor, on an
+        // OkHttp thread with no access to a NavController, so the two halves are
+        // joined only by a flow collection in BookSyncNavigation. Every other
+        // test here can pass with that collection deleted: the gate would rise,
+        // nothing would watch it, and a user holding a temporary password would
+        // sit in an app where every screen fails with 403 and none of them say
+        // why. Exactly the "correct but never called" shape this file exists for.
+        val nav = codeLines(source("com/booksync/ui/BookSyncNavigation.kt"))
+
+        assertTrue(
+            "BookSyncNavigation must collect PasswordResetGate.required — without " +
+                "it AuthInterceptor raises a gate nobody is watching.",
+            nav.any { it.contains("passwordResetGate.required") },
+        )
+        assertTrue(
+            "BookSyncNavigation must navigate to Routes.FORCE_PASSWORD_RESET when " +
+                "the gate is raised.",
+            nav.any { it.contains("Routes.FORCE_PASSWORD_RESET") },
+        )
+        assertTrue(
+            "The forced-reset destination must be registered in the NavHost, or " +
+                "navigating to it throws.",
+            nav.any { it.contains("ForcePasswordResetScreen") },
+        )
+    }
+
+    @Test
+    fun `the forced-reset screen offers no way out but changing the password`() {
+        // A ModalBottomSheet was rejected for this precisely because it can be
+        // swiped away; a back gesture would do the same thing. Leaving either
+        // open drops the user onto a screen where every call 403s, with no route
+        // back to the one screen that works.
+        val screen = codeLines(
+            source("com/booksync/ui/account/ForcePasswordResetScreen.kt")
+        )
+
+        assertTrue(
+            "ForcePasswordResetScreen must block the system back gesture.",
+            screen.any { it.contains("BackHandler") },
+        )
+        assertTrue(
+            "It must pass onCancel = null to ChangePasswordForm, which is what " +
+                "suppresses the Cancel button.",
+            screen.any { it.contains("onCancel = null") },
+        )
+        assertTrue(
+            "It must not be a dismissible sheet.",
+            screen.none { it.contains("ModalBottomSheet") },
+        )
+    }
 }

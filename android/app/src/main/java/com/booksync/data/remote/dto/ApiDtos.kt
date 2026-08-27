@@ -42,7 +42,14 @@ data class UserResponse(
     val is_admin: Boolean,
     val is_active: Boolean,
     val theme: String = "blueprint",
-    val created_at: String
+    val created_at: String,
+    /**
+     * Set by admin-create, admin password reset and the fresh-install bootstrap.
+     * The server refuses everything but /auth/me, /auth/change-password and
+     * /auth/logout while it is true (issue #209). Defaulted so the app still
+     * deserializes a response from a server older than that change.
+     */
+    val must_reset_password: Boolean = false,
 )
 
 @Serializable
