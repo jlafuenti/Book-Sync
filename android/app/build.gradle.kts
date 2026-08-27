@@ -110,11 +110,18 @@ androidComponents {
 
 android {
     namespace = "com.booksync"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.booksync"
         minSdk = 26
+        // Pinned, not inherited from compileSdk (issue #148). targetSdk is a
+        // behaviour switch — permissions, foreground-service rules, edge-to-edge,
+        // orientation handling all change with it — so a compileSdk bump made for
+        // an unrelated reason must not silently move it. Play also raises the
+        // floor for new apps and updates every year (API 36 from 2026-08-31):
+        // https://developer.android.com/google/play/requirements/target-sdk
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
 

@@ -20,6 +20,19 @@ Unit tests:
 cd android && ./gradlew :app:testDebugUnitTest
 ```
 
+### SDK levels
+
+`minSdk` is 26 (Android 8.0). `compileSdk` and `targetSdk` are both pinned to **36** in
+`android/app/build.gradle.kts` — `targetSdk` explicitly, so that bumping `compileSdk` for an
+unrelated reason cannot silently change runtime behaviour (permissions, foreground-service rules,
+edge-to-edge, orientation handling all key off it).
+
+Google Play raises the floor for new apps and updates every year, roughly at the end of August;
+API 36 became the minimum on 2026-08-31. When it moves again, raise both values together and
+re-check the behaviour changes for the new level —
+[target API level requirements](https://developer.android.com/google/play/requirements/target-sdk).
+`BuildConfigPinsTest` fails if either value drops below the floor.
+
 ## Pointing the app at your server
 
 The app ships with **no server URL baked in**. On first launch the login screen opens with its
