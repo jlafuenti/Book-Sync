@@ -70,7 +70,7 @@ private val MALFORMED_SCHEME =
  * subsequent launch crashed too, and the only recovery was Clear storage or a
  * reinstall. The Play build ships with no default server, so "type a host" is
  * literally the first thing every new user does, and `tandem.example.com` or
- * `192.168.1.5:8000` are the natural things to type.
+ * `203.0.113.5:8000` are the natural things to type.
  *
  * Rules, all pinned by [ServerUrlPolicyTest]:
  *  - a bare host gets `https://` — that is what people mean, and the secure
