@@ -86,3 +86,30 @@ android/app/src/test/resources/sync_parity/
 
 # Playwright MCP snapshots/screenshots
 .playwright-mcp/
+
+# Backup/scratch copies of config files carry exactly the same secrets as the
+# original, but the rules above match `/docker-compose.yml` and `.env` by name
+# only (issue #187). One `git add -A` is all it takes.
+*.bak
+*.orig
+*~
+
+# Environment files of every flavour. `.env` above is an exact-name rule, so
+# `.env.prod`, `.env.production` and friends slipped through.
+.env.*
+# ...but the templates a fresh clone copies from must stay tracked.
+!.env.example
+!.env.sample
+!.env.template
+# Deliberately NOT excepted: .env.production and .env.development. Vite treats
+# those as ordinary build config and they are often committed, but they are just
+# as often where a key ends up. If a build genuinely needs one, add the negation
+# in the same commit that adds the file, so the decision is visible in review.
+
+# Signing material — never in git. The Play upload keystore in particular is
+# unrecoverable if leaked: it cannot be rotated without Google's help.
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
