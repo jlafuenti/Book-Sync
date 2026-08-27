@@ -61,12 +61,48 @@ class ServerUrlPolicyTest {
     }
 
     @Test
-    fun `the result is an origin - no path, query, fragment or credentials`() {
-        // The field asks for an origin and docs/android.md says so; silently
-        // keeping "/api" would send every request to the wrong prefix.
-        assertEquals("https://host", normalizeServerUrl("https://host/api/v1"))
+    fun `a sub-path is preserved, but query, fragment and credentials are dropped`() {
+        // The path has to survive: `retrofitBaseUrl` used to be
+        // `stored.trimEnd('/') + "/"`, which kept it, so anyone reverse-proxying
+        // Tandem under a sub-path has one stored. Dropping it on upgrade would
+        // break every request with no error and nothing visibly different.
+        assertEquals("https://host/tandem", normalizeServerUrl("https://host/tandem"))
+        assertEquals("https://host/tandem", normalizeServerUrl("https://host/tandem/"))
+        // Query/fragment/credentials are not part of a base URL and never useful here.
         assertEquals("https://host", normalizeServerUrl("https://host/?a=b#frag"))
         assertEquals("https://host", normalizeServerUrl("https://user:pw@host"))
+        assertEquals("https://host/x", normalizeServerUrl("https://host/a/../x"))
+    }
+
+    @Test
+    fun `a malformed or foreign scheme is rejected rather than read as a hostname`() {
+        // `contains("://")` was the wrong test: a single-slash typo has no "://",
+        // so "https://" got prepended to the whole string and OkHttp read
+        // everything up to the first "/" as the authority — "https:/host" became
+        // a host literally named "https". That saved, restarted, and left the user
+        // staring at a URL they never typed with no error to explain it.
+        assertNull(normalizeServerUrl("https:/host"))
+        assertNull(normalizeServerUrl("http:/host"))
+        assertNull(normalizeServerUrl("https//host"))
+        assertNull(normalizeServerUrl("HTTPS:/host"))
+        assertNull(normalizeServerUrl("https:/192.168.1.5:8000"))
+        assertNull(normalizeServerUrl("https:host"))
+    }
+
+    @Test
+    fun `a bare host with a port or a path is not mistaken for a scheme`() {
+        // The counterweight to the test above: "host.com:8000" is a syntactically
+        // valid scheme followed by an opaque part, and must still be read as
+        // host:port. A digit after the colon is what separates the two.
+        assertEquals("https://host.com:8000", normalizeServerUrl("host.com:8000"))
+        assertEquals("https://host.com/tandem", normalizeServerUrl("host.com/tandem"))
+        assertEquals("https://192.168.1.5:8000", normalizeServerUrl("192.168.1.5:8000"))
+    }
+
+    @Test
+    fun `an uppercase scheme is accepted and normalised`() {
+        assertEquals("https://host", normalizeServerUrl("HTTPS://host"))
+        assertEquals("http://host:8000", normalizeServerUrl("HTTP://HOST:8000"))
     }
 
     @Test

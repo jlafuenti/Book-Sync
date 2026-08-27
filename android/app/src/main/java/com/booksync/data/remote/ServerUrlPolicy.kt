@@ -48,7 +48,20 @@ const val INVALID_SERVER_URL_MESSAGE =
     "Enter a server address like https://tandem.example.com"
 
 /**
- * Turn whatever the user typed into a canonical `scheme://host[:port]` origin,
+ * Anything that looks like it was *trying* to name a scheme but isn't `http://`
+ * or `https://`. Two shapes: a scheme word followed by a colon that is not the
+ * start of a port number (`https:/host`, `https:host`, `ftp://x`,
+ * `javascript:alert(1)`), and the missing-colon typo (`https//host`).
+ *
+ * The digit lookahead is what keeps `host.com:8000` out of this: by RFC 3986
+ * grammar `host.com` is a perfectly valid scheme, so the only thing separating
+ * "scheme with an opaque part" from "host with a port" is what follows the colon.
+ */
+private val MALFORMED_SCHEME =
+    Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*:(?!\d)|^[a-zA-Z][a-zA-Z0-9+.\-]*//""")
+
+/**
+ * Turn whatever the user typed into a canonical `scheme://host[:port][/path]`,
  * or null if it can't be one.
  *
  * Issue #149: this used to be nothing at all. `setServerUrl` persisted the raw
@@ -60,26 +73,34 @@ const val INVALID_SERVER_URL_MESSAGE =
  * `192.168.1.5:8000` are the natural things to type.
  *
  * Rules, all pinned by [ServerUrlPolicyTest]:
- *  - a bare host gets `https://` rather than being rejected — that is what people
- *    mean, and defaulting to the secure scheme is the safe guess;
- *  - only `http` and `https` survive (OkHttp's parser rejects every other scheme
- *    for us, which is also what kills `javascript:` and `ftp://`);
- *  - path, query, fragment and any embedded credentials are dropped — the field
- *    asks for an origin, and `docs/android.md` says so;
- *  - the default port for the scheme is dropped, everything else is kept;
+ *  - a bare host gets `https://` — that is what people mean, and the secure
+ *    scheme is the safe guess;
+ *  - anything that names a scheme must name `http` or `https` *properly*. A
+ *    one-character typo is rejected rather than repaired: reading `https:/host`
+ *    as a host named `https` is worse than useless, because it saves, restarts,
+ *    and then shows the user a URL they never typed with no error to explain it;
+ *  - the path is **kept**. `retrofitBaseUrl` used to be `stored.trimEnd('/') + "/"`,
+ *    so anyone reverse-proxying Tandem under a sub-path has one stored, and
+ *    dropping it on upgrade would break every request silently;
+ *  - query, fragment and embedded credentials are dropped — never part of a base URL;
+ *  - the default port for the scheme is dropped, any other port is kept;
  *  - no trailing slash (callers that need one add it, see [retrofitBaseUrl]).
  */
 fun normalizeServerUrl(input: String): String? {
     val trimmed = input.trim()
     if (trimmed.isEmpty()) return null
-    val withScheme = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+    val lower = trimmed.lowercase()
+    val withScheme = when {
+        lower.startsWith("http://") || lower.startsWith("https://") -> trimmed
+        MALFORMED_SCHEME.containsMatchIn(trimmed) -> return null
+        else -> "https://$trimmed"
+    }
     val parsed = withScheme.toHttpUrlOrNull() ?: return null
     // Rebuilding through HttpUrl (rather than string-concatenating scheme/host/port)
-    // is what gets IPv6 bracketing and default-port omission right.
+    // is what gets IPv6 bracketing, IDN punycoding and default-port omission right.
     return parsed.newBuilder()
         .username("")
         .password("")
-        .encodedPath("/")
         .query(null)
         .fragment(null)
         .build()

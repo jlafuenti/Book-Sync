@@ -133,4 +133,80 @@ class ServerUrlManagerTest {
         assertEquals("https://tandem.example.com", manager.currentUrl)
         assertEquals("https://tandem.example.com", dataStore.data.first()[key])
     }
+
+    // -- Repair on read (issue #149 review finding) -------------------------
+    //
+    // setServerUrl is not the only way a value gets into DataStore: builds that
+    // predate normalizeServerUrl wrote raw strings, and that is precisely the
+    // population #149 is about. currentUrl feeds Intent.ACTION_VIEW ("Open web
+    // app", which throws ActivityNotFoundException on a scheme-less URI) and
+    // coverImageUrl (which returns null, blanking every cover). Guarding only the
+    // Retrofit path left those broken.
+
+    @Test
+    fun `an unnormalized stored url is repaired on construction and written back`() = runBlocking {
+        val dataStore = newDataStore()
+        dataStore.edit { it[key] = "tandem.example.com" }
+
+        val manager = ServerUrlManager(dataStore, "")
+
+        assertEquals("https://tandem.example.com", manager.currentUrl)
+        assertEquals("https://tandem.example.com", dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `a stored url that cannot be repaired leaves the server unconfigured`() = runBlocking {
+        val dataStore = newDataStore()
+        dataStore.edit { it[key] = "not a url" }
+
+        val manager = ServerUrlManager(dataStore, "")
+
+        // Blank, not the garbage: every consumer of currentUrl already handles
+        // "unconfigured", and none of them handle "unparseable".
+        assertEquals("", manager.currentUrl)
+        assertNull(dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `an already-normalized stored url is not rewritten`() = runBlocking {
+        val dataStore = newDataStore()
+        dataStore.edit { it[key] = "https://my.own.server:8443" }
+
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+
+        assertEquals("https://my.own.server:8443", manager.currentUrl)
+        assertEquals("https://my.own.server:8443", dataStore.data.first()[key])
+    }
+
+    @Test
+    fun `a sub-path stored by an older build survives the repair`() = runBlocking {
+        // The old retrofitBaseUrl kept the path, so these exist in the wild.
+        val dataStore = newDataStore()
+        dataStore.edit { it[key] = "https://host/tandem/" }
+
+        val manager = ServerUrlManager(dataStore, "")
+
+        assertEquals("https://host/tandem", manager.currentUrl)
+    }
+
+    @Test
+    fun `a scheme-less build default is normalised`() {
+        // tandem.defaultServerUrl is a developer-set build property and gets the
+        // same treatment as anything the user types.
+        val manager = ServerUrlManager(newDataStore(), "tandem.example.com")
+        assertEquals("https://tandem.example.com", manager.currentUrl)
+    }
+
+    @Test
+    fun `an unusable build default is treated as unconfigured`() {
+        val manager = ServerUrlManager(newDataStore(), "not a url")
+        assertEquals("", manager.currentUrl)
+    }
+
+    @Test
+    fun `the url flow reports normalized values`() = runBlocking {
+        val dataStore = newDataStore()
+        val manager = ServerUrlManager(dataStore, "tandem.example.com")
+        assertEquals("https://tandem.example.com", manager.serverUrlFlow.first())
+    }
 }

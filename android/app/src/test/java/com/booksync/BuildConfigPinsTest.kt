@@ -29,8 +29,8 @@ class BuildConfigPinsTest {
     private val requiredSdk = 36
 
     private fun buildScript(): String {
-        // Gradle runs unit tests with the module directory as the working dir,
-        // but walk upward anyway so this survives being run from the repo root.
+        // Gradle runs unit tests with the module directory as the working dir;
+        // walking upward also covers being run from `android/`.
         var dir = File("").absoluteFile
         repeat(4) {
             for (candidate in listOf(File(dir, "app/build.gradle.kts"), File(dir, "build.gradle.kts"))) {
@@ -43,10 +43,20 @@ class BuildConfigPinsTest {
         throw AssertionError("Could not locate app/build.gradle.kts from ${File("").absolutePath}")
     }
 
-    /** Uncommented `<name> = <int>` assignment, or null if absent. */
+    /**
+     * Uncommented `<name> = <int>` assignment, or null if absent.
+     *
+     * Block comments are stripped before line comments, and the direction of the
+     * failure matters: `find` takes the first match, so a commented-out older
+     * value above the live one wins. A block-commented `targetSdk = 40` sitting
+     * above a live `targetSdk = 34` would otherwise make this test pass while the
+     * app shipped below Play's floor.
+     */
     private fun sdkLevel(name: String): Int? {
         val pattern = Regex("""^\s*$name\s*=\s*(\d+)""", RegexOption.MULTILINE)
+        val blockComment = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         return buildScript()
+            .replace(blockComment, "")
             .lineSequence()
             .filterNot { it.trimStart().startsWith("//") }
             .joinToString("\n")

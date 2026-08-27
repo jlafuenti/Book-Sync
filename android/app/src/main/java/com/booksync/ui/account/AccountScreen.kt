@@ -39,6 +39,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.BuildConfig
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
@@ -342,6 +344,11 @@ fun AccountScreen(
                 // Issue #149: a refused URL leaves the app running on the old server,
                 // so the failure has to be said out loud — nothing else changes.
                 val serverUrlError by viewModel.serverUrlError.collectAsState()
+                // The field is only `remember`ed while the error lives in the
+                // ViewModel, so scrolling this LazyColumn item out and back — or a
+                // rotation — resets the text to the stored value and leaves the red
+                // border and message describing input that is no longer there.
+                LaunchedEffect(Unit) { viewModel.clearServerUrlError() }
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -367,7 +374,12 @@ fun AccountScreen(
                     )
                     Button(
                         onClick = { viewModel.saveServerUrlAndRestart(context, serverUrlEdit.trim()) },
-                        enabled = serverUrlEdit.isNotBlank() && serverUrlEdit.trim() != serverUrl,
+                        // Normalized comparison: retyping the same server without
+                        // its scheme must not kill and relaunch the process for a
+                        // value that ends up identical. Still enabled when it does
+                        // not normalize, so the button can surface the error.
+                        enabled = serverUrlEdit.isNotBlank() &&
+                            normalizeServerUrl(serverUrlEdit).let { it == null || it != serverUrl },
                         modifier = Modifier.fillMaxWidth().height(44.dp),
                     ) {
                         Text("Save & Restart")
