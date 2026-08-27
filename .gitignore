@@ -99,6 +99,12 @@ android/app/src/test/resources/sync_parity/
 .env.*
 # ...but the templates a fresh clone copies from must stay tracked.
 !.env.example
+!.env.sample
+!.env.template
+# Deliberately NOT excepted: .env.production and .env.development. Vite treats
+# those as ordinary build config and they are often committed, but they are just
+# as often where a key ends up. If a build genuinely needs one, add the negation
+# in the same commit that adds the file, so the decision is visible in review.
 
 # Signing material — never in git. The Play upload keystore in particular is
 # unrecoverable if leaked: it cannot be rotated without Google's help.

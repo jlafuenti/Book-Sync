@@ -230,6 +230,8 @@ _MUST_BE_IGNORED = [
 _MUST_NOT_BE_IGNORED = [
     ".env.example",
     "server/.env.example",
+    ".env.sample",
+    "web/.env.template",
 ]
 
 
@@ -244,8 +246,13 @@ def _check_ignore(path: str) -> bool:
         )
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("git unavailable or not a git checkout")
+    # --no-index is load-bearing: without it `git check-ignore` reports any
+    # *tracked* path as not-ignored no matter what the rules say. Nothing here is
+    # tracked today, so both tests below would keep passing — the negative one
+    # vacuously — the moment someone actually committed one of these files, which
+    # is precisely when we would want to hear about it.
     result = subprocess.run(
-        ["git", "check-ignore", "-q", path],
+        ["git", "check-ignore", "-q", "--no-index", path],
         cwd=_REPO_ROOT,
         capture_output=True,
     )
