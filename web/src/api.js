@@ -176,11 +176,15 @@ async function fetchWithAuth(url, options = {}) {
     }
 
     // The server refuses everything except /auth/me, /auth/change-password and
-    // /auth/logout while must_reset_password is set (issue #209). App.jsx gates
-    // on the flag, but only from the getMe() it runs at mount — so an admin
-    // resetting your password while your tab is open left that tab fully usable
-    // until something reloaded it. Announce it here, the one place every call
-    // passes through, and let App.jsx reuse its existing gate.
+    // /auth/logout while must_reset_password is set (issue #209). App.jsx gates on
+    // the flag from the getMe() it runs at mount; this is the backstop for any
+    // call that goes out before or alongside that, and it turns an unexplained
+    // failure into a route to the reset screen.
+    //
+    // Note it is a backstop, not the main path, and specifically NOT the
+    // "admin resets you mid-session" case: routers/users.py bumps token_version in
+    // the same transaction that sets the flag, so an open tab gets 401 and goes
+    // through the refresh/relogin path above, never reaching this.
     //
     // Cloned, because the caller still needs to read this body: several callers
     // surface `detail` as the error message.

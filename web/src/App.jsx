@@ -324,13 +324,11 @@ function App() {
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // The flag is only read once, at mount. When an admin resets your password
-    // while the tab is open the server starts refusing every route with 403
-    // password_reset_required (issue #209) and this tab would otherwise carry on
-    // as though nothing had happened — every action failing with no explanation
-    // and no route to the reset screen short of a reload. api.js announces the
-    // refusal; setting the flag here reuses the existing gate below rather than
-    // introducing a second one.
+    // The flag is only read once, at mount (issue #209). api.js announces any
+    // later 403 password_reset_required; setting the flag here reuses the gate
+    // below rather than introducing a second one. Backstop for a call that races
+    // the mount-time getMe(), not for an admin resetting a live session — that
+    // path bumps token_version too and surfaces as a 401.
     useEffect(() => {
         const onGated = () => setUser(u => (u && !u.must_reset_password
             ? { ...u, must_reset_password: true }

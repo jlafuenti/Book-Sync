@@ -293,5 +293,7 @@ def test_bootstrap_logger_still_emits_somewhere(tmp_path):
         log.removeHandler(handler)
 
     assert any("abc123" in m for m in records)
-    assert log.handlers, "bootstrap logger has no handler of its own, so with "
-    "propagate=False the operator would never see the password at all"
+    assert log.handlers, (
+        "bootstrap logger has no handler of its own, so with propagate=False the "
+        "operator would never see the generated password at all"
+    )

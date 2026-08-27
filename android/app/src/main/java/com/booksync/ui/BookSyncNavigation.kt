@@ -214,6 +214,10 @@ fun BookSyncNavigation() {
             .drop(1)
             .collect { token ->
                 if (token.isNullOrEmpty()) {
+                    // No session means no reset to force. Without this an
+                    // in-flight 403 landing after logout would raise the gate and
+                    // drag the login screen off to the reset screen (issue #209).
+                    passwordResetGate.clear()
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
                     }
@@ -221,13 +225,21 @@ fun BookSyncNavigation() {
             }
     }
 
-    // An admin can set must_reset_password while the app is running, so the flag
-    // cannot be read only at launch (issue #209). AuthInterceptor raises the gate
-    // from an OkHttp thread when any call comes back 403 password_reset_required;
-    // this is the half that acts on it. popUpTo(0) so there is no back stack to
-    // return to a screen where every request now fails.
+    // The gate is raised by AuthInterceptor, off an OkHttp thread, when any call
+    // comes back 403 password_reset_required (issue #209). This is the half that
+    // acts on it; popUpTo(0) leaves no back stack to a screen where every request
+    // now fails.
+    //
+    // `startDestination` must be a key, not just a read. It resolves
+    // asynchronously from DataStore, and the gate can already be up before this
+    // composable ever runs — SyncWorker replays the offline queue through the same
+    // interceptor from WorkManager, with no Activity alive. Keyed only on
+    // `resetRequired`, that ordering fires the effect once while startDestination
+    // is still null, the guard swallows it, and StateFlow conflation means an
+    // already-true gate never emits again: the user lands on MAIN with every
+    // screen 403ing and no route out.
     val resetRequired by passwordResetGate.required.collectAsState()
-    LaunchedEffect(resetRequired) {
+    LaunchedEffect(resetRequired, startDestination) {
         if (resetRequired && startDestination != null) {
             navController.navigate(Routes.FORCE_PASSWORD_RESET) {
                 popUpTo(0) { inclusive = true }
@@ -260,16 +272,17 @@ fun BookSyncNavigation() {
 
         composable(Routes.FORCE_PASSWORD_RESET) {
             ForcePasswordResetScreen(
+                // `change_password` bumps token_version server-side, so by the time
+                // it returns 200 the tokens in hand are already dead — navigating
+                // to MAIN would 401 on the first call, fail the refresh, and bounce
+                // to login anyway, via a detour through a broken screen. Clearing
+                // the tokens routes there directly through the observer above, and
+                // signing in with the new password is the honest next step.
                 onPasswordChanged = {
-                    passwordResetGate.clear()
-                    navController.navigate(Routes.MAIN) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                },
-                onLogout = {
                     passwordResetGate.clear()
                     scope.launch { tokenManager.clearTokens() }
                 },
+                onLogout = { /* handled by the screen's own view-model */ },
             )
         }
 
