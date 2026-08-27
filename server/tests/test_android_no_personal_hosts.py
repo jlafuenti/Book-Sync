@@ -118,9 +118,23 @@ def test_scanner_actually_reads_the_android_tree():
     assert any(f.endswith("AndroidManifest.xml") for f in files)
 
 
+# These are inputs for the detectors, not addresses anyone uses: the assertion is
+# that the regexes above still match what they are supposed to match, so that a
+# broken alternation can't leave `test_no_personal_hosts_in_android_sources`
+# passing against a detector that matches nothing. Keep every address here
+# synthetic — a real one from someone's LAN is the exact thing this file exists to
+# keep out of the repo. (The 192.168 sample was lost to a history rewrite that
+# redacted it in place, which is what left that branch both uncovered and failing;
+# 169.254 never had one.)
 @pytest.mark.parametrize(
     "sample",
-    ["REDACTED", "https://tandem.lafuenti.com", "172.16.0.9", "10.1.2.3"],
+    [
+        "192.168.1.50",
+        "169.254.10.20",
+        "172.16.0.9",
+        "10.1.2.3",
+        "https://tandem.lafuenti.com",
+    ],
 )
 def test_detectors_match_the_things_they_are_meant_to_catch(sample):
     assert _PRIVATE_IP.search(sample) or _PERSONAL_HOST.search(sample)
