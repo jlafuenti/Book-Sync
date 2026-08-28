@@ -83,7 +83,25 @@ def create_media_token(user: User, resource_type: str, resource_id: str) -> str:
 # Auth dependencies
 # ---------------------------------------------------------------------------
 
+# Exactly the routes a user carrying `must_reset_password` may still reach:
+# enough to complete the reset, or to walk away from it. Keyed on (method, path)
+# rather than path alone because GET and PUT /api/auth/me are different things —
+# a temporary credential has no business editing the account's email before the
+# password behind it has been changed.
+#
+# `/api/auth/refresh` is deliberately absent and needs no entry: it validates the
+# refresh token directly instead of going through this dependency. It has to keep
+# working, or a session that hits the gate mid-flight could not renew the token it
+# needs to complete the reset.
+PASSWORD_RESET_ALLOWED_ROUTES = frozenset({
+    ("GET", "/api/auth/me"),
+    ("POST", "/api/auth/change-password"),
+    ("POST", "/api/auth/logout"),
+})
+
+
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -109,6 +127,19 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None or not user.is_active or token_version != user.token_version:
         raise credentials_exception
+
+    # Issue #209: the flag existed but nothing server-side honoured it, so an
+    # admin-issued temporary password stayed a fully working credential for any
+    # client that wasn't the React app. `require_role` derives from this
+    # dependency, so every role-gated route inherits the gate too.
+    if (
+        user.must_reset_password
+        and (request.method, request.url.path) not in PASSWORD_RESET_ALLOWED_ROUTES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="password_reset_required",
+        )
     return user
 
 

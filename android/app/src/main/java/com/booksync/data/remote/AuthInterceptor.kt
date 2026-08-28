@@ -11,7 +11,8 @@ import javax.inject.Singleton
 @Singleton
 class AuthInterceptor @Inject constructor(
     private val tokenManager: TokenManager,
-    private val api: Lazy<BookSyncApi>
+    private val api: Lazy<BookSyncApi>,
+    private val passwordResetGate: PasswordResetGate,
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -25,6 +26,24 @@ class AuthInterceptor @Inject constructor(
         }
 
         val response = chain.proceed(request)
+
+        // The server refuses every route but /auth/me, /auth/change-password and
+        // /auth/logout while must_reset_password is set (issue #209). Without
+        // this the refusal would surface as an unexplained failure on whatever
+        // screen happened to be open — an admin can set the flag while the app is
+        // running, so it is not enough to check only at launch.
+        //
+        // peekBody, not body(): consuming it here would leave the caller with an
+        // empty stream and no error message. 403 is also what require_role
+        // returns, hence matching on the detail rather than the status.
+        if (response.code == 403) {
+            val peeked = runCatching { response.peekBody(512).string() }.getOrNull()
+            if (peeked?.contains("password_reset_required") == true) {
+                passwordResetGate.raise()
+            }
+            return response
+        }
+
         if (response.code != 401) return response
 
         // 401 received — attempt token refresh

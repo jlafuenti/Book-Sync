@@ -126,4 +126,83 @@ class SyncWiringTest {
             service.none { it.contains("lastAutoLogTimeMs") },
         )
     }
+
+    @Test
+    fun `navigation acts on the forced-password-reset gate`() {
+        // Issue #209. PasswordResetGate is raised from AuthInterceptor, on an
+        // OkHttp thread with no access to a NavController, so the two halves are
+        // joined only by a flow collection in BookSyncNavigation. Every other
+        // test here can pass with that collection deleted: the gate would rise,
+        // nothing would watch it, and a user holding a temporary password would
+        // sit in an app where every screen fails with 403 and none of them say
+        // why. Exactly the "correct but never called" shape this file exists for.
+        val nav = codeLines(source("com/booksync/ui/BookSyncNavigation.kt"))
+
+        assertTrue(
+            "BookSyncNavigation must collect PasswordResetGate.required — without " +
+                "it AuthInterceptor raises a gate nobody is watching.",
+            nav.any { it.contains("passwordResetGate.required") },
+        )
+        assertTrue(
+            "BookSyncNavigation must navigate to Routes.FORCE_PASSWORD_RESET when " +
+                "the gate is raised.",
+            nav.any { it.contains("Routes.FORCE_PASSWORD_RESET") },
+        )
+        assertTrue(
+            "The forced-reset destination must be registered in the NavHost, or " +
+                "navigating to it throws.",
+            nav.any { it.contains("ForcePasswordResetScreen") },
+        )
+        // The effect reads `startDestination`, which resolves asynchronously from
+        // DataStore. If it is not also a *key*, an already-raised gate — raised by
+        // SyncWorker through the same interceptor, from WorkManager, with no
+        // Activity alive — fires the effect once while startDestination is still
+        // null, the guard swallows it, and StateFlow conflation means it never
+        // emits again. The user lands on MAIN with every screen 403ing and no way
+        // out. Every assertion above passes in that state, which is why this one
+        // exists.
+        assertTrue(
+            "LaunchedEffect must key on startDestination as well as resetRequired, " +
+                "or a gate raised before the start destination resolves is lost.",
+            nav.any { it.contains("LaunchedEffect(resetRequired, startDestination)") },
+        )
+        assertTrue(
+            "Clearing tokens must lower the gate: otherwise a 403 arriving after " +
+                "logout drags the login screen to the reset screen.",
+            nav.any { it.contains("passwordResetGate.clear()") },
+        )
+    }
+
+    @Test
+    fun `the forced-reset screen offers no way out but changing the password`() {
+        // A ModalBottomSheet was rejected for this precisely because it can be
+        // swiped away; a back gesture would do the same thing. Leaving either
+        // open drops the user onto a screen where every call 403s, with no route
+        // back to the one screen that works.
+        val screen = codeLines(
+            source("com/booksync/ui/account/ForcePasswordResetScreen.kt")
+        )
+
+        assertTrue(
+            "ForcePasswordResetScreen must block the system back gesture.",
+            screen.any { it.contains("BackHandler") },
+        )
+        assertTrue(
+            "It must pass onCancel = null to ChangePasswordForm, which is what " +
+                "suppresses the Cancel button.",
+            screen.any { it.contains("onCancel = null") },
+        )
+        assertTrue(
+            "It must not be a dismissible sheet.",
+            screen.none { it.contains("ModalBottomSheet") },
+        )
+        // /api/auth/logout is on the server's allow-list precisely so this escape
+        // hatch can bump token_version. A local-only token wipe would leave the
+        // temporary password's access token valid server-side for a further 24h.
+        assertTrue(
+            "The sign-out affordance must call the view-model logout (which hits " +
+                "/api/auth/logout), not merely clear tokens locally.",
+            screen.any { it.contains("viewModel.logout()") },
+        )
+    }
 }
