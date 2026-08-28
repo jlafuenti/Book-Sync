@@ -59,6 +59,7 @@ class SyncMapVersionTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun remotePair(syncMapVersion: Int?) = BookPairResponse(

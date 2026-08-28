@@ -150,7 +150,7 @@ class SyncConflictHelpersTest {
     private fun previousBookmark(
         locator: String? = "{\"locator\":true}",
         locatorAudioMs: Int? = 999,
-    ) = BookmarkEntity(
+    ) = BookmarkEntity(scopeKey = TEST_SCOPE, 
         bookPairId = 42,
         source = "ebook",
         epubChapter = 1,
@@ -168,7 +168,7 @@ class SyncConflictHelpersTest {
         // replay); the push must attest the version the server said the index
         // is expressed in, not whatever this device's cache happens to hold.
         val entity = position(epubSentenceIndex = 10, syncMapVersion = 6)
-            .toBookmarkEntity(42, previousBookmark().copy(syncMapVersion = 2))
+            .toBookmarkEntity(TEST_SCOPE, 42, previousBookmark().copy(syncMapVersion = 2))
 
         assertEquals(6, entity.syncMapVersion)
     }
@@ -185,7 +185,7 @@ class SyncConflictHelpersTest {
             deviceName = "Device B",
         )
 
-        val entity = response.toBookmarkEntity(42, previousBookmark())
+        val entity = response.toBookmarkEntity(TEST_SCOPE, 42, previousBookmark())
 
         assertEquals(42, entity.bookPairId)
         assertEquals("audiobook", entity.source)
@@ -213,7 +213,7 @@ class SyncConflictHelpersTest {
         // with chapter 0. The anchor moving is not a reason to destroy a hint.
         val response = position(epubChapter = 7, epubSentenceIndex = 2)
 
-        val entity = response.toBookmarkEntity(42, previousBookmark("{\"local\":true}"))
+        val entity = response.toBookmarkEntity(TEST_SCOPE, 42, previousBookmark("{\"local\":true}"))
 
         assertEquals("{\"local\":true}", entity.epubLocator)
         assertEquals(999, entity.locatorAudioMs)
@@ -229,7 +229,7 @@ class SyncConflictHelpersTest {
             hints = listOf(locatorHint("{\"fromServer\":true}", audioMs = 61_000)),
         )
 
-        val entity = response.toBookmarkEntity(42, previousBookmark("{\"local\":true}"))
+        val entity = response.toBookmarkEntity(TEST_SCOPE, 42, previousBookmark("{\"local\":true}"))
 
         assertEquals("{\"fromServer\":true}", entity.epubLocator)
         assertEquals(61_000, entity.locatorAudioMs)
@@ -246,7 +246,7 @@ class SyncConflictHelpersTest {
             hints = listOf(locatorHint("{\"stale\":true}", audioMs = 1, current = false)),
         )
 
-        val entity = response.toBookmarkEntity(42, previousBookmark("{\"local\":true}"))
+        val entity = response.toBookmarkEntity(TEST_SCOPE, 42, previousBookmark("{\"local\":true}"))
 
         assertEquals("{\"local\":true}", entity.epubLocator)
         assertEquals(999, entity.locatorAudioMs)
@@ -254,7 +254,7 @@ class SyncConflictHelpersTest {
 
     @Test
     fun `toBookmarkEntity with no previous entity leaves locator null`() {
-        val entity = position().toBookmarkEntity(42, null)
+        val entity = position().toBookmarkEntity(TEST_SCOPE, 42, null)
 
         assertNull(entity.epubLocator)
         assertNull(entity.locatorAudioMs)
@@ -266,7 +266,7 @@ class SyncConflictHelpersTest {
         // local bookmark table is keyed by pair.
         val response = position().copy(scope = "ebook", book_pair_id = null, ebook_id = 7)
 
-        assertEquals(42, response.toBookmarkEntity(42, null).bookPairId)
+        assertEquals(42, response.toBookmarkEntity(TEST_SCOPE, 42, null).bookPairId)
     }
 
     // ---------- PositionResponse.toProgressEntity ----------
@@ -281,7 +281,7 @@ class SyncConflictHelpersTest {
             deviceName = "Device B",
         )
 
-        val entity = response.toProgressEntity("audiobook", 99)
+        val entity = response.toProgressEntity(TEST_SCOPE, "audiobook", 99)
 
         assertEquals("audiobook", entity.mediaType)
         assertEquals(99, entity.mediaId)
@@ -301,7 +301,7 @@ class SyncConflictHelpersTest {
 
     @Test
     fun `toProgressEntity falls back to updated_at when captured_at is absent`() {
-        val entity = position().toProgressEntity("ebook", 7)
+        val entity = position().toProgressEntity(TEST_SCOPE, "ebook", 7)
 
         assertEquals(
             java.time.Instant.parse("2026-04-12T15:30:00Z").toEpochMilli(),
@@ -315,7 +315,7 @@ class SyncConflictHelpersTest {
         // judge it, so an Android-side mapping must never blank it — it used
         // to arrive as the `user_progress.epub_cfi` mirror column, which no
         // longer exists (issue #102).
-        val previous = UserProgressEntity(
+        val previous = UserProgressEntity(scopeKey = TEST_SCOPE, 
             mediaType = "ebook",
             mediaId = 7,
             bookPairId = 42,
@@ -328,7 +328,7 @@ class SyncConflictHelpersTest {
             deviceId = null,
         )
 
-        val entity = position(epubChapter = 9).toProgressEntity("ebook", 7, previous)
+        val entity = position(epubChapter = 9).toProgressEntity(TEST_SCOPE, "ebook", 7, previous)
 
         assertEquals("epubcfi(/6/4!/4/2)", entity.epubCfi)
         assertEquals(9, entity.epubChapter)

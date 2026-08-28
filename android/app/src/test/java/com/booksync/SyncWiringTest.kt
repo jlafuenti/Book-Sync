@@ -205,4 +205,54 @@ class SyncWiringTest {
             screen.any { it.contains("viewModel.logout()") },
         )
     }
+
+    @Test
+    fun `both authentication paths claim pre-scoping rows`() {
+        // Issue #314. The login path alone is not enough, and that gap is the
+        // whole bug for existing installs: a device upgrading into the scoped
+        // build already holds a token and never logs in again, so nothing would
+        // ever claim its pre-scoping rows and the user would silently lose every
+        // local position and bookmark. Both call sites have to exist.
+        val login = codeLines(source("com/booksync/ui/auth/LoginScreen.kt"))
+        val nav = codeLines(source("com/booksync/ui/BookSyncNavigation.kt"))
+
+        assertTrue(
+            "LoginViewModel.login must call userScopeProvider.onAuthenticated().",
+            login.any { it.contains("userScopeProvider.onAuthenticated") },
+        )
+        assertTrue(
+            "BookSyncNavigation must also call it at start-up for a stored token — " +
+                "an upgraded install never runs the login path again.",
+            nav.any { it.contains("userScopeProvider.onAuthenticated") },
+        )
+    }
+
+    @Test
+    fun `every cache path is scoped to one account, never read wholesale`() {
+        // The corruption half of #314. It was not enough to scope the queue:
+        // processPendingSync also pushed `bookmarks` and `user_progress` rows with
+        // syncedToServer = 0, and syncAllBookmarksAndProgress does the same on
+        // every library load. All of them sent under whatever token was stored.
+        val repo = codeLines(
+            source("com/booksync/data/repository/BookSyncRepository.kt")
+        )
+
+        for (call in listOf(
+            "pendingSyncDao.getPendingForScope",
+            "bookmarkDao.getUnsyncedBookmarks(scope)",
+            "userProgressDao.getUnsyncedProgress(scope)",
+        )) {
+            assertTrue("$call must be the scoped form", repo.any { it.contains(call) })
+        }
+        assertTrue(
+            "No unscoped queue read may exist on any path.",
+            repo.none { it.contains("getAllPending()") },
+        )
+        assertTrue(
+            "Queued writes must carry the scope, or the filters have nothing to " +
+                "filter on.",
+            repo.any { it.contains("scopeKey = scope") },
+        )
+    }
+
 }

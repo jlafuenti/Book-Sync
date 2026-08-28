@@ -46,6 +46,7 @@ class RefreshProgressTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun serverPosition(
@@ -69,7 +70,7 @@ class RefreshProgressTest {
         audioPositionMs: Int = 1_000,
         capturedAt: String? = "2026-08-10T10:00:00Z",
         synced: Boolean = true,
-    ) = UserProgressEntity(
+    ) = UserProgressEntity(scopeKey = TEST_SCOPE, 
         mediaType = "audiobook",
         mediaId = 17,
         bookPairId = null,
@@ -87,7 +88,7 @@ class RefreshProgressTest {
     @Test
     fun `adopts a newer server position written by another device`() = runTest {
         coEvery { api.getPosition("audiobook", 17) } returns serverPosition()
-        coEvery { userProgressDao.getProgress("audiobook", 17) } returns localProgress()
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 17) } returns localProgress()
 
         val saved = slot<UserProgressEntity>()
         coEvery { userProgressDao.upsertProgress(capture(saved)) } returns Unit
@@ -100,7 +101,7 @@ class RefreshProgressTest {
     @Test
     fun `pulls when there is no local row at all`() = runTest {
         coEvery { api.getPosition("audiobook", 17) } returns serverPosition()
-        coEvery { userProgressDao.getProgress("audiobook", 17) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 17) } returns null
 
         val saved = slot<UserProgressEntity>()
         coEvery { userProgressDao.upsertProgress(capture(saved)) } returns Unit
@@ -114,7 +115,7 @@ class RefreshProgressTest {
     fun `keeps unsynced local writes instead of clobbering them with the server copy`() = runTest {
         // Offline listening must survive a refresh — regardless of timestamps.
         coEvery { api.getPosition("audiobook", 17) } returns serverPosition()
-        coEvery { userProgressDao.getProgress("audiobook", 17) } returns
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 17) } returns
             localProgress(synced = false)
 
         repository().refreshProgress("audiobook", 17)
@@ -126,7 +127,7 @@ class RefreshProgressTest {
     fun `keeps a local row that is newer than the server record`() = runTest {
         coEvery { api.getPosition("audiobook", 17) } returns
             serverPosition(capturedAt = "2026-08-01T10:00:00Z")
-        coEvery { userProgressDao.getProgress("audiobook", 17) } returns
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 17) } returns
             localProgress(capturedAt = "2026-08-10T10:00:00Z")
 
         repository().refreshProgress("audiobook", 17)

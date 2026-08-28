@@ -30,6 +30,7 @@ import com.booksync.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.normalizeServerUrl
@@ -53,6 +54,7 @@ class LoginViewModel @Inject constructor(
     private val api: BookSyncApi,
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
+    private val userScopeProvider: UserScopeProvider,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -75,6 +77,11 @@ class LoginViewModel @Inject constructor(
             try {
                 val tokens = api.login(LoginRequest(username, password))
                 tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
+                // Claim any rows written before the cache was scoped, so an
+                // upgrading install keeps its reading positions (issue #314).
+                // After saveTokens — the scope is derived from the stored token —
+                // and before onSuccess() renders anything from the cache.
+                userScopeProvider.onAuthenticated()
                 onSuccess()
             } catch (e: Exception) {
                 _error.value = e.message ?: "Login failed"

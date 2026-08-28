@@ -61,6 +61,7 @@ class SaveReaderPositionTest {
     private val syncPointDao = mockk<SyncPointDao>(relaxed = true)
     private val bookPairDao = mockk<BookPairDao>(relaxed = true)
 
+
     private fun repository() = BookSyncRepository(
         api = api,
         bookPairDao = bookPairDao,
@@ -76,6 +77,7 @@ class SaveReaderPositionTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     // A preview long enough for SyncMatcher's exact pass, reused verbatim as
@@ -209,7 +211,7 @@ class SaveReaderPositionTest {
         repository().saveReaderPosition(snapshot()).join()
 
         assertFalse("row must stay unsynced until the PUT actually succeeds", saved.captured.syncedToServer)
-        coVerify(exactly = 0) { bookmarkDao.markSynced(any()) }
+        coVerify(exactly = 0) { bookmarkDao.markSynced(any(), any()) }
     }
 
     @Test
@@ -218,7 +220,7 @@ class SaveReaderPositionTest {
 
         repository().saveReaderPosition(snapshot()).join()
 
-        coVerify(exactly = 1) { bookmarkDao.markSynced(42) }
+        coVerify(exactly = 1) { bookmarkDao.markSynced(TEST_SCOPE, 42) }
     }
 
     // ---------- sync-point resolution now lives inside saveReaderPosition (fix 2) ----------
@@ -304,7 +306,7 @@ class SaveReaderPositionTest {
         // keep the version that index belongs to as well — not the live one.
         coEvery { bookPairDao.getPairById(42) } returns cachedPair(syncMapVersion = 5)
         coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
-        coEvery { bookmarkDao.getBookmark(42) } returns BookmarkEntity(
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42, source = "ebook", epubChapter = 12, epubSentenceIndex = 9,
             audioPositionMs = 1000, updatedAt = "1", syncMapVersion = 2,
         )
@@ -333,7 +335,7 @@ class SaveReaderPositionTest {
         assertEquals(3, pending.captured.syncMapVersion)
 
         // ...and the replay sends it, even if the pair's cache has since moved on.
-        coEvery { pendingSyncDao.getAllPending() } returns listOf(pending.captured)
+        coEvery { pendingSyncDao.getPendingForScope(TEST_SCOPE) } returns listOf(pending.captured)
         val replayed = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(replayed)) } returns Response.success(positionResponse())
 

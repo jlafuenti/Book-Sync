@@ -42,6 +42,7 @@ class LibraryPagingTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun ebook(id: Int) = EBookResponse(

@@ -9,6 +9,13 @@ import com.booksync.sync.MatchablePoint
  * These mirror the server models for local caching.
  */
 
+/**
+ * Column value for rows written before the cache was scoped to an account
+ * (issue #314). Adopted once, by the first scope to authenticate after the
+ * upgrade — see [com.booksync.data.remote.UserScope.LEGACY].
+ */
+const val LEGACY_SCOPE_KEY = ""
+
 @Entity(tableName = "book_pairs")
 data class BookPairEntity(
     @PrimaryKey val id: Int,
@@ -83,9 +90,11 @@ data class SyncPointEntity(
     override val confidence: Float = 0f
 ) : MatchablePoint
 
-@Entity(tableName = "bookmarks")
+@Entity(tableName = "bookmarks", primaryKeys = ["scopeKey", "bookPairId"])
 data class BookmarkEntity(
-    @PrimaryKey val bookPairId: Int,
+    /** Part of the primary key: two accounts can each hold a bookmark for one pair. */
+    val scopeKey: String,
+    val bookPairId: Int,
     val source: String,
     val epubChapter: Int?,
     val epubSentenceIndex: Int?,
@@ -116,6 +125,8 @@ data class BookmarkEntity(
 @Entity(tableName = "pending_sync")
 data class PendingSyncEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    /** Which account this queued write belongs to (issue #314). */
+    val scopeKey: String,
     val bookPairId: Int,
     val source: String,
     val epubChapter: Int?,
@@ -135,14 +146,16 @@ data class PendingSyncEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "acknowledged_items", primaryKeys = ["itemId", "itemType"])
+@Entity(tableName = "acknowledged_items", primaryKeys = ["scopeKey", "itemId", "itemType"])
 data class AcknowledgedItemEntity(
+    val scopeKey: String,
     val itemId: Int,
     val itemType: String  // "ebook", "audiobook", "pair"
 )
 
-@Entity(tableName = "user_progress", primaryKeys = ["mediaType", "mediaId"])
+@Entity(tableName = "user_progress", primaryKeys = ["scopeKey", "mediaType", "mediaId"])
 data class UserProgressEntity(
+    val scopeKey: String,
     val mediaType: String,
     val mediaId: Int,
     val bookPairId: Int?,
@@ -169,6 +182,8 @@ data class UserProgressEntity(
 @Entity(tableName = "bookmark_log")
 data class BookmarkLogEntity(
     @PrimaryKey(autoGenerate = true) val localId: Long = 0,
+    /** Not in the key — the id is generated — but still scoped (issue #314). */
+    val scopeKey: String,
     val serverId: Int? = null,
     val bookPairId: Int,
     val source: String,

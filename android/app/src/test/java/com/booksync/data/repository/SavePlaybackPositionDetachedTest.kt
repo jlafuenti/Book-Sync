@@ -56,6 +56,7 @@ class SavePlaybackPositionDetachedTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun positionResponse() = PositionResponse(
@@ -78,7 +79,7 @@ class SavePlaybackPositionDetachedTest {
         }
         var roomWritten = false
         coEvery { bookmarkDao.upsertBookmark(any()) } answers { roomWritten = true }
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
 
         val repo = repository()
         repo.appScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
