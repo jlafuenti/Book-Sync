@@ -44,11 +44,12 @@ class UpdateBookmarkMetadataTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     @Test
     fun `stamps source but leaves anchors untouched`() = runTest {
-        val existing = BookmarkEntity(
+        val existing = BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42,
             source = "audiobook",
             epubChapter = 39,
@@ -58,7 +59,7 @@ class UpdateBookmarkMetadataTest {
             locatorAudioMs = 54_000,
             updatedAt = "1000",
         )
-        coEvery { bookmarkDao.getBookmark(42) } returns existing
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
 
         val saved = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
@@ -79,7 +80,7 @@ class UpdateBookmarkMetadataTest {
         // refreshBookmark think this local row was newer than it really is,
         // which blocks pulling a genuinely newer position from another
         // device on the next open. Only `source` should change.
-        val existing = BookmarkEntity(
+        val existing = BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42,
             source = "audiobook",
             epubChapter = 39,
@@ -88,7 +89,7 @@ class UpdateBookmarkMetadataTest {
             updatedAt = "1000",
             capturedAt = "2026-01-01T00:00:00",
         )
-        coEvery { bookmarkDao.getBookmark(42) } returns existing
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
 
         val saved = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
@@ -101,7 +102,7 @@ class UpdateBookmarkMetadataTest {
 
     @Test
     fun `never calls the server or enqueues pending_sync`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
 
         val api = mockk<BookSyncApi>(relaxed = true)
         val pendingSyncDao = mockk<com.booksync.data.local.dao.PendingSyncDao>(relaxed = true)
@@ -120,6 +121,7 @@ class UpdateBookmarkMetadataTest {
             diagnosticLogger = mockk(relaxed = true),
             deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
             json = Json { ignoreUnknownKeys = true },
+            userScopeProvider = testScopeProvider(),
         )
 
         repo.updateBookmarkMetadata(42, source = "ebook")
@@ -130,7 +132,7 @@ class UpdateBookmarkMetadataTest {
 
     @Test
     fun `creates a bare row with no anchors when none exists yet`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
 
         val saved = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
@@ -144,7 +146,7 @@ class UpdateBookmarkMetadataTest {
 
     @Test
     fun `marks the row synced so it is never picked up by the startup retry sweep`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         val saved = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
 

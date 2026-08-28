@@ -1,0 +1,713 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 20,
+    "identityHash": "7c6e2b5b208950149ac6ac4c1072954f",
+    "entities": [
+      {
+        "tableName": "book_pairs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `ebookId` INTEGER NOT NULL, `ebookTitle` TEXT NOT NULL, `ebookAuthor` TEXT, `ebookFilename` TEXT NOT NULL, `ebookFormat` TEXT NOT NULL, `audiobookId` INTEGER NOT NULL, `audiobookTitle` TEXT NOT NULL, `audiobookAuthor` TEXT, `audiobookFilename` TEXT NOT NULL, `audiobookFormat` TEXT NOT NULL, `audiobookDurationSeconds` INTEGER, `status` TEXT NOT NULL, `ebookDownloaded` INTEGER NOT NULL, `audiobookDownloaded` INTEGER NOT NULL, `syncMapDownloaded` INTEGER NOT NULL, `syncMapVersion` INTEGER, `audiobookCoverPath` TEXT, `ebookSeries` TEXT, `ebookSeriesIndex` REAL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ebookId",
+            "columnName": "ebookId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ebookTitle",
+            "columnName": "ebookTitle",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ebookAuthor",
+            "columnName": "ebookAuthor",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ebookFilename",
+            "columnName": "ebookFilename",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ebookFormat",
+            "columnName": "ebookFormat",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookId",
+            "columnName": "audiobookId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookTitle",
+            "columnName": "audiobookTitle",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookAuthor",
+            "columnName": "audiobookAuthor",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "audiobookFilename",
+            "columnName": "audiobookFilename",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookFormat",
+            "columnName": "audiobookFormat",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookDurationSeconds",
+            "columnName": "audiobookDurationSeconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ebookDownloaded",
+            "columnName": "ebookDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audiobookDownloaded",
+            "columnName": "audiobookDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncMapDownloaded",
+            "columnName": "syncMapDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncMapVersion",
+            "columnName": "syncMapVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "audiobookCoverPath",
+            "columnName": "audiobookCoverPath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ebookSeries",
+            "columnName": "ebookSeries",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "ebookSeriesIndex",
+            "columnName": "ebookSeriesIndex",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "ebooks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `author` TEXT, `filename` TEXT NOT NULL, `fileSize` INTEGER, `format` TEXT NOT NULL, `series` TEXT, `seriesIndex` REAL, `uploadedAt` TEXT NOT NULL, `isDownloaded` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "filename",
+            "columnName": "filename",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileSize",
+            "columnName": "fileSize",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "format",
+            "columnName": "format",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seriesIndex",
+            "columnName": "seriesIndex",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "uploadedAt",
+            "columnName": "uploadedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDownloaded",
+            "columnName": "isDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "audiobooks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `title` TEXT NOT NULL, `author` TEXT, `filename` TEXT NOT NULL, `durationSeconds` INTEGER, `format` TEXT NOT NULL, `series` TEXT, `seriesIndex` REAL, `uploadedAt` TEXT NOT NULL, `isDownloaded` INTEGER NOT NULL, `coverFilename` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "filename",
+            "columnName": "filename",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationSeconds",
+            "columnName": "durationSeconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "format",
+            "columnName": "format",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seriesIndex",
+            "columnName": "seriesIndex",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "uploadedAt",
+            "columnName": "uploadedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDownloaded",
+            "columnName": "isDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coverFilename",
+            "columnName": "coverFilename",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "sync_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `bookPairId` INTEGER NOT NULL, `epubChapter` INTEGER NOT NULL, `epubSentenceIndex` INTEGER NOT NULL, `epubTextPreview` TEXT, `audioStartMs` INTEGER NOT NULL, `audioEndMs` INTEGER NOT NULL, `confidence` REAL NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookPairId",
+            "columnName": "bookPairId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epubChapter",
+            "columnName": "epubChapter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epubSentenceIndex",
+            "columnName": "epubSentenceIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epubTextPreview",
+            "columnName": "epubTextPreview",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "audioStartMs",
+            "columnName": "audioStartMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioEndMs",
+            "columnName": "audioEndMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "REAL",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "bookmarks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scopeKey` TEXT NOT NULL, `bookPairId` INTEGER NOT NULL, `source` TEXT NOT NULL, `epubChapter` INTEGER, `epubSentenceIndex` INTEGER, `audioPositionMs` INTEGER, `epubLocator` TEXT, `locatorAudioMs` INTEGER, `updatedAt` TEXT NOT NULL, `syncedToServer` INTEGER NOT NULL, `capturedAt` TEXT, `deviceId` TEXT, `deviceName` TEXT, `syncMapVersion` INTEGER, PRIMARY KEY(`scopeKey`, `bookPairId`))",
+        "fields": [
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookPairId",
+            "columnName": "bookPairId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epubChapter",
+            "columnName": "epubChapter",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubSentenceIndex",
+            "columnName": "epubSentenceIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "audioPositionMs",
+            "columnName": "audioPositionMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubLocator",
+            "columnName": "epubLocator",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "locatorAudioMs",
+            "columnName": "locatorAudioMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncedToServer",
+            "columnName": "syncedToServer",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capturedAt",
+            "columnName": "capturedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "syncMapVersion",
+            "columnName": "syncMapVersion",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "scopeKey",
+            "bookPairId"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_sync",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `scopeKey` TEXT NOT NULL, `bookPairId` INTEGER NOT NULL, `source` TEXT NOT NULL, `epubChapter` INTEGER, `epubSentenceIndex` INTEGER, `syncMapVersion` INTEGER, `audioPositionMs` INTEGER, `epubLocator` TEXT, `locatorAudioMs` INTEGER, `appendToLog` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookPairId",
+            "columnName": "bookPairId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epubChapter",
+            "columnName": "epubChapter",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubSentenceIndex",
+            "columnName": "epubSentenceIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "syncMapVersion",
+            "columnName": "syncMapVersion",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "audioPositionMs",
+            "columnName": "audioPositionMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubLocator",
+            "columnName": "epubLocator",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "locatorAudioMs",
+            "columnName": "locatorAudioMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "appendToLog",
+            "columnName": "appendToLog",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "user_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scopeKey` TEXT NOT NULL, `mediaType` TEXT NOT NULL, `mediaId` INTEGER NOT NULL, `bookPairId` INTEGER, `epubCfi` TEXT, `epubChapter` INTEGER, `epubProgressPercent` REAL, `audioPositionMs` INTEGER, `isCompleted` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `deviceId` TEXT, `syncedToServer` INTEGER NOT NULL, `capturedAt` TEXT, `deviceName` TEXT, PRIMARY KEY(`scopeKey`, `mediaType`, `mediaId`))",
+        "fields": [
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaType",
+            "columnName": "mediaType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaId",
+            "columnName": "mediaId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookPairId",
+            "columnName": "bookPairId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubCfi",
+            "columnName": "epubCfi",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "epubChapter",
+            "columnName": "epubChapter",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "epubProgressPercent",
+            "columnName": "epubProgressPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "audioPositionMs",
+            "columnName": "audioPositionMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "isCompleted",
+            "columnName": "isCompleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "syncedToServer",
+            "columnName": "syncedToServer",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capturedAt",
+            "columnName": "capturedAt",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "scopeKey",
+            "mediaType",
+            "mediaId"
+          ]
+        }
+      },
+      {
+        "tableName": "acknowledged_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scopeKey` TEXT NOT NULL, `itemId` INTEGER NOT NULL, `itemType` TEXT NOT NULL, PRIMARY KEY(`scopeKey`, `itemId`, `itemType`))",
+        "fields": [
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemType",
+            "columnName": "itemType",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "scopeKey",
+            "itemId",
+            "itemType"
+          ]
+        }
+      },
+      {
+        "tableName": "bookmark_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`localId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `scopeKey` TEXT NOT NULL, `serverId` INTEGER, `bookPairId` INTEGER NOT NULL, `source` TEXT NOT NULL, `prevEpubChapter` INTEGER, `prevEpubSentenceIndex` INTEGER, `prevAudioPositionMs` INTEGER, `newEpubChapter` INTEGER, `newEpubSentenceIndex` INTEGER, `newAudioPositionMs` INTEGER, `changedAt` TEXT NOT NULL, `deviceId` TEXT, `deviceName` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "localId",
+            "columnName": "localId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scopeKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "serverId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bookPairId",
+            "columnName": "bookPairId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prevEpubChapter",
+            "columnName": "prevEpubChapter",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "prevEpubSentenceIndex",
+            "columnName": "prevEpubSentenceIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "prevAudioPositionMs",
+            "columnName": "prevAudioPositionMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "newEpubChapter",
+            "columnName": "newEpubChapter",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "newEpubSentenceIndex",
+            "columnName": "newEpubSentenceIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "newAudioPositionMs",
+            "columnName": "newAudioPositionMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "changedAt",
+            "columnName": "changedAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deviceName",
+            "columnName": "deviceName",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "localId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7c6e2b5b208950149ac6ac4c1072954f')"
+    ]
+  }
+}

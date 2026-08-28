@@ -1,5 +1,7 @@
 package com.booksync.ui.player
 
+import com.booksync.data.repository.TEST_SCOPE
+
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -85,7 +87,7 @@ class PlayerViewModelTeardownTest {
             format = "m4b", series = null, seriesIndex = null,
             uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
         )
-        coEvery { repository.getProgressOnce("audiobook", 17) } returns UserProgressEntity(
+        coEvery { repository.getProgressOnce("audiobook", 17) } returns UserProgressEntity(scopeKey = TEST_SCOPE, 
             mediaType = "audiobook", mediaId = 17, bookPairId = null, epubCfi = null,
             epubChapter = null, epubProgressPercent = null, audioPositionMs = 3_600_000,
             isCompleted = false, updatedAt = 1_000L, deviceId = "web",

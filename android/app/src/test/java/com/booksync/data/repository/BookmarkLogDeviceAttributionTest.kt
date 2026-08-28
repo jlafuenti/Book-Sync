@@ -35,7 +35,7 @@ class BookmarkLogDeviceAttributionTest {
             device_name = "Jesse's Pixel",
         )
 
-        val entity = response.toEntity(pairId = 84)
+        val entity = response.toEntity(scopeKey = TEST_SCOPE, pairId = 84)
 
         assertEquals("device-abc", entity.deviceId)
         assertEquals("Jesse's Pixel", entity.deviceName)
@@ -43,7 +43,7 @@ class BookmarkLogDeviceAttributionTest {
 
     @Test
     fun `BookmarkLogEntity toResponse carries deviceId and deviceName into the response`() {
-        val entity = BookmarkLogEntity(
+        val entity = BookmarkLogEntity(scopeKey = TEST_SCOPE, 
             serverId = 1,
             bookPairId = 84,
             source = "audiobook",

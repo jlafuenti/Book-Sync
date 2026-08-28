@@ -72,6 +72,13 @@ interface PasswordResetGateEntryPoint {
     fun passwordResetGate(): com.booksync.data.remote.PasswordResetGate
 }
 
+/** Hilt entry point for the cache scope (issue #314). */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface UserScopeProviderEntryPoint {
+    fun userScopeProvider(): com.booksync.data.remote.UserScopeProvider
+}
+
 // ------------------------------------------------------------
 // Route constants — centralized so deep links stay consistent.
 // Library accepts optional filter / series / sort / group args.
@@ -186,6 +193,13 @@ fun BookSyncNavigation() {
         ).tokenManager()
     }
 
+    val userScopeProvider = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            UserScopeProviderEntryPoint::class.java,
+        ).userScopeProvider()
+    }
+
     val passwordResetGate = remember {
         EntryPointAccessors.fromApplication(
             context.applicationContext,
@@ -205,6 +219,13 @@ fun BookSyncNavigation() {
     var startDestination by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         val existingToken = tokenManager.getAccessToken().firstOrNull()
+        if (!existingToken.isNullOrEmpty()) {
+            // Also here, not only on the login path (issue #314): an install
+            // upgrading into this build has a stored token and never logs in
+            // again, so nothing would ever claim its pre-scoping rows and the
+            // user would silently lose every local position and bookmark.
+            userScopeProvider.onAuthenticated()
+        }
         startDestination = if (!existingToken.isNullOrEmpty()) Routes.MAIN else Routes.LOGIN
     }
 
