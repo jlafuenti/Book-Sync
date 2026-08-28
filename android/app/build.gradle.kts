@@ -254,6 +254,11 @@ dependencies {
     // mockk mocks final Kotlin classes (NetworkMonitor, TokenManager) and suspend
     // functions, which is what makes ViewModels unit-testable off-device.
     testImplementation("io.mockk:mockk:1.14.2")
+    // Real SQLite in JVM unit tests, so MIGRATION_19_20 can actually be executed
+    // against a populated v19 database (issue #314). Room's MigrationTestHelper
+    // needs an instrumentation context and this module has no androidTest source
+    // set, so CI would never run it; this does the same job on the JVM.
+    testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")
     // Version must track the kotlinx-coroutines-core the app resolves to (1.10.2) —
     // a mismatch breaks Dispatchers.setMain.
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
