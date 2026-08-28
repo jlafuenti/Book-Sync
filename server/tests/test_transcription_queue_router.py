@@ -197,3 +197,59 @@ async def test_offhours_reports_an_open_window_and_when_it_closes(
     assert body["open"] is True
     assert body["closes_at"] is not None
     assert body["opens_at"] is None
+
+
+# --- Role gating on the write endpoints (issue #207) ------------------------
+#
+# Starting a job spends the GPU for hours; cancelling one throws away work that
+# may not be the canceller's. Both were open to `user`, the lowest role, while
+# the queue-management endpoints beside them already required admin and the
+# text/realign editors already required editor. Read endpoints (status, queue,
+# offhours, history) are deliberately left alone here — they are #208's subject,
+# which pairs role with rate limiting.
+
+
+async def test_start_transcription_requires_editor(db, make_client, make_user, auth_header):
+    user = await make_user(username="plain", role="user")
+    pair = await make_book_pair(db)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/start", headers=auth_header(user)
+        )
+    assert r.status_code == 403
+
+
+async def test_cancel_transcription_requires_editor(db, make_client, make_user, auth_header):
+    user = await make_user(username="plain", role="user")
+    pair = await make_book_pair(db)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(user)
+        )
+    assert r.status_code == 403
+
+
+async def test_start_transcription_allows_editor(db, make_client, make_user, auth_header):
+    """The gate must not have been set too high — editor is the intended floor."""
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/start", headers=auth_header(editor)
+        )
+    # Whatever the queueing outcome, the role check let it through.
+    assert r.status_code != 403
+
+
+async def test_cancel_transcription_allows_editor(db, make_client, make_user, auth_header):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
+        )
+    assert r.status_code != 403

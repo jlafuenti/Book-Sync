@@ -75,7 +75,14 @@ async def _resolve_media_user(
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     user = await _load_active_user(db, payload)
-    if payload.get("type") == "media" and payload.get("ver", 0) != user.token_version:
+    # Both token types, not just media (issue #206). Logout, self password-change
+    # and admin reset all bump `token_version` precisely so an already-issued
+    # token stops working; guarding this compare behind `type == "media"` meant a
+    # leaked 24h access token kept streaming covers and audio after the user had
+    # logged out — on the two endpoints most worth having for bulk download, and
+    # nowhere else in the API, because every other route goes through
+    # `get_current_user`, which has always compared it.
+    if payload.get("ver", 0) != user.token_version:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
