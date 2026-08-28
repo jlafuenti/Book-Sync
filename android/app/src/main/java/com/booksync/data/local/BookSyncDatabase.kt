@@ -21,7 +21,7 @@ import com.booksync.data.local.entity.*
         AcknowledgedItemEntity::class,
         BookmarkLogEntity::class
     ],
-    version = 19,
+    version = 20,
     // Exported to app/schemas/ (room.schemaLocation in build.gradle.kts) so
     // schema changes show up in diffs and MigrationTestHelper tests become
     // possible (issue #168). Commit the generated JSON with every version bump.
@@ -37,4 +37,5 @@ abstract class BookSyncDatabase : RoomDatabase() {
     abstract fun userProgressDao(): UserProgressDao
     abstract fun acknowledgedItemDao(): AcknowledgedItemDao
     abstract fun bookmarkLogDao(): BookmarkLogDao
+    abstract fun scopeAdoptionDao(): ScopeAdoptionDao
 }

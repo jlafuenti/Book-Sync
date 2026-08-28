@@ -67,12 +67,12 @@ interface BookPairDao {
      */
     @Query("""
         SELECT bp.* FROM book_pairs bp
-        INNER JOIN bookmarks b ON bp.id = b.bookPairId
+        INNER JOIN bookmarks b ON bp.id = b.bookPairId AND b.scopeKey = :scope
         WHERE bp.audiobookDownloaded = 1
           AND b.audioPositionMs > 0
         ORDER BY b.updatedAt DESC
     """)
-    fun getRecentlyPlayedPairs(): Flow<List<BookPairEntity>>
+    fun getRecentlyPlayedPairs(scope: String): Flow<List<BookPairEntity>>
 }
 
 @Dao
@@ -111,13 +111,14 @@ interface EBookDao {
     @Query("""
         SELECT eb.* FROM ebooks eb
         INNER JOIN user_progress up ON up.mediaType = 'ebook' AND up.mediaId = eb.id
+            AND up.scopeKey = :scope
         WHERE eb.isDownloaded = 1
           AND up.isCompleted = 0
           AND (up.epubProgressPercent IS NOT NULL AND up.epubProgressPercent > 0
                OR up.epubChapter IS NOT NULL AND up.epubChapter > 0)
         ORDER BY up.updatedAt DESC
     """)
-    fun getRecentlyReadEbooks(): Flow<List<EBookEntity>>
+    fun getRecentlyReadEbooks(scope: String): Flow<List<EBookEntity>>
 }
 
 @Dao
@@ -160,12 +161,13 @@ interface AudioBookDao {
     @Query("""
         SELECT ab.* FROM audiobooks ab
         INNER JOIN user_progress up ON up.mediaType = 'audiobook' AND up.mediaId = ab.id
+            AND up.scopeKey = :scope
         WHERE ab.isDownloaded = 1
           AND up.audioPositionMs IS NOT NULL
           AND up.audioPositionMs > 0
         ORDER BY up.updatedAt DESC
     """)
-    fun getRecentlyPlayedStandaloneAudiobooks(): Flow<List<AudioBookEntity>>
+    fun getRecentlyPlayedStandaloneAudiobooks(scope: String): Flow<List<AudioBookEntity>>
 }
 
 @Dao
@@ -185,49 +187,54 @@ interface SyncPointDao {
 
 @Dao
 interface BookmarkDao {
-    @Query("SELECT * FROM bookmarks WHERE bookPairId = :pairId")
-    suspend fun getBookmark(pairId: Int): BookmarkEntity?
+    @Query("SELECT * FROM bookmarks WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun getBookmark(scope: String, pairId: Int): BookmarkEntity?
 
-    @Query("SELECT * FROM bookmarks WHERE bookPairId = :pairId")
-    fun getBookmarkFlow(pairId: Int): Flow<BookmarkEntity?>
+    @Query("SELECT * FROM bookmarks WHERE scopeKey = :scope AND bookPairId = :pairId")
+    fun getBookmarkFlow(scope: String, pairId: Int): Flow<BookmarkEntity?>
 
     @Upsert
     suspend fun upsertBookmark(bookmark: BookmarkEntity)
 
-    @Query("UPDATE bookmarks SET syncedToServer = 0 WHERE bookPairId = :pairId")
-    suspend fun markUnsynced(pairId: Int)
+    @Query("UPDATE bookmarks SET syncedToServer = 0 WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun markUnsynced(scope: String, pairId: Int)
 
     // Companion to markUnsynced: saveReaderPosition writes the initial row
     // unsynced (so a crash between the Room write and the PUT doesn't leave a
     // row falsely claiming to be synced), then calls this once the canonical
     // PUT actually succeeds (issue #61/#40 fix 5).
-    @Query("UPDATE bookmarks SET syncedToServer = 1 WHERE bookPairId = :pairId")
-    suspend fun markSynced(pairId: Int)
+    @Query("UPDATE bookmarks SET syncedToServer = 1 WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun markSynced(scope: String, pairId: Int)
 
     // Rows a throttled heartbeat (issue #65) or a failed PUT left behind —
     // processPendingSync pushes them on the WorkManager sweep, mirroring
     // UserProgressDao.getUnsyncedProgress.
-    @Query("SELECT * FROM bookmarks WHERE syncedToServer = 0")
-    suspend fun getUnsyncedBookmarks(): List<BookmarkEntity>
+    @Query("SELECT * FROM bookmarks WHERE scopeKey = :scope AND syncedToServer = 0")
+    suspend fun getUnsyncedBookmarks(scope: String): List<BookmarkEntity>
 
-    @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE bookPairId = :pairId")
-    suspend fun updateLocator(pairId: Int, locatorJson: String)
+    @Query("UPDATE bookmarks SET epubLocator = :locatorJson WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun updateLocator(scope: String, pairId: Int, locatorJson: String)
 
-    @Query("UPDATE bookmarks SET epubLocator = :locatorJson, locatorAudioMs = :audioMs WHERE bookPairId = :pairId")
-    suspend fun updateLocatorWithAudio(pairId: Int, locatorJson: String, audioMs: Int?)
+    @Query("UPDATE bookmarks SET epubLocator = :locatorJson, locatorAudioMs = :audioMs WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun updateLocatorWithAudio(scope: String, pairId: Int, locatorJson: String, audioMs: Int?)
 
     // A pair-level progress reset (issue: reset buttons not actually
     // resetting) must remove this row too — otherwise it resurrects the old
     // position on the next offline open and keeps routing resolvePairOpenTarget
     // to whatever format `source` still names.
-    @Query("DELETE FROM bookmarks WHERE bookPairId = :pairId")
-    suspend fun deleteBookmark(pairId: Int)
+    @Query("DELETE FROM bookmarks WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun deleteBookmark(scope: String, pairId: Int)
 }
 
 @Dao
 interface PendingSyncDao {
-    @Query("SELECT * FROM pending_sync ORDER BY createdAt ASC")
-    suspend fun getAllPending(): List<PendingSyncEntity>
+    /**
+     * The queue for one account (issue #314). Replaying another account's rows
+     * would commit their reading position here, so the drain has no unscoped
+     * read to reach for.
+     */
+    @Query("SELECT * FROM pending_sync WHERE scopeKey = :scope ORDER BY createdAt ASC")
+    suspend fun getPendingForScope(scope: String): List<PendingSyncEntity>
 
     @Insert
     suspend fun insert(sync: PendingSyncEntity)
@@ -235,67 +242,64 @@ interface PendingSyncDao {
     @Delete
     suspend fun delete(sync: PendingSyncEntity)
 
-    @Query("DELETE FROM pending_sync")
-    suspend fun deleteAll()
-
     // See BookmarkDao.deleteBookmark — a queued retry carrying the pre-reset
     // position would otherwise replay it right back onto the server.
-    @Query("DELETE FROM pending_sync WHERE bookPairId = :pairId")
-    suspend fun deleteForPair(pairId: Int)
+    @Query("DELETE FROM pending_sync WHERE scopeKey = :scope AND bookPairId = :pairId")
+    suspend fun deleteForPair(scope: String, pairId: Int)
 }
 
 @Dao
 interface UserProgressDao {
-    @Query("SELECT * FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
-    suspend fun getProgress(mediaType: String, mediaId: Int): UserProgressEntity?
+    @Query("SELECT * FROM user_progress WHERE scopeKey = :scope AND mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun getProgress(scope: String, mediaType: String, mediaId: Int): UserProgressEntity?
 
-    @Query("SELECT * FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
-    fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?>
+    @Query("SELECT * FROM user_progress WHERE scopeKey = :scope AND mediaType = :mediaType AND mediaId = :mediaId")
+    fun getProgressFlow(scope: String, mediaType: String, mediaId: Int): Flow<UserProgressEntity?>
 
-    @Query("SELECT * FROM user_progress")
-    fun getAllProgressFlow(): Flow<List<UserProgressEntity>>
+    @Query("SELECT * FROM user_progress WHERE scopeKey = :scope")
+    fun getAllProgressFlow(scope: String): Flow<List<UserProgressEntity>>
 
     @Upsert
     suspend fun upsertProgress(progress: UserProgressEntity)
 
-    @Query("UPDATE user_progress SET syncedToServer = 0 WHERE mediaType = :mediaType AND mediaId = :mediaId")
-    suspend fun markUnsynced(mediaType: String, mediaId: Int)
+    @Query("UPDATE user_progress SET syncedToServer = 0 WHERE scopeKey = :scope AND mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun markUnsynced(scope: String, mediaType: String, mediaId: Int)
 
     // Companion to markUnsynced, mirroring BookmarkDao.markSynced:
     // savePlaybackPositionStandalone writes the row unsynced BEFORE the
     // canonical PUT (issue #164 — the write must survive a cancelled network
     // call), then calls this once the PUT actually succeeds.
-    @Query("UPDATE user_progress SET syncedToServer = 1 WHERE mediaType = :mediaType AND mediaId = :mediaId")
-    suspend fun markSynced(mediaType: String, mediaId: Int)
+    @Query("UPDATE user_progress SET syncedToServer = 1 WHERE scopeKey = :scope AND mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun markSynced(scope: String, mediaType: String, mediaId: Int)
 
     // A pair-level progress reset (issue #61/#40 fix 3) must remove these rows
     // too — otherwise a stale, unsynced local row can be picked up by
     // syncAllBookmarksAndProgress/processPendingSync and pushed back to the
     // server, resurrecting the position the reset was supposed to have
     // cleared.
-    @Query("DELETE FROM user_progress WHERE mediaType = :mediaType AND mediaId = :mediaId")
-    suspend fun deleteProgress(mediaType: String, mediaId: Int)
+    @Query("DELETE FROM user_progress WHERE scopeKey = :scope AND mediaType = :mediaType AND mediaId = :mediaId")
+    suspend fun deleteProgress(scope: String, mediaType: String, mediaId: Int)
 
-    @Query("SELECT * FROM user_progress WHERE syncedToServer = 0")
-    suspend fun getUnsyncedProgress(): List<UserProgressEntity>
+    @Query("SELECT * FROM user_progress WHERE scopeKey = :scope AND syncedToServer = 0")
+    suspend fun getUnsyncedProgress(scope: String): List<UserProgressEntity>
 }
 
 @Dao
 interface BookmarkLogDao {
-    @Query("SELECT * FROM bookmark_log WHERE bookPairId = :pairId ORDER BY changedAt DESC LIMIT :limit")
-    suspend fun getForPair(pairId: Int, limit: Int): List<BookmarkLogEntity>
+    @Query("SELECT * FROM bookmark_log WHERE scopeKey = :scope AND bookPairId = :pairId ORDER BY changedAt DESC LIMIT :limit")
+    suspend fun getForPair(scope: String, pairId: Int, limit: Int): List<BookmarkLogEntity>
 
     @Insert
     suspend fun insertLocal(entry: BookmarkLogEntity): Long
 
-    @Query("SELECT localId FROM bookmark_log WHERE bookPairId = :pairId AND serverId = :serverId LIMIT 1")
-    suspend fun findByServerId(pairId: Int, serverId: Int): Long?
+    @Query("SELECT localId FROM bookmark_log WHERE scopeKey = :scope AND bookPairId = :pairId AND serverId = :serverId LIMIT 1")
+    suspend fun findByServerId(scope: String, pairId: Int, serverId: Int): Long?
 
     @Update
     suspend fun update(entry: BookmarkLogEntity)
 
-    @Query("DELETE FROM bookmark_log WHERE bookPairId = :pairId AND serverId IS NULL AND changedAt <= :cutoff")
-    suspend fun deleteLocalOnlyOlderThan(pairId: Int, cutoff: String)
+    @Query("DELETE FROM bookmark_log WHERE scopeKey = :scope AND bookPairId = :pairId AND serverId IS NULL AND changedAt <= :cutoff")
+    suspend fun deleteLocalOnlyOlderThan(scope: String, pairId: Int, cutoff: String)
 }
 
 @Dao
@@ -303,24 +307,42 @@ interface AcknowledgedItemDao {
     @Upsert
     suspend fun acknowledge(items: List<AcknowledgedItemEntity>)
 
-    @Query("DELETE FROM acknowledged_items WHERE itemId IN (:ids) AND itemType = :type")
-    suspend fun remove(ids: List<Int>, type: String)
+    @Query("DELETE FROM acknowledged_items WHERE scopeKey = :scope AND itemId IN (:ids) AND itemType = :type")
+    suspend fun remove(scope: String, ids: List<Int>, type: String)
 
-    @Query("SELECT * FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'ebook') ORDER BY uploadedAt DESC")
-    fun getNewEbooks(): Flow<List<EBookEntity>>
+    @Query(
+        "SELECT * FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'ebook') ORDER BY uploadedAt DESC"
+    )
+    fun getNewEbooks(scope: String): Flow<List<EBookEntity>>
 
-    @Query("SELECT * FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'audiobook') ORDER BY uploadedAt DESC")
-    fun getNewAudiobooks(): Flow<List<AudioBookEntity>>
+    @Query(
+        "SELECT * FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'audiobook') ORDER BY uploadedAt DESC"
+    )
+    fun getNewAudiobooks(scope: String): Flow<List<AudioBookEntity>>
 
-    @Query("SELECT * FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'pair') ORDER BY ebookTitle")
-    fun getNewPairs(): Flow<List<BookPairEntity>>
+    @Query(
+        "SELECT * FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'pair') ORDER BY ebookTitle"
+    )
+    fun getNewPairs(scope: String): Flow<List<BookPairEntity>>
 
-    @Query("SELECT COUNT(*) FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'ebook')")
-    fun getNewEbookCount(): Flow<Int>
+    @Query(
+        "SELECT COUNT(*) FROM ebooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'ebook')"
+    )
+    fun getNewEbookCount(scope: String): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'audiobook')")
-    fun getNewAudiobookCount(): Flow<Int>
+    @Query(
+        "SELECT COUNT(*) FROM audiobooks WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'audiobook')"
+    )
+    fun getNewAudiobookCount(scope: String): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items WHERE itemType = 'pair')")
-    fun getNewPairCount(): Flow<Int>
+    @Query(
+        "SELECT COUNT(*) FROM book_pairs WHERE id NOT IN (SELECT itemId FROM acknowledged_items " +
+            "WHERE scopeKey = :scope AND itemType = 'pair')"
+    )
+    fun getNewPairCount(scope: String): Flow<Int>
 }

@@ -1,5 +1,7 @@
 package com.booksync.ui.player
 
+import com.booksync.data.repository.TEST_SCOPE
+
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.work.WorkManager
@@ -53,7 +55,7 @@ class StandalonePositionRestoreTest {
         isDownloaded = true,
     )
 
-    private val progress = UserProgressEntity(
+    private val progress = UserProgressEntity(scopeKey = TEST_SCOPE, 
         mediaType = "audiobook",
         mediaId = 17,
         bookPairId = null,

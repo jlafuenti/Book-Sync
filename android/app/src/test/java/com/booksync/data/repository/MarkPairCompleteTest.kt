@@ -59,6 +59,7 @@ class MarkPairCompleteTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = deviceIdManager,
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun okResponse() = Response.success(
@@ -96,12 +97,12 @@ class MarkPairCompleteTest {
     @Test
     fun `both local user_progress rows are flagged, keyed to the pair`() = runTest {
         coEvery { api.updatePosition("pair", 7, any()) } returns okResponse()
-        coEvery { userProgressDao.getProgress("ebook", 100) } returns UserProgressEntity(
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "ebook", 100) } returns UserProgressEntity(scopeKey = TEST_SCOPE, 
             mediaType = "ebook", mediaId = 100, bookPairId = 7, epubCfi = null,
             epubChapter = 12, epubProgressPercent = 40f, audioPositionMs = null,
             isCompleted = false, updatedAt = 1L, deviceId = "pixel-9",
         )
-        coEvery { userProgressDao.getProgress("audiobook", 200) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 200) } returns null
 
         val rows = mutableListOf<UserProgressEntity>()
         coEvery { userProgressDao.upsertProgress(capture(rows)) } returns Unit
