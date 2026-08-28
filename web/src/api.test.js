@@ -1037,3 +1037,93 @@ describe('library browse (issue #120)', () => {
         expect(fetchMock.mock.calls[1][0]).toBe('/api/library/facets')
     })
 })
+
+describe('password_reset_required (issue #209)', () => {
+    // The server now refuses every route except /auth/me, /auth/change-password
+    // and /auth/logout while must_reset_password is set. App.jsx already gates on
+    // the flag, but only from the getMe() it runs at mount — so an admin resetting
+    // your password while your tab is open left that tab fully usable until
+    // someone reloaded it. fetchWithAuth is the one place every call passes
+    // through, so that is where the mid-session signal comes from.
+    //
+    // Real Response objects, not object literals: the point of the implementation
+    // is that it clones before sniffing, and a literal would not catch a
+    // regression that read the caller's body out from under them.
+
+    const json403 = (detail) =>
+        new Response(JSON.stringify({ detail }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+        })
+
+    async function listenDuring(fn) {
+        const listener = vi.fn()
+        window.addEventListener('tandem:password-reset-required', listener)
+        try {
+            return { result: await fn(), listener }
+        } finally {
+            window.removeEventListener('tandem:password-reset-required', listener)
+        }
+    }
+
+    it('announces the gate when any call is refused with that detail', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json403('password_reset_required')))
+
+        const { getMe } = await import('./api')
+        const { listener } = await listenDuring(() => getMe())
+
+        expect(listener).toHaveBeenCalledTimes(1)
+    })
+
+    it('stays quiet on a 403 that is about something else', async () => {
+        // Role failures ("Requires editor role or higher") are also 403 and must
+        // not bounce the user to a password-reset screen.
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json403('Requires editor role or higher')))
+
+        const { getMe } = await import('./api')
+        const { listener } = await listenDuring(() => getMe())
+
+        expect(listener).not.toHaveBeenCalled()
+    })
+
+    it('leaves the body readable, so callers still get the detail', async () => {
+        // If the sniff read the real body instead of a clone, the caller's own
+        // .json() would throw "body stream already read".
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json403('password_reset_required')))
+
+        const { changePassword } = await import('./api')
+        await expect(changePassword('a', 'b')).rejects.toThrow('password_reset_required')
+    })
+
+    it('survives a 403 with a non-JSON body', async () => {
+        // A proxy-generated 403 (nginx/Caddy) is HTML; the sniff must not throw.
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            new Response('<html>Forbidden</html>', { status: 403 }),
+        ))
+
+        const { getMe } = await import('./api')
+        const { result, listener } = await listenDuring(() => getMe())
+
+        expect(listener).not.toHaveBeenCalled()
+        expect(result).toBeNull()
+    })
+
+    it('stays quiet on a 200', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            new Response(JSON.stringify({ id: 1, username: 'x' }), {
+                status: 200, headers: { 'Content-Type': 'application/json' },
+            }),
+        ))
+
+        const { getMe } = await import('./api')
+        const { listener } = await listenDuring(() => getMe())
+
+        expect(listener).not.toHaveBeenCalled()
+    })
+})

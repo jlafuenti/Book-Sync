@@ -17,10 +17,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,9 +49,11 @@ import com.booksync.ui.library.SearchResultItem
 import com.booksync.ui.library.SearchScreen
 import com.booksync.ui.player.PlayerScreen
 import com.booksync.ui.reader.ReaderScreen
+import com.booksync.ui.account.ForcePasswordResetScreen
 import com.booksync.ui.account.AccountScreen
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.firstOrNull
 
 /**
@@ -61,6 +65,13 @@ interface TokenManagerEntryPoint {
     fun tokenManager(): TokenManager
 }
 
+/** Hilt entry point for the forced-password-reset gate (issue #209). */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface PasswordResetGateEntryPoint {
+    fun passwordResetGate(): com.booksync.data.remote.PasswordResetGate
+}
+
 // ------------------------------------------------------------
 // Route constants — centralized so deep links stay consistent.
 // Library accepts optional filter / series / sort / group args.
@@ -69,6 +80,8 @@ interface TokenManagerEntryPoint {
 object Routes {
     const val LOGIN       = "login"
     const val MAIN        = "main"
+    /** Forced password change; the app is unusable until it succeeds (issue #209). */
+    const val FORCE_PASSWORD_RESET = "force_password_reset"
     const val HOME        = "home"
     const val LIBRARY     = "library"
     const val DOWNLOADED  = "downloaded"
@@ -164,6 +177,7 @@ private val BOTTOM_TABS = listOf(
 fun BookSyncNavigation() {
     val navController = rememberNavController()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val tokenManager = remember {
         EntryPointAccessors.fromApplication(
@@ -172,7 +186,22 @@ fun BookSyncNavigation() {
         ).tokenManager()
     }
 
-    // Resolve start destination based on persisted auth token
+    val passwordResetGate = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            PasswordResetGateEntryPoint::class.java,
+        ).passwordResetGate()
+    }
+
+    // Resolve start destination based on persisted auth token.
+    //
+    // Note there is no getMe() probe here for must_reset_password (issue #209).
+    // The gate is raised by AuthInterceptor instead, from the 403 the server
+    // returns on the first real call — one mechanism covering both launch and
+    // mid-session, rather than two that can disagree. It also keeps the app
+    // usable offline: a probe would either block launch or fail closed, and a
+    // user with a temporary password can still read what they have downloaded.
+    // They are gated the moment they reach the server.
     var startDestination by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         val existingToken = tokenManager.getAccessToken().firstOrNull()
@@ -185,11 +214,37 @@ fun BookSyncNavigation() {
             .drop(1)
             .collect { token ->
                 if (token.isNullOrEmpty()) {
+                    // No session means no reset to force. Without this an
+                    // in-flight 403 landing after logout would raise the gate and
+                    // drag the login screen off to the reset screen (issue #209).
+                    passwordResetGate.clear()
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
                     }
                 }
             }
+    }
+
+    // The gate is raised by AuthInterceptor, off an OkHttp thread, when any call
+    // comes back 403 password_reset_required (issue #209). This is the half that
+    // acts on it; popUpTo(0) leaves no back stack to a screen where every request
+    // now fails.
+    //
+    // `startDestination` must be a key, not just a read. It resolves
+    // asynchronously from DataStore, and the gate can already be up before this
+    // composable ever runs — SyncWorker replays the offline queue through the same
+    // interceptor from WorkManager, with no Activity alive. Keyed only on
+    // `resetRequired`, that ordering fires the effect once while startDestination
+    // is still null, the guard swallows it, and StateFlow conflation means an
+    // already-true gate never emits again: the user lands on MAIN with every
+    // screen 403ing and no route out.
+    val resetRequired by passwordResetGate.required.collectAsState()
+    LaunchedEffect(resetRequired, startDestination) {
+        if (resetRequired && startDestination != null) {
+            navController.navigate(Routes.FORCE_PASSWORD_RESET) {
+                popUpTo(0) { inclusive = true }
+            }
+        }
     }
 
     if (startDestination == null) {
@@ -213,6 +268,22 @@ fun BookSyncNavigation() {
 
         composable(Routes.MAIN) {
             MainScaffold(outerNavController = navController)
+        }
+
+        composable(Routes.FORCE_PASSWORD_RESET) {
+            ForcePasswordResetScreen(
+                // `change_password` bumps token_version server-side, so by the time
+                // it returns 200 the tokens in hand are already dead — navigating
+                // to MAIN would 401 on the first call, fail the refresh, and bounce
+                // to login anyway, via a detour through a broken screen. Clearing
+                // the tokens routes there directly through the observer above, and
+                // signing in with the new password is the honest next step.
+                onPasswordChanged = {
+                    passwordResetGate.clear()
+                    scope.launch { tokenManager.clearTokens() }
+                },
+                onLogout = { /* handled by the screen's own view-model */ },
+            )
         }
 
         composable(Routes.SEARCH) {

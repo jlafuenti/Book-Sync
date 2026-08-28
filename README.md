@@ -78,8 +78,12 @@ schema step. **An existing database created before Alembic must be stamped once*
    docker compose logs server | grep -i superadmin
    ```
 
-2. **Log in and reset it.** The account is flagged `must_reset_password`, so the web app sends you
-   straight to a forced password-reset screen. You can't reach the rest of the UI until you do.
+2. **Log in and reset it.** The account is flagged `must_reset_password`, so you are sent straight
+   to a forced password-reset screen. The flag is enforced by the **server**, not just the UI: until
+   the password is changed the API refuses every route except `GET /auth/me`,
+   `POST /auth/change-password` and `POST /auth/logout` with `403 password_reset_required`. That
+   holds for the web app, the Android app and `curl` alike, so the temporary password cannot be used
+   for anything else.
 3. **Scan the library.** **System → Troubleshoot Library → Run Verification Scan** walks the
    mounted ebook and audiobook directories, extracts metadata, and auto-pairs what it can match.
    See [docs/library-conventions.md](docs/library-conventions.md) for the folder/filename patterns

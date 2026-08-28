@@ -213,3 +213,87 @@ async def test_lifespan_starts_and_stops_the_background_services(monkeypatch):
 
     # Shutdown tears them down in reverse order of how they were brought up.
     assert calls[3:] == ["backup.stop", "scheduler.stop", "queue.stop"]
+
+
+# ---------------------------------------------------------------------------
+# The generated bootstrap password must not land in the rotating file log
+# (issue #209).
+#
+# README tells the operator to read it from `docker compose logs`, so it has to
+# reach stdout. But main.py also attaches a RotatingFileHandler (10 MB x 5) to
+# the *root* logger, and `bootstrap_superadmin` used to log through
+# `logging.getLogger(__name__)`, which propagates there — leaving a plaintext
+# superadmin password on disk under APP_DATA_DIR across five rotations. That is
+# a second, far longer-lived copy that nothing asked for, for an account whose
+# whole point is that it must be reset on first login.
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_password_does_not_reach_the_root_file_handler(tmp_path):
+    import logging
+
+    from database import bootstrap_logger
+
+    secret = "generated-password-should-not-be-here"
+    log_file = tmp_path / "server.log"
+    root = logging.getLogger()
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    root.addHandler(file_handler)
+    try:
+        bootstrap_logger().warning("password: %s", secret)
+        file_handler.flush()
+    finally:
+        root.removeHandler(file_handler)
+        file_handler.close()
+
+    assert secret not in log_file.read_text(encoding="utf-8")
+
+
+def test_an_ordinary_module_logger_does_reach_the_root_file_handler(tmp_path):
+    """Counterweight: proves the test above is actually observing propagation
+    rather than a file handler that never worked."""
+    import logging
+
+    marker = "ordinary-propagating-message"
+    log_file = tmp_path / "server.log"
+    root = logging.getLogger()
+    root_level = root.level
+    root.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    root.addHandler(file_handler)
+    try:
+        logging.getLogger("database").warning(marker)
+        file_handler.flush()
+    finally:
+        root.removeHandler(file_handler)
+        file_handler.close()
+        root.setLevel(root_level)
+
+    assert marker in log_file.read_text(encoding="utf-8")
+
+
+def test_bootstrap_logger_still_emits_somewhere(tmp_path):
+    """It must not be silenced — the operator reads it from the container log."""
+    import logging
+
+    from database import bootstrap_logger
+
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    log = bootstrap_logger()
+    handler = _Capture()
+    log.addHandler(handler)
+    try:
+        log.warning("password: %s", "abc123")
+    finally:
+        log.removeHandler(handler)
+
+    assert any("abc123" in m for m in records)
+    assert log.handlers, (
+        "bootstrap logger has no handler of its own, so with propagate=False the "
+        "operator would never see the generated password at all"
+    )

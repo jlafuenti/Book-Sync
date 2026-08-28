@@ -4,10 +4,36 @@ Tandem Database Setup
 Async SQLAlchemy engine and session management for PostgreSQL.
 """
 
+import logging
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
+
+# The randomly generated bootstrap password is the one secret this process ever
+# prints. README tells the operator to read it from `docker compose logs`, so it
+# has to reach stdout — but main.py attaches a RotatingFileHandler (10 MB x 5) to
+# the root logger, and a plaintext superadmin password sitting in
+# <APP_DATA_DIR>/logs/server.log across five rotations is a second, much
+# longer-lived copy that nothing asked for (issue #209).
+#
+# A dedicated logger with propagate=False and its own StreamHandler reaches the
+# container log and stops there.
+BOOTSTRAP_LOGGER_NAME = "booksync.bootstrap"
+
+
+def bootstrap_logger() -> logging.Logger:
+    log = logging.getLogger(BOOTSTRAP_LOGGER_NAME)
+    log.propagate = False
+    log.setLevel(logging.INFO)
+    if not any(isinstance(h, logging.StreamHandler) for h in log.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        log.addHandler(handler)
+    return log
 
 # Create async engine. pool_size/max_overflow are QueuePool options that the
 # SQLite (aiosqlite) dialect rejects — it uses NullPool — so only pass them for
@@ -76,7 +102,7 @@ async def bootstrap_superadmin():
             )
             session.add(user)
             await session.commit()
-            logger.warning(
+            bootstrap_logger().warning(
                 "Created default superadmin account 'admin' with a randomly generated "
                 "password: %s — change it via first login (password reset is required).",
                 generated_password,

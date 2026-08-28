@@ -324,6 +324,19 @@ function App() {
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+    // The flag is only read once, at mount (issue #209). api.js announces any
+    // later 403 password_reset_required; setting the flag here reuses the gate
+    // below rather than introducing a second one. Backstop for a call that races
+    // the mount-time getMe(), not for an admin resetting a live session — that
+    // path bumps token_version too and surfaces as a 401.
+    useEffect(() => {
+        const onGated = () => setUser(u => (u && !u.must_reset_password
+            ? { ...u, must_reset_password: true }
+            : u))
+        window.addEventListener('tandem:password-reset-required', onGated)
+        return () => window.removeEventListener('tandem:password-reset-required', onGated)
+    }, [])
+
     if (loading) {
         return (
             <div className="loading-page">
