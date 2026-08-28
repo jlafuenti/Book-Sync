@@ -240,9 +240,6 @@ interface PendingSyncDao {
     @Delete
     suspend fun delete(sync: PendingSyncEntity)
 
-    @Query("DELETE FROM pending_sync WHERE scopeKey = :scope")
-    suspend fun deleteAllForScope(scope: String)
-
     // See BookmarkDao.deleteBookmark — a queued retry carrying the pre-reset
     // position would otherwise replay it right back onto the server.
     @Query("DELETE FROM pending_sync WHERE scopeKey = :scope AND bookPairId = :pairId")
