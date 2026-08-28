@@ -42,6 +42,7 @@ class RefreshBookmarkTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun serverPosition(
@@ -73,7 +74,7 @@ class RefreshBookmarkTest {
         locator: String? = "{\"href\":\"index_split_037.html\"}",
         updatedAt: String = "1000",
         synced: Boolean = true,
-    ) = BookmarkEntity(
+    ) = BookmarkEntity(scopeKey = TEST_SCOPE, 
         bookPairId = 309,
         source = "ebook",
         epubChapter = chapter,
@@ -91,7 +92,7 @@ class RefreshBookmarkTest {
         // land locally — without this pull the reader restores its own stale
         // page and never learns about the other device.
         coEvery { api.getPosition("pair", 309) } returns serverPosition()
-        coEvery { bookmarkDao.getBookmark(309) } returns localBookmark()
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 309) } returns localBookmark()
 
         val saved = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
@@ -111,7 +112,7 @@ class RefreshBookmarkTest {
         // Offline reading must survive a refresh, so an unsynced local row wins
         // regardless of timestamps.
         coEvery { api.getPosition("pair", 309) } returns serverPosition()
-        coEvery { bookmarkDao.getBookmark(309) } returns localBookmark(synced = false)
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 309) } returns localBookmark(synced = false)
 
         repository().refreshBookmark(309)
 
@@ -122,7 +123,7 @@ class RefreshBookmarkTest {
     fun `keeps a newer local position over an older server one`() = runTest {
         coEvery { api.getPosition("pair", 309) } returns serverPosition(
             updatedAt = "2026-07-30T16:00:00Z")
-        coEvery { bookmarkDao.getBookmark(309) } returns localBookmark(
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 309) } returns localBookmark(
             updatedAt = java.time.Instant.parse("2026-07-30T16:49:00Z").toEpochMilli().toString())
 
         repository().refreshBookmark(309)
@@ -133,7 +134,7 @@ class RefreshBookmarkTest {
     @Test
     fun `falls back to the local cache when the server is unreachable`() = runTest {
         coEvery { api.getPosition("pair", 309) } throws java.io.IOException("offline")
-        coEvery { bookmarkDao.getBookmark(309) } returns localBookmark()
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 309) } returns localBookmark()
 
         repository().refreshBookmark(309)  // must not throw
 

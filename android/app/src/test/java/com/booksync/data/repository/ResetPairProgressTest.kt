@@ -77,6 +77,7 @@ class ResetPairProgressTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     @Test
@@ -88,10 +89,10 @@ class ResetPairProgressTest {
 
         assertTrue("resetPairProgress must report success", result)
         coVerify(exactly = 1) { api.resetPairProgress(42) }
-        coVerify(exactly = 1) { bookmarkDao.deleteBookmark(42) }
-        coVerify(exactly = 1) { pendingSyncDao.deleteForPair(42) }
-        coVerify(exactly = 1) { userProgressDao.deleteProgress("ebook", 100) }
-        coVerify(exactly = 1) { userProgressDao.deleteProgress("audiobook", 200) }
+        coVerify(exactly = 1) { bookmarkDao.deleteBookmark(TEST_SCOPE, 42) }
+        coVerify(exactly = 1) { pendingSyncDao.deleteForPair(TEST_SCOPE, 42) }
+        coVerify(exactly = 1) { userProgressDao.deleteProgress(TEST_SCOPE, "ebook", 100) }
+        coVerify(exactly = 1) { userProgressDao.deleteProgress(TEST_SCOPE, "audiobook", 200) }
     }
 
     @Test
@@ -102,9 +103,9 @@ class ResetPairProgressTest {
         val result = repository().resetPairProgress(42)
 
         assertFalse("resetPairProgress must report failure", result)
-        coVerify(exactly = 0) { bookmarkDao.deleteBookmark(any()) }
-        coVerify(exactly = 0) { pendingSyncDao.deleteForPair(any()) }
-        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any()) }
+        coVerify(exactly = 0) { bookmarkDao.deleteBookmark(any(), any()) }
+        coVerify(exactly = 0) { pendingSyncDao.deleteForPair(any(), any()) }
+        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any(), any()) }
     }
 
     @Test
@@ -114,8 +115,8 @@ class ResetPairProgressTest {
         val result = repository().resetPairProgress(42)  // must not throw
 
         assertFalse("resetPairProgress must report failure when offline", result)
-        coVerify(exactly = 0) { bookmarkDao.deleteBookmark(any()) }
-        coVerify(exactly = 0) { pendingSyncDao.deleteForPair(any()) }
-        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any()) }
+        coVerify(exactly = 0) { bookmarkDao.deleteBookmark(any(), any()) }
+        coVerify(exactly = 0) { pendingSyncDao.deleteForPair(any(), any()) }
+        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any(), any()) }
     }
 }

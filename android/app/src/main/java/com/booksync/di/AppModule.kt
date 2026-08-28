@@ -145,6 +145,7 @@ object AppModule {
             com.booksync.data.local.MIGRATION_16_17,
             com.booksync.data.local.MIGRATION_17_18,
             com.booksync.data.local.MIGRATION_18_19,
+            com.booksync.data.local.MIGRATION_19_20,
         )
          // Destructive fallback ONLY for pre-position-work installs (< v12,
          // before MIGRATION_12_13 — those versions predate the migration
@@ -182,6 +183,9 @@ object AppModule {
 
     @Provides
     fun provideBookmarkLogDao(db: BookSyncDatabase): BookmarkLogDao = db.bookmarkLogDao()
+
+    @Provides
+    fun provideScopeAdoptionDao(db: BookSyncDatabase): ScopeAdoptionDao = db.scopeAdoptionDao()
 
     // Backs both ServerUrlManager and DeviceIdManager, which are each provided via their
     // own @Singleton @Inject constructor (no explicit @Provides needed) — Hilt resolves

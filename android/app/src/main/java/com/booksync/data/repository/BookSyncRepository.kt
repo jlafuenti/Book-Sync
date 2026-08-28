@@ -5,6 +5,7 @@ import com.booksync.sync.SyncMatcher
 import android.content.Context
 import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
+import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.*
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.diagnostics.DiagnosticLogger
@@ -57,7 +58,39 @@ class BookSyncRepository @Inject constructor(
     private val diagnosticLogger: DiagnosticLogger,
     private val deviceIdManager: DeviceIdManager,
     private val json: Json,
+    private val userScopeProvider: UserScopeProvider,
 ) {
+    /**
+     * The account this repository is reading and writing as (issue #314).
+     *
+     * Null when the signed-in user or the server cannot be determined. Callers
+     * must skip rather than fall back to unscoped access — an unscoped read shows
+     * another account's reading data, and an unscoped write replays into it.
+     */
+    /**
+     * The account every cache query below is scoped to (issue #314).
+     *
+     * When no account resolves — signed out, or no server configured — this is a
+     * sentinel that matches no row, so a read returns nothing rather than
+     * another account's reading data. Reads are the common case in that state
+     * (the app is on the login screen); the write paths that matter check
+     * [scopeKeyOrNull] and hold their data instead of writing it somewhere it
+     * would never be read from again.
+     */
+    private val scope: String get() = userScopeProvider.currentKey ?: NO_SCOPE
+
+    /** Null when no account resolves — for callers that must not guess. */
+    private val scopeKeyOrNull: String? get() = userScopeProvider.currentKey
+
+    private companion object {
+        /**
+         * Matches no row: [UserScope.of] always produces "server|id" with a
+         * non-empty server, so this cannot collide with a real scope. Never
+         * written to a row — only ever compared against.
+         */
+        const val NO_SCOPE = "<no-account>"
+    }
+
     /** This device's stable id / display name, for position attribution. */
     val deviceId: String get() = deviceIdManager.deviceId
     val deviceName: String get() = deviceIdManager.deviceName
@@ -217,7 +250,7 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyPlayedPairsFlow(): Flow<List<BookPairEntity>> =
         combine(
             bookPairDao.getRecentlyPlayedPairs(),
-            userProgressDao.getAllProgressFlow(),
+            userProgressDao.getAllProgressFlow(scope),
         ) { pairs, allProgress ->
             val completedAudiobookIds = allProgress
                 .filter { it.mediaType == "audiobook" && it.isCompleted }
@@ -230,7 +263,7 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
         combine(
             audioBookDao.getRecentlyPlayedStandaloneAudiobooks(),
-            userProgressDao.getAllProgressFlow(),
+            userProgressDao.getAllProgressFlow(scope),
         ) { audiobooks, allProgress ->
             val completedIds = allProgress
                 .filter { it.mediaType == "audiobook" && it.isCompleted }
@@ -243,7 +276,7 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
         combine(
             eBookDao.getRecentlyReadEbooks(),
-            userProgressDao.getAllProgressFlow(),
+            userProgressDao.getAllProgressFlow(scope),
         ) { ebooks, allProgress ->
             val completedIds = allProgress
                 .filter { it.mediaType == "ebook" && it.isCompleted }
@@ -278,7 +311,7 @@ class BookSyncRepository @Inject constructor(
         val capturedAt = capturedAtIsoFromMillis(nowMillis)
 
         suspend fun flagLocal(mediaType: String, mediaId: Int, synced: Boolean) {
-            val existing = userProgressDao.getProgress(mediaType, mediaId)
+            val existing = userProgressDao.getProgress(scope, mediaType, mediaId)
             userProgressDao.upsertProgress(
                 UserProgressEntity(
                     mediaType = mediaType,
@@ -293,6 +326,7 @@ class BookSyncRepository @Inject constructor(
                     deviceId = deviceIdManager.deviceId,
                     deviceName = deviceIdManager.deviceName,
                     capturedAt = capturedAt,
+                        scopeKey = scope,
                     syncedToServer = synced,
                 )
             )
@@ -345,7 +379,7 @@ class BookSyncRepository @Inject constructor(
             logW("resetStandaloneProgress $mediaType=$mediaId: HTTP ${response.code()} — leaving local state unchanged")
             return false
         }
-        userProgressDao.deleteProgress(mediaType, mediaId)
+        userProgressDao.deleteProgress(scope, mediaType, mediaId)
         return true
     }
 
@@ -381,26 +415,26 @@ class BookSyncRepository @Inject constructor(
             logW("resetPairProgress pair=$pairId: HTTP ${response.code()} — leaving local state unchanged")
             return false
         }
-        bookmarkDao.deleteBookmark(pairId)
-        pendingSyncDao.deleteForPair(pairId)
+        bookmarkDao.deleteBookmark(scope, pairId)
+        pendingSyncDao.deleteForPair(scope, pairId)
         // Also clear the local user_progress projection for the pair's own
         // ebook/audiobook — a stale row here is exactly the resurrection
         // vector this fix closes (see the doc comment above).
         val pair = bookPairDao.getPairById(pairId)
         if (pair != null) {
-            userProgressDao.deleteProgress("ebook", pair.ebookId)
-            userProgressDao.deleteProgress("audiobook", pair.audiobookId)
+            userProgressDao.deleteProgress(scope, "ebook", pair.ebookId)
+            userProgressDao.deleteProgress(scope, "audiobook", pair.audiobookId)
         }
         return true
     }
 
     /** Get the current bookmark for a pair (single snapshot, not a flow). */
     suspend fun getBookmark(pairId: Int): com.booksync.data.local.entity.BookmarkEntity? =
-        bookmarkDao.getBookmark(pairId)
+        bookmarkDao.getBookmark(scope, pairId)
 
     /** Get user progress for a given media item (single snapshot). */
     suspend fun getProgressOnce(mediaType: String, mediaId: Int): com.booksync.data.local.entity.UserProgressEntity? =
-        userProgressDao.getProgress(mediaType, mediaId)
+        userProgressDao.getProgress(scope, mediaType, mediaId)
 
     /** Refresh audiobooks from the server and update local cache. */
     suspend fun refreshAudiobooks() {
@@ -465,7 +499,7 @@ class BookSyncRepository @Inject constructor(
      *  - Otherwise prefer ebook → audiobook → details (matches LibraryScreen.openItem fallback).
      */
     suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget {
-        val source = bookmarkDao.getBookmark(pair.id)?.source
+        val source = bookmarkDao.getBookmark(scope, pair.id)?.source
         return when {
             source == "audiobook" && pair.audiobookDownloaded -> PairOpenTarget.Player
             source == "ebook"     && pair.ebookDownloaded     -> PairOpenTarget.Reader
@@ -734,14 +768,14 @@ class BookSyncRepository @Inject constructor(
 
     /** Get the current bookmark for a pair from local cache. */
     fun getBookmarkFlow(pairId: Int): Flow<BookmarkEntity?> =
-        bookmarkDao.getBookmarkFlow(pairId)
+        bookmarkDao.getBookmarkFlow(scope, pairId)
 
     /** Refresh the bookmark from the server, respecting unsynced local data. */
     suspend fun refreshBookmark(pairId: Int) {
         // A 204 (never opened) and an unreachable server both come back null —
         // in either case there is nothing to pull and the local cache stands.
         val remote = fetchPosition("pair", pairId).position ?: return
-        val existing = bookmarkDao.getBookmark(pairId)
+        val existing = bookmarkDao.getBookmark(scope, pairId)
 
         // Never overwrite unsynced local data — offline progress must survive
         if (existing != null && !existing.syncedToServer) {
@@ -754,7 +788,7 @@ class BookSyncRepository @Inject constructor(
         val localTs = parseSyncTimestamp(existing?.updatedAt)
 
         if (existing == null || remoteTs >= localTs) {
-            bookmarkDao.upsertBookmark(remote.toBookmarkEntity(pairId, existing))
+            bookmarkDao.upsertBookmark(remote.toBookmarkEntity(scope, pairId, existing))
         } else {
             log("refreshBookmark pair=$pairId: local is newer (local=$localTs, remote=$remoteTs), keeping local")
         }
@@ -772,17 +806,17 @@ class BookSyncRepository @Inject constructor(
         try {
             val serverEntries = api.getBookmarkLog(pairId, limit)
             for (entry in serverEntries) {
-                val existingLocalId = bookmarkLogDao.findByServerId(pairId, entry.id)
-                val row = entry.toEntity(pairId).copy(localId = existingLocalId ?: 0L)
+                val existingLocalId = bookmarkLogDao.findByServerId(scope, pairId, entry.id)
+                val row = entry.toEntity(scope, pairId).copy(localId = existingLocalId ?: 0L)
                 if (existingLocalId != null) bookmarkLogDao.update(row) else bookmarkLogDao.insertLocal(row)
             }
             serverEntries.maxByOrNull { it.changed_at }?.let { newest ->
-                bookmarkLogDao.deleteLocalOnlyOlderThan(pairId, newest.changed_at)
+                bookmarkLogDao.deleteLocalOnlyOlderThan(scope, pairId, newest.changed_at)
             }
         } catch (e: Exception) {
             logW("getBookmarkHistory offline — using local cache (${e.message})")
         }
-        return bookmarkLogDao.getForPair(pairId, limit).map { it.toResponse() }
+        return bookmarkLogDao.getForPair(scope, pairId, limit).map { it.toResponse() }
     }
 
     // ============ Multi-device conflict resolution (issue #54) ============
@@ -850,7 +884,7 @@ class BookSyncRepository @Inject constructor(
             response.code() == 409 -> {
                 val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                 if (serverState != null) {
-                    bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(pairId, entity))
+                    bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(scope, pairId, entity))
                     logW("pushBookmark pair=$pairId: 409 — this write lost, adopted server state")
                 } else {
                     logE("pushBookmark pair=$pairId: 409 but could not parse server state")
@@ -897,7 +931,7 @@ class BookSyncRepository @Inject constructor(
                 val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                 if (serverState != null) {
                     userProgressDao.upsertProgress(
-                        serverState.toProgressEntity(mediaType, mediaId, entity))
+                        serverState.toProgressEntity(scope, mediaType, mediaId, entity))
                     logW("pushProgress $mediaType/$mediaId: 409 — this write lost, adopted server state")
                 } else {
                     logE("pushProgress $mediaType/$mediaId: 409 but could not parse server state")
@@ -1019,7 +1053,7 @@ class BookSyncRepository @Inject constructor(
         // Returns whether the canonical server write landed.
         pushToServer: Boolean = true,
     ): Boolean {
-        val hasExistingRow = bookmarkDao.getBookmark(pairId) != null
+        val hasExistingRow = bookmarkDao.getBookmark(scope, pairId) != null
         val effectiveClaim = claimFormat || !hasExistingRow
 
         // Room-first (issue #164, contract § "The write gate"): the local row
@@ -1063,7 +1097,7 @@ class BookSyncRepository @Inject constructor(
                 stampSource = effectiveClaim,
             )
         } else {
-            bookmarkDao.markSynced(pairId)
+            bookmarkDao.markSynced(scope, pairId)
         }
         return result != null
     }
@@ -1107,7 +1141,7 @@ class BookSyncRepository @Inject constructor(
                 pushToServer = true,
             )
         } else {
-            userProgressDao.markSynced("audiobook", audiobookId)
+            userProgressDao.markSynced(scope, "audiobook", audiobookId)
         }
         return result != null
     }
@@ -1197,7 +1231,7 @@ class BookSyncRepository @Inject constructor(
         // sweep must still deliver if the app dies before the next push.
         markSynced: Boolean = true,
     ) {
-        val existing = bookmarkDao.getBookmark(pairId)
+        val existing = bookmarkDao.getBookmark(scope, pairId)
         val nowMillis = System.currentTimeMillis()
         val resolvedSource = if (stampSource) source else (existing?.source ?: source)
 
@@ -1221,6 +1255,7 @@ class BookSyncRepository @Inject constructor(
             capturedAt = capturedAtIsoFromMillis(nowMillis),
             deviceId = deviceIdManager.deviceId,
             deviceName = deviceIdManager.deviceName,
+                scopeKey = scope,
             syncedToServer = false,
         )
 
@@ -1250,6 +1285,7 @@ class BookSyncRepository @Inject constructor(
                     newAudioPositionMs = merged.audioPositionMs,
                     changedAt = localHistoryTimestamp(nowMillis),
                     deviceId = deviceIdManager.deviceId,
+                        scopeKey = scope,
                     deviceName = deviceIdManager.deviceName,
                 )
             )
@@ -1262,6 +1298,9 @@ class BookSyncRepository @Inject constructor(
                 logW("updateBookmark sync failed — queuing for later")
                 pendingSyncDao.insert(
                     PendingSyncEntity(
+                        // Stamp the owner so the drain cannot replay this into
+                        // someone else's account (issue #314).
+                        scopeKey = scope,
                         bookPairId = pairId,
                         source = resolvedSource,
                         epubChapter = merged.epubChapter,
@@ -1284,6 +1323,7 @@ class BookSyncRepository @Inject constructor(
             logW("updateBookmark sync failed — queuing for later (${e.message})")
             pendingSyncDao.insert(
                 PendingSyncEntity(
+                    scopeKey = scope,
                     bookPairId = pairId,
                     source = resolvedSource,
                     epubChapter = merged.epubChapter,
@@ -1328,7 +1368,7 @@ class BookSyncRepository @Inject constructor(
     fun saveReaderPosition(snapshot: ReaderPositionSnapshot): Job = appScope.launch {
         withContext(NonCancellable) {
             val capturedAtIso = capturedAtIsoFromMillis(snapshot.capturedAtMillis)
-            val existing = bookmarkDao.getBookmark(snapshot.pairId)
+            val existing = bookmarkDao.getBookmark(scope, snapshot.pairId)
 
             // A sync-map match upgrades the coarse spine chapter to a precise
             // sentence + audio position. A miss is not a failure: the chapter
@@ -1370,6 +1410,7 @@ class BookSyncRepository @Inject constructor(
                 capturedAt = capturedAtIso,
                 deviceId = deviceId,
                 deviceName = deviceName,
+                    scopeKey = scope,
                 syncedToServer = false,
             )
             bookmarkDao.upsertBookmark(merged)
@@ -1401,6 +1442,7 @@ class BookSyncRepository @Inject constructor(
                 // for a fresh write (issue #54).
                 pendingSyncDao.insert(
                     PendingSyncEntity(
+                        scopeKey = scope,
                         bookPairId = snapshot.pairId,
                         source = "ebook",
                         epubChapter = merged.epubChapter,
@@ -1416,7 +1458,7 @@ class BookSyncRepository @Inject constructor(
             } else {
                 // The canonical write landed — this row now genuinely matches
                 // the server, so it's safe to mark synced (fix 5).
-                bookmarkDao.markSynced(snapshot.pairId)
+                bookmarkDao.markSynced(scope, snapshot.pairId)
             }
         }
     }
@@ -1442,7 +1484,7 @@ class BookSyncRepository @Inject constructor(
      * since there's nothing to preserve.
      */
     suspend fun updateBookmarkMetadata(pairId: Int, source: String) {
-        val existing = bookmarkDao.getBookmark(pairId)
+        val existing = bookmarkDao.getBookmark(scope, pairId)
         val nowMillis = System.currentTimeMillis()
         val base = existing ?: BookmarkEntity(
             bookPairId = pairId,
@@ -1451,6 +1493,7 @@ class BookSyncRepository @Inject constructor(
             epubSentenceIndex = null,
             audioPositionMs = null,
             updatedAt = nowMillis.toString(),
+                scopeKey = scope,
             capturedAt = capturedAtIsoFromMillis(nowMillis),
         )
         val merged = base.copy(
@@ -1470,9 +1513,9 @@ class BookSyncRepository @Inject constructor(
      */
     suspend fun updateBookmarkLocator(pairId: Int, locatorJson: String, audioMs: Int? = null) {
         if (audioMs != null) {
-            bookmarkDao.updateLocatorWithAudio(pairId, locatorJson, audioMs)
+            bookmarkDao.updateLocatorWithAudio(scope, pairId, locatorJson, audioMs)
         } else {
-            bookmarkDao.updateLocator(pairId, locatorJson)
+            bookmarkDao.updateLocator(scope, pairId, locatorJson)
         }
     }
 
@@ -1586,7 +1629,7 @@ class BookSyncRepository @Inject constructor(
 
     /** Get the user progress flow from local cache */
     fun getProgressFlow(mediaType: String, mediaId: Int): Flow<UserProgressEntity?> =
-        userProgressDao.getProgressFlow(mediaType, mediaId)
+        userProgressDao.getProgressFlow(scope, mediaType, mediaId)
 
     /**
      * Refresh progress from the server's canonical record for this medium,
@@ -1596,7 +1639,7 @@ class BookSyncRepository @Inject constructor(
      */
     suspend fun refreshProgress(mediaType: String, mediaId: Int) {
         val remote = fetchPosition(mediaType, mediaId).position ?: return
-        val existing = userProgressDao.getProgress(mediaType, mediaId)
+        val existing = userProgressDao.getProgress(scope, mediaType, mediaId)
 
         // Never overwrite unsynced local data — offline progress must survive.
         if (existing != null && !existing.syncedToServer) {
@@ -1614,7 +1657,7 @@ class BookSyncRepository @Inject constructor(
             userProgressDao.upsertProgress(
                 // `updatedAt` is deliberately local wall-clock rather than the
                 // remote string: it only orders the local Continue list.
-                remote.toProgressEntity(mediaType, mediaId, existing)
+                remote.toProgressEntity(scope, mediaType, mediaId, existing)
                     .copy(updatedAt = System.currentTimeMillis())
             )
         } else {
@@ -1640,7 +1683,7 @@ class BookSyncRepository @Inject constructor(
         // unsynced so the sweep delivers it (throttled heartbeat, issue #65).
         markSynced: Boolean = true,
     ) {
-        val existing = userProgressDao.getProgress(mediaType, mediaId)
+        val existing = userProgressDao.getProgress(scope, mediaType, mediaId)
         val nowMillis = System.currentTimeMillis()
 
         // Merge with existing
@@ -1659,6 +1702,7 @@ class BookSyncRepository @Inject constructor(
             // The moment this position was actually captured on-device — see
             // BookmarkEntity.capturedAt / pushProgress for why this isn't "now" at sync time.
             capturedAt = capturedAtIsoFromMillis(nowMillis),
+                scopeKey = scope,
             syncedToServer = false
         )
 
@@ -1697,7 +1741,7 @@ class BookSyncRepository @Inject constructor(
                 // and the push simply fails in the second, so both are handled
                 // by falling through to the local-wins branch.
                 val remote = fetchPosition("pair", pair.id).position
-                val local = bookmarkDao.getBookmark(pair.id)
+                val local = bookmarkDao.getBookmark(scope, pair.id)
                 // Prefer captured_at (the true on-device capture moment) over updated_at
                 // (a bookkeeping timestamp) whenever the server/local row provides one —
                 // now that the server never re-stamps a rejected stale write with "now",
@@ -1715,7 +1759,7 @@ class BookSyncRepository @Inject constructor(
                     }
                     remote == null -> { /* nothing on the server, nothing unsynced here */ }
                     local == null || remoteTs > localTs -> {
-                        bookmarkDao.upsertBookmark(remote.toBookmarkEntity(pair.id, local))
+                        bookmarkDao.upsertBookmark(remote.toBookmarkEntity(scope, pair.id, local))
                         log("syncBookmark pair=${pair.id}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
@@ -1728,7 +1772,7 @@ class BookSyncRepository @Inject constructor(
             // --- Audiobook progress ---
             try {
                 val remote = fetchPosition("audiobook", pair.audiobookId).position
-                val local  = userProgressDao.getProgress("audiobook", pair.audiobookId)
+                val local  = userProgressDao.getProgress(scope, "audiobook", pair.audiobookId)
                 val remoteTs = if (remote != null)
                     parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
                 val localTs  = if (local != null) {
@@ -1744,7 +1788,7 @@ class BookSyncRepository @Inject constructor(
                     remote == null -> { /* nothing on the server, nothing unsynced here */ }
                     local == null || remoteTs > localTs -> {
                         userProgressDao.upsertProgress(
-                            remote.toProgressEntity("audiobook", pair.audiobookId, local))
+                            remote.toProgressEntity(scope, "audiobook", pair.audiobookId, local))
                         log("syncProgress audiobook=${pair.audiobookId}: pulled from server ts=$remoteTs")
                     }
                     localTs > remoteTs -> {
@@ -1770,7 +1814,17 @@ class BookSyncRepository @Inject constructor(
      * retry) and the server's authoritative state is adopted locally.
      */
     suspend fun processPendingSync() = pendingSyncMutex.withLock {
-        val pendingBookmarks = pendingSyncDao.getAllPending()
+        // Every push below is scoped (issue #314). Before this, all three loops
+        // read "whatever is unsynced" and sent it under whatever token happened to
+        // be stored, so one account's positions committed into another's.
+        val scope = scopeKeyOrNull
+        if (scope == null) {
+            // Holding the queue costs a delay; guessing costs someone else's
+            // reading position.
+            logW("processPendingSync — no resolvable account; leaving the queue untouched")
+            return@withLock
+        }
+        val pendingBookmarks = pendingSyncDao.getPendingForScope(scope)
         if (pendingBookmarks.isNotEmpty()) log("processPendingSync — ${pendingBookmarks.size} pending bookmarks")
         for (sync in pendingBookmarks) {
             try {
@@ -1806,8 +1860,8 @@ class BookSyncRepository @Inject constructor(
                     response.code() == 409 -> {
                         val serverState = parseConflictBody<PositionResponse>(response.errorBody()?.string())
                         if (serverState != null) {
-                            bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(
-                                sync.bookPairId, bookmarkDao.getBookmark(sync.bookPairId)))
+                            bookmarkDao.upsertBookmark(serverState.toBookmarkEntity(scope, 
+                                sync.bookPairId, bookmarkDao.getBookmark(scope, sync.bookPairId)))
                         }
                         pendingSyncDao.delete(sync)
                         logW("processPendingSync — bookmark pairId=${sync.bookPairId} lost to a newer write (409) — dropped, adopted server state")
@@ -1827,7 +1881,7 @@ class BookSyncRepository @Inject constructor(
         // PUT that failed before it could be queued. pushBookmark sends the
         // row's own captured_at, so a stale replay still loses to a newer
         // write on another device (409 → adopt server state).
-        for (row in bookmarkDao.getUnsyncedBookmarks()) {
+        for (row in bookmarkDao.getUnsyncedBookmarks(scope)) {
             try {
                 if (pushBookmark(row.bookPairId, row, appendToLog = false) == PushOutcome.FAILED) {
                     logW("processPendingSync — unsynced bookmark pairId=${row.bookPairId} failed, stopping")
@@ -1840,7 +1894,7 @@ class BookSyncRepository @Inject constructor(
         }
 
         // Process Progress
-        val unsyncedProgress = userProgressDao.getUnsyncedProgress()
+        val unsyncedProgress = userProgressDao.getUnsyncedProgress(scope)
         for (prog in unsyncedProgress) {
              try {
                  val outcome = pushProgress(prog.mediaType, prog.mediaId, prog)
@@ -1859,15 +1913,15 @@ class BookSyncRepository @Inject constructor(
 
     // ============ New Items (unacknowledged) ============
 
-    fun getNewEbooksFlow(): Flow<List<EBookEntity>> = acknowledgedItemDao.getNewEbooks()
-    fun getNewAudiobooksFlow(): Flow<List<AudioBookEntity>> = acknowledgedItemDao.getNewAudiobooks()
-    fun getNewPairsFlow(): Flow<List<BookPairEntity>> = acknowledgedItemDao.getNewPairs()
-    fun getNewEbookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewEbookCount()
-    fun getNewAudiobookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewAudiobookCount()
-    fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount()
+    fun getNewEbooksFlow(): Flow<List<EBookEntity>> = acknowledgedItemDao.getNewEbooks(scope)
+    fun getNewAudiobooksFlow(): Flow<List<AudioBookEntity>> = acknowledgedItemDao.getNewAudiobooks(scope)
+    fun getNewPairsFlow(): Flow<List<BookPairEntity>> = acknowledgedItemDao.getNewPairs(scope)
+    fun getNewEbookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewEbookCount(scope)
+    fun getNewAudiobookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewAudiobookCount(scope)
+    fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount(scope)
 
     suspend fun acknowledgeItems(ids: List<Int>, type: String) {
-        acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(it, type) })
+        acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(scope, it, type) })
     }
 }
 
@@ -1955,7 +2009,11 @@ internal fun PositionResponse.currentLocatorHint(): PositionHintResponse? =
  * [pairId] comes from the request context: a standalone-scoped response has a
  * null `book_pair_id`, but the local table is keyed by pair.
  */
-internal fun PositionResponse.toBookmarkEntity(pairId: Int, previous: BookmarkEntity?): BookmarkEntity {
+internal fun PositionResponse.toBookmarkEntity(
+    scopeKey: String,
+    pairId: Int,
+    previous: BookmarkEntity?,
+): BookmarkEntity {
     val locator = currentLocatorHint()
     return BookmarkEntity(
         bookPairId = book_pair_id ?: pairId,
@@ -1973,6 +2031,7 @@ internal fun PositionResponse.toBookmarkEntity(pairId: Int, previous: BookmarkEn
         deviceId = device_id,
         deviceName = device_name,
         syncedToServer = true,
+        scopeKey = scopeKey,
     )
 }
 
@@ -1988,6 +2047,7 @@ internal fun PositionResponse.toBookmarkEntity(pairId: Int, previous: BookmarkEn
  * that no longer exists (issue #102).
  */
 internal fun PositionResponse.toProgressEntity(
+    scopeKey: String,
     mediaType: String, mediaId: Int, previous: UserProgressEntity? = null,
 ) = UserProgressEntity(
     mediaType = mediaType,
@@ -2003,11 +2063,13 @@ internal fun PositionResponse.toProgressEntity(
     deviceName = device_name,
     capturedAt = captured_at,
     syncedToServer = true,
+    scopeKey = scopeKey,
 )
 
 // ============ BookmarkLog mappers ============
 
-internal fun BookmarkLogResponse.toEntity(pairId: Int) = BookmarkLogEntity(
+internal fun BookmarkLogResponse.toEntity(scopeKey: String, pairId: Int) = BookmarkLogEntity(
+    scopeKey = scopeKey,
     serverId = id,
     bookPairId = pairId,
     source = source,

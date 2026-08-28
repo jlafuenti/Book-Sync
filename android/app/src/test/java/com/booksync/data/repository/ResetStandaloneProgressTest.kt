@@ -56,6 +56,7 @@ class ResetStandaloneProgressTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     @Test
@@ -66,7 +67,7 @@ class ResetStandaloneProgressTest {
 
         assertTrue("resetStandaloneProgress must report success", result)
         coVerify(exactly = 1) { api.resetPosition("ebook", 100) }
-        coVerify(exactly = 1) { userProgressDao.deleteProgress("ebook", 100) }
+        coVerify(exactly = 1) { userProgressDao.deleteProgress(TEST_SCOPE, "ebook", 100) }
     }
 
     @Test
@@ -77,7 +78,7 @@ class ResetStandaloneProgressTest {
 
         assertTrue(result)
         coVerify(exactly = 1) { api.resetPosition("audiobook", 200) }
-        coVerify(exactly = 1) { userProgressDao.deleteProgress("audiobook", 200) }
+        coVerify(exactly = 1) { userProgressDao.deleteProgress(TEST_SCOPE, "audiobook", 200) }
     }
 
     @Test
@@ -88,7 +89,7 @@ class ResetStandaloneProgressTest {
         val result = repository().resetStandaloneProgress("ebook", 100)
 
         assertFalse("resetStandaloneProgress must report failure", result)
-        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any()) }
+        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any(), any()) }
     }
 
     @Test
@@ -98,6 +99,6 @@ class ResetStandaloneProgressTest {
         val result = repository().resetStandaloneProgress("ebook", 100)  // must not throw
 
         assertFalse("resetStandaloneProgress must report failure when offline", result)
-        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any()) }
+        coVerify(exactly = 0) { userProgressDao.deleteProgress(any(), any(), any()) }
     }
 }

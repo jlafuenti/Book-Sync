@@ -68,6 +68,7 @@ class SavePlaybackPositionTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun positionResponse(
@@ -88,7 +89,7 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `claimFormat=true sends source=audiobook on the wire and stamps Room`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         val sentRequest = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
             Response.success(positionResponse())
@@ -104,11 +105,11 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `claimFormat=false omits source from the wire payload and leaves Room source untouched`() = runTest {
-        val existing = BookmarkEntity(
+        val existing = BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42, source = "ebook", epubChapter = 5, epubSentenceIndex = 1,
             audioPositionMs = 1_000, updatedAt = "1000",
         )
-        coEvery { bookmarkDao.getBookmark(42) } returns existing
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
         val sentRequest = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
             Response.success(positionResponse(source = "ebook"))
@@ -130,7 +131,7 @@ class SavePlaybackPositionTest {
         // while this device's local fallback below stamps "audiobook" —
         // permanent routing disagreement from write #1. The user did just
         // play this book, so this one write escalates to a claim.
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         val sentRequest = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
             Response.success(positionResponse())
@@ -145,11 +146,11 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `claimFormat=false does not stamp source on the offline retry path either`() = runTest {
-        val existing = BookmarkEntity(
+        val existing = BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42, source = "ebook", epubChapter = 5, epubSentenceIndex = 1,
             audioPositionMs = 1_000, updatedAt = "1000",
         )
-        coEvery { bookmarkDao.getBookmark(42) } returns existing
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
         coEvery { api.updatePosition("pair", 42, any()) } returns
             Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
 
@@ -189,7 +190,7 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `savePlaybackPosition defaults claimFormat to true (backward compatible)`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         val sentRequest = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
             Response.success(positionResponse())
@@ -208,7 +209,7 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `pushToServer=false writes Room only, unsynced, and reports no push`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         val savedBookmark = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
 
@@ -224,7 +225,7 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `pushToServer=true reports whether the canonical write landed`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
         assertTrue(repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000))
 
@@ -251,14 +252,14 @@ class SavePlaybackPositionTest {
     fun `processPendingSync pushes a bookmark row a throttled heartbeat left unsynced`() = runTest {
         // The 15-minute WorkManager sweep is the backstop the throttle relies
         // on when the app is killed between pushes; it must see these rows.
-        val stale = BookmarkEntity(
+        val stale = BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 42, source = "audiobook", epubChapter = null, epubSentenceIndex = null,
             audioPositionMs = 9_000, updatedAt = "1000", capturedAt = "2026-08-15T10:00:00Z",
             syncedToServer = false,
         )
-        coEvery { pendingSyncDao.getAllPending() } returns emptyList()
-        coEvery { userProgressDao.getUnsyncedProgress() } returns emptyList()
-        coEvery { bookmarkDao.getUnsyncedBookmarks() } returns listOf(stale)
+        coEvery { pendingSyncDao.getPendingForScope(TEST_SCOPE) } returns emptyList()
+        coEvery { userProgressDao.getUnsyncedProgress(TEST_SCOPE) } returns emptyList()
+        coEvery { bookmarkDao.getUnsyncedBookmarks(TEST_SCOPE) } returns listOf(stale)
         val sentRequest = slot<PositionUpdateRequest>()
         coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns Response.success(positionResponse())
         val savedBookmark = slot<BookmarkEntity>()
@@ -281,7 +282,7 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `paired save writes the Room row before the server call`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         coEvery { api.updatePosition(any(), any(), any()) } coAnswers { awaitCancellation() }
         val savedBookmark = slot<BookmarkEntity>()
         coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
@@ -317,12 +318,12 @@ class SavePlaybackPositionTest {
 
     @Test
     fun `a successful paired push flips the row to synced`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
 
         repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
 
-        coVerify(exactly = 1) { bookmarkDao.markSynced(42) }
+        coVerify(exactly = 1) { bookmarkDao.markSynced(TEST_SCOPE, 42) }
     }
 
     @Test
@@ -332,18 +333,18 @@ class SavePlaybackPositionTest {
 
         repository().savePlaybackPositionStandalone(audiobookId = 7, audioPositionMs = 3_000)
 
-        coVerify(exactly = 1) { userProgressDao.markSynced("audiobook", 7) }
+        coVerify(exactly = 1) { userProgressDao.markSynced(TEST_SCOPE, "audiobook", 7) }
     }
 
     @Test
     fun `a failed paired push leaves the row unsynced`() = runTest {
-        coEvery { bookmarkDao.getBookmark(42) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
         coEvery { api.updatePosition("pair", 42, any()) } returns
             Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
 
         repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000)
 
-        coVerify(exactly = 0) { bookmarkDao.markSynced(any()) }
+        coVerify(exactly = 0) { bookmarkDao.markSynced(any(), any()) }
     }
 
     // A cancelled save must be reported as cancellation, not logged as

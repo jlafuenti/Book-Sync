@@ -88,3 +88,68 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         addColumnIfMissing(db, "ALTER TABLE pending_sync ADD COLUMN syncMapVersion INTEGER")
     }
 }
+
+/**
+ * v19 -> v20: scope the per-account tables to (server, user) — issue #314.
+ *
+ * `bookmarks`, `user_progress` and `acknowledged_items` are keyed on values unique
+ * only *within* one account (`bookPairId`, `(mediaType, mediaId)`,
+ * `(itemId, itemType)`), so two accounts on one device collided outright: one
+ * user's upsert overwrote the other's row. SQLite cannot alter a primary key, so
+ * those three are rebuilt. `pending_sync` and `bookmark_log` only need the column.
+ *
+ * Every existing row is copied with the empty legacy `scopeKey` and adopted once by
+ * the first account to sign in afterwards. Copying rather than discarding is the
+ * point: these tables hold `syncedToServer = 0` rows the server has never seen, and
+ * on the single-account device this overwhelmingly runs on, adopting them is simply
+ * correct.
+ *
+ * The CREATE statements are Room's own, copied from the generated
+ * `BookSyncDatabase_Impl` for schema 20 — hand-writing them got the column list
+ * wrong on the first attempt, which would have shifted values between columns.
+ * Column lists are explicit rather than `SELECT *` so a future column added
+ * without updating this fails loudly instead of silently misaligning.
+ */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(
+            db, "ALTER TABLE pending_sync ADD COLUMN scopeKey TEXT NOT NULL DEFAULT ''"
+        )
+        addColumnIfMissing(
+            db, "ALTER TABLE bookmark_log ADD COLUMN scopeKey TEXT NOT NULL DEFAULT ''"
+        )
+
+        // --- bookmarks ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `bookmarks_new` (`scopeKey` TEXT NOT NULL, `bookPairId` INTEGER NOT NULL, `source` TEXT NOT NULL, `epubChapter` INTEGER, `epubSentenceIndex` INTEGER, `audioPositionMs` INTEGER, `epubLocator` TEXT, `locatorAudioMs` INTEGER, `updatedAt` TEXT NOT NULL, `syncedToServer` INTEGER NOT NULL, `capturedAt` TEXT, `deviceId` TEXT, `deviceName` TEXT, `syncMapVersion` INTEGER, PRIMARY KEY(`scopeKey`, `bookPairId`))"
+        )
+        db.execSQL(
+            "INSERT INTO bookmarks_new (scopeKey, bookPairId, source, epubChapter, epubSentenceIndex, audioPositionMs, epubLocator, locatorAudioMs, updatedAt, syncedToServer, capturedAt, deviceId, deviceName, syncMapVersion) " +
+                "SELECT '', bookPairId, source, epubChapter, epubSentenceIndex, audioPositionMs, epubLocator, locatorAudioMs, updatedAt, syncedToServer, capturedAt, deviceId, deviceName, syncMapVersion FROM bookmarks"
+        )
+        db.execSQL("DROP TABLE bookmarks")
+        db.execSQL("ALTER TABLE bookmarks_new RENAME TO bookmarks")
+
+        // --- user_progress ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `user_progress_new` (`scopeKey` TEXT NOT NULL, `mediaType` TEXT NOT NULL, `mediaId` INTEGER NOT NULL, `bookPairId` INTEGER, `epubCfi` TEXT, `epubChapter` INTEGER, `epubProgressPercent` REAL, `audioPositionMs` INTEGER, `isCompleted` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `deviceId` TEXT, `syncedToServer` INTEGER NOT NULL, `capturedAt` TEXT, `deviceName` TEXT, PRIMARY KEY(`scopeKey`, `mediaType`, `mediaId`))"
+        )
+        db.execSQL(
+            "INSERT INTO user_progress_new (scopeKey, mediaType, mediaId, bookPairId, epubCfi, epubChapter, epubProgressPercent, audioPositionMs, isCompleted, updatedAt, deviceId, syncedToServer, capturedAt, deviceName) " +
+                "SELECT '', mediaType, mediaId, bookPairId, epubCfi, epubChapter, epubProgressPercent, audioPositionMs, isCompleted, updatedAt, deviceId, syncedToServer, capturedAt, deviceName FROM user_progress"
+        )
+        db.execSQL("DROP TABLE user_progress")
+        db.execSQL("ALTER TABLE user_progress_new RENAME TO user_progress")
+
+        // --- acknowledged_items ---
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `acknowledged_items_new` (`scopeKey` TEXT NOT NULL, `itemId` INTEGER NOT NULL, `itemType` TEXT NOT NULL, PRIMARY KEY(`scopeKey`, `itemId`, `itemType`))"
+        )
+        db.execSQL(
+            "INSERT INTO acknowledged_items_new (scopeKey, itemId, itemType) " +
+                "SELECT '', itemId, itemType FROM acknowledged_items"
+        )
+        db.execSQL("DROP TABLE acknowledged_items")
+        db.execSQL("ALTER TABLE acknowledged_items_new RENAME TO acknowledged_items")
+    }
+}

@@ -42,6 +42,7 @@ class ResolvePairOpenTargetTest {
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
         json = Json { ignoreUnknownKeys = true },
+        userScopeProvider = testScopeProvider(),
     )
 
     private fun pair(
@@ -66,7 +67,7 @@ class ResolvePairOpenTargetTest {
         audiobookDownloaded = audiobookDownloaded,
     )
 
-    private fun bookmark(source: String) = BookmarkEntity(
+    private fun bookmark(source: String) = BookmarkEntity(scopeKey = TEST_SCOPE, 
         bookPairId = 84,
         source = source,
         epubChapter = null,
@@ -77,7 +78,7 @@ class ResolvePairOpenTargetTest {
 
     @Test
     fun `source=ebook with ebook downloaded opens the Reader`() = runTest {
-        coEvery { bookmarkDao.getBookmark(84) } returns bookmark("ebook")
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("ebook")
 
         val target = repository().resolvePairOpenTarget(
             pair(ebookDownloaded = true, audiobookDownloaded = true))
@@ -87,7 +88,7 @@ class ResolvePairOpenTargetTest {
 
     @Test
     fun `source=audiobook with audiobook downloaded opens the Player`() = runTest {
-        coEvery { bookmarkDao.getBookmark(84) } returns bookmark("audiobook")
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
 
         val target = repository().resolvePairOpenTarget(
             pair(ebookDownloaded = true, audiobookDownloaded = true))
@@ -97,7 +98,7 @@ class ResolvePairOpenTargetTest {
 
     @Test
     fun `no bookmark falls back to whichever format is downloaded, preferring ebook`() = runTest {
-        coEvery { bookmarkDao.getBookmark(84) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns null
 
         assertEquals(
             PairOpenTarget.Reader,
@@ -113,7 +114,7 @@ class ResolvePairOpenTargetTest {
     @Test
     fun `source names a format that is not downloaded falls back to the downloaded one`() = runTest {
         // e.g. the audiobook was deleted locally after the last audio save.
-        coEvery { bookmarkDao.getBookmark(84) } returns bookmark("audiobook")
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
 
         val target = repository().resolvePairOpenTarget(
             pair(ebookDownloaded = true, audiobookDownloaded = false))
@@ -127,7 +128,7 @@ class ResolvePairOpenTargetTest {
         // ONLY source/updatedAt, leaving epubChapter/epubLocator/etc. null —
         // exactly what an unresolved restore looks like. Routing must not
         // depend on those anchors being populated.
-        coEvery { bookmarkDao.getBookmark(84) } returns BookmarkEntity(
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns BookmarkEntity(scopeKey = TEST_SCOPE, 
             bookPairId = 84,
             source = "ebook",
             epubChapter = null,
@@ -146,7 +147,7 @@ class ResolvePairOpenTargetTest {
     @Test
     fun `resolvePairOpenTarget by pairId looks up the pair first`() = runTest {
         coEvery { bookPairDao.getPairById(84) } returns pair(ebookDownloaded = true)
-        coEvery { bookmarkDao.getBookmark(84) } returns bookmark("ebook")
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("ebook")
 
         assertEquals(PairOpenTarget.Reader, repository().resolvePairOpenTarget(84))
     }
