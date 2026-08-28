@@ -253,7 +253,7 @@ class BookSyncRepository @Inject constructor(
     /** Pairs that have audio progress, ordered by most recently listened. Used for Android Auto Continue Listening. */
     fun getRecentlyPlayedPairsFlow(): Flow<List<BookPairEntity>> =
         combine(
-            bookPairDao.getRecentlyPlayedPairs(),
+            bookPairDao.getRecentlyPlayedPairs(scope),
             userProgressDao.getAllProgressFlow(scope),
         ) { pairs, allProgress ->
             val completedAudiobookIds = allProgress
@@ -266,7 +266,7 @@ class BookSyncRepository @Inject constructor(
     /** Standalone audiobooks with audio progress, ordered by most recently played. */
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
         combine(
-            audioBookDao.getRecentlyPlayedStandaloneAudiobooks(),
+            audioBookDao.getRecentlyPlayedStandaloneAudiobooks(scope),
             userProgressDao.getAllProgressFlow(scope),
         ) { audiobooks, allProgress ->
             val completedIds = allProgress
@@ -279,7 +279,7 @@ class BookSyncRepository @Inject constructor(
     /** Ebooks with reading progress, ordered by most recently read. */
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
         combine(
-            eBookDao.getRecentlyReadEbooks(),
+            eBookDao.getRecentlyReadEbooks(scope),
             userProgressDao.getAllProgressFlow(scope),
         ) { ebooks, allProgress ->
             val completedIds = allProgress

@@ -67,12 +67,12 @@ interface BookPairDao {
      */
     @Query("""
         SELECT bp.* FROM book_pairs bp
-        INNER JOIN bookmarks b ON bp.id = b.bookPairId
+        INNER JOIN bookmarks b ON bp.id = b.bookPairId AND b.scopeKey = :scope
         WHERE bp.audiobookDownloaded = 1
           AND b.audioPositionMs > 0
         ORDER BY b.updatedAt DESC
     """)
-    fun getRecentlyPlayedPairs(): Flow<List<BookPairEntity>>
+    fun getRecentlyPlayedPairs(scope: String): Flow<List<BookPairEntity>>
 }
 
 @Dao
@@ -111,13 +111,14 @@ interface EBookDao {
     @Query("""
         SELECT eb.* FROM ebooks eb
         INNER JOIN user_progress up ON up.mediaType = 'ebook' AND up.mediaId = eb.id
+            AND up.scopeKey = :scope
         WHERE eb.isDownloaded = 1
           AND up.isCompleted = 0
           AND (up.epubProgressPercent IS NOT NULL AND up.epubProgressPercent > 0
                OR up.epubChapter IS NOT NULL AND up.epubChapter > 0)
         ORDER BY up.updatedAt DESC
     """)
-    fun getRecentlyReadEbooks(): Flow<List<EBookEntity>>
+    fun getRecentlyReadEbooks(scope: String): Flow<List<EBookEntity>>
 }
 
 @Dao
@@ -160,12 +161,13 @@ interface AudioBookDao {
     @Query("""
         SELECT ab.* FROM audiobooks ab
         INNER JOIN user_progress up ON up.mediaType = 'audiobook' AND up.mediaId = ab.id
+            AND up.scopeKey = :scope
         WHERE ab.isDownloaded = 1
           AND up.audioPositionMs IS NOT NULL
           AND up.audioPositionMs > 0
         ORDER BY up.updatedAt DESC
     """)
-    fun getRecentlyPlayedStandaloneAudiobooks(): Flow<List<AudioBookEntity>>
+    fun getRecentlyPlayedStandaloneAudiobooks(scope: String): Flow<List<AudioBookEntity>>
 }
 
 @Dao
