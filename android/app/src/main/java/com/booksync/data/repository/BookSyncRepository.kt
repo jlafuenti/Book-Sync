@@ -78,6 +78,10 @@ class BookSyncRepository @Inject constructor(
      * would never be read from again.
      */
     private val scope: String get() = userScopeProvider.currentKey ?: NO_SCOPE
+    // NB: `scope` here is the *cache partition*. The API's own path segment
+    // ("pair" / "ebook" / "audiobook") is `pathScope` wherever both appear —
+    // they are both Strings, so a shadowed name would compile and silently
+    // read the wrong partition.
 
     /** Null when no account resolves — for callers that must not guess. */
     private val scopeKeyOrNull: String? get() = userScopeProvider.currentKey
@@ -952,14 +956,14 @@ class BookSyncRepository @Inject constructor(
      * callers fall back to their local cache in both cases. The two are
      * distinguished by [PositionFetch.reachable] where it matters.
      */
-    suspend fun fetchPosition(scope: String, id: Int): PositionFetch {
+    suspend fun fetchPosition(pathScope: String, id: Int): PositionFetch {
         return try {
-            val response = api.getPosition(scope, id)
+            val response = api.getPosition(pathScope, id)
             when {
                 response.code() == 204 -> PositionFetch(null, reachable = true)
                 response.isSuccessful -> PositionFetch(response.body(), reachable = true)
                 else -> {
-                    logW("fetchPosition $scope/$id: HTTP ${response.code()}")
+                    logW("fetchPosition $pathScope/$id: HTTP ${response.code()}")
                     PositionFetch(null, reachable = false)
                 }
             }
@@ -967,7 +971,7 @@ class BookSyncRepository @Inject constructor(
             // A cancelled fetch is not "offline" — let the caller's scope see it.
             throw e
         } catch (e: Exception) {
-            logW("fetchPosition $scope/$id: offline (${e.message})")
+            logW("fetchPosition $pathScope/$id: offline (${e.message})")
             PositionFetch(null, reachable = false)
         }
     }
@@ -980,22 +984,22 @@ class BookSyncRepository @Inject constructor(
      * leaving two records that disagreed about where the reader was.
      */
     suspend fun updatePosition(
-        scope: String,
+        pathScope: String,
         id: Int,
         request: PositionUpdateRequest,
     ): PositionResponse? {
         return try {
-            val response = api.updatePosition(scope, id, request)
+            val response = api.updatePosition(pathScope, id, request)
             when {
                 response.isSuccessful -> response.body()
                 response.code() == 409 -> {
                     val serverState = parseConflictBody<PositionResponse>(
                         response.errorBody()?.string())
-                    logW("updatePosition $scope/$id: 409 — this write lost, adopting server state")
+                    logW("updatePosition $pathScope/$id: 409 — this write lost, adopting server state")
                     serverState
                 }
                 else -> {
-                    logW("updatePosition $scope/$id: failed HTTP ${response.code()}")
+                    logW("updatePosition $pathScope/$id: failed HTTP ${response.code()}")
                     null
                 }
             }
@@ -1005,7 +1009,7 @@ class BookSyncRepository @Inject constructor(
             // write on an already-cancelled coroutine (issue #164).
             throw e
         } catch (e: Exception) {
-            logW("updatePosition $scope/$id: offline (${e.message})")
+            logW("updatePosition $pathScope/$id: offline (${e.message})")
             null
         }
     }

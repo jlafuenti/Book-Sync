@@ -1,5 +1,6 @@
 package com.booksync.data.remote
 
+import android.util.Log
 import com.booksync.data.local.dao.ScopeAdoptionDao
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
@@ -56,15 +57,15 @@ class UserScopeProvider @Inject constructor(
         UserScope.of(serverUrlManager.currentUrl, tokenManager.currentUserId())
 
     /**
-     * Claim rows written before scoping existed, if any remain.
+     * Claim rows written before scoping existed.
      *
-     * Idempotent and cheap: the existence check short-circuits on every launch
-     * after the first, so this can be called from the authentication path without
-     * a flag to remember whether it has run.
+     * Idempotent: after the first run the UPDATEs match nothing, so this can be
+     * called from every authentication path without remembering whether it has
+     * run. There is deliberately no cheap "are there any?" pre-check — see
+     * [ScopeAdoptionDao.adoptAll] for why gating on one table strands the others.
      */
     suspend fun adoptLegacyRowsIfAny(scope: UserScope) {
         if (scope == UserScope.LEGACY) return
-        if (!scopeAdoptionDao.hasLegacyBookmarks()) return
         scopeAdoptionDao.adoptAll(scope.key)
     }
 
@@ -76,6 +77,12 @@ class UserScopeProvider @Inject constructor(
     suspend fun onAuthenticated() {
         val scope = current()
         currentKey = scope?.key
-        scope?.let { adoptLegacyRowsIfAny(it) }
+        if (scope == null) return
+        // Publishing the scope is what makes the app usable; adopting old rows is
+        // a bonus on top. Never let the bonus take down the launch path or block a
+        // sign-in — a failure here leaves the rows where they are, to be retried
+        // on the next authentication, rather than stranding the user.
+        runCatching { adoptLegacyRowsIfAny(scope) }
+            .onFailure { Log.w("UserScopeProvider", "legacy row adoption failed; will retry", it) }
     }
 }

@@ -9,13 +9,6 @@ import com.booksync.sync.MatchablePoint
  * These mirror the server models for local caching.
  */
 
-/**
- * Column value for rows written before the cache was scoped to an account
- * (issue #314). Adopted once, by the first scope to authenticate after the
- * upgrade — see [com.booksync.data.remote.UserScope.LEGACY].
- */
-const val LEGACY_SCOPE_KEY = ""
-
 @Entity(tableName = "book_pairs")
 data class BookPairEntity(
     @PrimaryKey val id: Int,
