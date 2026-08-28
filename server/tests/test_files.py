@@ -158,6 +158,34 @@ async def test_get_cover_rejects_media_token_with_stale_token_version(
     assert r.status_code == 401
 
 
+async def test_get_cover_rejects_access_token_with_stale_token_version(
+    make_user, auth_header, temp_covers_dir, db,
+):
+    """Issue #206: the header path never compared `ver`.
+
+    Logout, self password-change and admin reset all bump `token_version`, which
+    kills a stolen access token on every route that goes through
+    `get_current_user` — but the media resolver only applied the compare to the
+    `?token=` branch. So a leaked 24h access token kept streaming the library
+    after the user had logged out or been reset, on exactly the two endpoints
+    worth having for bulk download.
+    """
+    (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
+    user = await make_user(username="reader", role="user")
+    header = auth_header(user)  # minted at the current token_version
+
+    db_user = (await db.execute(
+        select(User).where(User.id == user.id)
+    )).scalar_one()
+    db_user.token_version += 1
+    await db.commit()
+
+    async with _files_client() as client:
+        r = await client.get("/api/files/covers/cover.jpg", headers=header)
+
+    assert r.status_code == 401
+
+
 async def test_get_cover_requires_some_auth(make_user, temp_covers_dir):
     (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
     async with _files_client() as client:
@@ -224,5 +252,27 @@ async def test_download_audiobook_rejects_media_token_for_different_audiobook(
 
     async with _files_client() as client:
         r = await client.get(f"/api/files/audiobook/{book.id}?token={token}")
+
+    assert r.status_code == 401
+
+
+async def test_download_audiobook_rejects_access_token_with_stale_token_version(
+    make_user, auth_header, db, tmp_path,
+):
+    """Issue #206, the streaming half — see the cover test above."""
+    audio_file = tmp_path / "a.m4b"
+    audio_file.write_bytes(b"audio-bytes")
+    book = await _make_audiobook(db, audio_file)
+    user = await make_user(username="listener", role="user")
+    header = auth_header(user)
+
+    db_user = (await db.execute(
+        select(User).where(User.id == user.id)
+    )).scalar_one()
+    db_user.token_version += 1
+    await db.commit()
+
+    async with _files_client() as client:
+        r = await client.get(f"/api/files/audiobook/{book.id}", headers=header)
 
     assert r.status_code == 401

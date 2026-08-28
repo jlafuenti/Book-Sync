@@ -49,7 +49,9 @@ router = APIRouter(prefix="/api/transcription", tags=["transcription"])
 async def start_transcription(
     pair_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    # Editor floor (issue #207): starting a job spends the GPU for hours and
+    # cancelling one discards work that may not be the canceller's.
+    _: User = Depends(get_editor_user),
 ):
     """
     Add a book pair to the transcription queue.
@@ -123,7 +125,9 @@ async def get_transcription_status(
 async def cancel_transcription(
     pair_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    # Editor floor (issue #207): starting a job spends the GPU for hours and
+    # cancelling one discards work that may not be the canceller's.
+    _: User = Depends(get_editor_user),
 ):
     """Cancel an active or pending transcription job."""
     # Update BookPair status first to ensure UI gets unstuck
