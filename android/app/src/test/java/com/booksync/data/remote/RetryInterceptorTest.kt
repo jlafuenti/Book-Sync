@@ -113,5 +113,39 @@ class RetryInterceptorTest {
         }
 
         assertTrue("a transport failure must still throw", thrown != null)
+        // Assert the retries too. DISCONNECT_AT_START also drives OkHttp's own
+        // recover() loop, so requestCount here is not ours to reason about --
+        // but the backoff is, and it is what proves we retried rather than
+        // simply rethrowing the first failure.
+        assertEquals("three attempts means two gaps", listOf(250L, 500L), delays)
+    }
+
+    @Test
+    fun `an interrupt during backoff surfaces as an IOException and keeps the flag`() {
+        // WorkManager interrupts a SyncWorker's thread when it stops the work.
+        // Thread.sleep answers that with InterruptedException, which is not an
+        // IOException -- unhandled it escapes as an exception type no caller
+        // expects, and swallowing it silently would lose the cancellation.
+        server.enqueue(MockResponse().setResponseCode(500))
+        val interrupting = OkHttpClient.Builder()
+            .addInterceptor(
+                RetryInterceptor(maxRetries = 3, baseDelayMs = 250) {
+                    throw InterruptedException("stopped")
+                }
+            )
+            .build()
+
+        var thrown: IOException? = null
+        try {
+            interrupting.newCall(Request.Builder().url(server.url("/x")).build()).execute()
+        } catch (e: IOException) {
+            thrown = e
+        }
+
+        assertTrue("an interrupted retry must surface as an IOException", thrown != null)
+        assertTrue(
+            "the interrupt must not be swallowed",
+            Thread.interrupted(),  // also clears the flag, so the runner is unaffected
+        )
     }
 }

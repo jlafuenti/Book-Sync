@@ -4,6 +4,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -50,6 +51,10 @@ class TokenRefreshTest {
     @Volatile
     private var storedAccess: String? = "stale-access"
 
+    /** Cleared together with the access token, exactly as [TokenManager] does. */
+    @Volatile
+    private var storedRefresh: String? = "stale-refresh"
+
     @Before
     fun setUp() {
         server = MockWebServer()
@@ -60,8 +65,19 @@ class TokenRefreshTest {
         // Non-suspend accessors, so `every` — `coEvery` silently fails to match
         // and the relaxed mock then reports no session at all.
         every { tokenManager.cachedAccessToken() } answers { storedAccess }
-        every { tokenManager.currentRefreshToken() } returns "stale-refresh"
-        coEvery { tokenManager.saveTokens(any(), any()) } answers { storedAccess = firstArg() }
+        storedRefresh = "stale-refresh"
+        every { tokenManager.currentRefreshToken() } answers { storedRefresh }
+        coEvery { tokenManager.saveTokens(any(), any()) } answers {
+            storedAccess = firstArg()
+            storedRefresh = secondArg()
+        }
+        // clearTokens really does empty the cache, and "has the session already
+        // ended" is how a waiting request decides not to end it a second time. A
+        // mock that kept handing back a token would hide that entirely.
+        coEvery { tokenManager.clearTokens() } answers {
+            storedAccess = null
+            storedRefresh = null
+        }
     }
 
     @After
@@ -99,8 +115,8 @@ class TokenRefreshTest {
             .build()
     }
 
-    private fun call(c: OkHttpClient) =
-        c.newCall(Request.Builder().url(server.url("/api/library/pairs")).build()).execute()
+    private fun call(c: OkHttpClient, path: String = "/api/library/pairs") =
+        c.newCall(Request.Builder().url(server.url(path)).build()).execute()
 
     @Test
     fun `a rejected refresh does not recurse`() {
@@ -166,8 +182,22 @@ class TokenRefreshTest {
         repeat(20) { server.enqueue(MockResponse().setResponseCode(200).setBody("ok")) }
         val c = client(refreshSucceeds = true)
 
-        val threads = (1..5).map { Thread { call(c).close() } }
+        // Released together, so all five are genuinely in flight when the token
+        // expires. Without the latch a fast thread can finish its refresh before a
+        // slow one has sent anything, and that thread then carries the *new* token
+        // into its own 401 -- a second refresh, and a flake on a loaded machine.
+        val start = CountDownLatch(1)
+        val ready = CountDownLatch(5)
+        val threads = (1..5).map {
+            Thread {
+                ready.countDown()
+                start.await()
+                call(c).close()
+            }
+        }
         threads.forEach { it.start() }
+        ready.await()
+        start.countDown()
         threads.forEach { it.join(10_000) }
 
         assertEquals("five concurrent 401s must produce one refresh", 1, refreshCalls)
@@ -250,5 +280,99 @@ class TokenRefreshTest {
         c.newCall(Request.Builder().url(server.url("/api/x")).build()).execute().close()
 
         assertTrue(!gate.required.value)
+    }
+
+    @Test
+    fun `a redirect before the 401 does not disable the refresh`() {
+        // The retry bound must count *401s*, not responses. OkHttp attaches
+        // priorResponse for every follow-up it makes -- redirects, 408s and
+        // 503-with-Retry-After included -- and it does so before it calls the
+        // authenticator. So on a server that redirects (the app accepts an http://
+        // URL and a proxy 301s it to https), every 401 arrives already carrying a
+        // priorResponse, a naive count reaches 2 immediately, and the refresh never
+        // runs. The session then never recovers and never ends either: the user
+        // sees bare 401s on every screen with no route back to login.
+        server.enqueue(
+            MockResponse().setResponseCode(301)
+                .setHeader("Location", server.url("/api/library/pairs/").toString())
+        )
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+
+        val response = call(client(refreshSucceeds = true))
+
+        assertEquals("the redirect must not suppress the refresh", 200, response.code)
+        assertEquals(1, refreshCalls)
+        response.close()
+    }
+
+    @Test
+    fun `the bearer is not attached to a host the server redirected to`() {
+        // OkHttp strips Authorization when a redirect crosses hosts, which is the
+        // whole point of that rule. Re-attaching it here because "the request has
+        // no token yet" would hand the session token to whatever host the redirect
+        // named -- a worse bug than the one being fixed.
+        val other = MockWebServer()
+        other.start()
+        try {
+            server.enqueue(
+                MockResponse().setResponseCode(302)
+                    .setHeader("Location", other.url("/api/library/pairs").toString())
+            )
+            other.enqueue(MockResponse().setResponseCode(401))
+            other.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+
+            call(client(refreshSucceeds = true)).close()
+
+            assertEquals("the 401 should surface, not be retried", 1, other.requestCount)
+            assertNull(
+                "the access token must not follow a cross-host redirect",
+                other.takeRequest().getHeader("Authorization"),
+            )
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
+    fun `concurrent failed refreshes end the session once`() {
+        // Every waiter finds the refresh token already gone and would clear again.
+        // getAccessToken() has no distinctUntilChanged, so each redundant clear is
+        // another emission and another navigate(LOGIN) { popUpTo(0) }.
+        repeat(20) { server.enqueue(MockResponse().setResponseCode(401)) }
+        val c = client(refreshSucceeds = false)
+
+        val start = CountDownLatch(1)
+        val ready = CountDownLatch(5)
+        val threads = (1..5).map {
+            Thread {
+                ready.countDown()
+                start.await()
+                runCatching { call(c).close() }
+            }
+        }
+        threads.forEach { it.start() }
+        ready.await()
+        start.countDown()
+        threads.forEach { it.join(10_000) }
+
+        coVerify(exactly = 1) { tokenManager.clearTokens() }
+    }
+
+    @Test
+    fun `a rejected login is not retried and does not end the session`() {
+        // A 401 from /auth/login means the typed password was wrong, not that the
+        // token expired. Refreshing and replaying doubles the failed attempt
+        // against any server-side rate limiter, and signs the user in as whoever
+        // the stale session belonged to.
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        val response = call(client(refreshSucceeds = true), "/api/auth/login")
+
+        assertEquals(401, response.code)
+        assertEquals(1, server.requestCount)
+        assertEquals("a bad password must not trigger a refresh", 0, refreshCalls)
+        coVerify(exactly = 0) { tokenManager.clearTokens() }
+        response.close()
     }
 }

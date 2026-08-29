@@ -90,6 +90,13 @@ object AppModule {
     @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API)
     fun provideRefreshOkHttpClient(): OkHttpClient =
         OkHttpClient.Builder()
+            // The refresh runs under a process-wide mutex, so whatever it waits
+            // for, everything else waits for too. Without a call timeout the
+            // per-stage timeouts can still add up to 90s against a server that
+            // accepts the connection and then says nothing -- an nginx upstream
+            // stall does exactly that -- and for those 90s no request in the app
+            // completes, which is the symptom #143 was reported for.
+            .callTimeout(15, TimeUnit.SECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
