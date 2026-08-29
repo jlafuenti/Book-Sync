@@ -19,8 +19,12 @@ interface BookSyncApi {
     @POST("api/auth/register")
     suspend fun register(@Body request: RegisterRequest): UserResponse
 
-    @POST("api/auth/refresh")
-    suspend fun refreshToken(@Body request: RefreshRequest): TokenResponse
+    // NOTE: /api/auth/refresh is deliberately NOT here. It lives on
+    // AuthRefreshApi, which is built on a client carrying no AuthInterceptor and
+    // no authenticator. Refreshing through this API is what let a rejected
+    // refresh token recurse until every dispatcher thread was parked and no
+    // request in the process could complete (issue #143). Putting it back would
+    // restore the deadlock.
 
     @GET("api/auth/me")
     suspend fun getMe(): UserResponse
