@@ -255,4 +255,36 @@ class SyncWiringTest {
         )
     }
 
+    @Test
+    fun `refresh never runs on the authenticated client`() {
+        // Issue #143. Every other test here can pass while the refresh sits back
+        // on the main API: the deadlock only appears when a *rejected* refresh
+        // token meets a real dispatcher, which no unit test reproduces. So pin
+        // the structural property instead — the endpoint lives on a client that
+        // has no interceptor to re-enter.
+        val api = codeLines(source("com/booksync/data/remote/BookSyncApi.kt"))
+        val interceptor = codeLines(source("com/booksync/data/remote/AuthInterceptor.kt"))
+        val module = codeLines(source("com/booksync/di/AppModule.kt"))
+
+        assertTrue(
+            "api/auth/refresh must not be declared on BookSyncApi — that API is " +
+                "built on the client AuthInterceptor is installed on, so refreshing " +
+                "through it recurses.",
+            api.none { it.contains("api/auth/refresh") },
+        )
+        assertTrue(
+            "AuthInterceptor must not refresh; that belongs to TokenAuthenticator, " +
+                "which OkHttp calls once per 401 from outside the chain.",
+            interceptor.none { it.contains("refreshToken") },
+        )
+        assertTrue(
+            "The authenticator must actually be attached to the client, or nothing " +
+                "refreshes at all and every expired session looks like a logout.",
+            module.any { it.contains(".authenticator(") },
+        )
+        assertTrue(
+            "The refresh client must be built separately.",
+            module.any { it.contains("provideRefreshOkHttpClient") },
+        )
+    }
 }
