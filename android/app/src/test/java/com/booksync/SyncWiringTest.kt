@@ -282,9 +282,29 @@ class SyncWiringTest {
                 "refreshes at all and every expired session looks like a logout.",
             module.any { it.contains(".authenticator(") },
         )
+        // Naming the provider proves nothing; what matters is what it builds. Read
+        // the body, because adding one .addInterceptor(authInterceptor) line here
+        // restores the deadlock and every other test in the repo still passes.
+        val refreshClient = module
+            .dropWhile { !it.contains("fun provideRefreshOkHttpClient") }
+            .drop(1)
+            .takeWhile { !it.contains("@Provides") }
         assertTrue(
-            "The refresh client must be built separately.",
-            module.any { it.contains("provideRefreshOkHttpClient") },
+            "provideRefreshOkHttpClient must exist and build a client.",
+            refreshClient.any { it.contains("OkHttpClient.Builder()") },
+        )
+        assertTrue(
+            "The refresh client must carry no AuthInterceptor and no authenticator " +
+                "-- that isolation is the entire fix for #143.",
+            refreshClient.none {
+                it.contains("authInterceptor") || it.contains(".authenticator(")
+            },
+        )
+        assertTrue(
+            "The refresh client needs a callTimeout. Its per-stage timeouts can " +
+                "still add up to 90s, and the refresh is held under a global mutex, " +
+                "so an unresponsive server parks every other request behind it.",
+            refreshClient.any { it.contains(".callTimeout(") },
         )
     }
 }

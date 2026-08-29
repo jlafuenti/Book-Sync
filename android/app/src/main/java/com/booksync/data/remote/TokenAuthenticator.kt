@@ -8,6 +8,7 @@ import okhttp3.Authenticator
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.Route
+import java.net.HttpURLConnection.HTTP_UNAUTHORIZED
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -50,11 +51,33 @@ class TokenAuthenticator(
     private val refreshMutex = Mutex()
 
     override fun authenticate(route: Route?, response: Response): Request? {
+        // A 401 from login or register means the password was wrong, not that the
+        // token expired. Refreshing and replaying would double the failed attempt
+        // against any server-side rate limiter, and would sign the user back in as
+        // whoever the still-cached session belonged to.
+        val path = response.request.url.encodedPath
+        if (path.endsWith("/auth/login") || path.endsWith("/auth/register")) return null
+
         // Two 401s for one call means the token we just supplied was refused as
         // well. Refreshing again would be the start of the old recursion.
-        if (responseCount(response) >= 2) return null
+        //
+        // Count 401s, not responses: OkHttp attaches priorResponse for every
+        // follow-up it makes -- redirects, 408, 503-with-Retry-After -- and it does
+        // so before calling this. Counting all of them meant that on a server which
+        // redirects (the app accepts an http:// URL, and proxies answer those with
+        // a 301) every 401 already carried a priorResponse, so the bound tripped
+        // immediately and the token was never refreshed at all. That failure is
+        // quieter than the deadlock and just as terminal: bare 401s on every
+        // screen, no clearTokens, so nothing routes the user back to login.
+        if (authFailureCount(response) >= 2) return null
 
-        val attempted = response.request.header("Authorization")?.removePrefix("Bearer ")
+        // No Authorization on the failed request means either there was no session
+        // to begin with, or OkHttp stripped the header because a redirect crossed
+        // hosts. Attaching one now would hand the session token to whatever host
+        // the redirect named -- a worse bug than the one this class fixes.
+        val attempted = response.request.header("Authorization")
+            ?.removePrefix("Bearer ")
+            ?: return null
 
         return runBlocking {
             refreshMutex.withLock {
@@ -67,7 +90,15 @@ class TokenAuthenticator(
 
                 val refreshToken = tokenManager.currentRefreshToken()
                 if (refreshToken.isNullOrEmpty()) {
-                    tokenManager.clearTokens()
+                    // Nothing to refresh with. End the session only if one still
+                    // looks live: when several requests 401 together, the waiters
+                    // arrive here *after* the holder's failed refresh already
+                    // cleared, and getAccessToken() has no distinctUntilChanged, so
+                    // each redundant clear is another null emission and another
+                    // navigate(LOGIN) { popUpTo(0) }.
+                    if (!tokenManager.cachedAccessToken().isNullOrEmpty()) {
+                        tokenManager.clearTokens()
+                    }
                     return@withLock null
                 }
 
@@ -91,15 +122,10 @@ class TokenAuthenticator(
     private fun Request.withBearer(token: String): Request =
         newBuilder().header("Authorization", "Bearer $token").build()
 
-    private fun responseCount(response: Response): Int {
-        var count = 1
-        var prior = response.priorResponse
-        while (prior != null) {
-            count++
-            prior = prior.priorResponse
-        }
-        return count
-    }
+    /** How many 401s this call has collected, including the one being handled. */
+    private fun authFailureCount(response: Response): Int =
+        generateSequence(response) { it.priorResponse }
+            .count { it.code == HTTP_UNAUTHORIZED }
 
     companion object {
         /** Qualifier for the isolated refresh client's API. */
