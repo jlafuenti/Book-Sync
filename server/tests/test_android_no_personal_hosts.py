@@ -60,6 +60,55 @@ _KOTLIN_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _XML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
+def _strip_kotlin_comments(text: str) -> str:
+    """Blank Kotlin comments, leaving string literals alone (issue #311).
+
+    This used to be two regexes. Neither knew what a string was, so the `//` in
+    any `http://` blanked the rest of the line and a `/*` inside a literal opened
+    a comment that ran to the next `*/` anywhere in the file. The guard could
+    therefore not see a URL in Kotlin code at all -- including the hardcoded
+    default server URL it was written to catch.
+
+    One pass, tracking whether we are inside `"`, `\'` or a `\"\"\"` block.
+    Comments become spaces; newlines are preserved so reported line numbers stay
+    accurate. Not a Kotlin parser, and does not need to be: the only question is
+    whether a `//` or `/*` is inside a literal.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith('"""', i):
+            end = text.find('"""', i + 3)
+            i = n if end == -1 else end + 3
+        elif text[i] == '"' or text[i] == "'":
+            quote = text[i]
+            i += 1
+            while i < n and text[i] != quote:
+                # A backslash escapes whatever follows, including the quote. An
+                # unterminated literal stops at the newline rather than running
+                # away with the rest of the file.
+                if text[i] == "\\":
+                    i += 1
+                elif text[i] == "\n":
+                    break
+                i += 1
+            i += 1
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            stop = n if end == -1 else end + 2
+            while i < stop:
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
 def strip_comments(text: str, suffix: str) -> str:
     """Blank out comments, preserving line numbering so offenders stay locatable."""
 
@@ -69,11 +118,28 @@ def strip_comments(text: str, suffix: str) -> str:
 
     if suffix == ".xml":
         return _XML_COMMENT.sub(_blank, text)
-
-    text = _KOTLIN_BLOCK_COMMENT.sub(_blank, text)
     if suffix == ".pro":
+        # ProGuard rules: `#` comments, and no string syntax to protect.
         return re.sub(r"#[^\n]*", _blank, text)
-    return re.sub(r"//[^\n]*", _blank, text)
+    return _strip_kotlin_comments(text)
+
+
+def scan_text(text: str, suffix: str) -> list[tuple[int, str]]:
+    """Detector hits in `text` as (line number, literal), comments excluded.
+
+    Split out from `_offenders` so the detectors can be exercised against a
+    string. Walking the real tree only tells you the tree is clean today; it
+    cannot tell you the scanner would notice if it were not, which is exactly
+    how issue #311 stayed hidden.
+    """
+    found = []
+    for lineno, line in enumerate(strip_comments(text, suffix).splitlines(), 1):
+        for match in list(_PRIVATE_IP.finditer(line)) + list(_PERSONAL_HOST.finditer(line)):
+            literal = match.group(0)
+            if literal in ALLOWED_LITERALS:
+                continue
+            found.append((lineno, literal))
+    return found
 
 
 def _android_source_files():
@@ -91,13 +157,9 @@ def _offenders():
     for path in _android_source_files():
         suffix = os.path.splitext(path)[1]
         with open(path, encoding="utf-8", errors="replace") as fh:
-            body = strip_comments(fh.read(), suffix)
-        for lineno, line in enumerate(body.splitlines(), 1):
-            for match in list(_PRIVATE_IP.finditer(line)) + list(_PERSONAL_HOST.finditer(line)):
-                literal = match.group(0)
-                if literal in ALLOWED_LITERALS:
-                    continue
-                found.append((os.path.relpath(path, _REPO_ROOT), lineno, literal))
+            text = fh.read()
+        rel = os.path.relpath(path, _REPO_ROOT)
+        found.extend((rel, lineno, literal) for lineno, literal in scan_text(text, suffix))
     return found
 
 
@@ -151,3 +213,78 @@ def test_comment_stripping_blanks_comments_without_eating_code():
 
     xml = strip_comments("<!-- drop.me -->\n<domain>keep.me</domain>\n", ".xml")
     assert "drop.me" not in xml and "keep.me" in xml
+
+
+# ---------------------------------------------------------------------------
+# Issue #311: the guard could not see a URL.
+#
+# `strip_comments` blanked everything after `//` with no idea what a string
+# literal is, so the scheme separator in any `http://` or `https://` was read as
+# a line-comment opener and the rest of the line was erased before the detectors
+# ran. A hardcoded `"https://tandem.lafuenti.com"` — issue #58's original defect,
+# the exact thing this file was written to prevent — sailed straight through.
+#
+# Found by accident: #149 added four `192.168.1.5` literals to
+# ServerUrlPolicyTest.kt and only one was reported, the one written
+# `https:/192.168.1.5` with a single slash.
+# ---------------------------------------------------------------------------
+
+
+def test_a_url_in_a_string_literal_survives_comment_stripping():
+    kt = strip_comments('val a = "https://host.example.com"  // drop.me', ".kt")
+    assert "host.example.com" in kt, (
+        "the // in https:// was treated as a comment opener, which is why this "
+        "guard could not see any URL in Kotlin code"
+    )
+    assert "drop.me" not in kt, "real line comments must still be stripped"
+
+
+def test_the_original_hardcoded_default_server_url_is_reported():
+    """The #58 regression this file exists to prevent. Fails before #311."""
+    found = scan_text('private const val DEFAULT = "https://tandem.lafuenti.com"\n', ".kt")
+    assert [lit for _, lit in found] == ["tandem.lafuenti.com"]
+
+
+def test_a_private_ip_inside_a_url_literal_is_reported():
+    found = scan_text('val lan = "http://192.168.1.50:8000/api"\n', ".kt")
+    assert [lit for _, lit in found] == ["192.168.1.50"]
+
+
+def test_raw_string_blocks_are_scanned():
+    """build.gradle.kts builds the network security config in a raw string."""
+    kts = (
+        'val cfg = ' + '"""' + '\n'
+        '    <domain includeSubdomains="false">192.168.1.50</domain>\n'
+        + '"""' + '.trimIndent()\n'
+    )
+    found = scan_text(kts, ".kts")
+    assert [lit for _, lit in found] == ["192.168.1.50"]
+
+
+def test_a_comment_marker_inside_a_string_does_not_open_a_comment():
+    # The closing `*/` is load-bearing: without one the old regex found no match
+    # and this passed against the very bug it is meant to catch.
+    kt = strip_comments(
+        'val open = "/*"\nval b = "keep.me"\nval close = "*/"\n', ".kt"
+    )
+    assert "keep.me" in kt, (
+        "a `/*` inside a string literal opened a block comment that swallowed "
+        "everything up to the next `*/` in the file"
+    )
+
+
+def test_comments_naming_the_production_host_stay_exempt():
+    """The docstring's deliberate exemption — prose is not a baked-in host."""
+    assert scan_text("// see tandem.lafuenti.com for why\n", ".kt") == []
+    assert scan_text("/* tandem.lafuenti.com */\n", ".kt") == []
+    assert scan_text("<!-- tandem.lafuenti.com -->\n", ".xml") == []
+
+
+def test_reported_line_numbers_survive_stripping():
+    found = scan_text('// pad\n\nval a = "http://192.168.1.50"\n', ".kt")
+    assert found == [(3, "192.168.1.50")]
+
+
+def test_allowed_literals_still_pass_when_visible_in_a_url():
+    """10.0.2.2 is the emulator's alias for the host machine, allowed on purpose."""
+    assert scan_text('val emu = "http://10.0.2.2:8000"\n', ".kt") == []
