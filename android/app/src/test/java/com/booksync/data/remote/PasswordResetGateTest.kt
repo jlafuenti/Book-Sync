@@ -1,9 +1,7 @@
 package com.booksync.data.remote
 
-import dagger.Lazy
 import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -77,12 +75,13 @@ class PasswordResetGateTest {
     // ---- the interceptor -------------------------------------------------
 
     private fun interceptorWith(response: Response): Pair<AuthInterceptor, PasswordResetGate> {
+        // Refresh moved out to TokenAuthenticator (issue #143), so the interceptor
+        // no longer needs an API at all — it attaches the bearer and watches for
+        // the forced-reset 403.
         val tokenManager = mockk<TokenManager>(relaxed = true)
-        every { tokenManager.getAccessToken() } returns flowOf("access-token")
-        every { tokenManager.getRefreshToken() } returns flowOf("refresh-token")
-        val api = mockk<Lazy<BookSyncApi>>(relaxed = true)
+        every { tokenManager.cachedAccessToken() } returns "access-token"
         val gate = PasswordResetGate()
-        return AuthInterceptor(tokenManager, api, gate) to gate
+        return AuthInterceptor(tokenManager, gate) to gate
     }
 
     private fun responseOf(code: Int, body: String, contentType: String = "application/json") =

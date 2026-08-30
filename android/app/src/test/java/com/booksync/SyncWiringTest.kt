@@ -255,4 +255,56 @@ class SyncWiringTest {
         )
     }
 
+    @Test
+    fun `refresh never runs on the authenticated client`() {
+        // Issue #143. Every other test here can pass while the refresh sits back
+        // on the main API: the deadlock only appears when a *rejected* refresh
+        // token meets a real dispatcher, which no unit test reproduces. So pin
+        // the structural property instead — the endpoint lives on a client that
+        // has no interceptor to re-enter.
+        val api = codeLines(source("com/booksync/data/remote/BookSyncApi.kt"))
+        val interceptor = codeLines(source("com/booksync/data/remote/AuthInterceptor.kt"))
+        val module = codeLines(source("com/booksync/di/AppModule.kt"))
+
+        assertTrue(
+            "api/auth/refresh must not be declared on BookSyncApi — that API is " +
+                "built on the client AuthInterceptor is installed on, so refreshing " +
+                "through it recurses.",
+            api.none { it.contains("api/auth/refresh") },
+        )
+        assertTrue(
+            "AuthInterceptor must not refresh; that belongs to TokenAuthenticator, " +
+                "which OkHttp calls once per 401 from outside the chain.",
+            interceptor.none { it.contains("refreshToken") },
+        )
+        assertTrue(
+            "The authenticator must actually be attached to the client, or nothing " +
+                "refreshes at all and every expired session looks like a logout.",
+            module.any { it.contains(".authenticator(") },
+        )
+        // Naming the provider proves nothing; what matters is what it builds. Read
+        // the body, because adding one .addInterceptor(authInterceptor) line here
+        // restores the deadlock and every other test in the repo still passes.
+        val refreshClient = module
+            .dropWhile { !it.contains("fun provideRefreshOkHttpClient") }
+            .drop(1)
+            .takeWhile { !it.contains("@Provides") }
+        assertTrue(
+            "provideRefreshOkHttpClient must exist and build a client.",
+            refreshClient.any { it.contains("OkHttpClient.Builder()") },
+        )
+        assertTrue(
+            "The refresh client must carry no AuthInterceptor and no authenticator " +
+                "-- that isolation is the entire fix for #143.",
+            refreshClient.none {
+                it.contains("authInterceptor") || it.contains(".authenticator(")
+            },
+        )
+        assertTrue(
+            "The refresh client needs a callTimeout. Its per-stage timeouts can " +
+                "still add up to 90s, and the refresh is held under a global mutex, " +
+                "so an unresponsive server parks every other request behind it.",
+            refreshClient.any { it.contains(".callTimeout(") },
+        )
+    }
 }

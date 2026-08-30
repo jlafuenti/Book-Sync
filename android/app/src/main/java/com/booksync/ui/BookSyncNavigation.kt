@@ -300,8 +300,12 @@ fun BookSyncNavigation() {
                 // the tokens routes there directly through the observer above, and
                 // signing in with the new password is the honest next step.
                 onPasswordChanged = {
+                    // AccountViewModel.changePassword clears the tokens, for both
+                    // screens that change a password rather than only this one.
+                    // Clearing again here is a second null emission from a flow
+                    // with no distinctUntilChanged, and so a second
+                    // navigate(LOGIN) { popUpTo(0) }.
                     passwordResetGate.clear()
-                    scope.launch { tokenManager.clearTokens() }
                 },
                 onLogout = { /* handled by the screen's own view-model */ },
             )
