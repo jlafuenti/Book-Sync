@@ -29,11 +29,28 @@ coverage.xml
 *.log
 # Real deployment compose file (secrets, volume paths) — copy from
 # docker-compose.example.yml and customize; never tracked.
+#
+# The `.*` sibling rule is not paranoia: #187 fenced `*.bak`, and the production
+# host was then found holding `docker-compose.yml.pre-151` — same five secret
+# lines, matched by nothing (issue #313). Enumerating suffixes loses to whatever
+# a human types next, so ignore the whole stem. `docker-compose.example.yml` is a
+# different stem and stays tracked.
 /docker-compose.yml
+/docker-compose.yml.*
 
 # Real Jetson deployment compose file (carries TRANSCRIPTION_API_KEY) — copy
 # from jetson/docker-compose.example.yml and customize; never tracked.
 /jetson/docker-compose.yml
+/jetson/docker-compose.yml.*
+
+# The real reverse-proxy config. docs/operations.md tells operators to copy
+# Caddyfile.example and adapt it, so the documented setup produces a file here
+# holding whatever credentials the proxy fronts with — and nothing matched it.
+# The negation must stay last, or the template a fresh clone copies from stops
+# being committable (issue #313).
+/Caddyfile
+/Caddyfile.*
+!Caddyfile.example
 
 # Databases (local SQLite files must never be committed — issue #153)
 *.db
