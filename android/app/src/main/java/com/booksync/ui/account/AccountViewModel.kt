@@ -183,6 +183,13 @@ class AccountViewModel @Inject constructor(
                 )
                 if (response.isSuccessful) {
                     _changePasswordState.value = ChangePasswordState.Success
+                    // The server bumped token_version, so the tokens still held
+                    // here are already dead (issue #143). Leaving them in place
+                    // meant the next request 401'd, the refresh 401'd too, and the
+                    // app deadlocked. Ending the session locally is honest about
+                    // what the server just did; BookSyncNavigation observes the
+                    // clear and routes to login.
+                    tokenManager.clearTokens()
                 } else {
                     val msg = when (response.code()) {
                         400  -> "Current password is incorrect."

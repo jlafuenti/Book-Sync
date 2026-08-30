@@ -58,7 +58,8 @@ object AppModule {
     @Singleton
     fun provideOkHttpClient(
         authInterceptor: com.booksync.data.remote.AuthInterceptor,
-        retryInterceptor: com.booksync.data.remote.RetryInterceptor
+        retryInterceptor: com.booksync.data.remote.RetryInterceptor,
+        tokenAuthenticator: com.booksync.data.remote.TokenAuthenticator,
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -69,8 +70,64 @@ object AppModule {
             })
             .addInterceptor(retryInterceptor)
             .addInterceptor(authInterceptor)
+            // Refresh-on-401 lives here rather than in the interceptor (issue
+            // #143): OkHttp calls an authenticator once per 401, from outside the
+            // chain, so it cannot re-enter the chain that triggered it.
+            .authenticator(tokenAuthenticator)
             .build()
     }
+
+    // ---------------------------------------------------------------------
+    // Refresh client (issue #143) — deliberately carries no AuthInterceptor,
+    // no RetryInterceptor and no authenticator. Refreshing through the main
+    // client is what let a rejected refresh token recurse until every
+    // dispatcher thread was parked and no request in the process completed.
+    // Same shape as the dictionary client below, for a different reason.
+    // ---------------------------------------------------------------------
+
+    @Provides
+    @Singleton
+    @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API)
+    fun provideRefreshOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            // The refresh runs under a process-wide mutex, so whatever it waits
+            // for, everything else waits for too. Without a call timeout the
+            // per-stage timeouts can still add up to 90s against a server that
+            // accepts the connection and then says nothing -- an nginx upstream
+            // stall does exactly that -- and for those 90s no request in the app
+            // completes, which is the symptom #143 was reported for.
+            .callTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+            })
+            .build()
+
+    @Provides
+    @Singleton
+    @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API)
+    fun provideRefreshRetrofit(
+        @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API) client: OkHttpClient,
+        json: Json,
+        serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    ): Retrofit {
+        val contentType = "application/json".toMediaType()
+        return Retrofit.Builder()
+            .baseUrl(com.booksync.data.remote.retrofitBaseUrl(serverUrlManager.getServerUrlBlocking()))
+            .client(client)
+            .addConverterFactory(json.asConverterFactory(contentType))
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API)
+    fun provideAuthRefreshApi(
+        @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API) retrofit: Retrofit,
+    ): com.booksync.data.remote.AuthRefreshApi =
+        retrofit.create(com.booksync.data.remote.AuthRefreshApi::class.java)
 
     @Provides
     @Singleton

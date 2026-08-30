@@ -254,6 +254,10 @@ dependencies {
     // mockk mocks final Kotlin classes (NetworkMonitor, TokenManager) and suspend
     // functions, which is what makes ViewModels unit-testable off-device.
     testImplementation("io.mockk:mockk:1.14.2")
+    // Counts requests, which is what the refresh-recursion bug is about
+    // (issue #143): a unit test can assert "exactly one refresh POST" in a way
+    // a mocked Chain cannot.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // Real SQLite in JVM unit tests, so MIGRATION_19_20 can actually be executed
     // against a populated v19 database (issue #314). Room's MigrationTestHelper
     // needs an instrumentation context and this module has no androidTest source
