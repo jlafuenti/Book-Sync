@@ -213,6 +213,24 @@ _MUST_BE_IGNORED = [
     "docker-compose.yml.bak",
     "server/.env.bak",
     "docker-compose.yml.orig",
+    # ...and the suffixes nobody enumerated (issue #313). #187 fenced `*.bak`,
+    # but the production host was found holding `docker-compose.yml.pre-151`
+    # with the same five secret lines, matched by nothing. Ignore by stem
+    # instead of guessing which suffix someone will type next.
+    "docker-compose.yml.pre-151",
+    "docker-compose.yml.old",
+    "docker-compose.yml.2026-08-01",
+    "jetson/docker-compose.yml.pre-151",
+    # The reverse-proxy config. docs/operations.md tells operators to copy
+    # Caddyfile.example and adapt it, so following the documented setup produces
+    # an untracked Caddyfile holding whatever auth the proxy fronts with.
+    "Caddyfile",
+    "Caddyfile.bak",
+    # Only `/Caddyfile.*` reaches these two; `Caddyfile.bak` alone is covered by
+    # the older `*.bak` rule, so without them that rule would sit there pinned by
+    # nothing -- which is the failure mode both #311 and #313 are about.
+    "Caddyfile.old",
+    "Caddyfile.pre-151",
     # Environment files of every flavour
     ".env.prod",
     ".env.production",
@@ -232,6 +250,14 @@ _MUST_NOT_BE_IGNORED = [
     "server/.env.example",
     ".env.sample",
     "web/.env.template",
+    # The templates a fresh clone copies from. `docker-compose.example.yml` is a
+    # different stem so the `/docker-compose.yml.*` rule cannot reach it, but
+    # `Caddyfile.example` *is* matched by `/Caddyfile.*` and survives only on the
+    # negation that follows it — pin all three so a reordering is caught here
+    # rather than by someone's clone missing a file (issue #313).
+    "docker-compose.example.yml",
+    "jetson/docker-compose.example.yml",
+    "Caddyfile.example",
 ]
 
 
