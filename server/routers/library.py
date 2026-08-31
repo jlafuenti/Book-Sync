@@ -3495,7 +3495,9 @@ async def _realign_relinked_pairs(pair_ids: List[int], db: AsyncSession) -> List
 @router.get("/unsupported", response_model=List[UnsupportedFileResponse])
 async def list_unsupported_files(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # Editor, not admin: this list drives conversion, which is library
+    # maintenance rather than infrastructure (issue #283).
+    current_user: User = Depends(get_editor_user),
 ):
     """List all ebooks in unsupported formats (MOBI, AZW3) with conversion status."""
     result = await db.execute(

@@ -16,6 +16,7 @@ COPY --from=build /app/dist /usr/share/nginx/html
 RUN echo 'server { \
     listen 3000; \
     root /usr/share/nginx/html; \
+    add_header Referrer-Policy "same-origin" always; \
     location = /sw.js { \
     add_header Cache-Control "no-cache, must-revalidate"; \
     try_files $uri =404; \
