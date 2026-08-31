@@ -26,7 +26,11 @@ from ebooklib import epub
 import mutagen
 from markdownify import markdownify as md
 import zipfile
-import xml.etree.ElementTree as ET
+# defusedxml rather than the stdlib parser (issue #265). Python 3.12's expat
+# already refuses external entities and caps amplification, so this changes no
+# behaviour -- it makes the choice explicit for input that arrives as an
+# attacker-supplied archive, and keeps bandit quiet on a public repo.
+import defusedxml.ElementTree as ET
 import tempfile
 
 from database import get_db
