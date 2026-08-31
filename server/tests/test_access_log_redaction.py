@@ -22,7 +22,9 @@ here would silently delete access logging for every media request.
 
 import logging
 
-from main import AccessLogSecretFilter
+# From log_filters, not main: main creates its log directory at import time, so
+# importing it here fails in CI with PermissionError on /data.
+from log_filters import AccessLogSecretFilter
 
 _JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlLWhlcmU"
 
@@ -82,3 +84,31 @@ def test_a_record_without_args_is_passed_through():
     )
     assert AccessLogSecretFilter().filter(rec) is True
     assert rec.getMessage() == "something else entirely"
+
+
+def test_the_filter_is_actually_attached_in_main():
+    """The class now lives outside main, so it could be left unwired.
+
+    Importing main here is not an option -- it creates its log directory at
+    import time and CI cannot write /data -- so read the source, the same blunt
+    instrument SyncWiringTest uses on the Android side for the same reason:
+    the failure mode is "the call disappeared", which this catches exactly.
+    """
+    import os
+
+    main_py = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py"
+    )
+    with open(main_py, encoding="utf-8") as fh:
+        src = [ln.strip() for ln in fh if not ln.strip().startswith("#")]
+
+    assert any("from log_filters import AccessLogSecretFilter" in ln for ln in src), (
+        "main.py must import the filter"
+    )
+    assert any(
+        'logging.getLogger("uvicorn.access").addFilter(AccessLogSecretFilter())' in ln
+        for ln in src
+    ), (
+        "main.py must attach AccessLogSecretFilter to uvicorn.access -- unattached, "
+        "every test in this file still passes and every token still reaches the log"
+    )
