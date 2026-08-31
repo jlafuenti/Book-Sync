@@ -106,7 +106,14 @@ def main():
     # --- 2. Pull download URL out of the reply XML ---
     try:
         adNS = lambda tag: "{http://ns.adobe.com/adept}" + tag
-        resp = etree.fromstring(reply)
+        # Semi-trusted (HTTPS from Adobe), parsed explicitly anyway (#265).
+        resp = etree.fromstring(
+            reply,
+            parser=etree.XMLParser(
+                resolve_entities=False, no_network=True, load_dtd=False,
+                huge_tree=False,
+            ),
+        )
         download_url = resp.find(
             f"./{adNS('fulfillmentResult')}/{adNS('resourceItemInfo')}/{adNS('src')}"
         ).text
@@ -210,7 +217,13 @@ def main():
                 f"./{adNS('fulfillmentResult')}/{adNS('resourceItemInfo')}/{adNS('licenseToken')}"
             )
             rights_xml_str = buildRights(license_token_node)
-            adobe_resp = etree.fromstring(rights_xml_str)
+            adobe_resp = etree.fromstring(
+                rights_xml_str,
+                parser=etree.XMLParser(
+                    resolve_entities=False, no_network=True, load_dtd=False,
+                    huge_tree=False,
+                ),
+            )
             resource = adobe_resp.find(
                 f"./{adNS('licenseToken')}/{adNS('resource')}"
             ).text

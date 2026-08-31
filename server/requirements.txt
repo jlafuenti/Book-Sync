@@ -26,6 +26,13 @@ aiofiles==24.1.0
 numpy>=1.26,<2
 tqdm>=4.66
 ebooklib==0.18
+# Pinned deliberately, though both arrive transitively (issue #265). EPUB/OPF
+# parsing relies on lxml >= 5 defaulting to resolve_entities='internal', and
+# defusedxml is now imported directly for the stdlib XML call sites. A dependency
+# whose *behaviour* is a security property should not be a version pip happened
+# to pick: libxml2 already drifted 2.11.9 -> 2.14.6 under us while unpinned.
+lxml==6.1.2
+defusedxml==0.7.1
 mobi==0.3.3
 beautifulsoup4==4.12.3
 mutagen==1.47.0

@@ -38,6 +38,13 @@ COPY requirements.txt requirements-local.txt ./
 RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
+# Sentence tokenizer data, at build time (issue #322). Without this, every fresh
+# container fetches it from GitHub the first time a module imports it — unguarded
+# and untimed — which took production down for five minutes on 2026-08-31. It
+# sits here rather than after `COPY . .` so the layer is keyed to requirements
+# and not invalidated by every source edit.
+RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt_tab
+
 # Local (server-side) Whisper — torch + openai-whisper — is opt-in because torch
 # pulls multi-GB nvidia-cu* CUDA wheels that are pure build cost when
 # transcription is offloaded to a remote/Jetson worker. Default build skips them.
