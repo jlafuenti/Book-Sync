@@ -1,6 +1,7 @@
 import secrets
 from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.settings import SystemSetting
@@ -17,6 +18,34 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 # encrypted credential store. The web UI uses presence of this string to know
 # a credential is set without exposing the value.
 _SECRET_PLACEHOLDER = "********"
+
+
+# ---------------------------------------------------------------------------
+# Bodies for the three "Test connection" endpoints (issue #284).
+#
+# These carried the ABS token, the Hardcover token and the Jetson key as query
+# parameters, which put them in the request line -- and so into uvicorn's access
+# log, which is durable. Unlike the media tokens on cover URLs, these are
+# long-lived and not resource-scoped: they should never have been in a URL. A
+# confirmed instance was found in the production container's log.
+#
+# POST with a body is the fix. The endpoints are reads in spirit, but a GET
+# cannot carry a body, and correctness about where secrets travel beats REST
+# purity here.
+# ---------------------------------------------------------------------------
+
+class TestAbsRequest(BaseModel):
+    url: str
+    token: str = ""
+
+
+class TestHardcoverRequest(BaseModel):
+    token: str = ""
+
+
+class TestRemoteRequest(BaseModel):
+    url: str
+    key: str = ""
 
 DEFAULT_SETTINGS = {
     "ebook_filename_patterns": [
@@ -176,15 +205,16 @@ async def update_settings(
     await db.commit()
     return await get_settings(db)
 
-@router.get("/test-abs")
+@router.post("/test-abs")
 async def test_abs_connection(
-    url: str,
-    token: str = "",
+    body: TestAbsRequest,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_admin_user),
 ):
     """Test the connection to an Audiobookshelf server."""
     import httpx
+
+    url, token = body.url, body.token
 
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
@@ -226,15 +256,17 @@ async def test_abs_connection(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@router.get("/test-hardcover")
+@router.post("/test-hardcover")
 async def test_hardcover_connection(
-    token: str = "",
+    body: TestHardcoverRequest,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_admin_user),
 ):
     """Validate a Hardcover API token by running the trivial `me` query.
     Same placeholder/stored-credential fallback semantics as test-abs."""
     import httpx
+
+    token = body.token
 
     api_token = token if (token and token != _SECRET_PLACEHOLDER) else await credential_store.get_credential(db, "hardcover")
     if not api_token:
@@ -282,10 +314,9 @@ async def generate_transcription_remote_key(
     return {"key": key}
 
 
-@router.get("/test-remote")
+@router.post("/test-remote")
 async def test_remote_connection(
-    url: str,
-    key: str = "",
+    body: TestRemoteRequest,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_admin_user),
 ):
@@ -295,6 +326,8 @@ async def test_remote_connection(
     cannot reach a local LAN IP like the Jetson directly.
     """
     import httpx
+
+    url, key = body.url, body.key
 
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")

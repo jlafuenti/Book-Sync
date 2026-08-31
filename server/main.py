@@ -25,6 +25,7 @@ from config import (
     check_cors_origins,
     check_forwarded_allow_ips,
 )
+from log_filters import AccessLogSecretFilter
 from middleware import MultipartBodyLimitMiddleware
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
@@ -58,6 +59,7 @@ class EndpointFilter(logging.Filter):
         return "/api/transcription/queue HTTP" not in record.getMessage()
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+logging.getLogger("uvicorn.access").addFilter(AccessLogSecretFilter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
 # Library loggers we don't want in normal operation
 logging.getLogger("audible.auth").setLevel(logging.WARNING)

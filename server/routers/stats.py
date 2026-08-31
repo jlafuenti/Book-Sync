@@ -74,7 +74,9 @@ def format_bytes(size: int) -> str:
 
 @router.get("/disk_usage", response_model=DiskUsageStats)
 async def get_disk_usage(
-    _: User = Depends(get_current_user),
+    # Admin: capacity and usage of all three data roots is infrastructure detail,
+    # and the admin console is its only caller (issue #283).
+    _: User = Depends(get_admin_user),
 ):
     """Get disk usage statistics for configured directories."""
     
@@ -170,7 +172,7 @@ class RestoreRequest(BaseModel):
 
 
 @router.get("/backup", response_model=BackupStatus)
-async def get_backup_status(_: User = Depends(get_current_user)):
+async def get_backup_status(_: User = Depends(get_admin_user)):
     """Lightweight backup health: last successful run + staleness flag."""
     return BackupStatus(**backup_service.get_status())
 

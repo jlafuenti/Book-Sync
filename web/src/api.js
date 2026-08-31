@@ -30,6 +30,12 @@ function clearTokens() {
     refreshToken = null;
     localStorage.removeItem('tandem_token');
     localStorage.removeItem('tandem_refresh');
+    // Media tokens carry the session's `ver`, and logout bumps token_version
+    // server-side -- so every cached one is already dead. Logout followed by
+    // login is an SPA transition with no page reload, so without this the next
+    // session keeps serving them and every cover and audio request 401s for up
+    // to 14 minutes (issue #284).
+    mediaTokenCache.clear();
 }
 
 // ============ Device Identity (issue #54 — multi-device conflict resolution) ============
@@ -925,9 +931,13 @@ export async function testRemoteConnection(url, key = '') {
     if (!url) throw new Error("URL is required");
     // We ping via the backend to avoid CORS and VPN local-routing issues
     // where the user's browser cannot reach the Jetson directly.
-    const resp = await fetchWithAuth(
-        `${API_BASE}/settings/test-remote?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`
-    );
+    // POST, not GET: the Jetson key is long-lived and not resource-scoped, and a
+    // query string lands in the access log. One was found there (issue #284).
+    const resp = await fetchWithAuth(`${API_BASE}/settings/test-remote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, key }),
+    });
 
     if (!resp.ok) {
         let msg = `HTTP ${resp.status}`;
@@ -950,9 +960,11 @@ export async function generateTranscriptionRemoteKey() {
 
 export async function testAbsConnection(url, token = '') {
     if (!url) throw new Error("URL is required");
-    const resp = await fetchWithAuth(
-        `${API_BASE}/settings/test-abs?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`
-    );
+    const resp = await fetchWithAuth(`${API_BASE}/settings/test-abs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, token }),
+    });
     if (!resp.ok) {
         let msg = `HTTP ${resp.status}`;
         try {
@@ -965,9 +977,11 @@ export async function testAbsConnection(url, token = '') {
 }
 
 export async function testHardcoverConnection(token = '') {
-    const resp = await fetchWithAuth(
-        `${API_BASE}/settings/test-hardcover?token=${encodeURIComponent(token)}`
-    );
+    const resp = await fetchWithAuth(`${API_BASE}/settings/test-hardcover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+    });
     if (!resp.ok) {
         let msg = `HTTP ${resp.status}`;
         try {

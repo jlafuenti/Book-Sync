@@ -1302,8 +1302,14 @@ function SystemPage({ tab }) {
     }, [])
 
     useEffect(() => {
-        if (!showUnsupported) loadStatus()
-    }, [showUnsupported, loadStatus])
+        // `canAdmin` as well as the tab: the status reads are admin-only
+        // server-side now (issue #283), and /system/unsupported is reachable by
+        // editors. The route guard already keeps non-admins off the status view,
+        // so this is belt and braces -- but firing a read that can only 403 and
+        // then showing "Failed to load system status" is a bad way to express a
+        // permission boundary.
+        if (!showUnsupported && canAdmin) loadStatus()
+    }, [showUnsupported, canAdmin, loadStatus])
 
     const totalBooks = counts ? counts.ebooks + counts.audiobooks : 0
     const pairRate = counts ? Math.round(counts.pairs / Math.max(counts.ebooks, 1) * 100) : 0
@@ -1312,6 +1318,10 @@ function SystemPage({ tab }) {
     if (showUnsupported) {
         return (
             <div>
+                {/* Editors reach this view directly and cannot load the status
+                    view behind it, so the way back would show them an empty
+                    page (issue #283). */}
+                {canAdmin && (
                 <div style={{ marginBottom: 20 }}>
                     <button className="btn btn-secondary" onClick={() => setShowUnsupported(false)}
                         style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1321,6 +1331,7 @@ function SystemPage({ tab }) {
                         Back to System
                     </button>
                 </div>
+                )}
                 <UnsupportedFilesTab canAdmin={canAdmin} />
             </div>
         )
