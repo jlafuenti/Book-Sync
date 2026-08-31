@@ -16,6 +16,10 @@ COPY --from=build /app/dist /usr/share/nginx/html
 RUN echo 'server { \
     listen 3000; \
     root /usr/share/nginx/html; \
+    # nginx add_header does not merge: any location block with an add_header of \
+    # its own discards every inherited one. This server-level line covers the \
+    # blocks that set no headers, and /index.html repeats it -- that is the one \
+    # that matters, since the document is what sends a referrer (issue #284). \
     add_header Referrer-Policy "same-origin" always; \
     location = /sw.js { \
     add_header Cache-Control "no-cache, must-revalidate"; \
@@ -32,6 +36,7 @@ RUN echo 'server { \
     } \
     location = /index.html { \
     add_header Cache-Control "no-cache, must-revalidate"; \
+    add_header Referrer-Policy "same-origin" always; \
     } \
     location /assets/ { \
     add_header Cache-Control "public, max-age=31536000, immutable"; \
