@@ -417,6 +417,10 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
 function TroubleshootPage() {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
+    // /system/status is admin-only (issue #283), and this page is editor-
+    // reachable. Offering an editor a link there sends them to the home page,
+    // which reads as the app losing its place rather than as a boundary.
+    const canOpenSystem = hasMinRole('admin')
 
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(true)
@@ -491,6 +495,7 @@ function TroubleshootPage() {
 
     return (
         <div>
+            {canOpenSystem && (
             <div style={{ marginBottom: 16 }}>
                 <Link to="/system/status" className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
@@ -499,6 +504,7 @@ function TroubleshootPage() {
                     Back to System
                 </Link>
             </div>
+            )}
 
             <div className="system-section-header">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
