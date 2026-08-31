@@ -19,7 +19,7 @@ async def test_disk_usage_returns_shape(make_client, make_user, auth_header, mon
     (tmp_path / "e").mkdir()
     (tmp_path / "a").mkdir()
 
-    user = await make_user(username="u", role="user")
+    user = await make_user(username="u", role="admin")
     async with make_client(stats.router) as c:
         r = await c.get("/api/stats/disk_usage", headers=auth_header(user))
 
@@ -61,7 +61,7 @@ async def test_backup_status_recent(make_client, make_user, auth_header, monkeyp
     monkeypatch.setattr(settings, "backups_dir", str(tmp_path))
     _make_backup(tmp_path, "2026-07-13", db_size=200, mtime=time.time())
 
-    user = await make_user(username="u", role="user")
+    user = await make_user(username="u", role="admin")
     async with make_client(stats.router) as c:
         r = await c.get("/api/stats/backup", headers=auth_header(user))
 
@@ -81,7 +81,7 @@ async def test_backup_status_stale_when_old(make_client, make_user, auth_header,
     old = time.time() - 3 * 24 * 3600
     _make_backup(tmp_path, "2026-07-10", mtime=old)
 
-    user = await make_user(username="u", role="user")
+    user = await make_user(username="u", role="admin")
     async with make_client(stats.router) as c:
         r = await c.get("/api/stats/backup", headers=auth_header(user))
 
@@ -95,7 +95,7 @@ async def test_backup_status_stale_when_old(make_client, make_user, auth_header,
 async def test_backup_status_empty_dir(make_client, make_user, auth_header, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "backups_dir", str(tmp_path / "does-not-exist"))
 
-    user = await make_user(username="u", role="user")
+    user = await make_user(username="u", role="admin")
     async with make_client(stats.router) as c:
         r = await c.get("/api/stats/backup", headers=auth_header(user))
 
@@ -414,3 +414,56 @@ async def test_backups_list_includes_manual_and_label(make_client, make_user, au
     assert items["2026-07-13_090000-manual"]["is_manual"] is True
     assert items["2026-07-13_090000-manual"]["label"] == "pre-upgrade"
     assert items["2026-07-11"]["is_manual"] is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #283: the admin console's read endpoints accepted any authenticated
+# user. No privilege was gained -- every mutating endpoint was already gated --
+# but a plain reader could see disk capacity and usage for all three data roots
+# and the backup health of the deployment. Defence in depth, plus infra-info
+# disclosure that matters more once the repo is public.
+#
+# Android calls neither endpoint (BookSyncApi.kt declares no stats routes), so
+# tightening these cannot break the app.
+# ---------------------------------------------------------------------------
+
+
+async def test_disk_usage_requires_admin(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path / "e"))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path / "a"))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    (tmp_path / "e").mkdir()
+    (tmp_path / "a").mkdir()
+
+    user = await make_user(username="plain", role="user")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_disk_usage_editor_is_not_enough(make_client, make_user, auth_header, monkeypatch, tmp_path):
+    # Editors maintain the library; disk capacity is infrastructure.
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path / "e"))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path / "a"))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    (tmp_path / "e").mkdir()
+    (tmp_path / "a").mkdir()
+
+    user = await make_user(username="ed", role="editor")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_backup_status_requires_admin(make_client, make_user, auth_header):
+    user = await make_user(username="plain2", role="user")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backup", headers=auth_header(user))
+    assert r.status_code == 403
+
+
+async def test_backup_status_allows_admin(make_client, make_user, auth_header):
+    user = await make_user(username="adm2", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/backup", headers=auth_header(user))
+    assert r.status_code == 200

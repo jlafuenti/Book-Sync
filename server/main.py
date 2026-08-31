@@ -7,6 +7,7 @@ the database on startup.
 
 import os
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 
@@ -57,7 +58,42 @@ class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return "/api/transcription/queue HTTP" not in record.getMessage()
 
+class AccessLogSecretFilter(logging.Filter):
+    """Strip credentials out of the logged request line (issue #284).
+
+    Two kinds of secret reach the access log through the query string: media
+    tokens on cover/audio URLs, which are there by design because `<img>` and
+    `<audio>` cannot send an Authorization header (issue #50), and -- until #284
+    moved them into a POST body -- the ABS, Hardcover and Jetson credentials on
+    the admin "Test connection" calls. The log is durable, so anything that
+    lands in it is readable for as long as the log is kept; a
+    `test-remote?url=...&key=...` line was found in the production container's
+    log, so this is not hypothetical.
+
+    Note this filter *mutates and keeps* the record. The two filters around it
+    drop records by returning False, which is the right shape for silencing
+    noise and the wrong shape here -- returning False would delete access
+    logging for every media request instead of redacting it.
+
+    uvicorn builds the record with the pieces in `args` and formats later, so
+    the query string lives in `args[2]`, not in the message.
+    """
+
+    _SECRET_PARAM = re.compile(r"((?:token|key|api_key|access_token)=)[^&\s]+", re.I)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) > 2 and isinstance(args[2], str):
+            path = args[2]
+            if "=" in path:
+                redacted = self._SECRET_PARAM.sub(r"\1[redacted]", path)
+                if redacted != path:
+                    record.args = args[:2] + (redacted,) + args[3:]
+        return True
+
+
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+logging.getLogger("uvicorn.access").addFilter(AccessLogSecretFilter())
 logging.getLogger("httpx").setLevel(logging.WARNING)
 # Library loggers we don't want in normal operation
 logging.getLogger("audible.auth").setLevel(logging.WARNING)

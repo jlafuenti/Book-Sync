@@ -205,3 +205,43 @@ describe('paused items', () => {
         expect(screen.queryByText(/Paused/)).not.toBeInTheDocument()
     })
 })
+
+// ---------------------------------------------------------------------------
+// Issue #312: the write controls on these pages were rendered to every role,
+// and the server refuses them below admin -- or, for Cancel, below editor since
+// #207 gave it a floor. A plain user got a confirm dialog, clicked through, and
+// received a raw 403 in the error banner. The control looked available and was
+// not.
+//
+// Cancel is the one that changed: before #207 it was the single write control a
+// plain user could actually use, which was the bug #207 fixed. That left the UI
+// advertising it to people who can no longer use it.
+// ---------------------------------------------------------------------------
+
+describe('Cancel is editor-gated (issue #312)', () => {
+    const running = () => queueItem({ status: 'in_progress', message: 'Transcribing...' })
+
+    it('is hidden from a plain user', async () => {
+        authRef.role = 'user'
+        getQueueMock.mockResolvedValue([running()])
+        render(<TranscriptionQueuePage />)
+        await screen.findByText('Dune')
+        expect(screen.queryByText(/Cancel/)).toBeNull()
+    })
+
+    it('is offered to an editor', async () => {
+        authRef.role = 'editor'
+        getQueueMock.mockResolvedValue([running()])
+        render(<TranscriptionQueuePage />)
+        await screen.findByText('Dune')
+        expect(screen.getByText(/Cancel/)).toBeInTheDocument()
+    })
+
+    it('is offered to an admin', async () => {
+        authRef.role = 'admin'
+        getQueueMock.mockResolvedValue([running()])
+        render(<TranscriptionQueuePage />)
+        await screen.findByText('Dune')
+        expect(screen.getByText(/Cancel/)).toBeInTheDocument()
+    })
+})

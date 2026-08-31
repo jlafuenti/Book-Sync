@@ -4,6 +4,7 @@ import { isLoggedIn, getMe, logout } from './api'
 import { useTheme } from './ThemeContext'
 import { DEFAULT_THEME } from './themes'
 import { ThemePicker } from './components/ThemePicker'
+import { RequireRole } from './components/RequireRole'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
@@ -228,11 +229,17 @@ export function AppShell({ user, setUser }) {
                         <span>Transcription</span>
                     </Link>
 
-                    {/* System */}
-                    <Link to="/system/status" className={navClass('/system')} title="System">
+                    {/* System — visible from editor up, because Troubleshoot and
+                        Unsupported are editor-level. The target differs by role:
+                        pointing an editor at /system/status would land them on a
+                        redirect, which reads as a broken app rather than as a
+                        permission boundary (issue #283). */}
+                    {hasMinRole('editor') && (
+                    <Link to={hasMinRole('admin') ? '/system/status' : '/system/troubleshoot'} className={navClass('/system')} title="System">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         <span>System</span>
                     </Link>
+                    )}
 
                 </nav>
                 <div className="sidebar-footer">
@@ -279,12 +286,17 @@ export function AppShell({ user, setUser }) {
                     <Route path="/transcription/queue" element={<TranscriptionPage tab="queue" />} />
                     <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
-                    {/* System */}
-                    <Route path="/system" element={<SystemPage tab="status" />} />
-                    <Route path="/system/status" element={<SystemPage tab="status" />} />
-                    <Route path="/system/unsupported" element={<SystemPage tab="unsupported" />} />
-                    <Route path="/system/import-sources" element={<ImportSourcesPage />} />
-                    <Route path="/system/troubleshoot" element={<TroubleshootPage />} />
+                    {/* System — role-gated (issue #283). Admin for the
+                        infrastructure views; editor for the two library-
+                        maintenance ones, whose fix controls are already
+                        editor-level. The server enforces the same split; this
+                        only stops the console being presented to someone who
+                        cannot use it. */}
+                    <Route path="/system" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
+                    <Route path="/system/status" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
+                    <Route path="/system/unsupported" element={<RequireRole min="editor"><SystemPage tab="unsupported" /></RequireRole>} />
+                    <Route path="/system/import-sources" element={<RequireRole min="admin"><ImportSourcesPage /></RequireRole>} />
+                    <Route path="/system/troubleshoot" element={<RequireRole min="editor"><TroubleshootPage /></RequireRole>} />
 
                     {/* Book Detail */}
                     <Route path="/book/:type/:id" element={<BookDetailPage />} />
