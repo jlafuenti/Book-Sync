@@ -110,6 +110,10 @@ function SortPill({ sortField, setSortField, sortDir, setSortDir }) {
 function TranscriptionPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canManageQueue = hasMinRole('admin')
+    // Cancel sits one rung lower than the rest: #207 gave it an editor floor
+    // server-side, so showing it to a plain user renders a button whose only
+    // outcome is a 403 in the error banner (issue #312).
+    const canCancel = hasMinRole('editor')
     const isMobile = useIsMobile()
 
     // Mobile collapsible sections
@@ -514,7 +518,7 @@ function TranscriptionPage({ tab }) {
                     <ChevronIcon open={isOpen} />
                     <span className="transcription-series-title">{name}</span>
                     <span className="transcription-series-count">{seriesPairs.length}</span>
-                    {queueable.length > 0 && (
+                    {canManageQueue && queueable.length > 0 && (
                         <button
                             className="btn btn-primary btn-sm"
                             onClick={(e) => { e.stopPropagation(); handleQueueSeries(queueable) }}
@@ -543,7 +547,7 @@ function TranscriptionPage({ tab }) {
                             </div>
                         </div>
                         {renderStatusBadge(pair)}
-                        {canQueue(pair) && (
+                        {canManageQueue && canQueue(pair) && (
                             <button
                                 className="btn btn-primary btn-sm"
                                 style={{ flexShrink: 0 }}
@@ -567,7 +571,7 @@ function TranscriptionPage({ tab }) {
                     : <div className="transcription-card-placeholder">📚</div>
                 }
                 {renderStatusBadge(pair)}
-                {canQueue(pair) && (
+                {canManageQueue && canQueue(pair) && (
                     <div className="transcription-card-action">
                         <button
                             className="btn btn-primary btn-sm"
@@ -615,11 +619,13 @@ function TranscriptionPage({ tab }) {
                             <div className="transcription-ip-pct">{(progress * 100).toFixed(0)}%</div>
                         </div>
                     )}
+                    {canCancel && (
                     <div className="transcription-card-action">
                         <button className="btn btn-sm btn-danger" onClick={() => handleCancel(pair.id)}>
                             Cancel
                         </button>
                     </div>
+                    )}
                 </div>
                 <div className="transcription-card-title">
                     {pair.ebook?.title || `Pair #${pair.id}`}
@@ -663,6 +669,7 @@ function TranscriptionPage({ tab }) {
                         </>
                     )}
                 </div>
+                {canCancel && (
                 <button
                     className="btn btn-sm btn-danger"
                     onClick={() => handleCancel(pair.id)}
@@ -670,6 +677,7 @@ function TranscriptionPage({ tab }) {
                 >
                     Cancel
                 </button>
+                )}
             </div>
         )
     }
@@ -1043,7 +1051,7 @@ function TranscriptionPage({ tab }) {
                                     <>
                                         {(mobileShowAllNT || mobileQ ? mobileNotTranscribed : mobileNotTranscribed.slice(0, MOBILE_NOT_TRANSCRIBED_LIMIT)).map(pair =>
                                             renderMobileItem(pair,
-                                                canQueue(pair) && (
+                                                canManageQueue && canQueue(pair) && (
                                                     <button
                                                         className="tx-mobile-queue-btn"
                                                         onClick={() => handleAddToQueue(pair.id)}
@@ -1153,7 +1161,7 @@ function TranscriptionPage({ tab }) {
                             ])}
 
                             {/* Queue All / Queue Visible */}
-                            {activeTab === 'not-transcribed' && notTranscribedPairs.length > 0 && (
+                            {canManageQueue && activeTab === 'not-transcribed' && notTranscribedPairs.length > 0 && (
                                 <button className="btn btn-primary btn-sm" onClick={handleAddVisibleToQueue}>
                                     {queueBtnLabel}
                                 </button>
@@ -1221,12 +1229,14 @@ function TranscriptionPage({ tab }) {
                                                     )}
                                                 </div>
                                             </div>
+                                            {canCancel && (
                                             <button
                                                 className="btn btn-sm btn-danger"
                                                 onClick={() => handleCancel(activeQueueItem.book_pair_id)}
                                             >
                                                 Cancel
                                             </button>
+                                            )}
                                         </div>
                                         {activeQueueItem.progress != null && (
                                             <>

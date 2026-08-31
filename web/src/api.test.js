@@ -9,6 +9,43 @@ beforeEach(() => {
     vi.unstubAllGlobals()
 })
 
+describe('logout() — cached media tokens (issue #284)', () => {
+    // Media tokens carry the session's `ver`, and POST /auth/logout bumps
+    // token_version, so every cached token is dead the moment logout returns.
+    // Logout followed by login is an SPA transition with no page reload, so the
+    // module-level cache survives it: without clearing, the next session keeps
+    // serving the dead tokens and every cover and audio request 401s until they
+    // expire — up to 14 minutes of a library that looks broken.
+    it('drops cached media tokens so the next session mints fresh ones', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        let minted = 0
+        const fetchMock = vi.fn().mockImplementation(async (url) => {
+            if (String(url).includes('/auth/media-token')) {
+                minted += 1
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ token: `media-${minted}`, expires_in: 900 }),
+                }
+            }
+            return { ok: true, status: 200, json: async () => ({}) }
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc, logout } = await import('./api')
+
+        await coverSrc('/api/files/covers/a.jpg')
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(1)   // second call is served from cache
+
+        await logout()
+
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(2)   // the stale one must not be reused
+    })
+})
+
 describe('logout()', () => {
     it('calls the server logout endpoint and clears local tokens on success', async () => {
         localStorage.setItem('tandem_token', 'access-1')
@@ -47,7 +84,7 @@ describe('logout()', () => {
 })
 
 describe('testHardcoverConnection()', () => {
-    it('sends the token as a query param and returns the parsed result', async () => {
+    it('sends the token in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true, status: 200, json: async () => ({ success: true, username: 'jesse' }),
         })
@@ -56,10 +93,11 @@ describe('testHardcoverConnection()', () => {
         const { testHardcoverConnection } = await import('./api')
         const result = await testHardcoverConnection('my-token')
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            '/api/settings/test-hardcover?token=my-token',
-            expect.anything(),
-        )
+        const [url, opts] = fetchMock.mock.calls[0]
+        expect(url).toBe('/api/settings/test-hardcover')
+        expect(url).not.toContain('token=')
+        expect(opts.method).toBe('POST')
+        expect(JSON.parse(opts.body)).toEqual({ token: 'my-token' })
         expect(result).toEqual({ success: true, username: 'jesse' })
     })
 
@@ -74,7 +112,7 @@ describe('testHardcoverConnection()', () => {
 })
 
 describe('testRemoteConnection()', () => {
-    it('sends both the url and key as query params and returns the parsed result', async () => {
+    it('sends the url and key in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true, status: 200, json: async () => ({ success: true, model_loaded: true }),
         })
@@ -83,10 +121,16 @@ describe('testRemoteConnection()', () => {
         const { testRemoteConnection } = await import('./api')
         const result = await testRemoteConnection('http://192.168.1.50:9000', 'my-key')
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            '/api/settings/test-remote?url=http%3A%2F%2F192.168.1.50%3A9000&key=my-key',
-            expect.anything(),
-        )
+        // POST with a body, not a query string: the Jetson key is long-lived and
+        // not resource-scoped, and a query string is written to the access log.
+        // One was found there in production (issue #284).
+        const [url, opts] = fetchMock.mock.calls[0]
+        expect(url).toBe('/api/settings/test-remote')
+        expect(url).not.toContain('key=')
+        expect(opts.method).toBe('POST')
+        expect(JSON.parse(opts.body)).toEqual({
+            url: 'http://192.168.1.50:9000', key: 'my-key',
+        })
         expect(result).toEqual({ success: true, model_loaded: true })
     })
 
@@ -676,7 +720,7 @@ describe('sendPositionKeepalive()', () => {
 })
 
 describe('testAbsConnection()', () => {
-    it('sends the url and token as query params and returns the parsed result', async () => {
+    it('sends the url and token in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true, status: 200, json: async () => ({ success: true, book_libraries: ['Audiobooks'] }),
         })
@@ -685,10 +729,13 @@ describe('testAbsConnection()', () => {
         const { testAbsConnection } = await import('./api')
         const result = await testAbsConnection('http://192.168.1.60:13378', 'my-token')
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            '/api/settings/test-abs?url=http%3A%2F%2F192.168.1.60%3A13378&token=my-token',
-            expect.anything(),
-        )
+        const [url, opts] = fetchMock.mock.calls[0]
+        expect(url).toBe('/api/settings/test-abs')
+        expect(url).not.toContain('token=')
+        expect(opts.method).toBe('POST')
+        expect(JSON.parse(opts.body)).toEqual({
+            url: 'http://192.168.1.60:13378', token: 'my-token',
+        })
         expect(result).toEqual({ success: true, book_libraries: ['Audiobooks'] })
     })
 
@@ -701,10 +748,13 @@ describe('testAbsConnection()', () => {
         const { testAbsConnection } = await import('./api')
         await testAbsConnection('http://192.168.1.60:13378')
 
-        expect(fetchMock).toHaveBeenCalledWith(
-            '/api/settings/test-abs?url=http%3A%2F%2F192.168.1.60%3A13378&token=',
-            expect.anything(),
-        )
+        // The empty token is what tells the server to use the stored credential;
+        // asserting only the URL would pass even if it stopped being sent.
+        const [url, opts] = fetchMock.mock.calls[0]
+        expect(url).toBe('/api/settings/test-abs')
+        expect(JSON.parse(opts.body)).toEqual({
+            url: 'http://192.168.1.60:13378', token: '',
+        })
     })
 
     it('requires a url', async () => {

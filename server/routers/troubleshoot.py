@@ -85,7 +85,9 @@ def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = 
 @router.get("/issues")
 async def get_issues(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    # Editor: this page's own fix controls are editor-gated, so gating its data
+    # at admin would lock out exactly the role it was built for (issue #283).
+    _: User = Depends(get_editor_user),
 ):
     """Return all current issues grouped by category. Cheap categories are
     computed live; audio/ebook integrity come from the last scan."""

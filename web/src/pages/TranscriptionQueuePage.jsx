@@ -8,6 +8,10 @@ import { useAuth } from '../contexts/AuthContext'
 function TranscriptionQueuePage() {
     const { hasMinRole } = useAuth()
     const canManageQueue = hasMinRole('admin')
+    // Cancel sits one rung lower than the rest of the queue controls: #207 gave
+    // it an editor floor server-side, so rendering it to a plain user shows a
+    // button whose only outcome is a 403 (issue #312).
+    const canCancel = hasMinRole('editor')
     const [offHours, setOffHours] = useState(null)
     const [queue, setQueue] = useState([])
     const [history, setHistory] = useState([])
@@ -306,6 +310,7 @@ function TranscriptionQueuePage() {
                                             {activeItem.message || 'Processing...'}
                                         </div>
                                     </div>
+                                    {canCancel && (
                                     <button
                                         className="btn btn-danger btn-sm"
                                         onClick={() => handleCancel(activeItem)}
@@ -313,6 +318,7 @@ function TranscriptionQueuePage() {
                                     >
                                         🛑 Cancel
                                     </button>
+                                    )}
                                 </div>
 
                                 {activeItem.progress != null && (

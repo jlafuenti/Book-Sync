@@ -215,9 +215,8 @@ async def test_test_remote_reports_success_with_correct_key(
     _patch_jetson_transport(monkeypatch, _jetson_health_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://fake-jetson:9000", "key": "correct-key"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://fake-jetson:9000", "key": "correct-key"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -235,9 +234,8 @@ async def test_test_remote_reports_auth_failure_with_wrong_key(
     _patch_jetson_transport(monkeypatch, _jetson_health_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://fake-jetson:9000", "key": "wrong-key"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://fake-jetson:9000", "key": "wrong-key"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400
@@ -257,9 +255,8 @@ async def test_test_remote_falls_back_to_saved_key_when_none_passed(
     _patch_jetson_transport(monkeypatch, _jetson_health_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://fake-jetson:9000", "key": ""},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://fake-jetson:9000", "key": ""},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -271,9 +268,8 @@ async def test_test_remote_requires_a_key(make_client, make_user, auth_header, e
     request sent to the Jetson."""
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://fake-jetson:9000"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://fake-jetson:9000"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400
@@ -293,9 +289,8 @@ async def test_test_remote_rejects_invalid_scheme(make_client, make_user, auth_h
     admin = await make_user(username="admin1", role="admin")
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "file:///etc/passwd", "key": "some-key"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "file:///etc/passwd", "key": "some-key"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400
@@ -309,9 +304,8 @@ async def test_test_remote_allows_private_lan_url(make_client, make_user, auth_h
     _patch_jetson_transport(monkeypatch, _jetson_health_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://192.168.1.50:9000", "key": "correct-key"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://192.168.1.50:9000", "key": "correct-key"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -329,9 +323,8 @@ async def test_test_abs_rejects_invalid_scheme(make_client, make_user, auth_head
     admin = await make_user(username="admin1", role="admin")
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-abs",
-            params={"url": "file:///etc/passwd", "token": "tok"},
+        r = await c.post(
+            "/api/settings/test-abs", json={"url": "file:///etc/passwd", "token": "tok"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400
@@ -345,9 +338,8 @@ async def test_test_abs_allows_private_lan_url(make_client, make_user, auth_head
     _patch_jetson_transport(monkeypatch, _abs_libraries_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-abs",
-            params={"url": "http://192.168.1.60:13378", "token": "tok"},
+        r = await c.post(
+            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378", "token": "tok"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -375,9 +367,8 @@ async def test_test_abs_falls_back_to_saved_token_when_placeholder_sent(
     _patch_jetson_transport(monkeypatch, handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-abs",
-            params={"url": "http://192.168.1.60:13378", "token": _SECRET_PLACEHOLDER},
+        r = await c.post(
+            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378", "token": _SECRET_PLACEHOLDER},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -395,9 +386,8 @@ async def test_test_abs_falls_back_to_saved_token_when_no_token_passed(
     _patch_jetson_transport(monkeypatch, _abs_libraries_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-abs",
-            params={"url": "http://192.168.1.60:13378"},
+        r = await c.post(
+            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -458,8 +448,8 @@ async def test_test_hardcover_reports_success_with_valid_token(
     _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/test-hardcover",
-                        params={"token": "correct-token"},
+        r = await c.post(
+            "/api/settings/test-hardcover", json={"token": "correct-token"},
                         headers=auth_header(admin))
     assert r.status_code == 200
     body = r.json()
@@ -474,8 +464,8 @@ async def test_test_hardcover_reports_auth_failure_with_bad_token(
     _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/test-hardcover",
-                        params={"token": "wrong-token"},
+        r = await c.post(
+            "/api/settings/test-hardcover", json={"token": "wrong-token"},
                         headers=auth_header(admin))
     assert r.status_code == 400
     assert "authentication failed" in r.json()["detail"].lower()
@@ -491,8 +481,8 @@ async def test_test_hardcover_falls_back_to_saved_token_when_placeholder_sent(
     _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/test-hardcover",
-                        params={"token": _SECRET_PLACEHOLDER},
+        r = await c.post(
+            "/api/settings/test-hardcover", json={"token": _SECRET_PLACEHOLDER},
                         headers=auth_header(admin))
     assert r.status_code == 200
     assert r.json()["success"] is True
@@ -501,7 +491,8 @@ async def test_test_hardcover_falls_back_to_saved_token_when_placeholder_sent(
 async def test_test_hardcover_requires_a_token(make_client, make_user, auth_header, enc_key):
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/test-hardcover", headers=auth_header(admin))
+        r = await c.post(
+            "/api/settings/test-hardcover", json={}, headers=auth_header(admin))
     assert r.status_code == 400
     assert "token" in r.json()["detail"].lower()
 
@@ -509,8 +500,8 @@ async def test_test_hardcover_requires_a_token(make_client, make_user, auth_head
 async def test_test_hardcover_requires_admin(make_client, make_user, auth_header):
     user = await make_user(username="u", role="user")
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/test-hardcover",
-                        params={"token": "x"}, headers=auth_header(user))
+        r = await c.post(
+            "/api/settings/test-hardcover", json={"token": "x"}, headers=auth_header(user))
     assert r.status_code == 403
 
 
@@ -519,9 +510,8 @@ async def test_test_abs_requires_a_token(make_client, make_user, auth_header, en
     request sent to ABS."""
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-abs",
-            params={"url": "http://192.168.1.60:13378"},
+        r = await c.post(
+            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400
@@ -548,9 +538,8 @@ async def test_test_remote_passes_through_the_workers_model_state(
     _patch_jetson_transport(monkeypatch, _handler)
 
     async with make_client(settings_router.router) as c:
-        r = await c.get(
-            "/api/settings/test-remote",
-            params={"url": "http://fake-jetson:9000", "key": "k"},
+        r = await c.post(
+            "/api/settings/test-remote", json={"url": "http://fake-jetson:9000", "key": "k"},
             headers=auth_header(admin),
         )
 
@@ -634,3 +623,71 @@ async def test_offhours_invalid_window_is_not_persisted(make_client, make_user, 
         body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
     assert body["whisper_model"] == "medium"
     assert body["transcription_offhours_start"] == "01:00"
+
+
+# ---------------------------------------------------------------------------
+# Issue #284: the secret must not ride in the URL.
+#
+# These three carried long-lived, non-resource-scoped third-party credentials as
+# query parameters, so every call wrote them into the request line and from
+# there into uvicorn's access log. That is not theoretical: a
+# `test-remote?url=...&key=...` line was found in the production container's log.
+#
+# Flipping the endpoints to POST is only half the fix -- the assertion that
+# matters is that the credential is absent from the URL, which is what these
+# pin. Without them a future change could quietly reintroduce a query parameter
+# and every other test here would still pass.
+# ---------------------------------------------------------------------------
+
+_SECRET = "not-a-real-key-1234567890"
+
+
+async def test_test_remote_key_never_appears_in_the_url(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin_u1", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.post(
+            "/api/settings/test-remote",
+            json={"url": "http://192.0.2.10:9000", "key": _SECRET},
+            headers=auth_header(admin),
+        )
+    assert _SECRET not in str(r.request.url)
+    assert not r.request.url.query
+
+
+async def test_test_abs_token_never_appears_in_the_url(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin_u2", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.post(
+            "/api/settings/test-abs",
+            json={"url": "http://192.0.2.11:13378", "token": _SECRET},
+            headers=auth_header(admin),
+        )
+    assert _SECRET not in str(r.request.url)
+    assert not r.request.url.query
+
+
+async def test_test_hardcover_token_never_appears_in_the_url(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin_u3", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.post(
+            "/api/settings/test-hardcover",
+            json={"token": _SECRET},
+            headers=auth_header(admin),
+        )
+    assert _SECRET not in str(r.request.url)
+    assert not r.request.url.query
+
+
+async def test_the_old_get_shape_is_gone(make_client, make_user, auth_header, enc_key):
+    """Pin the query-string form closed, so it cannot come back unnoticed."""
+    admin = await make_user(username="admin_u4", role="admin")
+    async with make_client(settings_router.router) as c:
+        for path in ("test-abs", "test-hardcover", "test-remote"):
+            r = await c.get(f"/api/settings/{path}", params={"token": _SECRET, "key": _SECRET, "url": "http://192.0.2.12"})
+            assert r.status_code == 405, f"{path} still answers GET"
