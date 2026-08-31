@@ -1318,6 +1318,10 @@ function SystemPage({ tab }) {
     if (showUnsupported) {
         return (
             <div>
+                {/* Editors reach this view directly and cannot load the status
+                    view behind it, so the way back would show them an empty
+                    page (issue #283). */}
+                {canAdmin && (
                 <div style={{ marginBottom: 20 }}>
                     <button className="btn btn-secondary" onClick={() => setShowUnsupported(false)}
                         style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1327,6 +1331,7 @@ function SystemPage({ tab }) {
                         Back to System
                     </button>
                 </div>
+                )}
                 <UnsupportedFilesTab canAdmin={canAdmin} />
             </div>
         )
