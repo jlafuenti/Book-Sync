@@ -17,13 +17,10 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 import nltk
 
+from services.nltk_data import ensure_punkt
+
 logger = logging.getLogger(__name__)
 
-# Ensure NLTK sentence tokenizer data is available
-try:
-    nltk.data.find("tokenizers/punkt_tab")
-except LookupError:
-    nltk.download("punkt_tab", quiet=True)
 
 
 @dataclass
@@ -60,6 +57,9 @@ def _extract_text_from_html(html_content: str) -> str:
 
 def _split_into_sentences(text: str) -> List[str]:
     """Split text into sentences using NLTK."""
+    # Lazily, not at import: this used to run at module scope and could
+    # block the whole app lifespan on a slow CDN (issue #322).
+    ensure_punkt()
     sentences = nltk.sent_tokenize(text)
 
     # Filter out very short fragments (likely headers or artifacts)
@@ -155,13 +155,21 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
     import zipfile
     from lxml import etree
 
+    # Explicit rather than inherited (issue #265). lxml >= 5 defaults to
+    # resolve_entities='internal', so this is safe today by library default --
+    # but an EPUB is attacker-supplied input and the setting that protects it
+    # should be visible at the call site, not a version-dependent default.
+    safe = etree.XMLParser(
+        resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
+    )
+
     with zipfile.ZipFile(epub_path) as z:
-        container = etree.fromstring(z.read("META-INF/container.xml"))
+        container = etree.fromstring(z.read("META-INF/container.xml"), parser=safe)
         opf_paths = container.xpath('//*[local-name()="rootfile"]/@full-path')
         if not opf_paths:
             raise RuntimeError("no rootfile in META-INF/container.xml")
         opf_path = opf_paths[0]
-        opf = etree.fromstring(z.read(opf_path))
+        opf = etree.fromstring(z.read(opf_path), parser=safe)
         opf_dir = os.path.dirname(opf_path)
 
         manifest = {

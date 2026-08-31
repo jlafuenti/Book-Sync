@@ -16,17 +16,14 @@ from typing import List, Callable, Optional
 # be imported without the heavy ML stack (e.g. in tests / CI).
 import mutagen
 import nltk
+
+from services.nltk_data import ensure_punkt
 import tqdm as tqdm_module
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Ensure NLTK sentence tokenizer data is available
-try:
-    nltk.data.find("tokenizers/punkt_tab")
-except LookupError:
-    nltk.download("punkt_tab", quiet=True)
 
 
 @dataclass
@@ -140,7 +137,9 @@ def _group_words_into_sentences(segments: list) -> List[TranscribedSentence]:
         end_ms = int(segment.get("end", 0) * 1000)
         words = segment.get("words", [])
 
-        # Use NLTK to split if the segment contains multiple sentences
+        # Use NLTK to split if the segment contains multiple sentences.
+        # Ensured here rather than at import (issue #322).
+        ensure_punkt()
         nltk_sentences = nltk.sent_tokenize(text)
 
         if len(nltk_sentences) <= 1:
