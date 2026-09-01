@@ -2,7 +2,8 @@ package com.booksync.data.remote
 
 import android.util.Log
 import com.booksync.data.local.dao.ScopeAdoptionDao
-import kotlinx.coroutines.runBlocking
+import com.booksync.di.ApplicationScope
+import kotlinx.coroutines.CoroutineScope
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +27,7 @@ class UserScopeProvider @Inject constructor(
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
     private val scopeAdoptionDao: ScopeAdoptionDao,
+    @ApplicationScope scope: CoroutineScope,
 ) {
     /**
      * The current scope, readable without suspending.
@@ -38,13 +40,17 @@ class UserScopeProvider @Inject constructor(
      *
      * Null means "no resolvable account" and must never be treated as "all rows".
      */
-    @Volatile
-    var currentKey: String? = null
-        private set
+    private val seeded = SeededValue(scope) { current()?.key }
 
-    init {
-        currentKey = runBlocking { current()?.key }
-    }
+    /** Set by [onAuthenticated]; wins over the seed once a session is established. */
+    @Volatile
+    private var resolved: Holder? = null
+
+    private class Holder(val key: String?)
+
+    var currentKey: String? = null
+        get() = resolved?.key ?: seeded.get()
+        private set
 
     /**
      * The scope for the current session, or null when either half is unknown.
@@ -76,7 +82,7 @@ class UserScopeProvider @Inject constructor(
      */
     suspend fun onAuthenticated() {
         val scope = current()
-        currentKey = scope?.key
+        resolved = Holder(scope?.key)
         if (scope == null) return
         // Publishing the scope is what makes the app usable; adopting old rows is
         // a bonus on top. Never let the bonus take down the launch path or block a
