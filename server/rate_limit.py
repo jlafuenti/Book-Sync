@@ -41,6 +41,7 @@ worker would otherwise keep its own counts and multiply the effective
 threshold) means replacing this one class.
 """
 
+import hashlib
 import time
 from threading import Lock
 from typing import Callable, Dict, List, Optional
@@ -225,8 +226,15 @@ failed_password_changes = FailedLoginTracker(
 #: So this is checked in-handler like the login tracker, and counts only
 #: failures. A valid refresh is cheap and, since #268, single-flighted by the web
 #: client; a rejected one costs a DB lookup, and that is what is worth bounding.
+#:
+#: Keyed by the **token**, not its subject. Live testing showed why: with a
+#: subject key, twenty rejected replays of one dead token also blocked that
+#: user's freshly issued, perfectly valid one for the rest of the window --
+#: anyone holding a single stale token could keep a user from renewing. Keying
+#: on the token confines the lockout to the token being abused, and an attacker
+#: cannot mint a new one to rotate around it without the signing key.
 failed_refreshes = FailedLoginTracker(
-    normalize=lambda subject: str(subject),
+    normalize=lambda token: hashlib.sha256(str(token).encode()).hexdigest(),
     limit_supplier=lambda: settings.refresh_failure_limit,
     window_supplier=lambda: settings.refresh_failure_window_seconds,
 )

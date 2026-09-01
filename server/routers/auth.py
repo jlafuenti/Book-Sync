@@ -344,12 +344,10 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
     # synchronous and cannot read it (issue #296, and the note at the top of
     # rate_limit.py). Keying on the client address instead would collapse the
     # whole deployment into one bucket behind the proxy (#294).
-    def _reject(subject: Optional[str]) -> HTTPException:
-        if subject is not None:
-            failed_refreshes.record_failure(subject)
+    def _reject() -> HTTPException:
+        failed_refreshes.record_failure(body.refresh_token)
         return HTTPException(status_code=401, detail="Invalid refresh token")
 
-    subject = None
     try:
         payload = jwt.decode(
             body.refresh_token, settings.jwt_secret_key,
@@ -358,8 +356,7 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
         user_id = payload.get("sub")
         token_type = payload.get("type")
         token_version = payload.get("ver", 0)
-        subject = user_id
-        retry_after = failed_refreshes.retry_after(subject) if subject else None
+        retry_after = failed_refreshes.retry_after(body.refresh_token)
         if retry_after is not None:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -367,7 +364,7 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
                 headers={"Retry-After": str(retry_after)},
             )
         if user_id is None or token_type != "refresh":
-            raise _reject(subject)
+            raise _reject()
     except JWTError:
         # Undecodable: no subject to key on, and nothing was looked up in the
         # database either, so there is nothing here worth counting.
@@ -376,7 +373,7 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
     if not user or not user.is_active or token_version != user.token_version:
-        raise _reject(subject)
+        raise _reject()
 
     return TokenResponse(
         access_token=create_access_token(user),

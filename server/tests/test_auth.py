@@ -1052,8 +1052,13 @@ async def test_repeated_rejected_refreshes_are_throttled(client, make_user, db):
 
 
 async def test_a_valid_refresh_is_unaffected_by_another_tokens_failures(client, make_user, db):
-    """The bucket is per token subject, not global — one bad actor must not
-    stop everyone else renewing their sessions."""
+    """The bucket is per *token*, not per subject and not global.
+
+    Found in live testing: keying on the subject meant twenty replays of one
+    dead token also blocked that same user's freshly issued valid one for the
+    rest of the window, so anyone holding a single stale token could stop a user
+    renewing. This covers the same-user case as well as the bystander.
+    """
     from config import settings as s
     from rate_limit import failed_refreshes
 
@@ -1070,4 +1075,12 @@ async def test_a_valid_refresh_is_unaffected_by_another_tokens_failures(client, 
 
     good = create_refresh_token(victim)
     r = await client.post("/api/auth/refresh", json={"refresh_token": good})
+    assert r.status_code == 200
+
+    # And the abused user's own fresh token still works: the lockout follows the
+    # token that was replayed, not the account behind it.
+    stored = (await db.execute(select(User).where(User.id == noisy.id))).scalar_one()
+    r = await client.post(
+        "/api/auth/refresh", json={"refresh_token": create_refresh_token(stored)}
+    )
     assert r.status_code == 200
