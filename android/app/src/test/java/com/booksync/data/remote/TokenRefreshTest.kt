@@ -8,8 +8,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -178,14 +180,32 @@ class TokenRefreshTest {
         // Every in-flight request 401s when the access token expires. Without
         // single-flighting, each one POSTs its own refresh and they race each
         // other into DataStore.
-        repeat(20) { server.enqueue(MockResponse().setResponseCode(401)) }
-        repeat(20) { server.enqueue(MockResponse().setResponseCode(200).setBody("ok")) }
+        //
+        // Answer by what the request actually carries rather than queueing a fixed
+        // run of 401s. A queue 401s unconditionally, so a straggler that sends
+        // *after* the winner refreshed is handed an undeserved 401 while already
+        // holding the newest token — and refreshing again is the correct response
+        // to that, which failed the assertion on a loaded CI runner. The latch
+        // below cannot close the gap: it releases the threads together but cannot
+        // make them all *send* before the winner finishes. A real server accepts
+        // the fresh token, so this one does too, and the outcome stops depending
+        // on thread scheduling. It is also the stricter harness — a retry that
+        // still carries the stale token now gets a 401 instead of being handed a
+        // free 200 off the queue.
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.getHeader("Authorization") == "Bearer fresh-access") {
+                    MockResponse().setResponseCode(200).setBody("ok")
+                } else {
+                    MockResponse().setResponseCode(401)
+                }
+        }
         val c = client(refreshSucceeds = true)
 
         // Released together, so all five are genuinely in flight when the token
-        // expires. Without the latch a fast thread can finish its refresh before a
-        // slow one has sent anything, and that thread then carries the *new* token
-        // into its own 401 -- a second refresh, and a flake on a loaded machine.
+        // expires, rather than trickling out one at a time and never overlapping.
+        // The dispatcher above is what makes the assertion deterministic; the
+        // latch is what makes the test exercise real concurrency at all.
         val start = CountDownLatch(1)
         val ready = CountDownLatch(5)
         val threads = (1..5).map {
