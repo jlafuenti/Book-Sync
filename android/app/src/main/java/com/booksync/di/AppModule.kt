@@ -56,6 +56,18 @@ object AppModule {
         return com.booksync.data.remote.RetryInterceptor(maxRetries = 3)
     }
 
+    /**
+     * Process-lifetime scope for seeding the singletons that back every request
+     * (issue #318). IO because every current use is a DataStore read.
+     */
+    @Provides
+    @Singleton
+    @com.booksync.di.ApplicationScope
+    fun provideApplicationScope(): kotlinx.coroutines.CoroutineScope =
+        kotlinx.coroutines.CoroutineScope(
+            kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+        )
+
     @Provides
     @Singleton
     fun provideOkHttpClient(

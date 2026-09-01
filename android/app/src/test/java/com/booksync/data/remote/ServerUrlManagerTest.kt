@@ -32,6 +32,10 @@ import org.junit.rules.TemporaryFolder
  */
 class ServerUrlManagerTest {
 
+    /** Seeds run off the constructor since issue #318. */
+    private val seedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+
     @get:Rule
     val tmp = TemporaryFolder()
 
@@ -50,7 +54,7 @@ class ServerUrlManagerTest {
 
     @Test
     fun `build default is used when nothing stored`() {
-        val manager = ServerUrlManager(newDataStore(), "https://tandem.example.com")
+        val manager = ServerUrlManager(newDataStore(), "https://tandem.example.com", seedScope)
         assertEquals("https://tandem.example.com", manager.currentUrl)
     }
 
@@ -58,7 +62,7 @@ class ServerUrlManagerTest {
     fun `an empty build default leaves the server unconfigured`() {
         // A clean clone builds with no `tandem.defaultServerUrl`; nothing may be
         // invented on the user's behalf here.
-        val manager = ServerUrlManager(newDataStore(), "")
+        val manager = ServerUrlManager(newDataStore(), "", seedScope)
         assertEquals("", manager.currentUrl)
     }
 
@@ -67,7 +71,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = LEGACY_SERVER_URL }
 
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertEquals("https://tandem.example.com", manager.currentUrl)
         // The migration must also rewrite the persisted value, not just the cache.
@@ -79,7 +83,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "https://my.own.server:8443" }
 
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertEquals("https://my.own.server:8443", manager.currentUrl)
         assertEquals("https://my.own.server:8443", dataStore.data.first()[key])
@@ -88,7 +92,7 @@ class ServerUrlManagerTest {
     @Test
     fun `the url flow falls back to the build default until one is stored`() = runBlocking {
         val dataStore = newDataStore()
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertEquals("https://tandem.example.com", manager.serverUrlFlow.first())
 
@@ -103,7 +107,7 @@ class ServerUrlManagerTest {
         // Issue #149: this used to be stored verbatim, and the app then crashed
         // inside Hilt on every launch with reinstall as the only way out.
         val dataStore = newDataStore()
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertFalse(manager.setServerUrl("not a url"))
 
@@ -115,7 +119,7 @@ class ServerUrlManagerTest {
     fun `a refused url does not clobber an already-configured server`() = runBlocking {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "https://my.own.server:8443" }
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertFalse(manager.setServerUrl("ftp://nope"))
 
@@ -126,7 +130,7 @@ class ServerUrlManagerTest {
     @Test
     fun `a scheme-less host is normalised before it is persisted`() = runBlocking {
         val dataStore = newDataStore()
-        val manager = ServerUrlManager(dataStore, "")
+        val manager = ServerUrlManager(dataStore, "", seedScope)
 
         assertTrue(manager.setServerUrl("tandem.example.com"))
 
@@ -148,7 +152,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "tandem.example.com" }
 
-        val manager = ServerUrlManager(dataStore, "")
+        val manager = ServerUrlManager(dataStore, "", seedScope)
 
         assertEquals("https://tandem.example.com", manager.currentUrl)
         assertEquals("https://tandem.example.com", dataStore.data.first()[key])
@@ -159,7 +163,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "not a url" }
 
-        val manager = ServerUrlManager(dataStore, "")
+        val manager = ServerUrlManager(dataStore, "", seedScope)
 
         // Blank, not the garbage: every consumer of currentUrl already handles
         // "unconfigured", and none of them handle "unparseable".
@@ -172,7 +176,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "https://my.own.server:8443" }
 
-        val manager = ServerUrlManager(dataStore, "https://tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
         assertEquals("https://my.own.server:8443", manager.currentUrl)
         assertEquals("https://my.own.server:8443", dataStore.data.first()[key])
@@ -184,7 +188,7 @@ class ServerUrlManagerTest {
         val dataStore = newDataStore()
         dataStore.edit { it[key] = "https://host/tandem/" }
 
-        val manager = ServerUrlManager(dataStore, "")
+        val manager = ServerUrlManager(dataStore, "", seedScope)
 
         assertEquals("https://host/tandem", manager.currentUrl)
     }
@@ -193,20 +197,20 @@ class ServerUrlManagerTest {
     fun `a scheme-less build default is normalised`() {
         // tandem.defaultServerUrl is a developer-set build property and gets the
         // same treatment as anything the user types.
-        val manager = ServerUrlManager(newDataStore(), "tandem.example.com")
+        val manager = ServerUrlManager(newDataStore(), "tandem.example.com", seedScope)
         assertEquals("https://tandem.example.com", manager.currentUrl)
     }
 
     @Test
     fun `an unusable build default is treated as unconfigured`() {
-        val manager = ServerUrlManager(newDataStore(), "not a url")
+        val manager = ServerUrlManager(newDataStore(), "not a url", seedScope)
         assertEquals("", manager.currentUrl)
     }
 
     @Test
     fun `the url flow reports normalized values`() = runBlocking {
         val dataStore = newDataStore()
-        val manager = ServerUrlManager(dataStore, "tandem.example.com")
+        val manager = ServerUrlManager(dataStore, "tandem.example.com", seedScope)
         assertEquals("https://tandem.example.com", manager.serverUrlFlow.first())
     }
 }

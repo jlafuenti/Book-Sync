@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.junit.Test
 
 /**
@@ -17,6 +20,10 @@ import org.junit.Test
  * strands the other four tables for anyone whose `bookmarks` happens to be empty.
  */
 class UserScopeProviderTest {
+
+    /** Seeds run off the constructor since issue #318. */
+    private val seedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 
     private val adoption = mockk<ScopeAdoptionDao>(relaxed = true)
 
@@ -27,7 +34,7 @@ class UserScopeProviderTest {
         coEvery { tokenManager.currentUserId() } returns userIdFromAccessToken(token)
         val serverUrlManager = mockk<ServerUrlManager>(relaxed = true)
         every { serverUrlManager.currentUrl } returns (server ?: "")
-        return UserScopeProvider(tokenManager, serverUrlManager, adoption)
+        return UserScopeProvider(tokenManager, serverUrlManager, adoption, seedScope)
     }
 
     @Test
