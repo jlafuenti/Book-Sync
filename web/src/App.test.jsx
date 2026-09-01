@@ -13,6 +13,10 @@ vi.mock('./pages/HomePage', () => ({ default: () => <div>home-stub</div> }))
 
 // The admin-console pages fire their own loads on mount; the role gate is what
 // is under test here, not their contents.
+// LoginPage renders the real login form and its own api wiring; what matters
+// here is only that the app fell back to it (issue #268).
+vi.mock('./pages/LoginPage', () => ({ default: () => <div>login-stub</div> }))
+
 vi.mock('./pages/SystemPage', () => ({ default: () => <div>system-stub</div> }))
 vi.mock('./pages/TroubleshootPage', () => ({ default: () => <div>troubleshoot-stub</div> }))
 vi.mock('./pages/ImportSourcesPage', () => ({ default: () => <div>import-sources-stub</div> }))
@@ -101,6 +105,18 @@ describe('App — password_reset_required arriving mid-session', () => {
 
         expect(screen.queryByText('change-password-stub')).toBeNull()
         expect(screen.getByText('home-stub')).toBeTruthy()
+    })
+
+    // Issue #268. Same shape as the gate above, for the case where the session
+    // is over rather than merely restricted: api.js dispatches this instead of
+    // reloading the page, so an open reader keeps its pending save.
+    it('drops to the login screen when the session cannot be refreshed', async () => {
+        await renderApp({ username: 'alice', role: 'admin', must_reset_password: false })
+
+        window.dispatchEvent(new CustomEvent('tandem:unauthorized'))
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+        expect(screen.queryByText('home-stub')).toBeNull()
     })
 })
 

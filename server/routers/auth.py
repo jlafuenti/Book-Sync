@@ -21,7 +21,12 @@ from schemas import (
     UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
     PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
-from rate_limit import failed_logins, limiter
+from rate_limit import (
+    failed_logins,
+    failed_password_changes,
+    failed_refreshes,
+    limiter,
+)
 from utils import utcnow
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -330,6 +335,19 @@ async def login(credentials: UserLogin, request: Request, db: AsyncSession = Dep
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
     """Refresh an access token using a valid refresh token."""
+    # Issue #264: bound *rejected* refreshes. Each one costs a DB lookup, and
+    # this endpoint is unauthenticated. Successful refreshes are not counted —
+    # they are cheap, and the web client single-flights them (#268).
+    #
+    # Keyed by the token's subject, which is why this is here and not a
+    # decorator: the token is in the request body, and slowapi key functions are
+    # synchronous and cannot read it (issue #296, and the note at the top of
+    # rate_limit.py). Keying on the client address instead would collapse the
+    # whole deployment into one bucket behind the proxy (#294).
+    def _reject() -> HTTPException:
+        failed_refreshes.record_failure(body.refresh_token)
+        return HTTPException(status_code=401, detail="Invalid refresh token")
+
     try:
         payload = jwt.decode(
             body.refresh_token, settings.jwt_secret_key,
@@ -338,15 +356,24 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
         user_id = payload.get("sub")
         token_type = payload.get("type")
         token_version = payload.get("ver", 0)
+        retry_after = failed_refreshes.retry_after(body.refresh_token)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many rejected refresh attempts. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
         if user_id is None or token_type != "refresh":
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+            raise _reject()
     except JWTError:
+        # Undecodable: no subject to key on, and nothing was looked up in the
+        # database either, so there is nothing here worth counting.
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     result = await db.execute(select(User).where(User.id == int(user_id)))
     user = result.scalar_one_or_none()
     if not user or not user.is_active or token_version != user.token_version:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise _reject()
 
     return TokenResponse(
         access_token=create_access_token(user),
@@ -426,11 +453,45 @@ async def change_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Change the current user's password. Clears must_reset_password flag."""
+    # Issue #264. This endpoint verifies the current password, so without a
+    # bound it is an online brute-force oracle against bcrypt for anyone holding
+    # a stolen access token — and succeeding here bumps token_version, locking
+    # the real user out of their own account.
+    #
+    # Checked before the password, like the login lockout, so a locked bucket
+    # answers 429 whatever was submitted and can never be used as an oracle.
+    user_key = str(current_user.id)
+    retry_after = failed_password_changes.retry_after(user_key)
+    if retry_after is not None:
+        await log_audit(
+            db, "password_change_locked", user_id=current_user.id,
+            details="Password change temporarily locked after repeated failures",
+            ip_address=get_client_ip(request),
+        )
+        # Commit explicitly: the raise unwinds through get_db, which rolls the
+        # session back, and the audit row would silently never persist (#156).
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     if not verify_password(body.old_password, current_user.hashed_password):
+        failed_password_changes.record_failure(user_key)
+        await log_audit(
+            db, "password_change_failed", user_id=current_user.id,
+            details="Failed password change: current password incorrect",
+            ip_address=get_client_ip(request),
+        )
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Current password is incorrect",
         )
+
+    # Correct password: the run of failures is over.
+    failed_password_changes.clear(user_key)
 
     current_user.hashed_password = hash_password(body.new_password)
     current_user.must_reset_password = False

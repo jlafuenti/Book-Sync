@@ -41,6 +41,7 @@ worker would otherwise keep its own counts and multiply the effective
 threshold) means replacing this one class.
 """
 
+import hashlib
 import time
 from threading import Lock
 from typing import Callable, Dict, List, Optional
@@ -79,9 +80,20 @@ class FailedLoginTracker:
         self,
         clock: Optional[Callable[[], float]] = None,
         max_tracked: int = 10_000,
+        normalize: Optional[Callable[[str], str]] = None,
+        limit_supplier: Optional[Callable[[], int]] = None,
+        window_supplier: Optional[Callable[[], int]] = None,
     ):
         self.clock: Callable[[], float] = clock or time.monotonic
         self.max_tracked = max_tracked
+        # Injected so the same counter can guard a second endpoint with its own
+        # key semantics and thresholds (issue #264). The defaults are the login
+        # behaviour this class was written for, unchanged.
+        self._normalize: Callable[[str], str] = normalize or normalize_username
+        self._limit_supplier = limit_supplier or (lambda: settings.login_failure_limit)
+        self._window_supplier = window_supplier or (
+            lambda: settings.login_failure_window_seconds
+        )
         self._failures: Dict[str, List[float]] = {}
         self._lock = Lock()
 
@@ -90,12 +102,12 @@ class FailedLoginTracker:
     @property
     def limit(self) -> int:
         """Failures inside the window that trip the lock."""
-        return max(1, int(settings.login_failure_limit))
+        return max(1, int(self._limit_supplier()))
 
     @property
     def window(self) -> int:
         """Length of the sliding window, in seconds."""
-        return max(1, int(settings.login_failure_window_seconds))
+        return max(1, int(self._window_supplier()))
 
     # -- queries ---------------------------------------------------------------
 
@@ -106,7 +118,7 @@ class FailedLoginTracker:
         moment the oldest failure that keeps it at ``limit`` ages out of the
         window.
         """
-        key = normalize_username(username)
+        key = self._normalize(username)
         limit = self.limit
         window = self.window
         with self._lock:
@@ -123,7 +135,7 @@ class FailedLoginTracker:
 
     def failure_count(self, username: str) -> int:
         """Failures currently inside the window for this username."""
-        key = normalize_username(username)
+        key = self._normalize(username)
         window = self.window
         with self._lock:
             return len(self._prune(key, window))
@@ -138,7 +150,7 @@ class FailedLoginTracker:
 
     def record_failure(self, username: str) -> None:
         """Count one failed attempt against this username."""
-        key = normalize_username(username)
+        key = self._normalize(username)
         window = self.window
         with self._lock:
             recent = self._prune(key, window)
@@ -149,7 +161,7 @@ class FailedLoginTracker:
     def clear(self, username: str) -> None:
         """Forget every failure for this username (called on a correct password)."""
         with self._lock:
-            self._failures.pop(normalize_username(username), None)
+            self._failures.pop(self._normalize(username), None)
 
     def reset(self) -> None:
         """Drop all state. Test hook; never called at runtime."""
@@ -186,3 +198,43 @@ class FailedLoginTracker:
 
 #: Process-wide tracker used by the login route.
 failed_logins = FailedLoginTracker()
+
+#: Failed current-password checks on ``POST /api/auth/change-password`` (#264).
+#:
+#: Keyed by the authenticated user's id. **Not** by IP: behind Caddy and docker
+#: NAT every client shares the proxy's address (issue #294), so an IP bucket here
+#: would throttle the whole deployment together and protect nobody.
+#:
+#: The id is already canonical, so the key needs no folding — unlike a username,
+#: which has to absorb case and whitespace.
+failed_password_changes = FailedLoginTracker(
+    normalize=lambda user_id: str(user_id),
+    limit_supplier=lambda: settings.password_change_failure_limit,
+    window_supplier=lambda: settings.password_change_failure_window_seconds,
+)
+
+
+#: Rejected ``POST /api/auth/refresh`` attempts, keyed by token subject (#264).
+#:
+#: The issue asked for a slowapi decorator keyed by the token's ``sub``. That is
+#: not expressible: the token arrives in the request *body*, and slowapi key
+#: functions are synchronous and cannot read it -- the same wall as issue #296,
+#: described at the top of this module. The only decorator left keys on the
+#: client address, which behind Caddy and docker NAT (#294) is one bucket for the
+#: entire deployment.
+#:
+#: So this is checked in-handler like the login tracker, and counts only
+#: failures. A valid refresh is cheap and, since #268, single-flighted by the web
+#: client; a rejected one costs a DB lookup, and that is what is worth bounding.
+#:
+#: Keyed by the **token**, not its subject. Live testing showed why: with a
+#: subject key, twenty rejected replays of one dead token also blocked that
+#: user's freshly issued, perfectly valid one for the rest of the window --
+#: anyone holding a single stale token could keep a user from renewing. Keying
+#: on the token confines the lockout to the token being abused, and an attacker
+#: cannot mint a new one to rotate around it without the signing key.
+failed_refreshes = FailedLoginTracker(
+    normalize=lambda token: hashlib.sha256(str(token).encode()).hexdigest(),
+    limit_supplier=lambda: settings.refresh_failure_limit,
+    window_supplier=lambda: settings.refresh_failure_window_seconds,
+)

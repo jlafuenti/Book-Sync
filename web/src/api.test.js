@@ -1177,3 +1177,153 @@ describe('password_reset_required (issue #209)', () => {
         expect(listener).not.toHaveBeenCalled()
     })
 })
+
+
+// ---------------------------------------------------------------------------
+// Issue #268 — the refresh path, which had no test at all.
+//
+// This is the web sibling of #143 on Android. Every authenticated request goes
+// through fetchWithAuth; it is the single point where a session survives or
+// dies, and its refresh-and-retry, token-rotation and logout branches were
+// entirely uncovered.
+//
+// Two behaviours matter. Concurrent 401s each fired their own POST
+// /auth/refresh — the Home page fires five requests at once, so an expired
+// access token meant five refreshes racing into localStorage. Harmless only
+// while the server declines to rotate refresh tokens; one rotation change away
+// from an intermittent logout loop.
+//
+// And on refresh failure the module did `window.location.href = '/login'`: a
+// full page reload, from anywhere, including a background position heartbeat.
+// That tears down an open reader *with its pending save* and an active player.
+// The session is over either way — the reload is what costs the unsaved
+// position.
+// ---------------------------------------------------------------------------
+
+describe('fetchWithAuth — 401 refresh (issue #268)', () => {
+    /** A fetch mock that 401s protected calls until the token changes. */
+    function mockSession({ refreshSucceeds = true } = {}) {
+        const calls = { refresh: 0, protected: 0 }
+        // The only token the server will accept. The client starts holding
+        // 'stale-access', so its first call 401s — which is the whole point. An
+        // earlier draft had the server accepting the stale token, so nothing
+        // ever 401'd and every assertion here passed against a code path that
+        // never ran.
+        const SERVER_ACCEPTS = 'fresh-access'
+
+        const fetchMock = vi.fn().mockImplementation(async (url, options = {}) => {
+            const u = String(url)
+
+            if (u.includes('/auth/refresh')) {
+                calls.refresh += 1
+                if (!refreshSucceeds) {
+                    return { ok: false, status: 401, json: async () => ({ detail: 'Invalid refresh token' }) }
+                }
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ access_token: SERVER_ACCEPTS, refresh_token: 'fresh-refresh' }),
+                }
+            }
+
+            calls.protected += 1
+            const sent = options.headers?.['Authorization']
+            if (sent !== `Bearer ${SERVER_ACCEPTS}`) {
+                return { ok: false, status: 401, json: async () => ({ detail: 'Not authenticated' }) }
+            }
+            return { ok: true, status: 200, json: async () => ({ ok: true, seen: sent }) }
+        })
+
+        vi.stubGlobal('fetch', fetchMock)
+        return { calls, fetchMock }
+    }
+
+    beforeEach(() => {
+        localStorage.setItem('tandem_token', 'stale-access')
+        localStorage.setItem('tandem_refresh', 'stale-refresh')
+    })
+
+    it('refreshes once and retries the original request with the new token', async () => {
+        const { calls } = mockSession()
+        const { getMe } = await import('./api')
+
+        const body = await getMe()
+
+        expect(calls.refresh).toBe(1)
+        expect(body.seen).toBe('Bearer fresh-access')
+        expect(localStorage.getItem('tandem_token')).toBe('fresh-access')
+    })
+
+    it('makes exactly one refresh call when several requests 401 together', async () => {
+        // The real trigger: the Home page fires its requests in parallel and the
+        // access token expires between them.
+        const { calls } = mockSession()
+        const api = await import('./api')
+
+        await Promise.all([api.getMe(), api.getMe(), api.getMe(), api.getMe(), api.getMe()])
+
+        expect(calls.refresh).toBe(1)
+    })
+
+    it('gives every waiter the refreshed token, not the one that failed', async () => {
+        const { calls } = mockSession()
+        const api = await import('./api')
+
+        const results = await Promise.all([api.getMe(), api.getMe(), api.getMe()])
+
+        expect(calls.refresh).toBe(1)
+        for (const r of results) {
+            expect(r.seen).toBe('Bearer fresh-access')
+        }
+    })
+
+    it('clears the session and fires tandem:unauthorized when the refresh is rejected', async () => {
+        mockSession({ refreshSucceeds: false })
+        const events = []
+        const onUnauthorized = () => events.push('unauthorized')
+        window.addEventListener('tandem:unauthorized', onUnauthorized)
+
+        try {
+            const { getMe } = await import('./api')
+            await getMe().catch(() => {})
+
+            expect(events).toEqual(['unauthorized'])
+            expect(localStorage.getItem('tandem_token')).toBeNull()
+            expect(localStorage.getItem('tandem_refresh')).toBeNull()
+        } finally {
+            window.removeEventListener('tandem:unauthorized', onUnauthorized)
+        }
+    })
+
+    it('never navigates the page — the reload is the bug', async () => {
+        // Asserting this behaviourally does not work: `delete window.location`
+        // is a no-op in jsdom, so a stubbed setter never sees the assignment and
+        // the test passes whether or not the code reloads. It did, on the first
+        // draft of this file.
+        //
+        // So read the source. The failure mode is exactly "the assignment came
+        // back", which this catches, and there is no fallback branch to allow:
+        // App.jsx is the only consumer and always registers the listener.
+        // From cwd, not import.meta.url: vite serves modules over http, so that
+        // URL is not a file path and readFileSync rejects it.
+        const fs = await import('node:fs')
+        const path = await import('node:path')
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', 'api.js'), 'utf8')
+        // Block-comment continuations too, not just `//` — the doc comment that
+        // explains why the reload is gone quotes the very line being banned.
+        const code = src.split(/\r?\n/)
+            .map(l => l.trim())
+            .filter(l => !l.startsWith('//') && !l.startsWith('*') && !l.startsWith('/*'))
+
+        expect(code.some(l => /window\.location\s*(\.href)?\s*=/.test(l))).toBe(false)
+    })
+
+    it('does not try to refresh when there is no refresh token', async () => {
+        localStorage.removeItem('tandem_refresh')
+        const { calls } = mockSession({ refreshSucceeds: false })
+        const { getMe } = await import('./api')
+
+        await getMe().catch(() => {})
+
+        expect(calls.refresh).toBe(0)
+    })
+})
