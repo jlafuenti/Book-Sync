@@ -147,9 +147,44 @@ android {
         arg("room.schemaLocation", "$projectDir/schemas")
     }
 
+    // Play needs an .aab signed with an upload key, and there was no way to
+    // produce one (issue #144). The four values live in android/local.properties,
+    // which is gitignored — the keystore itself must stay outside the checkout
+    // entirely, because a Play upload key cannot be rotated without Google's help.
+    //
+    //   tandem.signing.storeFile=/absolute/path/to/tandem-upload.jks
+    //   tandem.signing.storePassword=...
+    //   tandem.signing.keyAlias=upload
+    //   tandem.signing.keyPassword=...
+    //
+    // Absent on a clean clone, and that has to keep working: the config is only
+    // *applied* below when the keystore actually resolves, so `bundleRelease`
+    // still succeeds unsigned in CI and for a fresh contributor.
+    val releaseKeystore = tandemSetting("tandem.signing.storeFile")
+        .takeIf { it.isNotBlank() }
+        ?.let { file(it) }
+        ?.takeIf { it.exists() }
+
+    signingConfigs {
+        create("release") {
+            if (releaseKeystore != null) {
+                storeFile = releaseKeystore
+                storePassword = tandemSetting("tandem.signing.storePassword")
+                keyAlias = tandemSetting("tandem.signing.keyAlias")
+                keyPassword = tandemSetting("tandem.signing.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Only when a keystore is actually present; see above.
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
+            // No-op without minification, real savings with it (issue #145).
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
