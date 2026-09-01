@@ -866,3 +866,221 @@ async def test_unflagged_user_is_unaffected(client, make_user, auth_header):
                          headers=auth_header(user))
 
     assert r.status_code != 403
+
+
+# ---------------------------------------------------------------------------
+# Issue #264: throttling and auditing the password change.
+#
+# change-password verifies the current password and had no limit and no audit
+# row on failure. Someone holding a stolen 24h access token could brute-force
+# the current password against bcrypt at whatever rate the server sustains, then
+# set a new one -- turning a temporary token into permanent takeover, locking
+# the real user out (the change bumps token_version), with nothing in the audit
+# log to show it happened.
+#
+# The bucket is keyed by **user id**, not IP. Behind Caddy every client shares
+# the proxy's address (issue #294), so a per-IP limit here would throttle all
+# users together and protect nobody.
+#
+# Note the limit is much lower than login's. login keys on username, so a high
+# threshold is deliberate there -- an attacker who knows a username could
+# otherwise lock the real user out (see config.py). That inverts here: reaching
+# this endpoint at all requires the victim's own valid access token, so the
+# caller *is* the session. Locking it out is the intended outcome, not
+# collateral damage.
+# ---------------------------------------------------------------------------
+
+
+async def _wrong_password(client, headers, n=1):
+    last = None
+    for _ in range(n):
+        last = await client.post(
+            "/api/auth/change-password",
+            json={"old_password": "not-the-password", "new_password": "irrelevant1"},
+            headers=headers,
+        )
+    return last
+
+
+async def test_repeated_wrong_current_passwords_lock_the_account_out(
+    client, make_user, auth_header
+):
+    from config import settings as s
+    from rate_limit import failed_password_changes
+
+    failed_password_changes.reset()
+    user = await make_user(username="brute", password="realpassword")
+    headers = auth_header(user)
+
+    for _ in range(s.password_change_failure_limit):
+        r = await _wrong_password(client, headers)
+        assert r.status_code == 400, "a wrong current password is a 400, not a lockout"
+
+    r = await _wrong_password(client, headers)
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+async def test_the_lockout_is_per_user_not_shared(client, make_user, auth_header):
+    """The test that actually proves the key is the user id.
+
+    A shared bucket -- which is what keying on the proxy's IP would give -- would
+    lock this second user out too, and every other user of the deployment with
+    them.
+    """
+    from config import settings as s
+    from rate_limit import failed_password_changes
+
+    failed_password_changes.reset()
+    attacker_victim = await make_user(username="locked", password="realpassword")
+    bystander = await make_user(username="bystander", password="realpassword")
+
+    await _wrong_password(client, auth_header(attacker_victim), s.password_change_failure_limit)
+    assert (await _wrong_password(client, auth_header(attacker_victim))).status_code == 429
+
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"old_password": "realpassword", "new_password": "brandnewpw1"},
+        headers=auth_header(bystander),
+    )
+    assert r.status_code == 200
+
+
+async def test_the_lockout_expires(client, make_user, auth_header):
+    """Advance the injected clock instead of sleeping."""
+    import time
+
+    from config import settings as s
+    from rate_limit import failed_password_changes
+
+    failed_password_changes.reset()
+    now = [5000.0]
+    failed_password_changes.clock = lambda: now[0]
+    try:
+        user = await make_user(username="patient", password="realpassword")
+        headers = auth_header(user)
+
+        await _wrong_password(client, headers, s.password_change_failure_limit)
+        assert (await _wrong_password(client, headers)).status_code == 429
+
+        now[0] += s.password_change_failure_window_seconds + 1
+        r = await client.post(
+            "/api/auth/change-password",
+            json={"old_password": "realpassword", "new_password": "brandnewpw1"},
+            headers=headers,
+        )
+        assert r.status_code == 200
+    finally:
+        failed_password_changes.clock = time.monotonic
+
+
+async def test_a_correct_password_clears_the_bucket(client, make_user, auth_header):
+    from rate_limit import failed_password_changes
+
+    failed_password_changes.reset()
+    user = await make_user(username="recovers", password="realpassword")
+    headers = auth_header(user)
+
+    await _wrong_password(client, headers, 2)
+    assert failed_password_changes.failure_count(str(user.id)) == 2
+
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"old_password": "realpassword", "new_password": "brandnewpw1"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    assert failed_password_changes.failure_count(str(user.id)) == 0
+
+
+async def test_a_failed_change_is_audited(client, make_user, auth_header, db):
+    """Without this the brute force leaves no trace at all."""
+    from rate_limit import failed_password_changes
+
+    failed_password_changes.reset()
+    user = await make_user(username="audited", password="realpassword")
+
+    await _wrong_password(client, auth_header(user))
+
+    rows = (await db.execute(
+        select(AuditLog).where(AuditLog.action == "password_change_failed")
+    )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].user_id == user.id
+
+
+# ---------------------------------------------------------------------------
+# Issue #264, the /auth/refresh half.
+#
+# The issue proposed `@limiter.limit("30/minute")` keyed by the token's `sub`.
+# That is not implementable: the refresh token arrives in the request *body*,
+# and slowapi key functions are synchronous and cannot read it — the same wall
+# this repo hit in #296, recorded in rate_limit.py's docstring. The remaining
+# decorator option, keying on the client address, is worse than nothing here:
+# behind Caddy and docker NAT every caller shares the proxy's address (#294), so
+# a 30/minute bucket would be shared by the whole deployment.
+#
+# So the bound is in-handler and counts *rejected* refreshes, which is the abuse
+# that costs anything: each one is a DB lookup, and a valid refresh is cheap and
+# self-limiting now that the web client single-flights them (#268).
+# ---------------------------------------------------------------------------
+
+
+async def test_repeated_rejected_refreshes_are_throttled(client, make_user, db):
+    from config import settings as s
+    from rate_limit import failed_refreshes
+
+    failed_refreshes.reset()
+    user = await make_user(username="refresher", password="pw")
+    stale = create_refresh_token(user)
+    # Invalidate it the way a logout does. Re-load through the db fixture first:
+    # make_user commits on its own session and hands back a detached object, so
+    # bumping that instance reaches nothing the request will read — the token
+    # stays valid and every assertion below passes against a 200. Same shape as
+    # test_token_rejected_after_version_bump.
+    stored = (await db.execute(select(User).where(User.id == user.id))).scalar_one()
+    stored.token_version += 1
+    await db.commit()
+
+    for _ in range(s.refresh_failure_limit):
+        r = await client.post("/api/auth/refresh", json={"refresh_token": stale})
+        assert r.status_code == 401
+
+    r = await client.post("/api/auth/refresh", json={"refresh_token": stale})
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+async def test_a_valid_refresh_is_unaffected_by_another_tokens_failures(client, make_user, db):
+    """The bucket is per *token*, not per subject and not global.
+
+    Found in live testing: keying on the subject meant twenty replays of one
+    dead token also blocked that same user's freshly issued valid one for the
+    rest of the window, so anyone holding a single stale token could stop a user
+    renewing. This covers the same-user case as well as the bystander.
+    """
+    from config import settings as s
+    from rate_limit import failed_refreshes
+
+    failed_refreshes.reset()
+    victim = await make_user(username="innocent", password="pw")
+    noisy = await make_user(username="noisy", password="pw")
+
+    stale = create_refresh_token(noisy)
+    stored = (await db.execute(select(User).where(User.id == noisy.id))).scalar_one()
+    stored.token_version += 1
+    await db.commit()
+    for _ in range(s.refresh_failure_limit + 1):
+        await client.post("/api/auth/refresh", json={"refresh_token": stale})
+
+    good = create_refresh_token(victim)
+    r = await client.post("/api/auth/refresh", json={"refresh_token": good})
+    assert r.status_code == 200
+
+    # And the abused user's own fresh token still works: the lockout follows the
+    # token that was replayed, not the account behind it.
+    stored = (await db.execute(select(User).where(User.id == noisy.id))).scalar_one()
+    r = await client.post(
+        "/api/auth/refresh", json={"refresh_token": create_refresh_token(stored)}
+    )
+    assert r.status_code == 200

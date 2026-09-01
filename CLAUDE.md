@@ -146,6 +146,29 @@ and the failure mode (reopening at the wrong page) is silent.
 - Stored in `localStorage` on the frontend
 - `server/routers/auth.py` handles login, registration, token refresh
 
+**The localStorage choice depends on the web having zero HTML-injection sinks**
+(issue #286). A 30-day refresh token in `localStorage` is readable by any script
+on the origin, so one injected script is full account takeover, not a defaced
+page. That trade is only sound while nothing can inject.
+
+So these are **banned in `web/src/**`**: `dangerouslySetInnerHTML`, `innerHTML`,
+`outerHTML`, `insertAdjacentHTML`, `document.write`, and `rehype-raw`. Pinned by
+`web/src/no-html-sinks.test.js`, which fails the build rather than relying on
+anyone remembering. Test files are exempt — they build DOM fixtures.
+
+The realistic way this breaks is not malice: ABS book descriptions render their
+literal `<p>` tags today, and the obvious fix is raw HTML. `BookDetailPage`
+renders them through react-markdown, whose escaping and `javascript:` URL
+filtering are load-bearing, not incidental — `BookDetailPage.test.jsx` pins both.
+
+**If you need one of these**, move the tokens to httpOnly cookies with CSRF
+protection first, in the same change that relaxes the rule.
+
+Related: refresh is single-flighted client-side (`web/src/api.js`,
+`refreshSession`) and the server does not rotate refresh tokens. If rotation is
+ever added, the single-flight is what stops concurrent 401s from logging users
+out at random — do not remove it without replacing that guarantee.
+
 ### Frontend Structure (`web/src/`)
 - `api.js` — Centralized API client with automatic token refresh
 - `App.jsx` — React Router root with auth guard

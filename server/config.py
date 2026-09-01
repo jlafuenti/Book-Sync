@@ -51,6 +51,30 @@ class Settings(BaseSettings):
         default=15 * 60, alias="LOGIN_FAILURE_WINDOW_SECONDS"
     )
 
+    # Failed *current-password* checks on /auth/change-password (issue #264).
+    # Much lower than the login limit above, and deliberately so: the reasoning
+    # that forces login's threshold high does not apply here. Login keys on a
+    # username anyone can name, so a low limit would let an attacker lock a real
+    # user out. This bucket keys on the authenticated user's id, and reaching
+    # the endpoint at all requires that user's own valid access token — so the
+    # caller already *is* the session. Locking it is the point.
+    password_change_failure_limit: int = Field(
+        default=5, alias="PASSWORD_CHANGE_FAILURE_LIMIT"
+    )
+    password_change_failure_window_seconds: int = Field(
+        default=15 * 60, alias="PASSWORD_CHANGE_FAILURE_WINDOW_SECONDS"
+    )
+
+    # Rejected /auth/refresh attempts for one token subject (issue #264). Only
+    # failures count: a valid refresh is cheap, and the web client single-flights
+    # them (#268). A rejected one costs a DB lookup, which is the abuse worth
+    # bounding. Generous, because a client whose token legitimately expired will
+    # retry a few times before its user gives up and signs in again.
+    refresh_failure_limit: int = Field(default=20, alias="REFRESH_FAILURE_LIMIT")
+    refresh_failure_window_seconds: int = Field(
+        default=15 * 60, alias="REFRESH_FAILURE_WINDOW_SECONDS"
+    )
+
     # Whisper Transcription
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisper_device: str = Field(
