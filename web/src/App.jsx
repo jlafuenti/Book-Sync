@@ -349,6 +349,18 @@ function App() {
         return () => window.removeEventListener('tandem:password-reset-required', onGated)
     }, [])
 
+    // The session ended and could not be refreshed (issue #268). api.js used to
+    // handle this itself with `window.location.href = '/login'` — a full reload,
+    // fired from wherever the failing request happened to be, including a
+    // background position heartbeat. That tore down an open reader along with
+    // its pending save. Dropping `user` unmounts to LoginPage through React
+    // instead, so anything mid-flight gets to finish.
+    useEffect(() => {
+        const onUnauthorized = () => setUser(null)
+        window.addEventListener('tandem:unauthorized', onUnauthorized)
+        return () => window.removeEventListener('tandem:unauthorized', onUnauthorized)
+    }, [])
+
     if (loading) {
         return (
             <div className="loading-page">
