@@ -282,3 +282,38 @@ describe('BookDetailPage reader/player handoff', () => {
         expect(reader).toHaveAttribute('data-chapter', '4')
     })
 })
+
+
+// ---------------------------------------------------------------------------
+// Issue #286. The description is remote text — it arrives from Audiobookshelf,
+// which pulls it from third-party metadata providers. It is rendered through
+// react-markdown, which escapes raw HTML and neutralises `javascript:` URLs by
+// default, and that default is load-bearing: the 30-day refresh token sits in
+// localStorage where any injected script can read it.
+//
+// ABS descriptions currently show their literal <p> tags, so there is a
+// standing temptation to "fix" this with rehype-raw. This test is what fails if
+// anyone does.
+// ---------------------------------------------------------------------------
+describe('BookDetailPage description rendering (issue #286)', () => {
+    const HOSTILE = '<img src=x onerror=alert(1)> [click](javascript:alert(1))'
+
+    it('renders hostile markdown without injecting HTML or a javascript: link', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr',
+            cover_path: null, description: HOSTILE,
+        })
+
+        const { container } = renderPage()
+        // The title appears in more than one place (heading and paired-with),
+        // so wait on the description instead — it is what this test is about.
+        await screen.findByText(/click/)
+
+        // No element from the raw HTML made it into the DOM.
+        expect(container.querySelector('img[src="x"]')).toBeNull()
+
+        // And no anchor carries a javascript: URL.
+        const hrefs = [...container.querySelectorAll('a')].map(a => a.getAttribute('href') || '')
+        expect(hrefs.some(h => h.trim().toLowerCase().startsWith('javascript:'))).toBe(false)
+    })
+})

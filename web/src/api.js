@@ -151,6 +151,72 @@ export async function coverSrc(path) {
     return `${encodedPath}?${query ? `${query}&` : ''}token=${token}`;
 }
 
+// One refresh at a time (issue #268). Every authenticated call goes through
+// fetchWithAuth, and the pages fire several at once — the Home page opens with
+// five. When the 24h access token expires they all 401 together, and without
+// this each one POSTed its own /auth/refresh and raced the others into
+// localStorage. That is safe only while the server declines to rotate refresh
+// tokens; adding rotation later would have turned it into an intermittent
+// logout loop, with nothing to catch it.
+//
+// This is the same single-flight the Android TokenAuthenticator does (#143).
+let refreshInFlight = null;
+
+/**
+ * Refresh the session, collapsing concurrent callers onto one request.
+ *
+ * @returns {Promise<string|null>} the new access token, or null if the session
+ *   is over — in which case the tokens are cleared and `tandem:unauthorized`
+ *   has been dispatched.
+ */
+function refreshSession() {
+    if (refreshInFlight) return refreshInFlight;
+
+    refreshInFlight = (async () => {
+        try {
+            const resp = await fetch(`${API_BASE}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken }),
+            });
+            if (!resp.ok) {
+                endSession();
+                return null;
+            }
+            const data = await resp.json();
+            setTokens(data.access_token, data.refresh_token);
+            return data.access_token;
+        } catch {
+            // A network failure is not an expired session: leave the tokens
+            // alone so the next attempt can succeed, and let the caller see the
+            // original 401.
+            return null;
+        } finally {
+            refreshInFlight = null;
+        }
+    })();
+
+    return refreshInFlight;
+}
+
+/**
+ * End the session without reloading the page (issue #268).
+ *
+ * This used to be `window.location.href = '/login'`. That reload fired from
+ * anywhere, including a background position heartbeat, and tore down an open
+ * reader together with its pending save and any active playback. The session is
+ * over either way; the reload is what cost the unsaved position.
+ *
+ * `App.jsx` listens for this and drops to LoginPage via React state, the same
+ * shape as the `tandem:password-reset-required` event next to it (#209). It is
+ * the only consumer, and it always registers the listener — so there is no
+ * fallback reload here, and a test pins that no navigation ever returns.
+ */
+function endSession() {
+    clearTokens();
+    window.dispatchEvent(new CustomEvent('tandem:unauthorized'));
+}
+
 async function fetchWithAuth(url, options = {}) {
     const headers = { ...options.headers };
     if (accessToken) {
@@ -162,22 +228,18 @@ async function fetchWithAuth(url, options = {}) {
 
     let response = await fetch(url, { ...options, headers });
 
-    // If 401, try refreshing the token
-    if (response.status === 401 && refreshToken) {
-        const refreshResp = await fetch(`${API_BASE}/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: refreshToken }),
-        });
+    // If 401, refresh once and retry (issue #268).
+    if (response.status === 401 && refreshToken && !String(url).includes('/auth/refresh')) {
+        const attempted = accessToken;
+        const fresh = await refreshSession();
 
-        if (refreshResp.ok) {
-            const data = await refreshResp.json();
-            setTokens(data.access_token, data.refresh_token);
-            headers['Authorization'] = `Bearer ${data.access_token}`;
+        if (fresh) {
+            headers['Authorization'] = `Bearer ${fresh}`;
             response = await fetch(url, { ...options, headers });
-        } else {
-            clearTokens();
-            window.location.href = '/login';
+        } else if (attempted !== accessToken && accessToken) {
+            // Someone else's refresh landed while this call was in flight.
+            headers['Authorization'] = `Bearer ${accessToken}`;
+            response = await fetch(url, { ...options, headers });
         }
     }
 
