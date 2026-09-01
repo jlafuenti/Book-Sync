@@ -8,8 +8,10 @@ import androidx.room.Room
 import com.booksync.data.local.BookSyncDatabase
 import com.booksync.data.local.MIGRATION_12_13
 import com.booksync.data.local.dao.*
+import com.booksync.BuildConfig
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DictionaryApi
+import com.booksync.data.remote.httpLoggingLevel
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -57,6 +59,7 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
+        baseUrlInterceptor: com.booksync.data.remote.BaseUrlInterceptor,
         authInterceptor: com.booksync.data.remote.AuthInterceptor,
         retryInterceptor: com.booksync.data.remote.RetryInterceptor,
         tokenAuthenticator: com.booksync.data.remote.TokenAuthenticator,
@@ -65,8 +68,11 @@ object AppModule {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS) // Long timeout for large file downloads
             .writeTimeout(30, TimeUnit.SECONDS)
+            // First: everything after it should see the real destination, and the
+            // logger should not print the placeholder host (issue #228).
+            .addInterceptor(baseUrlInterceptor)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = httpLoggingLevel(BuildConfig.DEBUG)
             })
             .addInterceptor(retryInterceptor)
             .addInterceptor(authInterceptor)
@@ -88,7 +94,9 @@ object AppModule {
     @Provides
     @Singleton
     @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API)
-    fun provideRefreshOkHttpClient(): OkHttpClient =
+    fun provideRefreshOkHttpClient(
+        baseUrlInterceptor: com.booksync.data.remote.BaseUrlInterceptor,
+    ): OkHttpClient =
         OkHttpClient.Builder()
             // The refresh runs under a process-wide mutex, so whatever it waits
             // for, everything else waits for too. Without a call timeout the
@@ -100,8 +108,11 @@ object AppModule {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // The user can change servers mid-session; without this the refresh
+            // client would keep renewing tokens against the previous one (#228).
+            .addInterceptor(baseUrlInterceptor)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = httpLoggingLevel(BuildConfig.DEBUG)
             })
             .build()
 
@@ -111,11 +122,12 @@ object AppModule {
     fun provideRefreshRetrofit(
         @Named(com.booksync.data.remote.TokenAuthenticator.REFRESH_API) client: OkHttpClient,
         json: Json,
-        serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     ): Retrofit {
         val contentType = "application/json".toMediaType()
         return Retrofit.Builder()
-            .baseUrl(com.booksync.data.remote.retrofitBaseUrl(serverUrlManager.getServerUrlBlocking()))
+            // A constant placeholder: BaseUrlInterceptor rewrites scheme/host/port
+            // per request, so this is never the address anything reaches (#228).
+            .baseUrl(com.booksync.data.remote.UNCONFIGURED_BASE_URL)
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
@@ -134,11 +146,12 @@ object AppModule {
     fun provideRetrofit(
         client: OkHttpClient,
         json: Json,
-        serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     ): Retrofit {
         val contentType = "application/json".toMediaType()
         return Retrofit.Builder()
-            .baseUrl(com.booksync.data.remote.retrofitBaseUrl(serverUrlManager.getServerUrlBlocking()))
+            // A constant placeholder: BaseUrlInterceptor rewrites scheme/host/port
+            // per request, so this is never the address anything reaches (#228).
+            .baseUrl(com.booksync.data.remote.UNCONFIGURED_BASE_URL)
             .client(client)
             .addConverterFactory(json.asConverterFactory(contentType))
             .build()
@@ -163,7 +176,7 @@ object AppModule {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = httpLoggingLevel(BuildConfig.DEBUG)
             })
             .build()
 

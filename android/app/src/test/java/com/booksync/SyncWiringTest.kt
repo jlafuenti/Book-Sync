@@ -307,4 +307,114 @@ class SyncWiringTest {
             refreshClient.any { it.contains(".callTimeout(") },
         )
     }
+
+    // ---------------------------------------------------------------------
+    // Issue #231. These cannot be behavioural tests: AudioPlayerService and
+    // LocalCastHttpServer are excluded from Kover and are Android-framework
+    // glue that JVM unit tests cannot instantiate, and there is no way to
+    // assert on what logcat received from here anyway.
+    //
+    // So read the source. The failure mode is exactly "someone interpolated a
+    // secret into a log line again", which a text scan catches precisely.
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `no log line carries the LAN cast token`() {
+        // The token gates the phone's local HTTP server while casting. Logging
+        // it hands anyone with adb, a bug-report bundle, or OEM diagnostics a
+        // working audiobook stream URL for the life of the session.
+        val offenders = mutableListOf<String>()
+        for (path in listOf(
+            "com/booksync/player/AudioPlayerService.kt",
+            "com/booksync/player/LocalCastHttpServer.kt",
+        )) {
+            codeLines(source(path)).forEachIndexed { i, line ->
+                if (!line.contains("Log.")) return@forEachIndexed
+                // $token, ${...token...}, or a URL built from one.
+                if (Regex("""\$\{?[A-Za-z.]*(token|streamUrl)""", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(line)
+                ) {
+                    offenders += "${path.substringAfterLast('/')}:${i + 1} -> $line"
+                }
+            }
+        }
+
+        assertTrue(
+            "Log lines interpolating the cast token or a URL containing it: $offenders. " +
+                "Log the host and port instead.",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `every OkHttp client gates its logging on the build type`() {
+        // Three clients today (main, refresh, dictionary). The interesting
+        // failure is a fourth being added with a bare Level.BASIC, which no
+        // other test would notice — AppModule is excluded from coverage.
+        val module = codeLines(source("com/booksync/di/AppModule.kt"))
+
+        val bare = module.filter { it.contains("HttpLoggingInterceptor.Level.") }
+        assertTrue(
+            "HttpLoggingInterceptor level set directly instead of via " +
+                "httpLoggingLevel(BuildConfig.DEBUG): $bare",
+            bare.isEmpty(),
+        )
+
+        val gated = module.count { it.contains("httpLoggingLevel(") }
+        val clients = module.count { it.contains("OkHttpClient.Builder()") }
+        assertEquals(
+            "every OkHttpClient must gate its logging; found $clients clients " +
+                "and $gated gated logging levels",
+            clients, gated,
+        )
+    }
+
+    @Test
+    fun `the base-url interceptor is registered on both server-facing clients`() {
+        // BaseUrlInterceptorTest builds the interceptor directly, so it passes
+        // whether or not anything installs it — removing the registration failed
+        // nothing until this existed. AppModule is excluded from Kover too, so
+        // reading the source is the only thing that can hold this.
+        val module = codeLines(source("com/booksync/di/AppModule.kt"))
+
+        val registrations = module.count { it.contains(".addInterceptor(baseUrlInterceptor)") }
+        assertEquals(
+            "Both the main and the refresh client must rewrite the base URL. " +
+                "Without it on the refresh client, tokens keep renewing against " +
+                "the previous server after a switch (issue #228).",
+            2, registrations,
+        )
+
+        val placeholders = module.count {
+            it.contains("baseUrl(com.booksync.data.remote.UNCONFIGURED_BASE_URL)")
+        }
+        assertEquals(
+            "Both server-facing Retrofit builders must use the placeholder; a real " +
+                "URL baked in at construction is the restart-on-switch bug.",
+            2, placeholders,
+        )
+
+        assertTrue(
+            "getServerUrlBlocking() has no remaining callers — the base URL is read " +
+                "per request now.",
+            module.none { it.contains("getServerUrlBlocking()") },
+        )
+    }
+
+    @Test
+    fun `nothing restarts the process to change servers`() {
+        // Runtime.getRuntime().exit(0) does not wait for the application-scoped,
+        // non-cancellable position flush the sync contract requires, so it could
+        // take a reading position with it (issue #228).
+        for (path in listOf(
+            "com/booksync/ui/account/AccountViewModel.kt",
+            "com/booksync/ui/auth/LoginScreen.kt",
+        )) {
+            val src = codeLines(source(path))
+            assertTrue(
+                "$path must not restart the app to apply a server change.",
+                src.none { it.contains("restartApp") || it.contains("Runtime.getRuntime()") },
+            )
+        }
+    }
 }

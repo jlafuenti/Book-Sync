@@ -43,9 +43,13 @@ re-check the behaviour changes for the new level —
 The app ships with **no server URL baked in**. On first launch the login screen opens with its
 **Advanced** section already expanded and the Server URL field empty; Sign In stays disabled until
 you fill it in. Enter your server's origin — e.g. `https://tandem.example.com` — and press
-**Save & Restart**. The app restarts because Retrofit's base URL is fixed at startup.
+**Save**. It takes effect on the next request — no restart (issue #228; the base
+URL is read per request by `BaseUrlInterceptor`).
 
-You can change it later from **Account → Server URL**, same restart.
+You can change it later from **Account → Server URL**. Doing so **signs you out**:
+the previous server's tokens are cleared rather than sent to the new host. Your
+downloaded library is kept — it is stored per server and per user, so switching
+back restores it without re-downloading.
 
 **Prefer HTTPS.** Android blocks cleartext HTTP unless the host is listed in the app's network
 security config, which by default exempts only `localhost`, `127.0.0.1`, and the emulator's
