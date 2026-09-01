@@ -1,13 +1,14 @@
 package com.booksync.data.remote
 
 import androidx.datastore.core.DataStore
+import com.booksync.di.ApplicationScope
+import kotlinx.coroutines.CoroutineScope
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
@@ -24,6 +25,8 @@ class ServerUrlManager @Inject constructor(
      * unconfigured case is testable.
      */
     @param:Named(DEFAULT_SERVER_URL_QUALIFIER) private val defaultUrl: String,
+    // Last, so the existing positional call sites in the tests keep working.
+    @ApplicationScope scope: CoroutineScope,
 ) {
     /**
      * Cached server URL. Initialized once at construction from DataStore and only mutated by
@@ -34,20 +37,24 @@ class ServerUrlManager @Inject constructor(
      * is set at singleton creation), but this property is kept in sync so callers that build
      * URLs at use-time (cover images, audio streams) immediately see the new value.
      */
-    @Volatile
-    var currentUrl: String = defaultUrl
-        private set
+    val currentUrl: String get() = chosenUrl ?: seeded.get()
 
-    init {
-        currentUrl = runBlocking {
-            val stored = dataStore.data.first()[KEY_SERVER_URL]
-            when {
-                stored == null -> repair(defaultUrl)
-                stored == LEGACY_SERVER_URL -> repair(defaultUrl).also { persist(it) }
-                else -> repair(stored).also { if (it != stored) persist(it) }
-            }
+    /**
+     * Seeded off the main thread (issue #318); this loader also *persists* a
+     * repaired value, so it must run exactly once -- see [SeededValue].
+     */
+    private val seeded = SeededValue(scope) {
+        val stored = dataStore.data.first()[KEY_SERVER_URL]
+        when {
+            stored == null -> repair(defaultUrl)
+            stored == LEGACY_SERVER_URL -> repair(defaultUrl).also { persist(it) }
+            else -> repair(stored).also { if (it != stored) persist(it) }
         }
     }
+
+    /** Set by [setServerUrl]; wins over the seed once the user picks a server. */
+    @Volatile
+    private var chosenUrl: String? = null
 
     /**
      * Normalize a value read from storage, or blank it out if it can't be.
@@ -91,7 +98,7 @@ class ServerUrlManager @Inject constructor(
      */
     suspend fun setServerUrl(url: String): Boolean {
         val normalized = normalizeServerUrl(url) ?: return false
-        currentUrl = normalized
+        chosenUrl = normalized
         persist(normalized)
         return true
     }

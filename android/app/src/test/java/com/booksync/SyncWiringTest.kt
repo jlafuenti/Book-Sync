@@ -417,4 +417,62 @@ class SyncWiringTest {
             )
         }
     }
+
+    @Test
+    fun `no singleton blocks on disk in its constructor`() {
+        // Issue #318. Hilt builds these inside Application.onCreate, so a
+        // runBlocking in an init block is a disk read on the main thread before
+        // the first frame. Behavioural tests cannot see it — they construct these
+        // off the main thread and never notice — so read the source.
+        val offenders = mutableListOf<String>()
+        for (path in listOf(
+            "com/booksync/data/remote/ServerUrlManager.kt",
+            "com/booksync/data/remote/TokenManager.kt",
+            "com/booksync/data/remote/DeviceIdManager.kt",
+            "com/booksync/data/remote/UserScopeProvider.kt",
+        )) {
+            val src = codeLines(source(path))
+            // `init {` followed by a runBlocking before the block closes.
+            var inInit = false
+            src.forEach { line ->
+                if (line.startsWith("init {")) inInit = true
+                else if (inInit && line == "}") inInit = false
+                if (inInit && line.contains("runBlocking")) {
+                    offenders += path.substringAfterLast('/')
+                }
+            }
+            // Belt and braces: a property initialiser can block just as well.
+            src.forEach { line ->
+                if (line.contains("= runBlocking") || line.contains("=runBlocking")) {
+                    offenders += "${path.substringAfterLast('/')} (property initialiser)"
+                }
+            }
+        }
+
+        assertTrue(
+            "These seed themselves with a blocking DataStore read at construction, " +
+                "which runs on the main thread inside Application.onCreate. Use " +
+                "SeededValue instead: $offenders",
+            offenders.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `the seeded singletons use the shared single-flight helper`() {
+        // SeededValue's memoisation is what stops DeviceIdManager minting two
+        // device ids on a first launch. A class that hand-rolls its own seeding
+        // would pass the guard above while reintroducing exactly that race.
+        for (path in listOf(
+            "com/booksync/data/remote/ServerUrlManager.kt",
+            "com/booksync/data/remote/TokenManager.kt",
+            "com/booksync/data/remote/DeviceIdManager.kt",
+            "com/booksync/data/remote/UserScopeProvider.kt",
+        )) {
+            val src = codeLines(source(path))
+            assertTrue(
+                "${path.substringAfterLast('/')} must seed through SeededValue.",
+                src.any { it.contains("SeededValue(") },
+            )
+        }
+    }
 }
