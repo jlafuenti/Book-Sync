@@ -11,13 +11,48 @@ There is no published APK — build and sideload it yourself:
 cd android && ./gradlew assembleDebug
 ```
 
-The APK lands in `android/app/build/outputs/apk/debug/`. Use `assembleRelease` for a minified
-build (you'll need your own signing config).
+The APK lands in `android/app/build/outputs/apk/debug/`.
 
-**Keep your keystore outside the checkout** and never name its path or password in a tracked
-file — put both in `android/local.properties` or an environment variable. `.gitignore` refuses
-`*.jks`/`*.keystore`/`*.p12` as a backstop, but a Play upload key cannot be rotated without
-Google's help, so don't rely on the backstop.
+### Release builds and signing
+
+`assembleRelease` (APK) and `bundleRelease` (AAB, the Play upload format) both run R8. Both
+work on a clean clone with no configuration at all — they simply produce an **unsigned**
+artifact, which is what CI builds on every PR so the minified path cannot rot unnoticed.
+
+To produce a *signed* build, create an upload keystore **outside the checkout**:
+
+```bash
+keytool -genkeypair -v -keystore tandem-upload.jks -keyalg RSA -keysize 4096 -validity 10000 -alias upload
+```
+
+then add four properties to `android/local.properties` (gitignored, alongside
+`tandem.defaultServerUrl`):
+
+```properties
+tandem.signing.storeFile=/absolute/path/to/tandem-upload.jks
+tandem.signing.storePassword=...
+tandem.signing.keyAlias=upload
+tandem.signing.keyPassword=...
+```
+
+The signing config is applied **only when `storeFile` points at a file that exists**, so a
+missing or partial configuration degrades to an unsigned build rather than a broken one.
+
+**Keep the keystore outside the checkout** and never name its path or password in a tracked
+file. `.gitignore` refuses `*.jks`/`*.keystore`/`*.p12` as a backstop, but a Play upload key
+cannot be rotated without Google's help, so don't rely on the backstop — store it in a password
+manager plus one offline copy.
+
+**Keep `app/build/outputs/mapping/release/mapping.txt` for every release you ship** and upload
+it to Play. Without it, Vitals crash reports are obfuscated stack traces and effectively
+unreadable.
+
+To smoke-test a minified build without the upload key, sign the release APK with the SDK's
+debug keystore (password `android`, not a secret) — the R8 output is identical:
+
+```bash
+apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android   --out app-release-signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
+```
 
 Unit tests:
 
