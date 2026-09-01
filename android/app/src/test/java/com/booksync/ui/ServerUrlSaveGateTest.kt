@@ -13,12 +13,10 @@ import com.booksync.data.remote.UserResponse
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.account.AccountViewModel
 import com.booksync.ui.auth.LoginViewModel
-import com.booksync.util.restartApp
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.mockkStatic
-import io.mockk.unmockkStatic
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -35,8 +33,13 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Issue #149, the load-bearing half: **the app must not restart on a URL that was
+ * Issue #149, the load-bearing half: **the app must not act on a URL that was
  * refused.**
+ *
+ * The action used to be a process restart. Since issue #228 there is none —
+ * BaseUrlInterceptor reads the URL per request — and what a refused URL must not
+ * trigger is the session teardown that an accepted one does. The gate is the
+ * same; only what sits behind it changed.
  *
  * `ServerUrlPolicyTest` and `ServerUrlManagerTest` pin the layer below this —
  * what normalizes, what persists — but neither can see the decision that actually
@@ -45,23 +48,22 @@ import org.junit.Test
  * every chance to correct it. A regression that dropped the `if` and always
  * restarted would leave every test in those two files green.
  *
- * `restartApp` is a top-level function, so it is stubbed with `mockkStatic` on its
- * generated file class. Note it cannot be observed by side effect instead: under
- * `unitTests.isReturnDefaultValues` the mocked `PackageManager` returns a null
- * launch intent and `restartApp` elects to return early.
+ * The observable effect is now `tokenManager.clearTokens()` on the account screen
+ * (the login screen has no session to clear), so these read it from a relaxed mock
+ * rather than stubbing a top-level function.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerUrlSaveGateTest {
 
     private lateinit var serverUrlManager: ServerUrlManager
+    private lateinit var tokenManager: TokenManager
     private lateinit var context: Context
 
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
-        mockkStatic("com.booksync.util.AppRestartKt")
-        every { restartApp(any()) } returns Unit
         context = mockk(relaxed = true)
+        tokenManager = mockk(relaxed = true)
 
         serverUrlManager = mockk()
         every { serverUrlManager.currentUrl } returns "https://tandem.example.com"
@@ -70,7 +72,6 @@ class ServerUrlSaveGateTest {
 
     @After
     fun tearDown() {
-        unmockkStatic("com.booksync.util.AppRestartKt")
         Dispatchers.resetMain()
     }
 
@@ -95,7 +96,7 @@ class ServerUrlSaveGateTest {
         val networkMonitor = mockk<NetworkMonitor>()
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
         return AccountViewModel(
-            dataStore, api, mockk<TokenManager>(relaxed = true),
+            dataStore, api, tokenManager,
             serverUrlManager, deviceIdManager, PasswordResetGate(), networkMonitor,
         )
     }
@@ -103,48 +104,46 @@ class ServerUrlSaveGateTest {
     // ---- login screen ----------------------------------------------------
 
     @Test
-    fun `login screen does not restart when the url is refused`() {
+    fun `login screen does not accept a refused url`() {
         coEvery { serverUrlManager.setServerUrl(any()) } returns false
         val vm = loginViewModel()
 
-        vm.saveServerUrlAndRestart(context, "not a url")
+        vm.saveServerUrl("not a url")
 
-        verify(exactly = 0) { restartApp(any()) }
         assertNotNull("the refusal has to be visible", vm.error.value)
     }
 
     @Test
-    fun `login screen restarts when the url is accepted`() {
+    fun `login screen accepts a valid url without error`() {
         coEvery { serverUrlManager.setServerUrl(any()) } returns true
         val vm = loginViewModel()
 
-        vm.saveServerUrlAndRestart(context, "tandem.example.com")
+        vm.saveServerUrl("tandem.example.com")
 
-        verify(exactly = 1) { restartApp(context) }
         assertNull(vm.error.value)
     }
 
     // ---- account screen --------------------------------------------------
 
     @Test
-    fun `account screen does not restart when the url is refused`() {
+    fun `account screen keeps the session when the url is refused`() {
         coEvery { serverUrlManager.setServerUrl(any()) } returns false
         val vm = accountViewModel()
 
-        vm.saveServerUrlAndRestart(context, "not a url")
+        vm.saveServerUrl("not a url")
 
-        verify(exactly = 0) { restartApp(any()) }
+        coVerify(exactly = 0) { tokenManager.clearTokens() }
         assertNotNull("the refusal has to be visible", vm.serverUrlError.value)
     }
 
     @Test
-    fun `account screen restarts when the url is accepted`() {
+    fun `account screen ends the session when the url is accepted`() {
         coEvery { serverUrlManager.setServerUrl(any()) } returns true
         val vm = accountViewModel()
 
-        vm.saveServerUrlAndRestart(context, "tandem.example.com")
+        vm.saveServerUrl("tandem.example.com")
 
-        verify(exactly = 1) { restartApp(context) }
+        coVerify(exactly = 1) { tokenManager.clearTokens() }
         assertNull(vm.serverUrlError.value)
     }
 
@@ -153,7 +152,7 @@ class ServerUrlSaveGateTest {
         coEvery { serverUrlManager.setServerUrl(any()) } returns false
         val vm = accountViewModel()
 
-        vm.saveServerUrlAndRestart(context, "not a url")
+        vm.saveServerUrl("not a url")
         assertNotNull(vm.serverUrlError.value)
 
         vm.clearServerUrlError()

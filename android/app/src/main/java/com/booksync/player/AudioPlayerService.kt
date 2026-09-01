@@ -583,7 +583,10 @@ class AudioPlayerService : MediaLibraryService() {
         localCastIp = currentIp
         localCastPort = server.listeningPort
         localCastPathToken = token
-        Log.i(TAG, "LocalCastHttpServer started at http://$currentIp:${server.listeningPort}/$token/")
+        // Host and port only. The path token gates the LAN server that serves
+        // the audiobook, so logging it hands anyone reading logcat a working
+        // stream URL for as long as the cast session lives (issue #231).
+        Log.i(TAG, "LocalCastHttpServer started at http://$currentIp:${server.listeningPort}/")
     }
 
     private fun stopLocalCastServer() {
@@ -744,7 +747,8 @@ class AudioPlayerService : MediaLibraryService() {
         // and can't fetch a content:// URI, and we don't have a public-LAN cover image to
         // substitute. The Default Media Receiver tolerates missing artwork (just shows its
         // default icon).
-        Log.d(TAG, "buildCastMediaItem: url=$streamUrl mimeType=$mimeType")
+        // Not $streamUrl: it carries the same path token (issue #231).
+        Log.d(TAG, "buildCastMediaItem: mimeType=$mimeType")
         return original.buildUpon()
             .setUri(streamUrl)
             .setMimeType(mimeType)

@@ -373,7 +373,7 @@ fun AccountScreen(
                         ),
                     )
                     Button(
-                        onClick = { viewModel.saveServerUrlAndRestart(context, serverUrlEdit.trim()) },
+                        onClick = { viewModel.saveServerUrl(serverUrlEdit.trim()) },
                         // Normalized comparison: retyping the same server without
                         // its scheme must not kill and relaunch the process for a
                         // value that ends up identical. Still enabled when it does
@@ -382,10 +382,10 @@ fun AccountScreen(
                             normalizeServerUrl(serverUrlEdit).let { it == null || it != serverUrl },
                         modifier = Modifier.fillMaxWidth().height(44.dp),
                     ) {
-                        Text("Save & Restart")
+                        Text("Save")
                     }
                     Text(
-                        serverUrlError ?: "Changing this restarts the app to apply the new server.",
+                        serverUrlError ?: "Changing this signs you out; the new server applies immediately.",
                         color = if (serverUrlError != null) colors.statusError else colors.textMuted,
                         fontSize = 12.sp,
                     )
