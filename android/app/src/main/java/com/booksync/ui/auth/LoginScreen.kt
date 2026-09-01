@@ -37,7 +37,6 @@ import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.data.remote.shouldExpandAdvanced
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.ServerUrlManager
-import com.booksync.util.restartApp
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -91,13 +90,17 @@ class LoginViewModel @Inject constructor(
         }
     }
 
-    fun saveServerUrlAndRestart(context: Context, url: String) {
+    /**
+     * Set the server before signing in (issue #228).
+     *
+     * No restart: BaseUrlInterceptor reads the URL per request, so the very next
+     * login attempt goes to the new host. Nothing to clear here — there is no
+     * session yet.
+     */
+    fun saveServerUrl(url: String) {
         viewModelScope.launch {
-            // Issue #149: only restart if the URL was actually accepted. Restarting
-            // on a value Retrofit can't parse is what made the app un-launchable.
-            if (serverUrlManager.setServerUrl(url)) {
-                restartApp(context)
-            } else {
+            // Issue #149: only act if the URL was actually accepted.
+            if (!serverUrlManager.setServerUrl(url)) {
                 _error.value = INVALID_SERVER_URL_MESSAGE
             }
         }
@@ -261,7 +264,7 @@ fun LoginScreen(
                         ),
                     )
                     Button(
-                        onClick = { viewModel.saveServerUrlAndRestart(context, serverUrlEdit.trim()) },
+                        onClick = { viewModel.saveServerUrl(serverUrlEdit.trim()) },
                         // Compare the normalized form: "tandem.example.com" and
                         // "https://tandem.example.com" are the same server, and
                         // restarting the process to store an identical value is pure
@@ -271,13 +274,13 @@ fun LoginScreen(
                             normalizeServerUrl(serverUrlEdit).let { it == null || it != currentServerUrl },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                     ) {
-                        Text("Save & Restart")
+                        Text("Save")
                     }
                     Text(
                         text = if (currentServerUrl.isBlank()) {
                             "No server configured yet — enter your Tandem server URL to sign in."
                         } else {
-                            "Saving restarts the app to apply the new server."
+                            "The new server applies immediately."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
