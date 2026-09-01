@@ -19,7 +19,6 @@ import com.booksync.data.remote.UpdateMeRequest
 import com.booksync.data.remote.UserResponse
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.theme.TandemTheme
-import com.booksync.util.restartApp
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -65,7 +64,7 @@ class AccountViewModel @Inject constructor(
     val serverUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
-    /** Non-null while the last Save & Restart was refused; see [saveServerUrlAndRestart]. */
+    /** Non-null while the last save was refused; see [saveServerUrl]. */
     private val _serverUrlError = MutableStateFlow<String?>(null)
     val serverUrlError = _serverUrlError.asStateFlow()
 
@@ -73,12 +72,28 @@ class AccountViewModel @Inject constructor(
         _serverUrlError.value = null
     }
 
-    fun saveServerUrlAndRestart(context: Context, url: String) {
+    /**
+     * Point the app at a different server (issue #228).
+     *
+     * No longer restarts: [com.booksync.data.remote.BaseUrlInterceptor] reads the
+     * URL per request, so the change takes effect on the next call. The old
+     * `Runtime.getRuntime().exit(0)` could cut off the application-scoped,
+     * non-cancellable position flush the sync contract depends on.
+     *
+     * Clearing the tokens is not tidiness — without it the previous server's
+     * bearer is sent to the new host, and on its 401 the refresh token follows.
+     * BookSyncNavigation observes the clear and routes to login.
+     *
+     * The cached library stays: it is keyed by server *and* user (issue #314), so
+     * it cannot be misread as the new server's data, and switching back restores
+     * it without a re-download.
+     */
+    fun saveServerUrl(url: String) {
         viewModelScope.launch {
-            // Issue #149: only restart if the URL was actually accepted. Restarting
-            // on a value Retrofit can't parse is what made the app un-launchable.
+            // Issue #149: only act if the URL was actually accepted. Acting on a
+            // value Retrofit can't parse is what made the app un-launchable.
             if (serverUrlManager.setServerUrl(url)) {
-                restartApp(context)
+                tokenManager.clearTokens()
             } else {
                 _serverUrlError.value = INVALID_SERVER_URL_MESSAGE
             }
