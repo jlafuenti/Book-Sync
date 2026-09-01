@@ -46,6 +46,16 @@ jobs:
         # Kover does not re-execute the suite. See docs/testing.md ("Android").
         run: ./gradlew :app:koverXmlReportDebug :app:koverVerifyDebug --stacktrace
 
+      - name: Build the release variant (unsigned — R8 runs)
+        working-directory: android
+        # The release path had never been compiled anywhere: no release artifact
+        # had ever been produced in this tree and CI only ever built debug, so a
+        # missing keep rule would first have surfaced as a crash in a user's hands
+        # (issues #144, #145). Unsigned is the point — this proves R8 and the
+        # shrinker, not the signature, and it also proves the signing config stays
+        # optional on a checkout with no local.properties.
+        run: ./gradlew :app:bundleRelease --stacktrace
+
       - name: Upload coverage report
         # Uploaded even when the gate fails, so a coverage drop can be diagnosed.
         if: always()

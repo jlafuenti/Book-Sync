@@ -91,4 +91,118 @@ class BuildConfigPinsTest {
             compile!! >= requiredSdk,
         )
     }
+
+    // -----------------------------------------------------------------------
+    // Release build configuration (issues #144, #145).
+    //
+    // None of this is executed by a unit test — it is Gradle configuration and
+    // R8 input. CI compiles it via `bundleRelease`, which catches a *broken*
+    // config, but not a silently *removed* one: delete the signing block and the
+    // build still succeeds, unsigned, and the first anyone knows is a rejected
+    // Play upload. So these read the files, the same blunt instrument the SDK
+    // pins above already use.
+    // -----------------------------------------------------------------------
+
+    private fun proguardRules(): String {
+        var dir = File("").absoluteFile
+        repeat(4) {
+            for (candidate in listOf(
+                File(dir, "app/proguard-rules.pro"),
+                File(dir, "proguard-rules.pro"),
+            )) {
+                if (candidate.exists()) return candidate.readText()
+            }
+            dir = dir.parentFile ?: return@repeat
+        }
+        throw AssertionError("Could not locate proguard-rules.pro")
+    }
+
+    @Test
+    fun `release signing is configured, and reads the keystore from local properties`() {
+        val script = buildScript()
+
+        assertTrue(
+            "No signingConfigs block: assembleRelease produces an unsigned APK and " +
+                "bundleRelease an unsigned AAB, so Play submission cannot start (#144).",
+            script.contains("signingConfigs"),
+        )
+        assertTrue(
+            "The signing config must read tandem.signing.storeFile through " +
+                "tandemSetting(), so the keystore path and passwords stay in " +
+                "android/local.properties and never enter the repository.",
+            script.contains("tandem.signing.storeFile"),
+        )
+        for (key in listOf("tandem.signing.storePassword", "tandem.signing.keyAlias", "tandem.signing.keyPassword")) {
+            assertTrue("The signing config must read $key.", script.contains(key))
+        }
+    }
+
+    @Test
+    fun `signing is applied only when a keystore is actually present`() {
+        // A clean clone has no local.properties. If the release build type
+        // referenced the signing config unconditionally, Gradle would fail at
+        // configuration time on a missing storeFile — breaking CI and every
+        // fresh contributor. The guard is what lets `bundleRelease` run unsigned.
+        val script = buildScript()
+
+        assertTrue(
+            "The release signingConfig must be applied conditionally on the " +
+                "keystore file existing — a clean clone must still build unsigned.",
+            script.contains("storeFile") && Regex("""\.exists\(\)""").containsMatchIn(script),
+        )
+    }
+
+    @Test
+    fun `R8 keeps the dependencies that ship no consumer rules`() {
+        // Media3, Cast, Room and Retrofit each ship their own proguard.txt inside
+        // the artifact, so R8 already knows about them. These three ship nothing,
+        // and they are the reader, the cast server and the HTML parser — the
+        // paths a stripped class would break in someone's hands rather than at
+        // build time (#145).
+        val rules = proguardRules()
+
+        assertTrue(
+            "Readium ships no consumer ProGuard rules; without a keep, R8 can " +
+                "strip the reader's reflective/serialized surface.",
+            rules.contains("org.readium."),
+        )
+        assertTrue(
+            "nanohttpd ships no consumer rules and LocalCastHttpServer extends " +
+                "fi.iki.elonen.NanoHTTPD — casting depends on it.",
+            rules.contains("fi.iki.elonen."),
+        )
+    }
+
+    @Test
+    fun `resource shrinking is on for release`() {
+        // A no-op without minification and a real size saving with it, so there
+        // is no reason to ship minified-but-unshrunk.
+        assertTrue(
+            "isShrinkResources should be enabled alongside isMinifyEnabled.",
+            Regex("""isShrinkResources\s*=\s*true""").containsMatchIn(buildScript()),
+        )
+    }
+
+    @Test
+    fun `CI compiles the release variant`() {
+        // The release path rotted precisely because nothing ever built it: no
+        // release artifact had ever been produced in this tree. R8 running on
+        // every PR is what turns a missing keep rule into a red build instead of
+        // a crash after upload.
+        var dir = File("").absoluteFile
+        var workflow: File? = null
+        repeat(5) {
+            val candidate = File(dir, ".github/workflows/android-tests.yml")
+            if (candidate.exists()) { workflow = candidate; return@repeat }
+            dir = dir.parentFile ?: return@repeat
+        }
+        val text = workflow?.readText()
+            ?: throw AssertionError("Could not locate .github/workflows/android-tests.yml")
+
+        assertTrue(
+            "android-tests.yml must run a release-variant build (bundleRelease) so " +
+                "R8 runs in CI. Without it, keep-rule gaps surface only after upload.",
+            text.contains("bundleRelease") || text.contains("assembleRelease"),
+        )
+    }
 }
