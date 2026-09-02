@@ -93,13 +93,7 @@ class ReaderViewModel @Inject constructor(
 
     fun downloadEbook() {
         val p = _pair.value ?: return
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to p.id,
-                DownloadWorker.KEY_TYPE to "EBOOK"
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(p.id, "EBOOK")
         workManager.enqueueUniqueWork("download_ebook_${p.id}", ExistingWorkPolicy.REPLACE, request)
     }
 

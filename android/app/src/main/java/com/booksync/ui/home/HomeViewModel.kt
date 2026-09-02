@@ -250,13 +250,7 @@ class HomeViewModel @Inject constructor(
         enqueue(audio.id, "STANDALONE_AUDIOBOOK", "download_standalone_audio_${audio.id}")
 
     private fun enqueue(id: Int, type: String, uniqueName: String) {
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to id,
-                DownloadWorker.KEY_TYPE    to type,
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(id, type)
         workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
     }
 

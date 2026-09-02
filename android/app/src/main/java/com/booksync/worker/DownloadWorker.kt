@@ -2,9 +2,13 @@ package com.booksync.worker
 
 import android.content.Context
 import androidx.hilt.work.HiltWorker
+import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 import com.booksync.data.repository.BookSyncRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -26,7 +30,8 @@ import kotlinx.coroutines.CancellationException
 class DownloadWorker @AssistedInject constructor(
     @Assisted private val appContext: Context,
     @Assisted private val workerParams: WorkerParameters,
-    private val repository: BookSyncRepository
+    private val repository: BookSyncRepository,
+    private val coverArtHelper: com.booksync.auto.CoverArtHelper,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -37,10 +42,33 @@ class DownloadWorker @AssistedInject constructor(
         
         const val PROGRESS_KEY = "PROGRESS"
         const val ERROR_KEY = "ERROR"
+
+        /**
+         * One place download work is built (issue #219).
+         *
+         * Eight call sites across seven files used to construct this request by
+         * hand and not one set a backoff policy, so the retry added below would
+         * have used WorkManager's default on some paths and whatever the next
+         * person copied on others. Centralising it also means the constraint
+         * and backoff choices are visible in a single diff.
+         */
+        fun request(pairId: Int, type: String): OneTimeWorkRequest =
+            OneTimeWorkRequestBuilder<DownloadWorker>()
+                .setInputData(workDataOf(KEY_PAIR_ID to pairId, KEY_TYPE to type))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("download_worker")
+                .build()
     }
 
     private var notificationBuilder: NotificationCompat.Builder? = null
-    private val notificationId = 1994
+
+    /**
+     * Distinct per worker (issue #219). This was a hardcoded 1994, so two
+     * concurrent downloads shared one notification: the second setForeground
+     * replaced the first, the title flipped between books, and finishing either
+     * dismissed the other's progress.
+     */
+    private val notificationId = notificationIdFor(id)
 
     private fun updateNotificationProgress(progress: Int, typeText: String) {
         notificationBuilder?.let { builder ->
@@ -102,6 +130,7 @@ class DownloadWorker @AssistedInject constructor(
                             updateNotificationProgress(progress, "Audiobook")
                         }
                     }
+                    cacheCoverArt(audiobook.id, audiobook.filename, audiobook.coverFilename)
                     return@withContext Result.success()
                 }
 
@@ -132,6 +161,7 @@ class DownloadWorker @AssistedInject constructor(
                             updateNotificationProgress(progress, "Audiobook")
                         }
                     }
+                    cacheCoverArt(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                 }
 
                 // Always attempt sync-map after an audiobook download (or on ALL / explicit SYNC_MAP).
@@ -154,8 +184,20 @@ class DownloadWorker @AssistedInject constructor(
                 Log.w("DownloadWorker", "Worker was cancelled!", e)
                 throw e // MUST throw CancellationException so WorkManager handles cancellation correctly
             } catch (e: Exception) {
-                Log.e("DownloadWorker", "Worker failed with exception", e)
-                Result.failure(workDataOf(ERROR_KEY to (e.message ?: "Unknown download error")))
+                // A blip partway through a several-hundred-megabyte audiobook
+                // used to kill the job outright (issue #219). Transient causes
+                // now get another attempt; a 404 or a missing DB row still
+                // fails immediately rather than five times over.
+                when (classifyDownloadFailure(e, runAttemptCount)) {
+                    DownloadOutcome.Retry -> {
+                        Log.w("DownloadWorker", "Transient failure (attempt $runAttemptCount), retrying", e)
+                        Result.retry()
+                    }
+                    DownloadOutcome.Fail -> {
+                        Log.e("DownloadWorker", "Worker failed with exception", e)
+                        Result.failure(workDataOf(ERROR_KEY to (e.message ?: "Unknown download error")))
+                    }
+                }
             }
         }
     }
@@ -200,6 +242,30 @@ class DownloadWorker @AssistedInject constructor(
             androidx.work.ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
             androidx.work.ForegroundInfo(notificationId, notification)
+        }
+    }
+
+    /**
+     * Warm the cover cache while the network is already in hand (issue #331).
+     *
+     * Resolving art lazily is what fixes books already on the device, but it
+     * needs a connection at the moment of playing. Doing it here means a book
+     * downloaded for a journey has its art in the car, on a plane, or anywhere
+     * else the server is out of reach.
+     *
+     * Invalidate first: a re-download is the one moment we know the file may
+     * have changed, and the cache is keyed on the audiobook id alone with no
+     * version, so nothing else would ever displace a stale image.
+     *
+     * Best-effort by design — a download that succeeded must not be reported as
+     * failed because a thumbnail did not arrive.
+     */
+    private fun cacheCoverArt(audiobookId: Int, filename: String?, serverCoverPath: String?) {
+        try {
+            coverArtHelper.invalidate(audiobookId)
+            coverArtHelper.getCoverUri(audiobookId, filename, serverCoverPath)
+        } catch (e: Exception) {
+            Log.w("DownloadWorker", "Cover art pre-cache failed for audiobook $audiobookId", e)
         }
     }
 }
