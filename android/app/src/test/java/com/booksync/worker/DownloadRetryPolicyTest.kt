@@ -39,7 +39,7 @@ class DownloadRetryPolicyTest {
         assertEquals(
             "a dropped DNS lookup mid-download is transient",
             DownloadOutcome.Retry,
-            classifyDownloadFailure(UnknownHostException("tandem.lafuenti.com"), runAttemptCount = 1),
+            classifyDownloadFailure(UnknownHostException("books.example.invalid"), runAttemptCount = 1),
         )
     }
 
