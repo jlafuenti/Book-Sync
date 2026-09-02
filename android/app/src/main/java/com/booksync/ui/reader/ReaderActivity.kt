@@ -60,6 +60,13 @@ class ReaderActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_PAIR_ID = "pairId"
+
+        /**
+         * A standalone (unpaired) ebook — issue #169. Mutually exclusive with
+         * [EXTRA_PAIR_ID]: with this set there is no pair, no sync map and no
+         * audio to hand off to, and the position lives under the `ebook` scope.
+         */
+        const val EXTRA_EBOOK_ID = "ebookId"
         const val RESULT_SWITCH_TO_AUDIO = 42
         private const val TAG = "ReaderActivity"
         private const val NAV_FRAGMENT_TAG = "EpubNavigatorFragment"
@@ -135,6 +142,16 @@ class ReaderActivity : AppCompatActivity() {
     private var navigator: EpubNavigatorFragment? = null
     private var pair: BookPairEntity? = null
     private var pairId: Int = 0
+
+    /**
+     * Standalone mode (issue #169): non-zero when opened on an unpaired ebook.
+     * [isStandalone] is the single switch every pair-dependent branch reads, so
+     * that "does this book have audio" is asked once rather than inferred from
+     * a null pair in a dozen places.
+     */
+    private var ebookId: Int = 0
+    private var standaloneEbook: com.booksync.data.local.entity.EBookEntity? = null
+    private val isStandalone: Boolean get() = ebookId != 0
     private var positionSaveJob: Job? = null
     private var isBarVisible = false
     private var isSeeking = false
@@ -204,7 +221,8 @@ class ReaderActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         pairId = intent.getIntExtra(EXTRA_PAIR_ID, 0)
-        Log.d(TAG, "onCreate pairId=$pairId savedState=${savedInstanceState != null}")
+        ebookId = intent.getIntExtra(EXTRA_EBOOK_ID, 0)
+        Log.d(TAG, "onCreate pairId=$pairId ebookId=$ebookId savedState=${savedInstanceState != null}")
 
         if (savedInstanceState != null && publication == null) {
             // Pass null: restoring the saved fragment state would make
@@ -246,6 +264,13 @@ class ReaderActivity : AppCompatActivity() {
 
         // Menu items: Font Settings, Table of Contents
         toolbar.inflateMenu(R.menu.reader_toolbar)
+        // A standalone ebook has no audiobook to switch to (issue #169). Hide
+        // the control rather than leave it to fall through to a no-op — an
+        // action that does nothing is the same defect class this issue is
+        // about, just one screen further in.
+        if (isStandalone) {
+            toolbar.menu.findItem(R.id.action_switch_audio)?.isVisible = false
+        }
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_switch_audio -> { syncAudioToPage(); true }
@@ -291,17 +316,31 @@ class ReaderActivity : AppCompatActivity() {
     private fun loadPublication() {
         lifecycleScope.launch {
             try {
-                pair = repository.getPairById(pairId)
-                val bookPair = pair ?: run {
-                    Log.e(TAG, "Book pair not found for pairId=$pairId")
-                    finish()
-                    return@launch
+                // Two entry modes (issue #169). A standalone ebook has no pair
+                // row to look up and no sync map to cache; everything past this
+                // block — Readium, the restore ladder, the save gate — is the
+                // same either way, which is why only the lookup branches.
+                val ebookFile = if (isStandalone) {
+                    val book = repository.getEbookById(ebookId) ?: run {
+                        Log.e(TAG, "Ebook not found for ebookId=$ebookId")
+                        finish()
+                        return@launch
+                    }
+                    standaloneEbook = book
+                    Log.d(TAG, "Standalone ebook: ${book.title}")
+                    toolbar.title = book.title
+                    repository.getStandaloneEbookFile(book)
+                } else {
+                    pair = repository.getPairById(pairId)
+                    val bookPair = pair ?: run {
+                        Log.e(TAG, "Book pair not found for pairId=$pairId")
+                        finish()
+                        return@launch
+                    }
+                    Log.d(TAG, "Book pair: ${bookPair.ebookTitle}")
+                    toolbar.title = bookPair.ebookTitle
+                    repository.getEbookFile(bookPair)
                 }
-                Log.d(TAG, "Book pair: ${bookPair.ebookTitle}")
-
-                toolbar.title = bookPair.ebookTitle
-
-                val ebookFile = repository.getEbookFile(bookPair)
                 if (!ebookFile.exists()) {
                     Log.e(TAG, "Ebook file does not exist: ${ebookFile.absolutePath}")
                     finish()
@@ -355,11 +394,26 @@ class ReaderActivity : AppCompatActivity() {
                 // checks below can't catch that, since a stale local bookmark
                 // agrees with itself. The helper also refreshes the sync-map
                 // cache (issue #55) and fetches the canonical record.
-                val fetch = prefetchBeforeRestore(repository, pairId)
+                val fetch = if (isStandalone) {
+                    prefetchBeforeRestoreStandalone(repository, ebookId)
+                } else {
+                    prefetchBeforeRestore(repository, pairId)
+                }
                 canonicalPosition = fetch.position?.toStoredPosition()
-                    ?: repository.getBookmark(pairId)
-                        ?.toStoredPosition(repository.deviceId)
-                        .takeIf { !fetch.reachable }
+                    ?: if (isStandalone) {
+                        // No pair-keyed bookmark row exists for a standalone
+                        // ebook; user_progress is the local mirror. It is a
+                        // thinner one — no sentence index, no text preview —
+                        // so an offline reopen restores by chapter, percent
+                        // and the device's own locator hint.
+                        repository.getProgressOnce("ebook", ebookId)
+                            ?.toStoredPosition(repository.deviceId)
+                            .takeIf { !fetch.reachable }
+                    } else {
+                        repository.getBookmark(pairId)
+                            ?.toStoredPosition(repository.deviceId)
+                            .takeIf { !fetch.reachable }
+                    }
 
                 val initialLocator = getInitialLocator(pub)
                 Log.d(TAG, "Initial locator: $initialLocator")
@@ -737,7 +791,11 @@ class ReaderActivity : AppCompatActivity() {
 
         is RestoreStep.Percent -> locatorForProgress(pub, step.percent / 100.0)
 
-        is RestoreStep.Audio -> {
+        // An audio rung cannot resolve without a sync map, and a standalone
+        // ebook has neither one nor an audiobook to have produced the position
+        // (issue #169). Guarded rather than left to return null by accident:
+        // audioToEpubText would otherwise query sync points for pair id 0.
+        is RestoreStep.Audio -> if (isStandalone) null else {
             // Audio -> sync map -> preview -> the same text search as above.
             val (syncChapter, previewText) = repository.audioToEpubText(
                 pairId, step.audioPositionMs)
@@ -793,10 +851,14 @@ class ReaderActivity : AppCompatActivity() {
      * of the chapter when there's no usable preview text.
      */
     private suspend fun locatorFromChapterAnchor(pub: Publication, chapter: Int?): Locator? {
-        val bookmark = repository.getBookmark(pairId)
         val chapterIdx = chapter?.takeIf { it in pub.readingOrder.indices } ?: return null
-        val previewText = repository.epubTextForSentence(
-            pairId, chapterIdx, bookmark?.epubSentenceIndex)
+        // Sentence resolution needs the sync map's per-sentence text, which only
+        // a pair has. A standalone ebook restores to the top of the chapter and
+        // relies on its locator hint for anything finer (issue #169).
+        val previewText = if (isStandalone) "" else {
+            val bookmark = repository.getBookmark(pairId)
+            repository.epubTextForSentence(pairId, chapterIdx, bookmark?.epubSentenceIndex)
+        }
         val base = pub.locatorFromLink(pub.readingOrder[chapterIdx]) ?: return null
         if (previewText.isEmpty()) return base
         val resolvedIdx = findSpineIndexForText(previewText, chapterIdx) ?: chapterIdx
@@ -861,7 +923,9 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun savePosition(locator: Locator) {
-        pair ?: return
+        // A standalone ebook has no pair row; everything below keys off
+        // isStandalone instead (issue #169).
+        if (!isStandalone && pair == null) return
         val pub = publication ?: return
         val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
         val progression = locator.locations.progression ?: 0.0
@@ -881,6 +945,15 @@ class ReaderActivity : AppCompatActivity() {
             // BookSyncRepository.updateBookmarkMetadata — so format routing
             // (resolvePairOpenTarget) still works without risking the
             // chapter-0 data loss a full save here would recreate.
+            // Nothing to stamp for a standalone ebook. The metadata write
+            // exists so that `source` keeps open-target routing following the
+            // session (contract, "The write gate"), and an unpaired ebook has
+            // no second format to route between — while the anchor half of the
+            // verdict still must not be written. So the correct standalone
+            // behaviour here is to write nothing at all, not to reach for a
+            // pair-keyed row with a pair id of zero.
+            if (isStandalone) return
+
             lifecycleScope.launch {
                 try {
                     repository.updateBookmarkMetadata(pairId, source = "ebook")
@@ -923,6 +996,23 @@ class ReaderActivity : AppCompatActivity() {
         // itself now resolves the sync-point match on the repository's own
         // appScope) is the only thing that crosses a coroutine boundary.
         val textPreview = extractTextPreviewFromCache(chapterIndex, progression)
+
+        if (isStandalone) {
+            // No sync map and no bookmark row: the anchor is the chapter, the
+            // book percentage, the text preview and this device's locator hint
+            // (issue #169). Detached for the same reason the paired path is —
+            // the contract requires the final flush to survive teardown, and a
+            // back-press cancels this activity's scope mid-request.
+            repository.saveReaderPositionStandaloneDetached(
+                ebookId = ebookId,
+                epubChapter = chapterIndex,
+                epubTextPreview = textPreview,
+                epubProgressPercent = bookPercentFor(locator, chapterIndex),
+                epubLocator = locatorJson,
+            )
+            return
+        }
+
         val snapshot = ReaderPositionSnapshot(
             pairId = pairId,
             chapterIndex = chapterIndex,
