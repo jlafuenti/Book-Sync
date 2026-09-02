@@ -1399,7 +1399,7 @@ class AudioPlayerService : MediaLibraryService() {
                 for (pair in recentPairs) {
                     val bookmark = repository.getBookmark(pair.id)
                     val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)
+                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
                     items.add(buildPairMediaItem(pair, resumeMs, coverUri))
                 }
@@ -1407,7 +1407,7 @@ class AudioPlayerService : MediaLibraryService() {
                 for (audio in recentStandalone) {
                     val progress = repository.getProgressOnce("audiobook", audio.id)
                     val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename)
+                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
                     items.add(buildAudiobookMediaItem(audio, resumeMs, coverUri))
                 }
@@ -1439,7 +1439,7 @@ class AudioPlayerService : MediaLibraryService() {
                 for (pair in downloadedPairs) {
                     val bookmark = repository.getBookmark(pair.id)
                     val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)
+                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
                     items.add(buildPairMediaItem(pair, resumeMs, coverUri))
                 }
@@ -1448,7 +1448,7 @@ class AudioPlayerService : MediaLibraryService() {
                     if (audio.id in pairedAudiobookIds) continue
                     val progress = repository.getProgressOnce("audiobook", audio.id)
                     val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename)
+                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
                     items.add(buildAudiobookMediaItem(audio, resumeMs, coverUri))
                 }
@@ -1510,7 +1510,7 @@ class AudioPlayerService : MediaLibraryService() {
                 refreshPositionBeforeResume("pair", id.pairId)
                 val bookmark = repository.getBookmark(id.pairId)
                 val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
-                val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename)
+                val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                 buildPairMediaItem(pair, resumeMs, coverUri)
             }
             is MediaId.Audiobook -> {
@@ -1519,7 +1519,7 @@ class AudioPlayerService : MediaLibraryService() {
                 refreshPositionBeforeResume("audiobook", id.audiobookId)
                 val progress = repository.getProgressOnce("audiobook", id.audiobookId)
                 val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                val coverUri = coverArtHelper.getCoverUri(id.audiobookId, audio.filename)
+                val coverUri = coverArtHelper.getCoverUri(id.audiobookId, audio.filename, audio.coverFilename)
                 buildAudiobookMediaItem(audio, resumeMs, coverUri)
             }
             null -> null
