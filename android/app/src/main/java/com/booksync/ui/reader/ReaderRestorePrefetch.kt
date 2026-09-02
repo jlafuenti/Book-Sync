@@ -41,3 +41,25 @@ suspend fun prefetchBeforeRestore(
         repository.fetchPosition("pair", pairId)
     } ?: PositionFetch(null, reachable = false)
 }
+
+/**
+ * The same bounded pre-restore pull, for a standalone (unpaired) ebook — issue
+ * #169.
+ *
+ * One call rather than three. `refreshBookmark` and `ensureSyncMapCached` are
+ * both pair-keyed and neither has a standalone meaning: `bookmarks` has no local
+ * row for a standalone ebook, and with no audiobook there is nothing to align a
+ * sync map to. The rule that matters is unchanged — contract § "The write gate",
+ * "Resume paths refresh first": pull the server position before seeking, bounded,
+ * and fall back to the local cache on timeout.
+ */
+suspend fun prefetchBeforeRestoreStandalone(
+    repository: BookSyncRepository,
+    ebookId: Int,
+    timeoutMs: Long = PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS,
+): PositionFetch =
+    withTimeoutOrNull(timeoutMs) {
+        repository.fetchPosition("ebook", ebookId)
+    } ?: PositionFetch(null, reachable = false).also {
+        Log.w(TAG, "server position not available in time — using local cache")
+    }
