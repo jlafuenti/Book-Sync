@@ -42,6 +42,7 @@ import com.booksync.ui.diagnostics.DiagnosticsScreen
 import com.booksync.ui.downloaded.DownloadedScreen
 import com.booksync.ui.home.HomeScreen
 import com.booksync.ui.home.HomeSeeAll
+import com.booksync.data.repository.PairOpenTarget
 import com.booksync.ui.library.LibraryFilter
 import com.booksync.ui.library.LibraryScreen
 import com.booksync.ui.library.LibrarySort
@@ -97,6 +98,8 @@ object Routes {
     const val SETTINGS    = "settings"                // kept for legacy intents
     const val DIAGNOSTICS = "diagnostics/{channel}"
     const val READER               = "reader/{pairId}"
+    /** A standalone (unpaired) ebook — no pair, no sync map (issue #169). */
+    const val READER_STANDALONE    = "reader/standalone/{ebookId}"
     const val PLAYER               = "player/{pairId}"
     const val PLAYER_STANDALONE    = "player/standalone/{audiobookId}"
     const val BOOK_DETAILS_PAIR      = "book_details/pair/{pairId}"
@@ -123,6 +126,7 @@ object Routes {
     }
 
     fun reader(pairId: Int)  = "reader/$pairId"
+    fun readerStandalone(ebookId: Int) = "reader/standalone/$ebookId"
     fun player(pairId: Int)  = "player/$pairId"
     fun playerStandalone(audiobookId: Int) = "player/standalone/$audiobookId"
     fun diagnostics(channel: String) = "diagnostics/$channel"
@@ -138,13 +142,34 @@ object Routes {
      * reader then opened an unrelated pair, or none, and its Reset / Mark
      * Complete actions silently did nothing (or worse, acted on that other
      * book). Standalone media gets the same destinations Library gives it:
-     * details for an ebook (there is no standalone reader yet) and the
-     * standalone player for an audiobook.
+     * details for an ebook and the standalone player for an audiobook.
+     *
+     * A standalone ebook goes to **details, not the reader**, even though a
+     * standalone reader now exists (issue #169). [SearchResultItem] carries no
+     * downloaded flag, so search cannot tell whether the file is on the device,
+     * and opening a reader with nothing to read is worse than landing on the page
+     * that has the Download button. Home and Library gate their Read entry points
+     * on `isDownloaded` for exactly that reason.
+     *
+     * [pairTarget] is what `resolvePairOpenTarget` said about this pair — the
+     * format the user last actually consumed (issue #220). Search used to ignore
+     * it and always open the reader, and because reader saves claim `ebook`
+     * (docs/position-sync-contract.md, "Who may claim `source`"), that one tap
+     * flipped the book's routing to the ebook for every later open from Home or
+     * Library. Null means the lookup did not resolve; the reader was the
+     * behaviour before this change and stays the fallback.
      *
      * Returns null when the row names nothing openable.
      */
-    fun searchDestination(item: SearchResultItem): String? {
-        item.pairId?.let { return reader(it) }
+    fun searchDestination(
+        item: SearchResultItem,
+        pairTarget: PairOpenTarget? = null,
+    ): String? {
+        item.pairId?.let { pairId ->
+            // Details is unreachable for a pair from search — there is no pair
+            // details route here — so it falls in with Reader.
+            return if (pairTarget == PairOpenTarget.Player) player(pairId) else reader(pairId)
+        }
         val id = item.numericId ?: return null
         return when {
             item.isEbook     -> bookDetailsEbook(id)
@@ -314,8 +339,8 @@ fun BookSyncNavigation() {
         composable(Routes.SEARCH) {
             SearchScreen(
                 onBack = { navController.popBackStack() },
-                onResultSelect = { item ->
-                    Routes.searchDestination(item)?.let { navController.navigate(it) }
+                onResultSelect = { item, pairTarget ->
+                    Routes.searchDestination(item, pairTarget)?.let { navController.navigate(it) }
                 },
             )
         }
@@ -372,6 +397,17 @@ fun BookSyncNavigation() {
         // Standalone audiobook player — no pair, no reader switch.
         // The audiobookId arg is read by PlayerViewModel from its SavedStateHandle.
         composable(
+            Routes.READER_STANDALONE,
+            arguments = listOf(navArgument("ebookId") { type = NavType.IntType }),
+        ) { backStackEntry ->
+            val ebookId = backStackEntry.arguments?.getInt("ebookId") ?: return@composable
+            com.booksync.ui.reader.StandaloneReaderScreen(
+                ebookId = ebookId,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
             Routes.PLAYER_STANDALONE,
             arguments = listOf(navArgument("audiobookId") { type = NavType.IntType }),
         ) {
@@ -390,6 +426,7 @@ fun BookSyncNavigation() {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
                 onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
@@ -401,6 +438,7 @@ fun BookSyncNavigation() {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
                 onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
@@ -412,6 +450,7 @@ fun BookSyncNavigation() {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
                 onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
                 onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
@@ -475,7 +514,7 @@ private fun MainScaffold(outerNavController: NavHostController) {
                     onSearchClick     = { outerNavController.navigate(Routes.SEARCH) },
                     onOpenPairReader  = { outerNavController.navigate(Routes.reader(it)) },
                     onOpenPairPlayer  = { outerNavController.navigate(Routes.player(it)) },
-                    onOpenEbook       = { /* standalone ebook reader — no pair-based reader support yet */ },
+                    onOpenEbook       = { ebookId -> outerNavController.navigate(Routes.readerStandalone(ebookId)) },
                     onOpenAudiobook   = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onOpenPairDetails      = { outerNavController.navigate(Routes.bookDetailsPair(it)) },
                     onOpenEbookDetails     = { outerNavController.navigate(Routes.bookDetailsEbook(it)) },
@@ -537,7 +576,7 @@ private fun MainScaffold(outerNavController: NavHostController) {
                 DownloadedScreen(
                     onPairBookSelect  = { outerNavController.navigate(Routes.reader(it)) },
                     onPairAudioSelect = { outerNavController.navigate(Routes.player(it)) },
-                    onEbookSelect     = { /* standalone ebook reader — no pair-based reader support yet */ },
+                    onEbookSelect     = { ebookId -> outerNavController.navigate(Routes.readerStandalone(ebookId)) },
                     onAudiobookSelect = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onOpenPairDetails     = { outerNavController.navigate(Routes.bookDetailsPair(it)) },
                     onOpenEbookDetails    = { outerNavController.navigate(Routes.bookDetailsEbook(it)) },

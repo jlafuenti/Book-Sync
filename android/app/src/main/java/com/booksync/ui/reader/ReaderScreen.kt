@@ -281,3 +281,40 @@ fun ReaderScreen(
         }
     }
 }
+
+/**
+ * Launcher for a standalone (unpaired) ebook — issue #169.
+ *
+ * Deliberately has no shell of its own, unlike [ReaderScreen]. That screen exists
+ * to show a download prompt while a pair's EPUB is fetched; every entry point
+ * that offers "Read" for a standalone ebook already requires the file to be on
+ * the device (`PrimaryAction.ReadStandalone` in BookDetailsScreen, Home's
+ * `onRead`, and the Downloaded list, which lists nothing else), so there is
+ * nothing to wait for and nothing to draw.
+ *
+ * Any result means "leave the reader": there is no paired audiobook, so the
+ * switch-to-audio result [ReaderActivity.RESULT_SWITCH_TO_AUDIO] cannot occur.
+ */
+@Composable
+fun StandaloneReaderScreen(
+    ebookId: Int,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    var hasLaunched by remember { mutableStateOf(false) }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { onBack() }
+
+    LaunchedEffect(Unit) {
+        if (!hasLaunched) {
+            hasLaunched = true
+            launcher.launch(
+                Intent(context, ReaderActivity::class.java).apply {
+                    putExtra(ReaderActivity.EXTRA_EBOOK_ID, ebookId)
+                }
+            )
+        }
+    }
+}
