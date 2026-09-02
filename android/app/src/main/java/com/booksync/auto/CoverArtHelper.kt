@@ -8,7 +8,13 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.booksync.data.remote.ServerUrlManager
+import com.booksync.data.remote.coverImageUrl
+import com.booksync.player.CoverArtRung
+import com.booksync.player.coverArtPlan
 import dagger.hilt.android.qualifiers.ApplicationContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,7 +32,11 @@ import javax.inject.Singleton
  */
 @Singleton
 class CoverArtHelper @Inject constructor(
-    @param:ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    // The same auth-capable client Retrofit and Coil use — the covers endpoint
+    // needs a bearer token (issue #331).
+    private val okHttpClient: OkHttpClient,
+    private val serverUrlManager: ServerUrlManager,
 ) {
     companion object {
         private const val TAG = "CoverArtHelper"
@@ -40,21 +50,97 @@ class CoverArtHelper @Inject constructor(
     /**
      * Returns a content:// URI for the cover art of the given audiobook, or null if none is found.
      *
-     * Lookup order:
-     *  1. Cached file at filesDir/covers/{audiobookId}.jpg — returned immediately
-     *  2. Embedded artwork extracted from the M4B at filesDir/audiobooks/{filename}
+     * Walks [coverArtPlan]: the cached file, then artwork embedded in the audio
+     * file, then the server's own cover.
+     *
+     * That third rung is issue #331. Without it the app only ever used embedded
+     * art, so an audiobook whose file carries no `covr` atom or `APIC` frame was
+     * blank in the player, the notification, the lock screen and Android Auto —
+     * while every other screen showed the cover the server held for it. Because
+     * all of those read this one cache, the rung fixes them together.
+     *
+     * [serverCoverPath] comes from `audiobooks.cover_path`; callers already hold
+     * the pair or audiobook entity, which keeps this helper free of a repository
+     * dependency.
      *
      * Must be called from an IO dispatcher.
      */
-    fun getCoverUri(audiobookId: Int, audiobookFilename: String?): Uri? {
+    fun getCoverUri(
+        audiobookId: Int,
+        audiobookFilename: String?,
+        serverCoverPath: String? = null,
+    ): Uri? {
         val coverFile = File(coversDir, "$audiobookId.jpg")
-        if (coverFile.exists()) {
-            return uriFor(coverFile)
+        val audioFile = audiobookFilename
+            ?.let { File(File(context.filesDir, AUDIOBOOKS_DIR), it) }
+            ?.takeIf { it.exists() }
+
+        val plan = coverArtPlan(
+            cachedExists = coverFile.exists(),
+            audioFileExists = audioFile != null,
+            serverCoverPath = serverCoverPath,
+        )
+
+        for (rung in plan) {
+            val uri = when (rung) {
+                is CoverArtRung.Cached -> uriFor(coverFile)
+                is CoverArtRung.Embedded -> audioFile?.let { extractAndCache(audiobookId, it, coverFile) }
+                is CoverArtRung.Server -> fetchAndCache(audiobookId, rung.coverPath, coverFile)
+            }
+            if (uri != null) return uri
         }
-        if (audiobookFilename == null) return null
-        val audioFile = File(File(context.filesDir, AUDIOBOOKS_DIR), audiobookFilename)
-        if (!audioFile.exists()) return null
-        return extractAndCache(audiobookId, audioFile, coverFile)
+        return null
+    }
+
+    /**
+     * Download the server's cover and cache it beside the extracted ones, so the
+     * media session, the notification and Android Auto all see it (issue #331).
+     *
+     * Written through a temp file and renamed: a half-written JPEG left by a
+     * dropped connection would otherwise be cached forever, since the cache is
+     * keyed on existence alone.
+     */
+    private fun fetchAndCache(audiobookId: Int, coverPath: String, coverFile: File): Uri? {
+        val url = coverImageUrl(serverUrlManager.currentUrl, coverPath) ?: return null
+        val tmp = File(coverFile.parentFile, "${coverFile.name}.part")
+        return try {
+            okHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "Cover fetch for audiobook $audiobookId: HTTP ${response.code}")
+                    return null
+                }
+                val body = response.body ?: return null
+                tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
+            }
+            if (tmp.length() == 0L) {
+                tmp.delete()
+                return null
+            }
+            if (!tmp.renameTo(coverFile)) {
+                tmp.delete()
+                return null
+            }
+            Log.d(TAG, "Cached server cover for audiobook $audiobookId")
+            uriFor(coverFile)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch server cover for audiobook $audiobookId", e)
+            tmp.delete()
+            null
+        }
+    }
+
+    /**
+     * Drop the cached cover so the next request re-resolves it (issue #331).
+     *
+     * The cache is keyed by audiobook id with no version, so a cover replaced on
+     * the server would otherwise never be picked up. Call this when the
+     * audiobook is deleted or re-downloaded — that covers the case where the
+     * user actually did something about the art. A cover changed server-side
+     * with no local action still goes stale; fixing that needs a version or
+     * ETag on the record, which is a separate change.
+     */
+    fun invalidate(audiobookId: Int) {
+        File(coversDir, "$audiobookId.jpg").delete()
     }
 
     /**

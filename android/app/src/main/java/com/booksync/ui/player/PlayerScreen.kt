@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,8 +66,16 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import kotlinx.coroutines.delay
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.booksync.data.remote.coverImageUrl
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -98,8 +107,14 @@ internal fun standaloneMediaId(audio: com.booksync.data.local.entity.AudioBookEn
 class PlayerViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     @param:ApplicationContext private val appContext: Context,
+    serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    private val coverArtHelper: com.booksync.auto.CoverArtHelper,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    /** For the cover-art fallback (issue #331); same shape as BookDetailsViewModel. */
+    val serverUrl: String = serverUrlManager.currentUrl
+
     private val pairId: Int = savedStateHandle["pairId"] ?: 0
     // audiobookId is set when launched from standalone player route (player/standalone/{audiobookId})
     private val standaloneAudiobookId: Int = savedStateHandle.get<Int>("audiobookId") ?: -1
@@ -132,6 +147,18 @@ class PlayerViewModel @Inject constructor(
     private val _coverArtBitmap = MutableStateFlow<Bitmap?>(null)
     val coverArtBitmap = _coverArtBitmap.asStateFlow()
 
+    /**
+     * The server's cover path for whatever is playing, or null (issue #331).
+     *
+     * The player used to render only art embedded in the audio file, so a book
+     * whose file had none showed a headphones placeholder while every other
+     * screen — and the web UI — displayed the cover the server held for it.
+     */
+    val serverCoverPath: StateFlow<String?> =
+        combine(_pair, _standaloneAudio) { pair, audio ->
+            pair?.audiobookCoverPath ?: audio?.coverFilename
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _chapters = MutableStateFlow<List<Chapter>>(emptyList())
     val chapters = _chapters.asStateFlow()
 
@@ -155,13 +182,7 @@ class PlayerViewModel @Inject constructor(
     /** Download the standalone audiobook (used from PlayerScreen when isStandalone). */
     fun downloadStandaloneAudiobook() {
         val audio = _standaloneAudio.value ?: return
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to audio.id,
-                DownloadWorker.KEY_TYPE    to "STANDALONE_AUDIOBOOK",
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(audio.id, "STANDALONE_AUDIOBOOK")
         val workName = "download_standalone_audio_${audio.id}"
         workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, request)
         _downloadProgress.value = 0
@@ -193,13 +214,7 @@ class PlayerViewModel @Inject constructor(
 
     fun downloadAudiobook() {
         val pair = _pair.value ?: return
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to pair.id,
-                DownloadWorker.KEY_TYPE    to "AUDIOBOOK",
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(pair.id, "AUDIOBOOK")
         workManager.enqueueUniqueWork("download_audio_${pair.id}", ExistingWorkPolicy.REPLACE, request)
         _downloadProgress.value = 0
         viewModelScope.launch {
@@ -471,6 +486,41 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Give the notification and lock screen something to show (issue #331).
+     *
+     * The phone built its MediaItem with a title and an artist and nothing else,
+     * so media controls were artless for any book whose file had no embedded
+     * art — while Android Auto, which does set `artworkUri`, was fine. Resolving
+     * runs off the main thread because a cold cache means an HTTP fetch, and the
+     * result is applied with `replaceMediaItem` on the same URI, which updates
+     * metadata without disturbing playback.
+     */
+    private fun warmNotificationArtwork(
+        audiobookId: Int,
+        filename: String?,
+        serverCoverPath: String?,
+        mediaController: MediaController,
+    ) {
+        viewModelScope.launch {
+            val uri = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { coverArtHelper.getCoverUri(audiobookId, filename, serverCoverPath) }
+                    .getOrNull()
+            } ?: return@launch
+
+            val current = mediaController.currentMediaItem ?: return@launch
+            if (current.mediaMetadata.artworkUri != null) return@launch
+            runCatching {
+                mediaController.replaceMediaItem(
+                    mediaController.currentMediaItemIndex,
+                    current.buildUpon()
+                        .setMediaMetadata(current.mediaMetadata.buildUpon().setArtworkUri(uri).build())
+                        .build(),
+                )
+            }
+        }
+    }
+
     private fun loadAudio(pair: BookPairEntity, mediaController: MediaController) {
         if (!pair.audiobookDownloaded) return
 
@@ -489,6 +539,12 @@ class PlayerViewModel @Inject constructor(
                     .build()
             )
             .build()
+
+        // The notification and lock screen read artwork off the MediaItem, and
+        // the phone's item never carried any — only the Android Auto path set it
+        // (issue #331). Resolved in the background and applied when it lands, so
+        // a cold cache costs a fetch rather than delaying playback.
+        warmNotificationArtwork(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath, mediaController)
 
         // Only set if not already loaded (check current media item)
         val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
@@ -525,6 +581,9 @@ class PlayerViewModel @Inject constructor(
                     .build()
             )
             .build()
+
+        // See the paired path: artwork for the notification and lock screen.
+        warmNotificationArtwork(audio.id, audio.filename, audio.coverFilename, mediaController)
 
         val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
         if (currentUri != Uri.fromFile(audioFile)) {
@@ -911,6 +970,8 @@ fun PlayerScreen(
     val sleepTimerMinutes  by viewModel.sleepTimerMinutes.collectAsState()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsState()
     val coverArt           by viewModel.coverArtBitmap.collectAsState()
+    val serverCoverPath    by viewModel.serverCoverPath.collectAsState()
+    val serverUrl          = viewModel.serverUrl
     val chapters           by viewModel.chapters.collectAsState()
     val currentChapterIdx  by viewModel.currentChapterIndex.collectAsState()
     val historyItems       by viewModel.history.collectAsState()
@@ -1016,15 +1077,34 @@ fun PlayerScreen(
                     .background(colors.bgCard),
                 contentAlignment = Alignment.Center,
             ) {
-                if (coverArt != null) {
-                    Image(
+                // Embedded art first — it is already decoded and works offline.
+                // Then the server's cover (issue #331): before that fallback
+                // existed, a book whose audio file carried no embedded art was
+                // blank here while Home, Library, Details and the web UI all
+                // showed its cover. Coil is wired to the auth-capable
+                // OkHttpClient in BookSyncApp, so the bearer token is handled.
+                val serverCover = serverCoverPath?.let { coverImageUrl(serverUrl, it) }
+                when {
+                    coverArt != null -> Image(
                         bitmap = coverArt!!.asImageBitmap(),
                         contentDescription = "Album Art",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
-                } else {
-                    Icon(
+
+                    serverCover != null -> AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(serverCover)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "Album Art",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        // Only now is there genuinely no art to show.
+                        error = rememberVectorPainter(Icons.Default.Headphones),
+                    )
+
+                    else -> Icon(
                         Icons.Default.Headphones,
                         contentDescription = null,
                         tint = colors.textMuted,

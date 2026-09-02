@@ -144,13 +144,7 @@ class DownloadedViewModel @Inject constructor(
     }
 
     private fun enqueue(pairId: Int, type: String, uniqueName: String) {
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to pairId,
-                DownloadWorker.KEY_TYPE    to type,
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(pairId, type)
         workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
         _downloadingProgress.value = _downloadingProgress.value + (pairId to 0)
     }

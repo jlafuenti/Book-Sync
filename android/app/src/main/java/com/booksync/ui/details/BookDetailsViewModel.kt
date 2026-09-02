@@ -278,13 +278,7 @@ class BookDetailsViewModel @Inject constructor(
     }
 
     private fun enqueue(id: Int, type: String, uniqueName: String) {
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to id,
-                DownloadWorker.KEY_TYPE    to type,
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request(id, type)
         workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
         _downloadPercent.value = 0
     }

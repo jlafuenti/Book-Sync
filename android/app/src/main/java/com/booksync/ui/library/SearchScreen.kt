@@ -355,13 +355,7 @@ class SearchViewModel @Inject constructor(
             else             -> return
         }
         val uniqueName = "download_search_${type.lowercase()}_$id"
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(
-                DownloadWorker.KEY_PAIR_ID to (item.pairId ?: id),
-                DownloadWorker.KEY_TYPE    to type,
-            ))
-            .addTag("download_worker")
-            .build()
+        val request = DownloadWorker.request((item.pairId ?: id), type)
         workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
     }
 }

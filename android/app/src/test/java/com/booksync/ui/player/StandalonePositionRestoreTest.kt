@@ -88,6 +88,8 @@ class StandalonePositionRestoreTest {
     private fun viewModel() = PlayerViewModel(
         repository = repository,
         appContext = mockk(relaxed = true),
+        serverUrlManager = mockk(relaxed = true),
+            coverArtHelper = mockk(relaxed = true),
         savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
     )
 

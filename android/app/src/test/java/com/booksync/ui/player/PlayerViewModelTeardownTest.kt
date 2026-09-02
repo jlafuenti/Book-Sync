@@ -68,6 +68,8 @@ class PlayerViewModelTeardownTest {
         val vm = PlayerViewModel(
             repository = repository,
             appContext = mockk(relaxed = true),
+            serverUrlManager = mockk(relaxed = true),
+            coverArtHelper = mockk(relaxed = true),
             savedStateHandle = SavedStateHandle(mapOf("pairId" to 42)),
         )
         advanceUntilIdle()
@@ -97,6 +99,8 @@ class PlayerViewModelTeardownTest {
         val vm = PlayerViewModel(
             repository = repository,
             appContext = mockk(relaxed = true),
+            serverUrlManager = mockk(relaxed = true),
+            coverArtHelper = mockk(relaxed = true),
             savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
         )
         advanceUntilIdle() // restore completes; the write gate is open
