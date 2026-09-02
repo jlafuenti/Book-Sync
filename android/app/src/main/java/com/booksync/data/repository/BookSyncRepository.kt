@@ -742,6 +742,15 @@ class BookSyncRepository @Inject constructor(
     fun getAudiobookFile(pair: BookPairEntity): File =
         File(context.filesDir, "audiobooks/${pair.audiobookFilename}")
 
+    /**
+     * The same file [downloadStandaloneEbook] writes — the standalone reader
+     * needs to open it (issue #169). Kept beside [getEbookFile] so the two
+     * naming schemes stay visibly identical; `deleteStandaloneEbook` below
+     * builds the same path.
+     */
+    fun getStandaloneEbookFile(ebook: EBookEntity): File =
+        File(context.filesDir, "ebooks/${ebook.filename}")
+
     suspend fun deleteEbook(pair: BookPairEntity) {
         getEbookFile(pair).delete()
         bookPairDao.setEbookDownloaded(pair.id, false)
@@ -1187,6 +1196,120 @@ class BookSyncRepository @Inject constructor(
             savePlaybackPositionStandalone(
                 audiobookId = audiobookId,
                 audioPositionMs = audioPositionMs,
+                claimFormat = claimFormat,
+            )
+        }
+    }
+
+    /**
+     * Save a reading position for a *standalone* (unpaired) ebook — issue #169.
+     *
+     * Deliberately NOT [saveReaderPosition]. That path goes through
+     * [updateBookmark], which writes a `bookmarks` row, a `bookmark_log` entry
+     * and, when the push fails, a `pending_sync` row — all three keyed by
+     * `book_pair_id`. A standalone ebook has no pair, so reusing it would either
+     * write a null key or attribute the position to an unrelated book.
+     *
+     * This mirrors [savePlaybackPositionStandalone] instead: the Room projection
+     * first (issue #164 — a save that only reached the server is lost if the
+     * process dies), then the one canonical endpoint under the `ebook` scope.
+     * The server's canonical record is still `bookmarks`, scoped there by
+     * `ebook_id` (docs/position-sync-contract.md, "One record"); it is only the
+     * local pair-keyed mirror that does not apply.
+     *
+     * [claimFormat] exists for symmetry and defaults to true because "reader
+     * saves always claim `ebook`: having the reader open is consumption"
+     * (contract, "Who may claim `source`"). For a standalone ebook there is no
+     * second format to route between, so it changes nothing but the wire.
+     *
+     * One known gap, shared with standalone audio: a failed push is not queued
+     * for retry, because `pending_sync` is pair-keyed. The unsynced Room row is
+     * left for the progress sweep.
+     */
+    suspend fun saveReaderPositionStandalone(
+        ebookId: Int,
+        epubChapter: Int? = null,
+        epubSentenceIndex: Int? = null,
+        epubTextPreview: String? = null,
+        epubProgressPercent: Float? = null,
+        epubLocator: String? = null,
+        claimFormat: Boolean = true,
+        pushToServer: Boolean = true,
+    ): Boolean {
+        // Room first, mirroring savePlaybackPositionStandalone.
+        updateProgress(
+            mediaType = "ebook",
+            mediaId = ebookId,
+            epubCfi = epubLocator,
+            epubChapter = epubChapter,
+            epubProgressPercent = epubProgressPercent,
+            pushToServer = false,
+            markSynced = false,
+        )
+        if (!pushToServer) return false
+
+        val result = updatePosition(
+            "ebook", ebookId,
+            PositionUpdateRequest(
+                source = if (claimFormat) "ebook" else null,
+                epub_chapter = epubChapter,
+                epub_sentence_index = epubSentenceIndex,
+                epub_text_preview = epubTextPreview,
+                epub_progress_percent = epubProgressPercent,
+                // The locator is a device-local hint; the owning device is
+                // carried by device_id on the request, not on the hint.
+                hint = epubLocator?.let {
+                    PositionHintDto(
+                        kind = com.booksync.data.sync.HINT_READIUM_LOCATOR,
+                        value = it,
+                    )
+                },
+                captured_at = capturedAtIsoFromMillis(System.currentTimeMillis()),
+                device_id = deviceId,
+                device_name = deviceName,
+            ),
+        )
+        if (result == null) {
+            // Same fallback shape as savePlaybackPositionStandalone: let the
+            // legacy progress push try, and leave the row unsynced if it fails
+            // too, so the sweep picks it up.
+            updateProgress(
+                mediaType = "ebook",
+                mediaId = ebookId,
+                epubCfi = epubLocator,
+                epubChapter = epubChapter,
+                epubProgressPercent = epubProgressPercent,
+                pushToServer = true,
+            )
+        } else {
+            userProgressDao.markSynced(scope, "ebook", ebookId)
+        }
+        return result != null
+    }
+
+    /**
+     * Boundary-save variant of [saveReaderPositionStandalone], for teardown.
+     * See [savePlaybackPositionDetached]: the contract requires the final flush
+     * to survive the caller's cancellation ("Saves must survive teardown"), and
+     * a back-press out of the reader cancels the activity scope mid-request.
+     */
+    fun saveReaderPositionStandaloneDetached(
+        ebookId: Int,
+        epubChapter: Int? = null,
+        epubSentenceIndex: Int? = null,
+        epubTextPreview: String? = null,
+        epubProgressPercent: Float? = null,
+        epubLocator: String? = null,
+        claimFormat: Boolean = true,
+    ): Job = appScope.launch {
+        withContext(NonCancellable) {
+            saveReaderPositionStandalone(
+                ebookId = ebookId,
+                epubChapter = epubChapter,
+                epubSentenceIndex = epubSentenceIndex,
+                epubTextPreview = epubTextPreview,
+                epubProgressPercent = epubProgressPercent,
+                epubLocator = epubLocator,
                 claimFormat = claimFormat,
             )
         }
@@ -2187,6 +2310,37 @@ internal fun PositionResponse.toStoredPosition() = com.booksync.data.sync.Stored
  * The locally stored locator is offered as a hint at the record's own anchor
  * revision, so it qualifies — this device captured it against this anchor.
  */
+/**
+ * The local fallback for a *standalone* ebook (issue #169).
+ *
+ * `user_progress` is a projection of `bookmarks` (contract, "One record"), and a
+ * thinner one: it carries no sentence index and no text preview. That is fine
+ * for what this is used for — an offline reopen, where the ladder falls back to
+ * the device's own locator hint, then the chapter, then the percent. Online, the
+ * canonical `PositionResponse` supplies the full anchor and this is never
+ * consulted.
+ */
+internal fun com.booksync.data.local.entity.UserProgressEntity.toStoredPosition(deviceId: String) =
+    com.booksync.data.sync.StoredPosition(
+        anchorRevision = 0L,
+        source = null,
+        epubChapter = epubChapter,
+        epubSentenceIndex = null,
+        epubTextPreview = null,
+        epubProgressPercent = epubProgressPercent,
+        audioPositionMs = audioPositionMs,
+        hints = epubCfi?.let {
+            listOf(
+                com.booksync.data.sync.PositionHint(
+                    kind = com.booksync.data.sync.HINT_READIUM_LOCATOR,
+                    deviceId = deviceId,
+                    value = it,
+                    anchorRevision = 0L,
+                )
+            )
+        } ?: emptyList(),
+    )
+
 internal fun BookmarkEntity.toStoredPosition(deviceId: String) =
     com.booksync.data.sync.StoredPosition(
         anchorRevision = 0L,

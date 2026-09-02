@@ -52,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +73,7 @@ import androidx.work.workDataOf
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.PairOpenTarget
 import com.booksync.ui.components.EmptyState
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
@@ -337,6 +339,13 @@ class SearchViewModel @Inject constructor(
     // unique work name. TYPE is "ALL" for a pair, else the appropriate
     // standalone type.
 
+    /**
+     * Which format this pair should reopen in (issue #220), the same lookup Home
+     * and Library already make. Search is the one surface that used to skip it.
+     */
+    suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
+        repository.resolvePairOpenTarget(pairId)
+
     fun downloadFromResult(item: SearchResultItem) {
         val id = item.numericId ?: return
         val type = when {
@@ -369,10 +378,29 @@ fun SearchScreen(
     // its own cannot say whether it names a pair, an ebook or an audiobook,
     // which is how standalone ids ended up in pair routes (issue #119). The
     // caller decides where each kind opens — see Routes.searchDestination.
-    onResultSelect: (SearchResultItem) -> Unit,
+    //
+    // The second argument is the pair's open target, resolved here because this
+    // is where the repository is (issue #220). Null for standalone rows, and for
+    // a pair whose lookup failed.
+    onResultSelect: (SearchResultItem, PairOpenTarget?) -> Unit,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
+    val scope = rememberCoroutineScope()
+
+    // Resolve which format the user last consumed before routing (issue #220).
+    // A failed lookup routes with null rather than swallowing the tap: landing
+    // in the reader is what search did before this change, so the worst case is
+    // the old behaviour, not a dead button.
+    val selectResult: (SearchResultItem) -> Unit = { item ->
+        scope.launch {
+            val target = item.pairId?.let {
+                runCatching { viewModel.resolvePairOpenTarget(it) }.getOrNull()
+            }
+            onResultSelect(item, target)
+        }
+    }
+
     val query by viewModel.query.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val results by viewModel.searchResults.collectAsState()
@@ -509,7 +537,7 @@ fun SearchScreen(
                 }
                 else -> SearchResultsList(
                     results = results,
-                    onResultSelect = onResultSelect,
+                    onResultSelect = selectResult,
                     onRequestPair = { pairingItem = it },
                     onDownload = { viewModel.downloadFromResult(it) },
                 )

@@ -84,6 +84,7 @@ import java.io.File
 fun BookDetailsScreen(
     onBack: () -> Unit,
     onRead: (pairId: Int) -> Unit,
+    onReadStandalone: (ebookId: Int) -> Unit,
     onListen: (pairId: Int) -> Unit,
     onListenStandalone: (audiobookId: Int) -> Unit,
     viewModel: BookDetailsViewModel = hiltViewModel(),
@@ -169,6 +170,7 @@ fun BookDetailsScreen(
             PrimaryActionButton(
                 ui = ui,
                 onRead = onRead,
+                onReadStandalone = onReadStandalone,
                 onListen = onListen,
                 onListenStandalone = onListenStandalone,
                 onDownloadPair = { viewModel.downloadPair() },
@@ -491,10 +493,44 @@ private fun Chip(chip: StatusChip) {
     }
 }
 
+/**
+ * The single action the detail page's primary button offers, or null for none.
+ *
+ * Deliberately an enum rather than the button spec itself: the spec carries a
+ * lambda, which cannot be compared, so the decision could only ever be asserted
+ * through the UI. Nothing did, and the standalone-ebook branch returned `null` —
+ * offering "Download ebook", succeeding, and then removing the button, with no
+ * way to read the file that had just been fetched (issue #169). It even carried
+ * a comment explaining that it was intentional.
+ */
+enum class PrimaryAction {
+    Read,
+    ReadStandalone,
+    Listen,
+    ListenStandalone,
+    DownloadPair,
+    DownloadEbook,
+    DownloadAudiobook,
+}
+
+fun primaryAction(ui: BookDetailsUi): PrimaryAction? = when {
+    // An active download owns the slot; the progress UI is drawn separately.
+    ui.downloadPercent != null -> null
+    ui.pair != null && ui.pair.ebookDownloaded         -> PrimaryAction.Read
+    ui.pair != null && ui.pair.audiobookDownloaded     -> PrimaryAction.Listen
+    ui.pair != null                                    -> PrimaryAction.DownloadPair
+    ui.ebook != null && !ui.ebook.isDownloaded         -> PrimaryAction.DownloadEbook
+    ui.ebook != null                                   -> PrimaryAction.ReadStandalone
+    ui.audiobook != null && !ui.audiobook.isDownloaded -> PrimaryAction.DownloadAudiobook
+    ui.audiobook != null                               -> PrimaryAction.ListenStandalone
+    else -> null
+}
+
 @Composable
 private fun PrimaryActionButton(
     ui: BookDetailsUi,
     onRead: (Int) -> Unit,
+    onReadStandalone: (Int) -> Unit,
     onListen: (Int) -> Unit,
     onListenStandalone: (Int) -> Unit,
     onDownloadPair: () -> Unit,
@@ -502,7 +538,6 @@ private fun PrimaryActionButton(
     onDownloadStandaloneAudiobook: () -> Unit,
 ) {
     val colors = Tandem.colors
-    val downloading = ui.downloadPercent != null
 
     data class ButtonSpec(
         val label: String,
@@ -510,24 +545,22 @@ private fun PrimaryActionButton(
         val onClick: () -> Unit,
     )
 
-    val spec: ButtonSpec? = when {
-        downloading -> null
-        ui.pair != null && ui.pair.ebookDownloaded ->
-            ButtonSpec("Read", Icons.Default.Book) { onRead(ui.pair.id) }
-        ui.pair != null && ui.pair.audiobookDownloaded ->
-            ButtonSpec("Listen", Icons.Default.PlayArrow) { onListen(ui.pair.id) }
-        ui.pair != null ->
+    val spec: ButtonSpec? = when (primaryAction(ui)) {
+        PrimaryAction.Read ->
+            ui.pair?.let { p -> ButtonSpec("Read", Icons.Default.Book) { onRead(p.id) } }
+        PrimaryAction.ReadStandalone ->
+            ui.ebook?.let { e -> ButtonSpec("Read", Icons.Default.Book) { onReadStandalone(e.id) } }
+        PrimaryAction.Listen ->
+            ui.pair?.let { p -> ButtonSpec("Listen", Icons.Default.PlayArrow) { onListen(p.id) } }
+        PrimaryAction.ListenStandalone ->
+            ui.audiobook?.let { a -> ButtonSpec("Listen", Icons.Default.PlayArrow) { onListenStandalone(a.id) } }
+        PrimaryAction.DownloadPair ->
             ButtonSpec("Download pair", Icons.Default.Download, onDownloadPair)
-        ui.ebook != null && !ui.ebook.isDownloaded ->
+        PrimaryAction.DownloadEbook ->
             ButtonSpec("Download ebook", Icons.Default.Download, onDownloadStandaloneEbook)
-        ui.ebook != null && ui.ebook.isDownloaded ->
-            // No standalone reader yet — the button disappears; user can still delete / reset from the stack.
-            null
-        ui.audiobook != null && !ui.audiobook.isDownloaded ->
+        PrimaryAction.DownloadAudiobook ->
             ButtonSpec("Download audiobook", Icons.Default.Download, onDownloadStandaloneAudiobook)
-        ui.audiobook != null && ui.audiobook.isDownloaded ->
-            ButtonSpec("Listen", Icons.Default.PlayArrow) { onListenStandalone(ui.audiobook.id) }
-        else -> null
+        null -> null
     }
 
     if (spec == null) return
