@@ -9,9 +9,10 @@ caller's own account.
 Three things are pinned here beyond "the row is gone":
 
 * **Every dependent row goes with it.** Bookmarks, their logs, their position
-  hints and the progress rows. The SQLite harness enforces foreign keys
-  (``conftest.py``), so a missing cascade fails here the same way it 500s on
-  Postgres — which is exactly how issue #198 escaped.
+  hints, the progress rows, and the per-device refresh sessions added by issue
+  #250. The SQLite harness enforces foreign keys (``conftest.py``), so a missing
+  cascade fails here the same way it 500s on Postgres — which is exactly how
+  issue #198 escaped.
 * **The audit trail survives, redacted.** ``audit_logs.user_id`` is
   ``ON DELETE SET NULL``, so the row that records the deletion outlives the
   account with a nulled user id. ``target_user_id`` carries no FK and keeps the
@@ -27,6 +28,7 @@ from sqlalchemy import func, select
 from models.audit_log import AuditLog
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource, HintKind, PositionHint
 from models.progress import ProgressType, UserProgress
+from models.refresh_token import RefreshToken
 from models.user import User
 from tests.factories import make_book_pair
 
@@ -37,13 +39,16 @@ def _reset_password_failure_tracker():
 
     Its state is process-global and conftest only resets the *login* tracker, so
     without this a run of wrong-password tests would leak a lockout into the
-    next test in this file.
+    next test in this file. ``failed_refreshes`` goes too: the tests below post a
+    deliberately-dead refresh token, and each rejection is recorded.
     """
-    from rate_limit import failed_password_changes
+    from rate_limit import failed_password_changes, failed_refreshes
 
     failed_password_changes.reset()
+    failed_refreshes.reset()
     yield
     failed_password_changes.reset()
+    failed_refreshes.reset()
 
 
 async def seed_positions(db, user, pair):
@@ -156,6 +161,75 @@ async def test_self_delete_leaves_a_redacted_audit_row(client, make_user, auth_h
     assert entry.user_id is None
     # target_user_id carries no FK, so the id stays readable to an operator.
     assert entry.target_user_id == user.id
+
+
+async def test_self_delete_removes_every_refresh_session(client, make_user, db):
+    """Per-device sessions (issue #250) must not outlive the account.
+
+    ``refresh_tokens.user_id`` is ``ON DELETE CASCADE`` with no ORM relationship
+    on ``User``, so nothing in the handler deletes these rows — the database
+    does, on the same statement. That makes this the test that catches the
+    cascade being dropped: a session row surviving its user is both an orphan
+    the FK should have refused and a credential nobody can revoke.
+    """
+    await make_user(username="multidevice", password="pw12345")
+
+    # Two real logins, so two real session rows — one per device.
+    phone = await client.post("/api/auth/login", json={
+        "username": "multidevice", "password": "pw12345", "device_id": "phone",
+    })
+    laptop = await client.post("/api/auth/login", json={
+        "username": "multidevice", "password": "pw12345", "device_id": "laptop",
+    })
+    assert phone.status_code == 200 and laptop.status_code == 200
+
+    user_id = (await db.execute(
+        select(User.id).where(User.username == "multidevice")
+    )).scalar_one()
+    assert await count(db, RefreshToken, user_id=user_id) == 2
+
+    r = await client.request(
+        "DELETE", "/api/auth/me",
+        headers={"Authorization": f"Bearer {laptop.json()['access_token']}"},
+        json={"password": "pw12345"},
+    )
+    assert r.status_code == 204, r.text
+
+    assert await count(db, RefreshToken, user_id=user_id) == 0
+    # And no session row is left pointing at a user that no longer exists.
+    assert (await db.execute(select(func.count()).select_from(RefreshToken))).scalar_one() == 0
+
+
+async def test_refresh_token_stops_working_after_self_delete(client, make_user):
+    """The other device's refresh token is dead too.
+
+    Deleting the account from one device has to end every session, not just the
+    one that pressed the button — otherwise a phone still holding a 30-day
+    refresh token keeps minting access tokens for an account that is gone.
+    """
+    await make_user(username="leaves-a-phone", password="pw12345")
+
+    phone = await client.post("/api/auth/login", json={
+        "username": "leaves-a-phone", "password": "pw12345", "device_id": "phone",
+    })
+    laptop = await client.post("/api/auth/login", json={
+        "username": "leaves-a-phone", "password": "pw12345", "device_id": "laptop",
+    })
+    phone_refresh = phone.json()["refresh_token"]
+
+    # Precondition: the phone's refresh token works before the deletion.
+    ok = await client.post("/api/auth/refresh", json={"refresh_token": phone_refresh})
+    assert ok.status_code == 200
+
+    r = await client.request(
+        "DELETE", "/api/auth/me",
+        headers={"Authorization": f"Bearer {laptop.json()['access_token']}"},
+        json={"password": "pw12345"},
+    )
+    assert r.status_code == 204, r.text
+
+    dead = await client.post("/api/auth/refresh", json={"refresh_token": phone_refresh})
+    assert dead.status_code == 401
 
 
 async def test_access_token_stops_working_after_self_delete(client, make_user, auth_header):

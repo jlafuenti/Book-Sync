@@ -167,7 +167,7 @@ class BookmarkLog(Base):
     # deleting an account cascades into `bookmarks` in the database, and without
     # an action here Postgres refuses that cascade and the delete 500s. The ORM
     # cascade on `Bookmark.logs` covers the session-performed delete only.
-    # Migration 0013; pinned by `tests/test_schema_contract.py`.
+    # Migration 0014; pinned by `tests/test_schema_contract.py`.
     bookmark_id: Mapped[int] = mapped_column(
         ForeignKey("bookmarks.id", ondelete="CASCADE"), nullable=False, index=True
     )

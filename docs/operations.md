@@ -359,8 +359,9 @@ by the web app without a login. It is the URL that goes in the Play Console's Da
 Data deletion field; see [play-listing.md](play-listing.md).
 
 What a deletion removes: the user row, their bookmarks, each bookmark's change log and per-device
-position hints, and their progress rows. Nothing is soft-deleted and nothing is recoverable
-without a backup restore.
+position hints, their progress rows, and every one of their `refresh_tokens` sessions — so no
+other device is left holding a 30-day refresh token for an account that is gone. Nothing is
+soft-deleted and nothing is recoverable without a backup restore.
 
 What it keeps: the `audit_logs` row recording the deletion. `audit_logs.user_id` is
 `ON DELETE SET NULL`, so the row survives with the actor redacted; `target_user_id` carries no

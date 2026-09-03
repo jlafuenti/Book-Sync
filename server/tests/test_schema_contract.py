@@ -210,7 +210,16 @@ def test_the_migration_creates_each_name_the_models_declare(name):
 # so its `user_id` stays `SET NULL`.
 # ---------------------------------------------------------------------------
 
-_CASCADING_USER_FKS = [("user_progress", "user_id"), ("bookmarks", "user_id")]
+_CASCADING_USER_FKS = [
+    ("user_progress", "user_id"),
+    ("bookmarks", "user_id"),
+    # A per-device refresh session (#250) must not outlive its user. There is no
+    # ORM relationship on `User` for these, so the database is the *only* thing
+    # that deletes them — losing this cascade would leave a live credential for
+    # a deleted account, which self-service deletion (#146) makes reachable by
+    # any user rather than only an admin.
+    ("refresh_tokens", "user_id"),
+]
 
 
 async def _reflected_fks(table):
