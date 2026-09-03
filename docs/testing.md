@@ -118,6 +118,19 @@ Both CI pipelines fail on known vulnerabilities in production dependencies (issu
 Every allow-list entry must carry a written justification and gets re-checked whenever the
 owning dependency is next touched.
 
+The one standing web exception is `@xmldom/xmldom`, reached through `epubjs` 0.3.x. npm's only
+fix is `epubjs@0.4.2`, a semver-major of the library that renders every book, and epub.js only
+falls back to xmldom when the browser's own parser is missing (`typeof DOMParser === "undefined"
+|| forceXMLDom` in `epubjs/src/utils/core.js`, `typeof XMLSerializer === "undefined" || isIE` in
+`epubjs/src/section.js`) — so the advisories are unreachable in a browser build. The full
+reasoning lives in `web/audit-ci.jsonc` next to the allow-listed IDs; `web/src/dependency-pins.test.js`
+stops a bot PR from taking the major to quiet the audit. Moving off 0.3.x is its own change, with a
+reader regression pass (issue #285).
+
+`npm audit` without `--omit=dev` also reports dev-only advisories (vitest, esbuild, the nested vite
+under it). Those never ship to the browser, `skip-dev` excludes them from the gate, and clearing
+them means a vitest major — a separate piece of work.
+
 ## Coverage gates (CI)
 
 Coverage is measured with `pytest-cov` and enforced by **two independent gates** in the

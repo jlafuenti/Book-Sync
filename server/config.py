@@ -259,6 +259,68 @@ def check_cors_origins(s: "Settings") -> None:
     )
 
 
+# Env vars that make an ASGI server fork extra workers. uvicorn reads
+# WEB_CONCURRENCY (and honours --workers/UVICORN_WORKERS in some wrappers);
+# gunicorn reads WEB_CONCURRENCY and GUNICORN_WORKERS.
+WORKER_COUNT_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")
+
+
+def check_single_process(s: "Settings") -> None:
+    """Refuse to boot when the environment asks for more than one worker.
+
+    The transcription pipeline is single-process by construction (issue #252):
+
+    * ``services/queue_manager._process_next_item`` claims work with a plain
+      ``SELECT ... LIMIT 1`` followed by an ``UPDATE`` in the same session — no
+      row lock, so two processes claim the same item and transcribe the same
+      audiobook twice.
+    * Cancel/pause/active-job state (``_cancel_requested``, ``_pause_requested``,
+      ``_active_provider``) lives in module-level Python sets, so a cancel only
+      reaches the process that happens to own the job.
+    * ``reset_stale_items()`` flips *every* ``in_progress`` row back to
+      ``pending`` at startup, so a second process re-queues the first one's
+      running job.
+    * ``import_scheduler`` and ``backup_service`` are started inside the
+      per-process lifespan, so N processes means N nightly backups and N
+      concurrent import syncs.
+
+    None of that is enforced anywhere else, and the failure mode is silent, so
+    the mistake is caught here at boot instead. Making the server genuinely
+    multi-process is a real redesign (atomic claim, cancel flags on the queue
+    row, worker heartbeats) tracked separately — not something to enable by
+    setting an env var.
+    """
+    import logging
+    import os
+
+    logger = logging.getLogger(__name__)
+    for var in WORKER_COUNT_ENV_VARS:
+        raw = os.environ.get(var)
+        if raw is None or not raw.strip():
+            continue
+        try:
+            workers = int(raw.strip())
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a number; ignoring it. The Tandem server must run "
+                "as a single process — see the single-process note in "
+                "docs/operations.md.",
+                var,
+                raw,
+            )
+            continue
+        if workers > 1:
+            raise RuntimeError(
+                f"{var}={workers} would run the server as {workers} processes, "
+                "but the transcription queue, cancellation state and the "
+                "import/backup schedulers are single-process only: you would get "
+                "duplicate transcriptions, cancels that reach the wrong process "
+                "and jobs re-queued out from under each other. Unset it or set "
+                f"{var}=1, and scale by giving this one process more CPU. See "
+                "docs/operations.md ('Single process only') and issue #252."
+            )
+
+
 def check_forwarded_allow_ips(s: "Settings") -> None:
     """Warn (never raise) when prod runs without FORWARDED_ALLOW_IPS.
 

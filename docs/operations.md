@@ -160,6 +160,37 @@ Both `login_failed` and `login_locked` rows land in the audit log, so a sustaine
 account is visible in the web UI's user-management **Audit Log** tab, filterable by action (and it
 grows that table; the per-IP limit is what bounds how fast).
 
+## Single process only
+
+**Run exactly one `server` process.** Not `uvicorn --workers 2`, not `WEB_CONCURRENCY=2`, not a
+second replica of the container behind a load balancer. `server/entrypoint.sh` starts one uvicorn
+process with no `--workers`, and that is a correctness requirement, not a default.
+
+Four things in the server are process-local (issue #252):
+
+| What | Where | What a second process does |
+|---|---|---|
+| Queue claim | `services/queue_manager.py`, `_process_next_item` | Claims with `SELECT ... WHERE status='pending' LIMIT 1` then `UPDATE` — no row lock, so both processes claim the same item and the same audiobook is transcribed twice |
+| Cancel / pause state | `services/queue_manager.py`, module-level `_cancel_requested` / `_pause_requested` / `_active_provider` | A cancel or an off-hours pause only reaches whichever process owns the job; the other keeps going |
+| Startup recovery | `services/queue_manager.py`, `reset_stale_items()` | Flips *every* `in_progress` row back to `pending` at boot, re-queueing the other process's running job |
+| Schedulers | `main.py` lifespan → `import_scheduler`, `backup_service` | N processes means N nightly `pg_dump`s and N concurrent import syncs |
+
+`config.check_single_process()` refuses to boot when `WEB_CONCURRENCY`, `UVICORN_WORKERS` or
+`GUNICORN_WORKERS` is greater than 1, so the mistake surfaces in the container log rather than as a
+duplicated transcription weeks later. A healthy start logs:
+
+```
+Single-process mode: one queue manager, one import scheduler, one backup scheduler (issue #252).
+```
+
+and a refused one raises `RuntimeError: WEB_CONCURRENCY=2 would run the server as 2 processes ...`.
+
+To scale, give the one process more CPU. Making the server genuinely multi-process is a redesign —
+an atomic claim (`UPDATE ... WHERE id=:id AND status='pending' RETURNING id`, or Postgres'
+`SELECT ... FOR UPDATE SKIP LOCKED`), cancellation moved onto the queue row, and a
+`worker_id`/heartbeat so startup recovery only touches rows owned by a dead process. Do that work
+before removing the guard, not after.
+
 ## Restart policies
 
 Every service in `docker-compose.example.yml` carries `restart: unless-stopped`. Keep it that way
