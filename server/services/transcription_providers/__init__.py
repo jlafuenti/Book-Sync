@@ -19,6 +19,15 @@ from services.transcription_providers.remote import RemoteWhisperProvider
 
 logger = logging.getLogger(__name__)
 
+# Remote-worker request timeout, in seconds (issue #248). `POST /v1/transcribe`
+# is a single blocking request that returns only when the whole book is
+# transcribed, so this must exceed the longest job you expect — 24 h by
+# default. Lowering it makes long books fail; it is not a dead-worker
+# detector. The minimum is a sanity guard against a typo, nothing more.
+# `routers.settings.DEFAULT_SETTINGS` mirrors the default and must match.
+DEFAULT_REMOTE_TIMEOUT_SEC = 86400
+MIN_REMOTE_TIMEOUT_SEC = 60
+
 __all__ = [
     "TranscriptionProvider",
     "ProviderUnavailableError",
@@ -27,6 +36,8 @@ __all__ = [
     "LocalWhisperProvider",
     "RemoteWhisperProvider",
     "get_transcription_provider",
+    "DEFAULT_REMOTE_TIMEOUT_SEC",
+    "MIN_REMOTE_TIMEOUT_SEC",
 ]
 
 
@@ -80,7 +91,16 @@ async def get_transcription_provider() -> "TranscriptionProvider":
 
     provider_mode = str(db_settings.get("transcription_provider", "remote_with_fallback"))
     remote_url = str(db_settings.get("transcription_remote_url", ""))
-    remote_timeout = max(int(db_settings.get("transcription_remote_timeout", 86400)), 86400)
+    # `POST /v1/transcribe` blocks for the whole job, so this read timeout must
+    # outlast the longest book — hence the 24 h default. It is a default, not a
+    # floor: an operator with a short library may legitimately want less
+    # (issue #248). MIN_REMOTE_TIMEOUT_SEC is only a sanity guard so a typo
+    # cannot abandon every job seconds in.
+    remote_timeout = max(
+        int(db_settings.get("transcription_remote_timeout", DEFAULT_REMOTE_TIMEOUT_SEC)),
+        MIN_REMOTE_TIMEOUT_SEC,
+    )
+    logger.info(f"Remote transcription timeout in effect: {remote_timeout}s")
 
     if provider_mode == "local":
         logger.info("Using Local Whisper provider")

@@ -129,7 +129,6 @@ bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#rev
 | `BACKUPS_DIR` | `/backups` | Nightly + manual backups — mount this off the host disk |
 | `TRANSCRIPTION_PROVIDER` | `remote_with_fallback` | `local`, `remote`, or `remote_with_fallback` |
 | `TRANSCRIPTION_REMOTE_URL` | — | Jetson worker URL (port 9000) |
-| `TRANSCRIPTION_REMOTE_TIMEOUT` | `7200` | Seconds before a remote job is abandoned |
 | `WHISPER_MODEL` / `WHISPER_DEVICE` | `medium` / `auto` | Local Whisper model and device (`auto`/`cpu`/`cuda`) |
 | `AUTO_TRANSCRIBE_ENABLED` | `false` | Queue newly auto-matched pairs automatically |
 | `ALLOW_PUBLIC_REGISTRATION` | `true` | Self-registration; new accounts still need admin approval |
