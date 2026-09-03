@@ -265,113 +265,118 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                         </div>
                     )}
 
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                {canEdit && selectable && (
-                                    <th style={{ width: 32 }}>
-                                        <input type="checkbox" checked={rows.length > 0 && selected.size === rows.length}
-                                            onChange={toggleAll} title="Select all" />
-                                    </th>
-                                )}
-                                <th>Title</th>
-                                <th>Detail</th>
-                                <th style={{ width: 100 }}>Size</th>
-                                {canEdit && <th style={{ width: 230 }}>Actions</th>}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows.map((r, i) => (
-                                <tr key={rowKey(r, i)}>
+                    {/* The Actions column falls off a phone screen, and every
+                        ancestor clips overflow — .table-wrapper is what makes
+                        it scrollable instead of unreachable (issue #271). */}
+                    <div className="table-wrapper table-wrapper--flush">
+                        <table className="data-table">
+                            <thead>
+                                <tr>
                                     {canEdit && selectable && (
-                                        <td>
-                                            <input type="checkbox" checked={selected.has(rowKey(r, i))}
-                                                onClick={(e) => toggleRow(i, e.shiftKey)}
-                                                onChange={() => { }} />
-                                        </td>
+                                        <th style={{ width: 32 }}>
+                                            <input type="checkbox" checked={rows.length > 0 && selected.size === rows.length}
+                                                onChange={toggleAll} title="Select all" />
+                                        </th>
                                     )}
-                                    <td>
-                                        {(() => {
-                                            const title = r.title || r.filename || `Item ${r.item_id}`
-                                            // Only books open the details modal; a multi-file
-                                            // folder row (item_type 'folder') has nothing to open.
-                                            const isBook = r.item_type === 'ebook' || r.item_type === 'audiobook'
-                                            const target = (isBook && r.item_id) ? [r.item_type, r.item_id]
-                                                : r.ebook_id ? ['ebook', r.ebook_id]
-                                                    : r.audiobook_id ? ['audiobook', r.audiobook_id] : null
-                                            return target
-                                                ? <button className="ts-title-link" onClick={() => onOpenDetails(target[0], target[1])}>{title}</button>
-                                                : <div style={{ fontWeight: 500 }}>{title}</div>
-                                        })()}
-                                        {r.author && <div className="ts-sub">{r.author}</div>}
-                                        {r.file_path && <div className="ts-path">{r.file_path}</div>}
-                                    </td>
-                                    <td className="ts-detail">{r.detail}</td>
-                                    <td style={{ color: 'var(--text-secondary)' }}>{fmtBytes(r.file_size)}</td>
-                                    {canEdit && (
-                                        <td>
-                                            <div className="ts-row-actions">
-                                                {(cat.kind === 'item') && (
-                                                    <>
-                                                        <button className="btn btn-sm btn-secondary" disabled={busy}
-                                                            onClick={() => openReplace(r)}>Replace</button>
-                                                        <button className="btn btn-sm btn-danger" disabled={busy}
-                                                            onClick={() => doDeleteOne(r)}>Delete</button>
-                                                    </>
-                                                )}
-                                                {cat.kind === 'unsupported' && (
-                                                    <>
-                                                        <button className="btn btn-sm btn-primary" disabled={busy}
-                                                            onClick={() => doConvert(r)}>Convert</button>
-                                                        <button className="btn btn-sm btn-danger" disabled={busy}
-                                                            onClick={() => doDeleteOne(r)}>Delete</button>
-                                                    </>
-                                                )}
-                                                {cat.kind === 'chapter_repair' && (
-                                                    <button className="btn btn-sm btn-primary" disabled={busy}
-                                                        onClick={() => doRepair(r)}>Repair</button>
-                                                )}
-                                                {cat.kind === 'dup' && (
-                                                    <button className="btn btn-sm btn-danger" disabled={busy}
-                                                        onClick={() => doDeleteOne(r)}>Delete</button>
-                                                )}
-                                                {cat.kind === 'cover' && (
-                                                    <button className="btn btn-sm btn-primary" disabled={busy}
-                                                        onClick={() => doRescan(r)}>Rescan</button>
-                                                )}
-                                                {cat.kind === 'orphan' && (
-                                                    <button className="btn btn-sm btn-danger" disabled={busy}
-                                                        onClick={() => doDeleteOrphan(r)}>Delete</button>
-                                                )}
-                                                {cat.kind === 'transcription' && (
-                                                    <button className="btn btn-sm btn-primary" disabled={busy}
-                                                        onClick={() => doRequeue(r)}>Re-queue</button>
-                                                )}
-                                                {cat.kind === 'acsm' && (
-                                                    <button className="btn btn-sm btn-danger" disabled={busy}
-                                                        onClick={() => doDismiss(r)}>Dismiss</button>
-                                                )}
-                                                {cat.kind === 'multi_file' && (
-                                                    <>
-                                                        <button className="btn btn-sm btn-primary" disabled={busy}
-                                                            onClick={doLibraryRescan}>Rescan</button>
-                                                        {r.imported_track_count > 0 && (
-                                                            <button className="btn btn-sm btn-danger" disabled={busy}
-                                                                onClick={() => setConfirmRemoveTracks(r)}>
-                                                                Remove imported tracks ({r.imported_track_count})
-                                                            </button>
-                                                        )}
-                                                        <button className="btn btn-sm btn-secondary" disabled={busy}
-                                                            onClick={() => doDismissFolder(r)}>Dismiss</button>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </td>
-                                    )}
+                                    <th>Title</th>
+                                    <th>Detail</th>
+                                    <th style={{ width: 100 }}>Size</th>
+                                    {canEdit && <th style={{ width: 230 }}>Actions</th>}
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {rows.map((r, i) => (
+                                    <tr key={rowKey(r, i)}>
+                                        {canEdit && selectable && (
+                                            <td>
+                                                <input type="checkbox" checked={selected.has(rowKey(r, i))}
+                                                    onClick={(e) => toggleRow(i, e.shiftKey)}
+                                                    onChange={() => { }} />
+                                            </td>
+                                        )}
+                                        <td>
+                                            {(() => {
+                                                const title = r.title || r.filename || `Item ${r.item_id}`
+                                                // Only books open the details modal; a multi-file
+                                                // folder row (item_type 'folder') has nothing to open.
+                                                const isBook = r.item_type === 'ebook' || r.item_type === 'audiobook'
+                                                const target = (isBook && r.item_id) ? [r.item_type, r.item_id]
+                                                    : r.ebook_id ? ['ebook', r.ebook_id]
+                                                        : r.audiobook_id ? ['audiobook', r.audiobook_id] : null
+                                                return target
+                                                    ? <button className="ts-title-link" onClick={() => onOpenDetails(target[0], target[1])}>{title}</button>
+                                                    : <div style={{ fontWeight: 500 }}>{title}</div>
+                                            })()}
+                                            {r.author && <div className="ts-sub">{r.author}</div>}
+                                            {r.file_path && <div className="ts-path">{r.file_path}</div>}
+                                        </td>
+                                        <td className="ts-detail">{r.detail}</td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>{fmtBytes(r.file_size)}</td>
+                                        {canEdit && (
+                                            <td>
+                                                <div className="ts-row-actions">
+                                                    {(cat.kind === 'item') && (
+                                                        <>
+                                                            <button className="btn btn-sm btn-secondary" disabled={busy}
+                                                                onClick={() => openReplace(r)}>Replace</button>
+                                                            <button className="btn btn-sm btn-danger" disabled={busy}
+                                                                onClick={() => doDeleteOne(r)}>Delete</button>
+                                                        </>
+                                                    )}
+                                                    {cat.kind === 'unsupported' && (
+                                                        <>
+                                                            <button className="btn btn-sm btn-primary" disabled={busy}
+                                                                onClick={() => doConvert(r)}>Convert</button>
+                                                            <button className="btn btn-sm btn-danger" disabled={busy}
+                                                                onClick={() => doDeleteOne(r)}>Delete</button>
+                                                        </>
+                                                    )}
+                                                    {cat.kind === 'chapter_repair' && (
+                                                        <button className="btn btn-sm btn-primary" disabled={busy}
+                                                            onClick={() => doRepair(r)}>Repair</button>
+                                                    )}
+                                                    {cat.kind === 'dup' && (
+                                                        <button className="btn btn-sm btn-danger" disabled={busy}
+                                                            onClick={() => doDeleteOne(r)}>Delete</button>
+                                                    )}
+                                                    {cat.kind === 'cover' && (
+                                                        <button className="btn btn-sm btn-primary" disabled={busy}
+                                                            onClick={() => doRescan(r)}>Rescan</button>
+                                                    )}
+                                                    {cat.kind === 'orphan' && (
+                                                        <button className="btn btn-sm btn-danger" disabled={busy}
+                                                            onClick={() => doDeleteOrphan(r)}>Delete</button>
+                                                    )}
+                                                    {cat.kind === 'transcription' && (
+                                                        <button className="btn btn-sm btn-primary" disabled={busy}
+                                                            onClick={() => doRequeue(r)}>Re-queue</button>
+                                                    )}
+                                                    {cat.kind === 'acsm' && (
+                                                        <button className="btn btn-sm btn-danger" disabled={busy}
+                                                            onClick={() => doDismiss(r)}>Dismiss</button>
+                                                    )}
+                                                    {cat.kind === 'multi_file' && (
+                                                        <>
+                                                            <button className="btn btn-sm btn-primary" disabled={busy}
+                                                                onClick={doLibraryRescan}>Rescan</button>
+                                                            {r.imported_track_count > 0 && (
+                                                                <button className="btn btn-sm btn-danger" disabled={busy}
+                                                                    onClick={() => setConfirmRemoveTracks(r)}>
+                                                                    Remove imported tracks ({r.imported_track_count})
+                                                                </button>
+                                                            )}
+                                                            <button className="btn btn-sm btn-secondary" disabled={busy}
+                                                                onClick={() => doDismissFolder(r)}>Dismiss</button>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
 
                     <input ref={replaceInputRef} type="file" style={{ display: 'none' }} onChange={onReplacePicked} />
 

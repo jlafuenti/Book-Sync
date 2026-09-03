@@ -94,3 +94,15 @@ describe('UnsupportedFilesTab — sync map after conversion', () => {
         expect(screen.getByText(/pair 84/i).textContent).toContain('Could not read ebook file')
     })
 })
+
+// Issue #271: the Convert/Delete buttons live in the table's last column, and
+// the `.system-card` around this table sets `overflow: hidden`, so on a phone
+// that column was simply unreachable — no scroll, no wrap, no fallback.
+describe('UnsupportedFilesTab mobile layout', () => {
+    it('renders the file table inside a horizontal-scroll wrapper', async () => {
+        await renderTab()
+
+        const table = screen.getByRole('table')
+        expect(table.closest('.table-wrapper')).not.toBeNull()
+    })
+})
