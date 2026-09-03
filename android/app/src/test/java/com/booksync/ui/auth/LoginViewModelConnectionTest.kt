@@ -88,6 +88,7 @@ class LoginViewModelConnectionTest {
         userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
         firstRunGate = gate,
         serverVersionGate = versionGate,
+        deviceIdManager = mockk(relaxed = true),
     )
 
     // -- The version handshake (issue #174) --------------------------------

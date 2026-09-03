@@ -1124,15 +1124,15 @@ async def test_a_second_run_on_the_same_audio_reuses_the_cached_transcript(db, m
     assert len(await _transcripts_for(pair.id)) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #254: replacing a stale transcript issues the INSERT before the "
-           "DELETE in one flush, and `audio_transcripts.pair_id` is UNIQUE — so "
-           "re-transcribing after the audio file is replaced dies with an "
-           "IntegrityError and the queue item is marked `failed`. A `db.flush()` "
-           "between the delete and the add fixes it. Remove this marker then.",
-)
 async def test_rerun_with_a_different_audio_path_replaces_the_cached_transcript(db, monkeypatch):
+    """Issue #193: the stale row is updated in place, not deleted and re-added.
+
+    Delete-then-add in one flush sent the INSERT first (SQLAlchemy orders every
+    INSERT for a mapper ahead of its DELETEs), the new row hit the `pair_id`
+    unique index, and the whole run was lost to an IntegrityError — leaving the
+    pair permanently unable to re-transcribe. Pinned as xfail by #254 until the
+    fix landed.
+    """
     pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
     await _seed_item(db, pair.id, status="pending")
     provider = _PipelineProvider()

@@ -920,17 +920,38 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             for s in whisper_sentences
         ]
         async with async_session() as db:
-            if cached_transcript:
-                # Stale cache (different audio file) — replace it
-                stale = await db.get(AudioTranscript, cached_transcript.id)
-                if stale:
-                    await db.delete(stale)
-            db.add(AudioTranscript(
-                pair_id=pair_id,
-                audiobook_path=audiobook_path,
-                sentence_count=len(whisper_sentences),
-                sentences_json=json.dumps(sentences_data),
-            ))
+            # Stale cache (the audio file changed) — update the existing row in
+            # place rather than delete-then-add (issue #193).
+            #
+            # `audio_transcripts.pair_id` is UNIQUE, and SQLAlchemy's unit of
+            # work emits every INSERT for a mapper before any DELETE for it. So
+            # `db.delete(stale)` followed by `db.add(new)` in one flush sent the
+            # INSERT first, hit the unique index, and raised IntegrityError; the
+            # session rolled back, so the new transcript was never saved, the
+            # item was marked `failed` and the pair `ERROR`. Re-queueing took
+            # the identical path — the stale row with the old path was still
+            # there — so the pair stayed wedged until someone deleted the row by
+            # hand. An UPDATE has no ordering hazard at all, and it also keeps
+            # the primary key (and any future FK to it) stable.
+            existing = (
+                await db.get(AudioTranscript, cached_transcript.id)
+                if cached_transcript
+                else None
+            )
+            if existing is not None:
+                existing.audiobook_path = audiobook_path
+                existing.sentence_count = len(whisper_sentences)
+                existing.sentences_json = json.dumps(sentences_data)
+                # The column records when this transcription was produced, not
+                # when the pair was first transcribed.
+                existing.created_at = utcnow()
+            else:
+                db.add(AudioTranscript(
+                    pair_id=pair_id,
+                    audiobook_path=audiobook_path,
+                    sentence_count=len(whisper_sentences),
+                    sentences_json=json.dumps(sentences_data),
+                ))
             await db.commit()
         logger.info(f"Pair {pair_id}: transcript saved ({len(whisper_sentences)} sentences)")
 

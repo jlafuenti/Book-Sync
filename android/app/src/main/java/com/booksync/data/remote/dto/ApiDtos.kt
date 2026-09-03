@@ -12,7 +12,16 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class LoginRequest(
     val username: String,
-    val password: String
+    val password: String,
+    /**
+     * This install's device id (issue #250).
+     *
+     * The server stores it on the refresh session the login opens, so signing
+     * out on the phone signs out the phone and leaves the browser — and its
+     * unsynced reading positions — alone. Null-defaulted, and kotlinx omits
+     * defaults, so the field simply is not sent by a build that has none.
+     */
+    val device_id: String? = null,
 )
 
 @Serializable
