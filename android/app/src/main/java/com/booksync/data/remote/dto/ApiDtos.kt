@@ -52,6 +52,23 @@ data class UserResponse(
     val must_reset_password: Boolean = false,
 )
 
+/**
+ * `GET /api/health` (issue #175) — the first-run "Check connection" probe.
+ *
+ * Every field is optional on purpose. The probe's job is to tell a stranger
+ * whether there is a Tandem server at the address they typed, and a server old
+ * enough to answer with a payload we don't recognise is still a server they can
+ * sign in to. A missing field must not become "connection failed": today's
+ * server sends `{"status": "healthy"}` and nothing else, so the version fields
+ * are absent from every deployment currently running.
+ */
+@Serializable
+data class HealthResponse(
+    val status: String? = null,
+    val api_version: Int? = null,
+    val app_version: String? = null,
+)
+
 @Serializable
 data class UpdateMeRequest(
     val theme: String? = null

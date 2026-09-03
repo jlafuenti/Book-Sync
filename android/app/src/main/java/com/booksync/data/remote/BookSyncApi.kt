@@ -11,6 +11,20 @@ import retrofit2.http.*
  */
 interface BookSyncApi {
 
+    // ============ Health ============
+
+    /**
+     * Readiness probe, used by the first-run "Check connection" (issue #175).
+     *
+     * Unauthenticated and cheap, which is what makes it the right thing to point
+     * at a URL a stranger just typed: it answers "is there a Tandem server here"
+     * before any credentials exist. Returns 503 when the server is up but its
+     * database is not, which surfaces as an `HttpException` rather than success —
+     * correct, since signing in would fail too.
+     */
+    @GET("api/health")
+    suspend fun getHealth(): HealthResponse
+
     // ============ Auth ============
 
     @POST("api/auth/login")
