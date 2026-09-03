@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, getPosition, updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName } from '../api'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -9,6 +9,7 @@ import CoverImg from '../components/CoverImg'
 import { useAuth } from '../contexts/AuthContext'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { formatDateTime } from '../lib/datetime'
+import { switchToEbook } from '../lib/handoff'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -49,6 +50,7 @@ function BookDetailPage() {
     const canEdit = hasMinRole('editor')
     const { type, id } = useParams()
     const navigate = useNavigate()
+    const location = useLocation()
     const [book, setBook] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -87,6 +89,18 @@ function BookDetailPage() {
         // Fetch reading/listening progress
         getProgress(type, id).then(setProgress).catch(() => setProgress(null))
     }, [type, id])
+
+    // Arriving from the app-wide mini-player's "switch to ebook" (issue #267).
+    // The reader is component state, not a route, so the shell hands the intent
+    // over in router state and this opens it. Consumed once and then cleared
+    // from history: a later Back onto this entry should show the detail page,
+    // not silently reopen the reader at a position that has since moved on.
+    useEffect(() => {
+        if (!location.state?.openReader) return
+        setReaderInitialChapter(location.state.initialChapter ?? null)
+        setReaderOpen(true)
+        navigate(location.pathname, { replace: true, state: null })
+    }, [location.state?.openReader]) // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleSaveMetadata = async (bookId, data) => {
         const updateFunc = type === 'ebook' ? updateEbookMetadata : updateAudiobookMetadata;
@@ -471,16 +485,11 @@ function BookDetailPage() {
             {playerOpen && audioPlayer.currentAudiobook && (
                 <AudioPlayerView
                     onClose={() => setPlayerOpen(false)}
-                    onSwitchToEbook={book.pair_id && book.paired_with ? async (pairId, ebookId) => {
-                        audioPlayer.pause()
-                        const posMs = Math.floor(audioPlayer.currentTime * 1000)
-                        const pos = await updatePosition('pair', pairId, {
-                            source: 'audiobook',
-                            audio_position_ms: posMs,
-                            device_id: getDeviceId(),
-                            device_name: getDeviceName(),
-                            captured_at: new Date().toISOString(),
-                        }).catch(() => null)
+                    onSwitchToEbook={book.pair_id && book.paired_with ? async (pairId) => {
+                        // Shared with HomePage's and the mini-player's handoff
+                        // so `source` and the device metadata are written the
+                        // same way from all three (issue #267).
+                        const pos = await switchToEbook(audioPlayer, pairId)
                         setPlayerOpen(false)
                         setReaderInitialChapter(pos?.epub_chapter ?? null)
                         setReaderOpen(true)

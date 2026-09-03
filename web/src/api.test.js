@@ -481,6 +481,183 @@ describe('prefetchMediaTokens()', () => {
     })
 })
 
+
+// ---------------------------------------------------------------------------
+// Issue #269: media-token coalescing.
+//
+// A library page renders 50 covers in one commit, and each one independently
+// awaited its own GET /api/auth/media-token — 50 round-trips queued behind the
+// browser's ~6-connection-per-host limit, and another 50 on every infinite-
+// scroll append. The batch endpoint that fixes this already existed on both
+// sides and had no caller. Coalescing inside getMediaToken fixes every cover
+// site at once, including the six that never had a prefetch hook.
+// ---------------------------------------------------------------------------
+
+function mediaTokenFetchMock({ batchOk = true, tokens = {}, singleToken = 'tok-single' } = {}) {
+    const calls = { batch: 0, single: 0, batchBodies: [] }
+    const fetchMock = vi.fn().mockImplementation(async (url, options) => {
+        const u = String(url)
+        if (u.includes('/auth/media-token/batch')) {
+            calls.batch += 1
+            calls.batchBodies.push(JSON.parse(options.body))
+            if (!batchOk) return { ok: false, status: 500, json: async () => ({}) }
+            return { ok: true, status: 200, json: async () => ({ tokens, expires_in: 900 }) }
+        }
+        if (u.includes('/auth/media-token')) {
+            calls.single += 1
+            return { ok: true, status: 200, json: async () => ({ token: singleToken, expires_in: 900 }) }
+        }
+        return { ok: true, status: 200, json: async () => ({}) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return { calls, fetchMock }
+}
+
+describe('media tokens — coalescing (issue #269)', () => {
+    it('mints every cover requested in the same tick in one batch call', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({
+            tokens: { 'cover:a.jpg': 'tok-a', 'cover:b.jpg': 'tok-b', 'cover:c.jpg': 'tok-c' },
+        })
+
+        const { coverSrc } = await import('./api')
+        const srcs = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/b.jpg'),
+            coverSrc('/api/files/covers/c.jpg'),
+        ])
+
+        expect(calls.batch).toBe(1)
+        expect(calls.single).toBe(0)
+        expect(srcs).toEqual([
+            '/api/files/covers/a.jpg?token=tok-a',
+            '/api/files/covers/b.jpg?token=tok-b',
+            '/api/files/covers/c.jpg?token=tok-c',
+        ])
+        expect(calls.batchBodies[0].resources).toHaveLength(3)
+    })
+
+    it('shares one request between concurrent callers for the same cover', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({ singleToken: 'tok-a' })
+
+        const { coverSrc } = await import('./api')
+        const [first, second] = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/a.jpg'),
+        ])
+
+        // One key in flight is not a batch — it stays on the cheaper GET.
+        expect(calls.single + calls.batch).toBe(1)
+        expect(first).toBe(second)
+        expect(first).toBe('/api/files/covers/a.jpg?token=tok-a')
+    })
+
+    it('falls back to the single-token GET when the batch call fails', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({ batchOk: false, singleToken: 'tok-single' })
+
+        const { coverSrc } = await import('./api')
+        const srcs = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/b.jpg'),
+        ])
+
+        expect(calls.batch).toBe(1)
+        expect(calls.single).toBe(2)
+        expect(srcs).toEqual([
+            '/api/files/covers/a.jpg?token=tok-single',
+            '/api/files/covers/b.jpg?token=tok-single',
+        ])
+    })
+
+    it('falls back to the single-token GET when the batch request throws', async () => {
+        // Offline, or a server old enough not to have the batch endpoint at
+        // all: the covers must still resolve, one request each.
+        localStorage.setItem('tandem_token', 'access-1')
+        let single = 0
+        vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url) => {
+            if (String(url).includes('/auth/media-token/batch')) throw new TypeError('Failed to fetch')
+            single += 1
+            return { ok: true, status: 200, json: async () => ({ token: 'tok-single', expires_in: 900 }) }
+        }))
+
+        const { coverSrc } = await import('./api')
+        const srcs = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/b.jpg'),
+        ])
+
+        expect(single).toBe(2)
+        expect(srcs[0]).toBe('/api/files/covers/a.jpg?token=tok-single')
+    })
+
+    it('falls back for just the keys a partial batch response left out', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({
+            tokens: { 'cover:a.jpg': 'tok-a' },   // b.jpg missing
+            singleToken: 'tok-b',
+        })
+
+        const { coverSrc } = await import('./api')
+        const srcs = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/b.jpg'),
+        ])
+
+        expect(calls.batch).toBe(1)
+        expect(calls.single).toBe(1)
+        expect(srcs).toEqual([
+            '/api/files/covers/a.jpg?token=tok-a',
+            '/api/files/covers/b.jpg?token=tok-b',
+        ])
+    })
+
+    it('rejects each waiter when even the fallback mint fails', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) }))
+
+        const { coverSrc } = await import('./api')
+        const results = await Promise.allSettled([
+            coverSrc('/api/files/covers/a.jpg'),
+            coverSrc('/api/files/covers/b.jpg'),
+        ])
+
+        expect(results.map(r => r.status)).toEqual(['rejected', 'rejected'])
+    })
+
+    it('mixes cover and audiobook resources into the same batch', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({
+            tokens: { 'cover:a.jpg': 'tok-a', 'audiobook:42': 'tok-42' },
+        })
+
+        const { coverSrc, getAudiobookStreamUrl } = await import('./api')
+        const [src, url] = await Promise.all([
+            coverSrc('/api/files/covers/a.jpg'),
+            getAudiobookStreamUrl(42),
+        ])
+
+        expect(calls.batch).toBe(1)
+        expect(src).toBe('/api/files/covers/a.jpg?token=tok-a')
+        expect(url).toBe('/api/files/audiobook/42?token=tok-42')
+    })
+
+    it('serves a second tick from the cache without another request', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const { calls } = mediaTokenFetchMock({
+            tokens: { 'cover:a.jpg': 'tok-a', 'cover:b.jpg': 'tok-b' },
+        })
+
+        const { coverSrc } = await import('./api')
+        await Promise.all([coverSrc('/api/files/covers/a.jpg'), coverSrc('/api/files/covers/b.jpg')])
+        await Promise.all([coverSrc('/api/files/covers/a.jpg'), coverSrc('/api/files/covers/b.jpg')])
+
+        expect(calls.batch).toBe(1)
+        expect(calls.single).toBe(0)
+    })
+})
+
 describe('getDeviceId()', () => {
     it('generates a UUID-shaped id and persists it under tandem_device_id', async () => {
         const { getDeviceId } = await import('./api')
@@ -1325,5 +1502,72 @@ describe('fetchWithAuth — 401 refresh (issue #268)', () => {
         await getMe().catch(() => {})
 
         expect(calls.refresh).toBe(0)
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Issue #211: non-JSON error bodies on the front door.
+//
+// login/register did `(await resp.json()).detail`. An nginx 502 page is HTML,
+// so .json() threw and the SyntaxError replaced the real failure — the login
+// form told the user "Unexpected token '<'" when the server was simply down.
+// ---------------------------------------------------------------------------
+
+function htmlErrorResponse(status) {
+    const body = '<html><head><title>502 Bad Gateway</title></head><body>...</body></html>'
+    return {
+        ok: false,
+        status,
+        text: async () => body,
+        json: async () => { throw new SyntaxError("Unexpected token '<'") },
+    }
+}
+
+function jsonErrorResponse(status, detail) {
+    const body = JSON.stringify({ detail })
+    return { ok: false, status, text: async () => body, json: async () => JSON.parse(body) }
+}
+
+describe('login() — error bodies', () => {
+    it('reports the status when the body is not JSON, not a parse error', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlErrorResponse(502)))
+        const { login } = await import('./api')
+
+        await expect(login('alice', 'hunter2')).rejects.toThrow('Login failed (502)')
+    })
+
+    it('still surfaces the server detail when the body is JSON', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonErrorResponse(401, 'Invalid username or password')))
+        const { login } = await import('./api')
+
+        await expect(login('alice', 'nope')).rejects.toThrow('Invalid username or password')
+    })
+
+    it('falls back to the status when the JSON body carries no detail', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 500, text: async () => '{}', json: async () => ({}),
+        }))
+        const { login } = await import('./api')
+
+        await expect(login('alice', 'hunter2')).rejects.toThrow('Login failed (500)')
+    })
+})
+
+describe('register() — error bodies', () => {
+    it('reports the status when the body is not JSON', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlErrorResponse(502)))
+        const { register } = await import('./api')
+
+        await expect(register('alice', 'a@example.com', 'hunter2'))
+            .rejects.toThrow('Registration failed (502)')
+    })
+
+    it('still surfaces the server detail when the body is JSON', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonErrorResponse(400, 'Username already exists')))
+        const { register } = await import('./api')
+
+        await expect(register('alice', 'a@example.com', 'hunter2'))
+            .rejects.toThrow('Username already exists')
     })
 })
