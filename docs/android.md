@@ -132,12 +132,42 @@ cd android && ./gradlew :app:generateNetworkSecurityConfig && cat app/build/gene
 `server/tests/test_android_no_personal_hosts.py` guards this: it fails if a private-network address
 or a personal hostname reappears in the committed Android sources.
 
-## Downloads and offline use
+## Streaming, downloads and offline use
 
-Books can be downloaded for offline use from a book's detail page and managed on the Downloaded
-screen. For a pair you can fetch the ebook, the audio, or both — plus the pair's sync map, so
-switching between reading and listening keeps working with no network. Unpaired ebooks and
-audiobooks can be downloaded on their own too.
+**Audio streams by default.** Press play on any audiobook and it starts, whether or not it is on
+the device — the player fetches `GET /api/files/audiobook/{id}` through the app's own OkHttp
+client, so it carries the same `Authorization: Bearer` header as every other request and refreshes
+the token mid-stream if it expires. Nothing goes in the URL: the server also accepts a scoped
+`?token=` media token for consumers that cannot send a header, and Android deliberately does not
+use it, because a URL ends up in logcat. Seeking works because the endpoint honours HTTP Range.
+
+The rule is in `player/MediaSourceSelector.kt` and is the only place the app decides: **a
+downloaded file if there is one, the server otherwise.** A downloaded book never touches the
+network.
+
+**Ebooks download on open.** An EPUB is small and Readium wants a real file, so opening a paired
+ebook that is not on the device fetches it and opens the reader by itself, with progress and a
+Cancel button rather than a prompt to press Download first.
+
+**Downloading is for offline — and for Cast.** Books can be downloaded from a book's detail page,
+from the player's "Download for offline" button, and managed on the Downloaded screen. For a pair
+you can fetch the ebook, the audio, or both — plus the pair's sync map, so switching between
+reading and listening keeps working with no network. Unpaired ebooks and audiobooks can be
+downloaded on their own too.
+
+Two things need the file rather than the stream:
+
+- **Offline.** With no connection and no local copy, the transport controls are disabled and the
+  player says so — that is the only state where they are.
+- **Chromecast.** `LocalCastHttpServer` serves the phone's own copy to the receiver over the LAN,
+  and a Cast receiver cannot send a bearer token, so there is no server-side Cast path. The Cast
+  button is disabled until the book is downloaded, and the service refuses the handoff rather than
+  handing the television a URL it cannot authenticate.
+
+**Cleartext.** Streaming needs no separate allowance: it goes out on the same OkHttp client as the
+API calls, and Android's network security config is process-wide, so a plain-HTTP server already
+listed in `tandem.cleartextHosts` (see [Machine-local build settings](#machine-local-build-settings))
+streams as well as it logs in. A host that is *not* listed cannot do either.
 
 Writes made while offline (position updates, bookmarks) are queued locally in `pending_sync` and
 drained when connectivity returns — on app start, when the network comes back, and when the
