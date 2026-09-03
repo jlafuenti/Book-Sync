@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata } from '../api'
+import {
+    getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata,
+    updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName,
+} from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
@@ -301,6 +304,62 @@ export default function SeriesPage() {
             setBulkSaving(false)
         }
     }
+
+    // ---- Series-level progress actions (issue #270) ----
+    //
+    // Android has offered these on a series stack since CardOverflowMenu; the
+    // web made you repeat the same action book by book. Both are a loop of the
+    // existing per-book calls, scope-correct per member: a pair is one write at
+    // pair scope (both halves share a single canonical record, so two
+    // per-media writes could be adjudicated separately and leave the book
+    // half-complete); an unpaired book writes at its own media scope.
+
+    // Device attribution + write-ordering fields, same shape as HomePage's.
+    // captured_at is read per-call so each write in the batch stamps its own
+    // moment. A completion toggle carries no anchor fields and no `source`
+    // (docs/position-sync-contract.md).
+    const deviceMeta = () => ({
+        device_id: getDeviceId(),
+        device_name: getDeviceName(),
+        captured_at: new Date().toISOString(),
+    })
+
+    const selectedItems = () => allVisibleItems.filter(i => selectedKeys.has(i.key))
+
+    async function applyToSelection(verb, perItem) {
+        const selected = selectedItems()
+        if (selected.length === 0) return
+        const n = selected.length
+        if (!confirm(`${verb} ${n} book${n !== 1 ? 's' : ''}?`)) return
+        setBulkSaving(true)
+        setError('')
+        try {
+            await Promise.all(selected.map(perItem))
+            exitSelectMode()
+            await loadAll()
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setBulkSaving(false)
+        }
+    }
+
+    const handleMarkSeriesComplete = () => applyToSelection(
+        'Mark complete —',
+        item => item.type === 'pair'
+            ? updatePosition('pair', item.pairId, { is_completed: true, ...deviceMeta() })
+            : updatePosition(item.type, item.ebookId ?? item.audiobookId, { is_completed: true, ...deviceMeta() }),
+    )
+
+    const handleResetSeriesProgress = () => applyToSelection(
+        'Reset progress for',
+        // Scope-level DELETE in both cases: it removes the canonical record,
+        // its hints and the projection. A zero-write would leave the record in
+        // place for the next save to resurrect.
+        item => item.type === 'pair'
+            ? resetPairProgress(item.pairId)
+            : resetPosition(item.type, item.ebookId ?? item.audiobookId),
+    )
 
     // Navigate to library with explicit series filter
     function navigateToSeries(group) {
@@ -618,6 +677,12 @@ export default function SeriesPage() {
                         {selectedKeys.size} selected
                     </span>
                     <button className="btn btn-secondary" onClick={() => setBulkEditOpen(true)}>Edit Metadata</button>
+                    <button className="btn btn-secondary" onClick={handleMarkSeriesComplete} disabled={bulkSaving}>
+                        Mark Complete
+                    </button>
+                    <button className="btn btn-secondary" onClick={handleResetSeriesProgress} disabled={bulkSaving}>
+                        Reset Progress
+                    </button>
                 </div>
             )}
 

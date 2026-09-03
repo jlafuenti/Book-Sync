@@ -258,7 +258,13 @@ covers, working files and logs along with the untracked build junk you meant to 
 
 The first account is the superadmin created on first boot. Additional users register themselves
 (`ALLOW_PUBLIC_REGISTRATION`, on by default) but land inactive until an admin approves them — set
-`ALLOW_PUBLIC_REGISTRATION=false` to close registration entirely.
+`ALLOW_PUBLIC_REGISTRATION=false` to close registration entirely. On an internet-facing
+deployment where the admin knows every user by name, `false` is the right setting: nobody waits
+for an approval that was never going to come, and no junk accounts accumulate.
+
+While registration is open, a waiting request shows as a count badge on the **System** entry in
+the sidebar and as a "Pending User Requests" tile on the System status dashboard — both admin-only,
+because the count comes from the admin user list. Approve or reject in System → User Management.
 
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.

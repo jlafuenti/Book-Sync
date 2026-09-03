@@ -7,7 +7,7 @@ import TranscriptionQueuePage from './TranscriptionQueuePage'
 // never fires within a test).
 const {
     getQueueMock, getHistoryMock, removeMock, cancelMock, priorityMock,
-    runNowMock, offHoursMock, authRef,
+    runNowMock, offHoursMock, requeueMock, authRef,
 } = vi.hoisted(() => ({
     getQueueMock: vi.fn(),
     getHistoryMock: vi.fn(),
@@ -16,6 +16,7 @@ const {
     priorityMock: vi.fn(),
     runNowMock: vi.fn(),
     offHoursMock: vi.fn(),
+    requeueMock: vi.fn(),
     authRef: { role: 'admin' },
 }))
 
@@ -30,6 +31,7 @@ vi.mock('../api', async (importOriginal) => {
         updateQueuePriority: priorityMock,
         runQueueItemNow: runNowMock,
         getOffHoursStatus: offHoursMock,
+        requeueQueueItem: requeueMock,
     }
 })
 
@@ -83,6 +85,7 @@ beforeEach(() => {
     priorityMock.mockReset().mockResolvedValue({})
     runNowMock.mockReset().mockResolvedValue({})
     offHoursMock.mockReset().mockResolvedValue(WINDOW_DISABLED)
+    requeueMock.mockReset().mockResolvedValue({})
 })
 
 afterEach(() => {
@@ -243,5 +246,82 @@ describe('Cancel is editor-gated (issue #312)', () => {
         render(<TranscriptionQueuePage />)
         await screen.findByText('Dune')
         expect(screen.getByText(/Cancel/)).toBeInTheDocument()
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Issue #247: History showed a failed job's error and offered nothing to do
+// about it — the operator had to know to go to the book page and press Start.
+// Retry is editor-gated because POST /queue/{id}/requeue is.
+// ---------------------------------------------------------------------------
+
+describe('Retry from History (issue #247)', () => {
+    const failed = (o = {}) => queueItem({
+        id: 7, status: 'failed', error_message: 'whisper died',
+        started_at: '2026-06-01T12:01:00', completed_at: '2026-06-01T12:09:00', ...o,
+    })
+
+    async function openHistory() {
+        fireEvent.click(await screen.findByRole('button', { name: /History/ }))
+        await screen.findByText('Dune')
+    }
+
+    it('offers Retry on a failed row and calls the API, then refreshes', async () => {
+        getHistoryMock.mockResolvedValue([failed()])
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        const before = getHistoryMock.mock.calls.length
+        fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
+
+        await waitFor(() => expect(requeueMock).toHaveBeenCalledWith(7))
+        await waitFor(() => expect(getHistoryMock.mock.calls.length).toBeGreaterThan(before))
+        await waitFor(() => expect(getQueueMock.mock.calls.length).toBeGreaterThan(1))
+    })
+
+    it('offers Retry on a cancelled row', async () => {
+        getHistoryMock.mockResolvedValue([failed({ status: 'cancelled', error_message: null })])
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        expect(screen.getByRole('button', { name: /Retry/ })).toBeInTheDocument()
+    })
+
+    it('does not offer Retry on a completed row', async () => {
+        getHistoryMock.mockResolvedValue([failed({ status: 'completed', error_message: null })])
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument()
+    })
+
+    it('is hidden from a plain user, whom the server would refuse', async () => {
+        authRef.role = 'user'
+        getHistoryMock.mockResolvedValue([failed()])
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        expect(screen.queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument()
+    })
+
+    it('is offered to an editor', async () => {
+        authRef.role = 'editor'
+        getHistoryMock.mockResolvedValue([failed()])
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        expect(screen.getByRole('button', { name: /Retry/ })).toBeInTheDocument()
+    })
+
+    it('surfaces a failure instead of failing silently', async () => {
+        getHistoryMock.mockResolvedValue([failed()])
+        requeueMock.mockRejectedValue(new Error('Cannot retry a completed item'))
+        render(<TranscriptionQueuePage />)
+        await openHistory()
+
+        fireEvent.click(screen.getByRole('button', { name: /Retry/ }))
+
+        expect(await screen.findByText(/Cannot retry a completed item/)).toBeInTheDocument()
     })
 })
