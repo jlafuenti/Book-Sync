@@ -281,7 +281,7 @@ export function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
     const [remoteUrl, setRemoteUrl] = useState('')
     const [remoteKey, setRemoteKey] = useState('')
-    const [remoteTimeout, setRemoteTimeout] = useState(7200)
+    const [remoteTimeout, setRemoteTimeout] = useState(86400)
     const [autoTranscribe, setAutoTranscribe] = useState(false)
     const [whisperModel, setWhisperModel] = useState('medium')
     const [offhoursEnabled, setOffhoursEnabled] = useState(false)
@@ -328,7 +328,7 @@ export function TranscriptionSettingsSection() {
                 transcription_provider: provider,
                 transcription_remote_url: remoteUrl,
                 transcription_remote_key: remoteKey,
-                transcription_remote_timeout: parseInt(remoteTimeout) || 7200,
+                transcription_remote_timeout: parseInt(remoteTimeout) || 86400,
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
                 transcription_offhours_enabled: offhoursEnabled,
@@ -434,7 +434,9 @@ export function TranscriptionSettingsSection() {
                         <label className="system-form-label">Remote Timeout (s)</label>
                         <input type="number" className="input" value={remoteTimeout}
                             onChange={e => setRemoteTimeout(e.target.value)} style={{ width: 120 }} />
-                        <p className="system-form-hint">Default: 7200s (2 hours)</p>
+                        <p className="system-form-hint">Default: 86400s (24 h) — must exceed the longest
+                            transcription you expect, because the worker call blocks for the
+                            whole job</p>
                     </div>
                 </div>
             )}
