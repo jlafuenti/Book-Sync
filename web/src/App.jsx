@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { isLoggedIn, getMe, logout, getUsers } from './api'
 import { useTheme } from './ThemeContext'
@@ -30,13 +30,38 @@ import useIsMobile from './hooks/useIsMobile'
 import BottomNavBar from './components/BottomNavBar'
 import MobileTopBar from './components/MobileTopBar'
 import MobileDrawer from './components/MobileDrawer'
+import { switchToEbook } from './lib/handoff'
 
-function AppMiniPlayer() {
+// The player every route other than Home and BookDetail gets: it is mounted
+// once in the shell, outside <Routes>. Until issue #267 it passed the full
+// player no `onSwitchToEbook`, so the "Read" button — which renders only when
+// that prop is set — was missing exactly where the mini-player is the usual way
+// back in (mobile). Whether the audio->text handoff existed depended on which
+// page you had started the book from; Android always offers it for a pair.
+//
+// Neither of the two pages that already had the handoff opens the reader by
+// URL, so the shell cannot just navigate: it hands BookDetailPage the intent in
+// router state, and that page opens its reader on arrival.
+export function AppMiniPlayer() {
     const player = useAudioPlayer()
+    const navigate = useNavigate()
     const [showFullPlayer, setShowFullPlayer] = useState(false)
 
     if (!player.currentAudiobook) return null
-    if (showFullPlayer) return <AudioPlayerView onClose={() => setShowFullPlayer(false)} />
+    if (showFullPlayer) {
+        return (
+            <AudioPlayerView
+                onClose={() => setShowFullPlayer(false)}
+                onSwitchToEbook={player.pairedEbookId ? async (pairId, ebookId) => {
+                    const pos = await switchToEbook(player, pairId)
+                    setShowFullPlayer(false)
+                    navigate(`/book/ebook/${ebookId}`, {
+                        state: { openReader: true, initialChapter: pos?.epub_chapter ?? null },
+                    })
+                } : null}
+            />
+        )
+    }
     return <MiniPlayer onExpand={() => setShowFullPlayer(true)} />
 }
 
@@ -349,21 +374,35 @@ export function AppShell({ user, setUser }) {
 function App() {
     const [user, setUser] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [unreachable, setUnreachable] = useState(false)
     const { setTheme } = useTheme()
 
-    useEffect(() => {
-        if (isLoggedIn()) {
-            getMe().then(u => {
-                if (u) setTheme(u.theme || DEFAULT_THEME)
-                setUser(u)
-                setLoading(false)
-            }).catch(() => {
-                setLoading(false)
-            })
-        } else {
+    // Boot: decide between the app, the login form and the reset gate (#211).
+    //
+    // The two failures are not the same thing and must not look the same. A
+    // rejected session (401) resolves to null and belongs on the login form.
+    // A *rejected promise* means the request never got an answer — offline, DNS,
+    // a proxy that dropped the connection — and this used to fall through to
+    // the same bare login form, telling the user they had been signed out and
+    // inviting them to retype a password that would not get through either.
+    const bootstrap = useCallback(() => {
+        if (!isLoggedIn()) {
             setLoading(false)
+            return
         }
+        setLoading(true)
+        setUnreachable(false)
+        getMe().then(u => {
+            if (u) setTheme(u.theme || DEFAULT_THEME)
+            setUser(u)
+            setLoading(false)
+        }).catch(() => {
+            setUnreachable(true)
+            setLoading(false)
+        })
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => { bootstrap() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
     // The flag is only read once, at mount (issue #209). api.js announces any
     // later 403 password_reset_required; setting the flag here reuses the gate
@@ -395,6 +434,21 @@ function App() {
             <div className="loading-page">
                 <div className="spinner"></div>
                 <span>Loading Tandem...</span>
+            </div>
+        )
+    }
+
+    // The token is still good as far as we know — we just never reached the
+    // server. Keep it, say so, and offer the retry (issue #211).
+    if (!user && unreachable) {
+        return (
+            <div className="loading-page">
+                <h2>Couldn't reach the server</h2>
+                <p style={{ color: 'var(--text-muted)', maxWidth: 420, textAlign: 'center' }}>
+                    Tandem couldn't load your session. Check your connection and try again —
+                    you are still signed in.
+                </p>
+                <button className="btn btn-primary" onClick={bootstrap}>Retry</button>
             </div>
         )
     }
