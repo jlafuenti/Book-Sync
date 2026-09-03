@@ -56,7 +56,9 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS
 import com.booksync.player.AudioPlayerService
 import com.booksync.player.MediaId
+import com.booksync.player.MediaSourceSelector
 import com.booksync.player.PlaybackOffsets
+import com.booksync.player.toUri
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
 import com.google.android.gms.cast.framework.CastButtonFactory
@@ -109,11 +111,21 @@ class PlayerViewModel @Inject constructor(
     @param:ApplicationContext private val appContext: Context,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     private val coverArtHelper: com.booksync.auto.CoverArtHelper,
+    networkMonitor: com.booksync.data.util.NetworkMonitor,
+    castSessionMonitor: com.booksync.cast.CastSessionMonitor,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     /** For the cover-art fallback (issue #331); same shape as BookDetailsViewModel. */
     val serverUrl: String = serverUrlManager.currentUrl
+
+    /**
+     * The two inputs to [transportEnabled] the screen cannot work out for itself
+     * (issue #171): streaming needs a connection, and Cast needs the downloaded
+     * file because it serves the phone's copy over the LAN.
+     */
+    val isOnline: kotlinx.coroutines.flow.StateFlow<Boolean> = networkMonitor.isOnline
+    val isCasting: kotlinx.coroutines.flow.StateFlow<Boolean> = castSessionMonitor.isCasting
 
     private val pairId: Int = savedStateHandle["pairId"] ?: 0
     // audiobookId is set when launched from standalone player route (player/standalone/{audiobookId})
@@ -522,16 +534,19 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun loadAudio(pair: BookPairEntity, mediaController: MediaController) {
-        if (!pair.audiobookDownloaded) return
+        // No `if (!pair.audiobookDownloaded) return` any more (issue #171): a
+        // book that is not on the device streams from the server instead of
+        // leaving the player with nothing loaded and every control dead.
+        val audioFile = repository.localAudioFile(pair.audiobookFilename)
+        val uri = mediaUriFor(audioFile, pair.audiobookId) ?: return
 
-        val audioFile = repository.getAudiobookFile(pair)
-        if (!audioFile.exists()) return
-
-        loadCoverArt(audioFile)
+        // Only the downloaded file has embedded art to read; the streaming case
+        // falls back to the server's cover, which the screen already fetches.
+        if (audioFile != null && audioFile.isFile) loadCoverArt(audioFile)
 
         val mediaItem = MediaItem.Builder()
             .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(Uri.fromFile(audioFile))
+            .setUri(uri)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(pair.audiobookTitle)
@@ -548,7 +563,7 @@ class PlayerViewModel @Inject constructor(
 
         // Only set if not already loaded (check current media item)
         val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
-        if (currentUri != Uri.fromFile(audioFile)) {
+        if (currentUri != uri) {
             mediaController.setMediaItem(mediaItem)
             mediaController.prepare()
 
@@ -565,15 +580,16 @@ class PlayerViewModel @Inject constructor(
         audio: com.booksync.data.local.entity.AudioBookEntity,
         mediaController: MediaController,
     ) {
-        if (!audio.isDownloaded) return
-        val audioFile = repository.localAudioFile(audio.filename) ?: return
-        if (!audioFile.exists()) return
+        // Same as the paired path: not downloaded means stream, not refuse
+        // (issue #171).
+        val audioFile = repository.localAudioFile(audio.filename)
+        val uri = mediaUriFor(audioFile, audio.id) ?: return
 
-        loadCoverArt(audioFile)
+        if (audioFile != null && audioFile.isFile) loadCoverArt(audioFile)
 
         val mediaItem = MediaItem.Builder()
             .setMediaId(standaloneMediaId(audio))
-            .setUri(Uri.fromFile(audioFile))
+            .setUri(uri)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(audio.title)
@@ -586,7 +602,7 @@ class PlayerViewModel @Inject constructor(
         warmNotificationArtwork(audio.id, audio.filename, audio.coverFilename, mediaController)
 
         val currentUri = mediaController.currentMediaItem?.localConfiguration?.uri
-        if (currentUri != Uri.fromFile(audioFile)) {
+        if (currentUri != uri) {
             mediaController.setMediaItem(mediaItem)
             mediaController.prepare()
 
@@ -601,6 +617,14 @@ class PlayerViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * The downloaded file if it is there, the server's stream URL otherwise
+     * (issue #171). The single place this ViewModel turns a book into a URI;
+     * pinned by `MediaSourceWiringTest`.
+     */
+    private fun mediaUriFor(localFile: java.io.File?, audiobookId: Int): Uri? =
+        MediaSourceSelector.select(localFile, serverUrl, audiobookId)?.toUri()
 
     private fun startPositionPolling() {
         positionPollingJob?.cancel()
@@ -1039,6 +1063,15 @@ fun PlayerScreen(
     val displayAuthor = standaloneAudio?.author ?: pair?.audiobookAuthor
 
     val isDownloaded = pair?.audiobookDownloaded == true || standaloneAudio?.isDownloaded == true
+    val isOnline           by viewModel.isOnline.collectAsState()
+    val isCasting          by viewModel.isCasting.collectAsState()
+
+    // Issue #171: an undownloaded book streams, so "downloaded" is no longer the
+    // question the transport controls should be asking. The rules are pure and
+    // live in PlayerTransportState.kt — Compose is not unit-testable here.
+    val transportEnabled = transportEnabled(isDownloaded, isOnline, isCasting)
+    val canCast          = castAvailable(isDownloaded)
+    val downloadHint     = downloadHintMessage(isDownloaded, isOnline)
 
     var showSleepSheet  by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -1076,14 +1109,30 @@ fun PlayerScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.bgPrimary),
                 actions = {
-                    // Chromecast button
+                    // Chromecast button. Disabled unless the book is on the phone:
+                    // LocalCastHttpServer streams the phone's own copy over the LAN
+                    // and the receiver cannot send a Bearer header, so there is no
+                    // way to cast a streaming book (issue #171). Saying so with a
+                    // dead button and a toast beats a receiver that 401s and idles.
                     AndroidView(
                         factory = { ctx ->
                             MediaRouteButton(ctx).also { btn ->
                                 CastButtonFactory.setUpMediaRouteButton(ctx, btn)
                             }
                         },
-                        modifier = Modifier.size(48.dp),
+                        update = { btn -> btn.isEnabled = canCast },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .then(
+                                if (canCast) Modifier
+                                else Modifier.clickable {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Download this audiobook to cast it.",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            ),
                     )
                     // Switch to Reader (not available for standalone audiobooks — no paired ebook)
                     if (!isStandalone) {
@@ -1185,23 +1234,37 @@ fun PlayerScreen(
                 Text(text = author, color = colors.textSecondary, fontSize = 14.sp, textAlign = TextAlign.Center)
             }
 
-            // Download state — warning + button when not downloaded, progress bar when downloading
+            // Download state (issue #171). Not a warning any more while the book is
+            // streaming — that is the normal case, and the download is an offer:
+            // offline listening, and Cast, which serves the phone's own copy. It
+            // only turns into a warning offline, the one state where the controls
+            // really are dead.
             if (!isDownloaded) {
+                val hintIsError = !isOnline
                 Spacer(Modifier.height(10.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(Tandem.shapes.input)
-                        .background(colors.statusError.copy(alpha = 0.15f))
+                        .background(
+                            if (hintIsError) colors.statusError.copy(alpha = 0.15f)
+                            else colors.bgCard
+                        )
                         .padding(10.dp),
                 ) {
+                    val hintColor = if (hintIsError) colors.statusError else colors.textSecondary
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Warning, null, tint = colors.statusError, modifier = Modifier.size(16.dp))
+                        Icon(
+                            if (hintIsError) Icons.Default.Warning else Icons.Default.CloudDownload,
+                            null,
+                            tint = hintColor,
+                            modifier = Modifier.size(16.dp),
+                        )
                         Spacer(Modifier.size(8.dp))
                         Text(
                             if (downloadProgress != null) "Downloading audiobook…"
-                            else "Audiobook not downloaded.",
-                            color = colors.statusError,
+                            else downloadHint.orEmpty(),
+                            color = hintColor,
                             fontSize = 13.sp,
                         )
                     }
@@ -1228,7 +1291,7 @@ fun PlayerScreen(
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.size(6.dp))
-                            Text("Download Audiobook", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Download for offline", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -1242,7 +1305,7 @@ fun PlayerScreen(
                 value = progress,
                 onValueChange = { viewModel.seekTo((it * durationMs).toLong()) },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = isDownloaded,
+                enabled = transportEnabled,
                 colors = SliderDefaults.colors(
                     thumbColor = colors.accent,
                     activeTrackColor = colors.accent,
@@ -1265,13 +1328,13 @@ fun PlayerScreen(
                 // Prev chapter
                 IconButton(
                     onClick = { viewModel.skipToPreviousChapter() },
-                    enabled = isDownloaded && chapters.isNotEmpty(),
+                    enabled = transportEnabled && chapters.isNotEmpty(),
                 ) {
                     Icon(Icons.Default.SkipPrevious, "Prev chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
 
                 // Replay 30 s — matches PlaybackOffsets.SKIP_MS.
-                IconButton(onClick = { viewModel.skipBackward() }, enabled = isDownloaded) {
+                IconButton(onClick = { viewModel.skipBackward() }, enabled = transportEnabled) {
                     Icon(Icons.Default.Replay30, "Rewind 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
@@ -1280,8 +1343,8 @@ fun PlayerScreen(
                     modifier = Modifier
                         .size(64.dp)
                         .clip(CircleShape)
-                        .background(if (isDownloaded) colors.accent else colors.border)
-                        .clickable(enabled = isDownloaded) { viewModel.togglePlayback() },
+                        .background(if (transportEnabled) colors.accent else colors.border)
+                        .clickable(enabled = transportEnabled) { viewModel.togglePlayback() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -1293,14 +1356,14 @@ fun PlayerScreen(
                 }
 
                 // Forward 30 s — matches PlaybackOffsets.SKIP_MS.
-                IconButton(onClick = { viewModel.skipForward() }, enabled = isDownloaded) {
+                IconButton(onClick = { viewModel.skipForward() }, enabled = transportEnabled) {
                     Icon(Icons.Default.Forward30, "Forward 30s", tint = colors.textPrimary, modifier = Modifier.size(32.dp))
                 }
 
                 // Next chapter
                 IconButton(
                     onClick = { viewModel.skipToNextChapter() },
-                    enabled = isDownloaded && chapters.isNotEmpty(),
+                    enabled = transportEnabled && chapters.isNotEmpty(),
                 ) {
                     Icon(Icons.Default.SkipNext, "Next chapter", tint = colors.textPrimary, modifier = Modifier.size(28.dp))
                 }
@@ -1320,7 +1383,7 @@ fun PlayerScreen(
                     modifier = Modifier
                         .clip(Tandem.shapes.pill)
                         .background(colors.bgCard)
-                        .clickable(enabled = isDownloaded) { viewModel.cycleSpeed() }
+                        .clickable(enabled = transportEnabled) { viewModel.cycleSpeed() }
                         .padding(horizontal = 18.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -1330,7 +1393,7 @@ fun PlayerScreen(
                 Spacer(Modifier.width(24.dp))
 
                 // Sleep timer icon — tinted when active
-                IconButton(onClick = { showSleepSheet = true }, enabled = isDownloaded) {
+                IconButton(onClick = { showSleepSheet = true }, enabled = transportEnabled) {
                     Icon(
                         Icons.Default.NightsStay,
                         "Sleep timer",

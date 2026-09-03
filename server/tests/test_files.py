@@ -270,6 +270,52 @@ async def test_download_audiobook_accepts_full_access_token_via_header(
     assert r.content == b"audio-bytes"
 
 
+async def test_audiobook_range_with_bearer_returns_206(
+    make_user, auth_header, db, tmp_path,
+):
+    """The contract Android's streaming player depends on (issue #171).
+
+    A Bearer header and a Range request together must answer 206 with a
+    Content-Range, because Media3's OkHttpDataSource seeks by asking for byte
+    ranges and authenticates with the header — never with a `?token=` in the
+    URL, which would end up in logcat. This already passes; it is here so that a
+    future change to `_range_response` or `_resolve_media_user` cannot quietly
+    take seeking (or streaming at all) away from the phone.
+    """
+    audio_file = tmp_path / "a.m4b"
+    audio_file.write_bytes(b"0123456789")
+    book = await _make_audiobook(db, audio_file)
+    user = await make_user(username="streamer", role="user")
+
+    headers = {**auth_header(user), "Range": "bytes=2-5"}
+    async with _files_client() as client:
+        r = await client.get(f"/api/files/audiobook/{book.id}", headers=headers)
+
+    assert r.status_code == 206
+    assert r.headers["content-range"] == "bytes 2-5/10"
+    assert r.headers["accept-ranges"] == "bytes"
+    assert r.headers["content-length"] == "4"
+    assert r.content == b"2345"
+
+
+async def test_audiobook_open_ended_range_with_bearer_streams_to_the_end(
+    make_user, auth_header, db, tmp_path,
+):
+    """`bytes=N-` is what a player sends to resume mid-book."""
+    audio_file = tmp_path / "a.m4b"
+    audio_file.write_bytes(b"0123456789")
+    book = await _make_audiobook(db, audio_file)
+    user = await make_user(username="streamer2", role="user")
+
+    headers = {**auth_header(user), "Range": "bytes=7-"}
+    async with _files_client() as client:
+        r = await client.get(f"/api/files/audiobook/{book.id}", headers=headers)
+
+    assert r.status_code == 206
+    assert r.headers["content-range"] == "bytes 7-9/10"
+    assert r.content == b"789"
+
+
 async def test_download_audiobook_accepts_scoped_media_token_via_query(
     make_user, db, tmp_path,
 ):
