@@ -108,7 +108,7 @@ machine-specific config:
 
 ```properties
 tandem.defaultServerUrl=https://tandem.example.com
-tandem.cleartextHosts=192.168.1.10
+tandem.cleartextHosts=192.0.2.10
 ```
 
 A Gradle property overrides the file, for CI or a one-off build:

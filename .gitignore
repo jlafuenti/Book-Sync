@@ -88,6 +88,7 @@ data/
 
 # Android Gradle cache and build output (incl. Kover coverage reports)
 android/.gradle/
+android/.kotlin/
 android/build/
 android/app/build/
 

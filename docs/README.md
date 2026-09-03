@@ -36,12 +36,3 @@ or if a link here points at a file that does not exist.
 |---|---|
 | [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |
-
-## Historical
-
-Kept for the reasoning they record, not as current documentation. Where they disagree with the
-pages above, the pages above win.
-
-| Doc | Covers |
-|---|---|
-| [handoff-position-sync.md](handoff-position-sync.md) | Session handoff note from the position-sync redesign (issues #61/#40) — the three root causes and what was fixed. The rules it produced are stated normatively in [position-sync-contract.md](position-sync-contract.md) |

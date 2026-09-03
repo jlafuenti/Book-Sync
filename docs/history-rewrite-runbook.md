@@ -54,10 +54,15 @@ it to filter-repo:
 
 ```bash
 cat > /tmp/mailmap <<'EOF'
-Jesse <jlafuenti@users.noreply.github.com> <owner@example.com>
+<new-email> <old-email>
 EOF
 git filter-repo --mailmap /tmp/mailmap
 ```
+
+One line per address to rewrite: the replacement address first, the address as it
+appears in the existing commits second (`Name <new> <old>` if you also want the
+author name normalized). Check what is actually in the history first with
+`git log --format='%an <%ae>' | sort -u`.
 
 ## Push
 

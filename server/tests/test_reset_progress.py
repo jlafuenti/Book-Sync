@@ -7,7 +7,8 @@ The canonical record now lives in `bookmarks` (see
 written in the same transaction. The reset endpoint used to delete only
 `UserProgress` rows and never touch the canonical `Bookmark` — so the very
 next write re-seeded `user_progress` from the still-present bookmark and
-"reset" silently un-reset itself (issue #6, docs/handoff-position-sync.md).
+"reset" silently un-reset itself (issue #6; the rules are in
+`docs/position-sync-contract.md`).
 """
 
 from sqlalchemy import select
