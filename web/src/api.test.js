@@ -1327,3 +1327,33 @@ describe('fetchWithAuth — 401 refresh (issue #268)', () => {
         expect(calls.refresh).toBe(0)
     })
 })
+
+
+describe('requeueQueueItem() (issue #247)', () => {
+    it('POSTs to the item requeue endpoint and returns the new item', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: 9, status: 'pending' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { requeueQueueItem } = await import('./api')
+        const result = await requeueQueueItem(7)
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/transcription/queue/7/requeue',
+            expect.objectContaining({ method: 'POST' }),
+        )
+        // A *new* row, not the one that was retried — the failure stays in History.
+        expect(result).toEqual({ id: 9, status: 'pending' })
+    })
+
+    it('surfaces the server-provided reason on failure', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 409,
+            json: async () => ({ detail: 'Cannot retry a completed item' }),
+        }))
+
+        const { requeueQueueItem } = await import('./api')
+        await expect(requeueQueueItem(7)).rejects.toThrow('Cannot retry a completed item')
+    })
+})
