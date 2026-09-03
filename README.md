@@ -6,7 +6,7 @@ and keeps a single position in sync across devices.
 
 > **A note on the name.** The project used to be called BookSync and still answers to it in places
 > that are expensive to rename: the Android package `com.booksync`, the Postgres role/database
-> `booksync`, the `booksync_db`/`booksync_data` docker volumes, `booksync-db-*.dump` backup files,
+> `booksync`, the `booksync_db` docker volume, `booksync-db-*.dump` backup files,
 > and the repo slug `Book-Sync`. Those are identifiers, not branding — leave them alone. Everything
 > a user reads says Tandem. The Android one is not merely expensive but *permanent*: Play binds an
 > app's identity to the `applicationId` of its first uploaded bundle, so once Tandem ships,
@@ -59,10 +59,13 @@ conflicts with future pulls:
 
 ```bash
 cp docker-compose.example.yml docker-compose.yml
+cp .env.example .env
 ```
 
 Edit `docker-compose.yml`: the ebook/audiobook/backup volume mounts, and the mandatory variables in
-the table below. Then:
+the table below. Edit `.env`: set `POSTGRES_PASSWORD` — compose interpolates it into both the `db`
+service and the server's `DATABASE_URL`, and Postgres refuses to initialise if it is empty. Both
+files are gitignored. Then:
 
 ```bash
 docker compose up --build
@@ -100,7 +103,9 @@ schema step. **An existing database created before Alembic must be stamped once*
 ### Environment variables
 
 Set in the `server` service's `environment:` block. Everything the server reads lives in
-[`server/config.py`](server/config.py).
+[`server/config.py`](server/config.py). The one exception is `POSTGRES_PASSWORD`: it is a compose
+*interpolation* variable, read from a `.env` file next to `docker-compose.yml` (copy
+[`.env.example`](.env.example)) and substituted into both the `db` service and `DATABASE_URL`.
 
 **Mandatory** — with `APP_ENV=prod` (the default) the server *refuses to start* without these:
 
@@ -173,19 +178,10 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 
 ## Documentation
 
-| Doc | Covers |
-|---|---|
-| [docs/library-conventions.md](docs/library-conventions.md) | Supported formats, folder/filename patterns, metadata precedence, auto-pairing rules, format conversion |
-| [docs/import-sources.md](docs/import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
-| [docs/transcription.md](docs/transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
-| [docs/android.md](docs/android.md) | Building the app, pointing it at your server, downloads/offline, Android Auto |
-| [docs/play-listing.md](docs/play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
-| [docs/operations.md](docs/operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, restart policies |
-| [docs/backup-restore.md](docs/backup-restore.md) | Backup schedule, restore procedure, test drills |
-| [docs/position-sync-contract.md](docs/position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |
-| [docs/web-pwa.md](docs/web-pwa.md) | Web app as a PWA: lock-screen controls, home-screen install, service-worker caching policy |
-| [docs/testing.md](docs/testing.md) | Test suites, fixtures, coverage policy |
-| [jetson/README.md](jetson/README.md) | Deploying the remote transcription worker |
+Full index with one line per document: **[docs/README.md](docs/README.md)**. Start there for the
+library conventions, transcription, Android and web-PWA guides, the operations and backup runbooks,
+the testing policy, and the position-sync contract. Deploying the remote transcription worker is
+[jetson/README.md](jetson/README.md).
 
 ## Development & tests
 
