@@ -50,6 +50,10 @@ per `(bookmark, device, kind)`:
 | `readium_locator` | Android | No — encodes how that device rendered the page |
 | `epubjs_cfi` | web | Yes — derived from the EPUB DOM |
 
+A write that carries no `device_id` files its hint under the reserved device
+`unattributed` and never touches an identified device's row — the key is the
+device that made *that* write, not the last one to identify itself.
+
 A hint is **current** iff `hint.anchor_revision == bookmark.anchor_revision`.
 `anchor_revision` bumps when a text anchor changes, and deliberately **not** on
 audio movement alone — audio drifting on doesn't move the page.

@@ -195,6 +195,72 @@ async def test_two_devices_keep_independent_hints(client, make_user, auth_header
     assert all(h["current"] for h in hints)
 
 
+async def test_a_write_without_device_id_does_not_overwrite_an_identified_devices_hint(
+    client, make_user, auth_header, db
+):
+    """An anonymous write files its hint under `unattributed` (issue #251).
+
+    The hint used to be keyed on `bookmark.device_id` — the *last* device to
+    identify itself, which survives an anonymous write — so a scripted or
+    third-party client with no `device_id` overwrote whichever real device
+    wrote before it. That is exactly what the per-device table exists to
+    prevent, and for a Readium locator it means handing phone A a page another
+    writer rendered.
+    """
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+    other_locator = '{"href":"ch12.xhtml","locations":{"progression":0.9}}'
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, device_id="a", device_name="Phone A",
+        hint={"kind": "readium_locator", "value": LOCATOR},
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, device_id=None, device_name=None,
+        hint={"kind": "readium_locator", "value": other_locator},
+        captured_at="2026-07-30T11:00:00Z",
+    )
+
+    hints = (await _get(client, user, auth_header, "pair", pair.id)).json()["hints"]
+    by_device = {h["device_id"]: h["value"] for h in hints}
+    assert by_device == {"a": LOCATOR, "unattributed": other_locator}
+
+
+async def test_unattributed_hint_is_not_served_to_an_identified_device(
+    client, make_user, auth_header, db
+):
+    """The consequence the key fixes: the restore ladder for device "a" plans
+    from A's own locator, never the anonymous writer's."""
+    from services.position_resolver import plan_restore
+
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+    other_locator = '{"href":"ch12.xhtml","locations":{"progression":0.9}}'
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, device_id="a", device_name="Phone A",
+        hint={"kind": "readium_locator", "value": LOCATOR},
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=12, device_id=None, device_name=None,
+        hint={"kind": "readium_locator", "value": other_locator},
+        captured_at="2026-07-30T11:00:00Z",
+    )
+
+    position = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    steps = plan_restore(
+        position, spine_count=40, device_id="a", hint_kind="readium_locator"
+    )
+    assert steps[0].kind == "hint"
+    assert steps[0].value == LOCATOR
+
+
 async def test_re_saving_the_same_anchor_does_not_bump_the_revision(
     client, make_user, auth_header, db
 ):

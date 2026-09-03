@@ -113,7 +113,7 @@
 .admin-filter-pill-btn.active {
     border-color: var(--accent);
     color: var(--accent);
-    background: var(--accent-bg, rgba(124, 58, 237, 0.08));
+    background: var(--accent-light);
 }
 
 .admin-filter-pill-btn svg {

@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,6 +58,7 @@ import com.booksync.ui.components.CardOverflowMenu
 import com.booksync.ui.components.EmptyState
 import com.booksync.ui.components.OverflowActions
 import com.booksync.ui.components.OverflowTarget
+import com.booksync.ui.components.VersionMismatchBanner
 import com.booksync.ui.theme.Tandem
 
 /**
@@ -148,12 +150,20 @@ fun HomeScreen(
         },
         containerColor = colors.bgPrimary,
     ) { padding ->
+        // Issue #174. Home is the first screen with both a server and a session,
+        // and the only one a returning user reaches without passing through
+        // login — so this is where a version mismatch has to be able to surface.
+        val versionBanner by viewModel.versionBanner.collectAsState()
+
         if (allEmpty) {
             val webAppUrl by viewModel.webAppUrl.collectAsState()
-            HomeEmptyState(
-                webAppUrl = webAppUrl,
-                modifier = Modifier.padding(padding).fillMaxSize(),
-            )
+            Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+                VersionMismatchBanner(versionBanner)
+                HomeEmptyState(
+                    webAppUrl = webAppUrl,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             return@Scaffold
         }
 
@@ -164,6 +174,10 @@ fun HomeScreen(
             contentPadding = PaddingValues(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (versionBanner != null) {
+                item { VersionMismatchBanner(versionBanner) }
+            }
+
             if (continueItems.isNotEmpty()) {
                 item {
                     SectionHeader(

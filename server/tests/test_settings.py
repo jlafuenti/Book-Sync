@@ -79,6 +79,21 @@ async def test_update_persists_and_casts_typed_value(make_client, make_user, aut
     assert val == 500 and isinstance(val, int)
 
 
+async def test_remote_timeout_below_the_floor_is_rejected(make_client, make_user, auth_header):
+    """Issue #248: the stored value is honoured now, so a typo would abandon
+    every job seconds in. Reject it at the door and write nothing."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"transcription_remote_timeout": 5, "whisper_model": "small"})
+        assert put.status_code == 422
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    # A rejected PUT is all-or-nothing: the valid key alongside it is not saved.
+    assert body["transcription_remote_timeout"] == 86400
+    assert body["whisper_model"] == "medium"
+
+
 async def test_backup_settings_round_trip_with_types(make_client, make_user, auth_header):
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:

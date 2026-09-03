@@ -179,7 +179,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                                                 style={{
                                                     cursor: 'pointer',
                                                     backgroundColor: selected[d.field] === 'ebook' ? 'var(--bg-card-hover)' : 'transparent',
-                                                    border: selected[d.field] === 'ebook' ? '2px solid var(--primary)' : '2px solid transparent',
+                                                    border: selected[d.field] === 'ebook' ? '2px solid var(--accent)' : '2px solid transparent',
                                                     borderRadius: '4px',
                                                     padding: '8px'
                                                 }}
@@ -195,7 +195,7 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                                                 style={{
                                                     cursor: 'pointer',
                                                     backgroundColor: selected[d.field] === 'audiobook' ? 'var(--bg-card-hover)' : 'transparent',
-                                                    border: selected[d.field] === 'audiobook' ? '2px solid var(--primary)' : '2px solid transparent',
+                                                    border: selected[d.field] === 'audiobook' ? '2px solid var(--accent)' : '2px solid transparent',
                                                     borderRadius: '4px',
                                                     padding: '8px'
                                                 }}
