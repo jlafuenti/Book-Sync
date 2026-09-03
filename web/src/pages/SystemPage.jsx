@@ -7,7 +7,8 @@ import {
     convertUnsupportedFile, convertAllUnsupportedFiles, deleteUnsupportedSource,
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
     getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
-    getBackupStatus, listBackups, restoreBackup, createBackup, deleteBackup, downloadBackup
+    getBackupStatus, listBackups, restoreBackup, createBackup, deleteBackup, downloadBackup,
+    getUsers,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
@@ -1322,6 +1323,21 @@ function SystemPage({ tab }) {
         if (!showUnsupported && canAdmin) loadStatus()
     }, [showUnsupported, canAdmin, loadStatus])
 
+    // Pending registrations (issue #282). Kept out of `loadStatus`'s
+    // Promise.all deliberately: this is a convenience count, and a 403 or an
+    // outage on it must not blank the disk/library/queue dashboard behind
+    // "Failed to load system status".
+    const [pendingUsers, setPendingUsers] = useState(0)
+    useEffect(() => {
+        if (showUnsupported || !canAdmin) return
+        let cancelled = false
+        Promise.resolve()
+            .then(() => getUsers('pending'))
+            .then(list => { if (!cancelled) setPendingUsers(list.length) })
+            .catch(() => {})
+        return () => { cancelled = true }
+    }, [showUnsupported, canAdmin])
+
     const totalBooks = counts ? counts.ebooks + counts.audiobooks : 0
     const pairRate = counts ? Math.round(counts.pairs / Math.max(counts.ebooks, 1) * 100) : 0
 
@@ -1405,6 +1421,17 @@ function SystemPage({ tab }) {
                             value={counts.pendingQueue}
                             sub={counts.inProgressQueue > 0 ? `${counts.inProgressQueue} processing now` : 'Queue is idle'}
                         />
+                        {/* Only when there is something to act on (#282): a
+                            standing "0" is noise on a dashboard read at a glance. */}
+                        {pendingUsers > 0 && (
+                            <StatBadgeCard
+                                icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="8.5" cy="7" r="4" /><line x1="20" y1="8" x2="20" y2="14" /><line x1="23" y1="11" x2="17" y2="11" /></svg>}
+                                color="amber"
+                                label="Pending User Requests"
+                                value={pendingUsers}
+                                sub="Approve or reject in User Management below"
+                            />
+                        )}
                     </div>
 
                     {/* Calibre + Unsupported side by side */}

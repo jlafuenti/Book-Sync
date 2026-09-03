@@ -11,6 +11,7 @@ Endpoints:
   DELETE /queue/{item_id}   — Remove a queue item
   PUT  /queue/{item_id}/priority — Change priority of a queue item
   POST /queue/{item_id}/run-now  — Dispatch now, bypassing the off-hours window
+  POST /queue/{item_id}/requeue  — Retry a failed/cancelled item (#247)
   GET  /offhours            — Current off-hours window state (#106)
 """
 
@@ -309,6 +310,60 @@ async def run_queue_item_now(
         .where(BookPair.id == item.book_pair_id)
     )
     return _queue_item_to_response(item, pair_result.scalar_one_or_none())
+
+
+@router.post("/queue/{item_id}/requeue", response_model=QueueItemResponse)
+async def requeue_queue_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    # Editor floor, matching /start and /cancel (#207): a retry spends the GPU
+    # for hours, so it sits at the same rung as starting a job for the first
+    # time rather than at the admin-only queue-plumbing controls.
+    _: User = Depends(get_editor_user),
+):
+    """
+    Retry a finished-but-unsuccessful queue item (issue #247).
+
+    Goes through `add_to_queue`, the path every other entry point uses, so the
+    result is a *new* pending row. The failed row stays in History as the
+    record of what went wrong — reviving it in place would erase that, and
+    `reset_stale_items`/`run-now` both assume a freshly created row anyway.
+    """
+    result = await db.execute(
+        select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+    if item.status not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry a {item.status} item — only failed or cancelled jobs can be retried.",
+        )
+
+    pair_id = item.book_pair_id
+
+    from services.queue_manager import add_to_queue, get_queue_item_for_pair
+    created = await add_to_queue([pair_id])
+
+    if created:
+        new_item = created[0]
+    else:
+        # `add_to_queue` skips a pair that already has a pending/in_progress
+        # row, which makes a double-click idempotent rather than an error.
+        new_item = await get_queue_item_for_pair(pair_id)
+        if not new_item:
+            raise HTTPException(
+                status_code=409,
+                detail="Could not requeue this book — its pair no longer exists.",
+            )
+
+    pair_result = await db.execute(
+        select(BookPair)
+        .options(selectinload(BookPair.ebook))
+        .where(BookPair.id == pair_id)
+    )
+    return _queue_item_to_response(new_item, pair_result.scalar_one_or_none())
 
 
 @router.get("/offhours", response_model=OffHoursStatusResponse)

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
@@ -24,10 +24,15 @@ vi.mock('./pages/SystemPage', () => ({ default: () => <div>system-stub</div> }))
 vi.mock('./pages/TroubleshootPage', () => ({ default: () => <div>troubleshoot-stub</div> }))
 vi.mock('./pages/ImportSourcesPage', () => ({ default: () => <div>import-sources-stub</div> }))
 
-const { logoutMock } = vi.hoisted(() => ({ logoutMock: vi.fn().mockResolvedValue(undefined) }))
+const { logoutMock, getUsersMock } = vi.hoisted(() => ({
+    logoutMock: vi.fn().mockResolvedValue(undefined),
+    // The pending-registration badge (issue #282) reads the admin user list on
+    // mount; every AppShell render in this file goes through it.
+    getUsersMock: vi.fn().mockResolvedValue([]),
+}))
 vi.mock('./api', async (importOriginal) => {
     const actual = await importOriginal()
-    return { ...actual, logout: logoutMock }
+    return { ...actual, logout: logoutMock, getUsers: getUsersMock }
 })
 
 // AuthProvider is load-bearing: without it `hasMinRole` comes from the context
@@ -212,6 +217,57 @@ describe('AppShell — the System nav entry follows the gate', () => {
     it('is shown to an admin, pointing at status', () => {
         renderShell({ username: 'x', role: 'admin' })
         expect(screen.getByTitle('System').getAttribute('href')).toBe('/system/status')
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Issue #282: with ALLOW_PUBLIC_REGISTRATION on, strangers create pending
+// accounts and an admin only notices by opening System -> Users. The count is
+// one admin-only query away, so it rides on the nav entry that leads there.
+//
+// Admin-only because GET /api/users/?filter=pending is: firing it from an
+// editor's session would buy a 403 and nothing else.
+// ---------------------------------------------------------------------------
+
+describe('AppShell — pending-registration badge (issue #282)', () => {
+    const pending = (n) => Array.from({ length: n }, (_, i) => ({ id: i, username: `u${i}`, is_active: false }))
+
+    beforeEach(() => {
+        getUsersMock.mockReset().mockResolvedValue([])
+    })
+
+    it('shows the count on the System nav entry for an admin', async () => {
+        getUsersMock.mockResolvedValue(pending(2))
+        renderShell({ username: 'x', role: 'admin' })
+
+        await waitFor(() => expect(screen.getByTitle('System')).toHaveTextContent('2'))
+        expect(getUsersMock).toHaveBeenCalledWith('pending')
+    })
+
+    it('shows nothing when there are no pending requests', async () => {
+        getUsersMock.mockResolvedValue([])
+        renderShell({ username: 'x', role: 'admin' })
+
+        await waitFor(() => expect(getUsersMock).toHaveBeenCalled())
+        expect(screen.queryByTestId('pending-users-badge')).toBeNull()
+    })
+
+    it('does not ask at all from an editor session, which would only 403', async () => {
+        renderShell({ username: 'x', role: 'editor' })
+
+        await new Promise(r => setTimeout(r, 0))
+        expect(getUsersMock).not.toHaveBeenCalled()
+        expect(screen.getByTitle('System')).not.toHaveTextContent('2')
+    })
+
+    it('stays quiet when the count cannot be read', async () => {
+        getUsersMock.mockRejectedValue(new Error('boom'))
+        renderShell({ username: 'x', role: 'admin' })
+
+        await waitFor(() => expect(getUsersMock).toHaveBeenCalled())
+        expect(screen.queryByTestId('pending-users-badge')).toBeNull()
+        expect(screen.getByTitle('System')).toBeInTheDocument()
     })
 })
 
