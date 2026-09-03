@@ -455,6 +455,29 @@ export async function changePassword(oldPassword, newPassword) {
     return resp.json();
 }
 
+/**
+ * Delete the signed-in account and everything belonging to it (issue #146).
+ *
+ * The server answers 204 and there is no body to read. The password travels in
+ * the request body, not the query string, so it stays out of the access log and
+ * out of any proxy in between.
+ *
+ * On success the tokens are cleared here rather than by the caller: they now
+ * describe an account that does not exist, and every later request would 401
+ * and then fail its refresh. On a refusal they are kept — 403 (wrong password)
+ * and 409 (last active superadmin) both leave the account intact and the user
+ * still signed in, and `errorMessage` surfaces the server's own sentence, which
+ * is the only thing that says which of the two happened.
+ */
+export async function deleteAccount(password) {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/me`, {
+        method: 'DELETE',
+        body: JSON.stringify({ password }),
+    });
+    if (!resp.ok) throw new Error(await errorMessage(resp, 'Failed to delete account'));
+    clearTokens();
+}
+
 // ============ User Management (Admin) ============
 
 export async function getUsers(filter) {

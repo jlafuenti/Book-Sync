@@ -1667,3 +1667,63 @@ describe('register() — error bodies', () => {
             .rejects.toThrow('Username already exists')
     })
 })
+
+describe('deleteAccount() (issue #146)', () => {
+    // Play requires an in-app account-deletion path; this is the web half of it.
+    // Two properties matter here and nowhere else: the password must travel in
+    // the *body* (a query string would land it in the access log and every proxy
+    // in between), and the local tokens must survive a refusal — 403 and 409
+    // both leave the account intact and the user still signed in.
+    it('sends the password in the body and clears the tokens on 204', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204 })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { deleteAccount, isLoggedIn } = await import('./api')
+        await deleteAccount('hunter2')
+
+        const [url, init] = fetchMock.mock.calls[0]
+        expect(url).toBe('/api/auth/me')
+        expect(init.method).toBe('DELETE')
+        expect(JSON.parse(init.body)).toEqual({ password: 'hunter2' })
+
+        expect(isLoggedIn()).toBe(false)
+        expect(localStorage.getItem('tandem_token')).toBeNull()
+        expect(localStorage.getItem('tandem_refresh')).toBeNull()
+    })
+
+    it('keeps the session and surfaces the detail when the password is wrong', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            jsonErrorResponse(403, 'Password is incorrect'),
+        ))
+
+        const { deleteAccount, isLoggedIn } = await import('./api')
+
+        await expect(deleteAccount('wrong')).rejects.toThrow('Password is incorrect')
+        expect(isLoggedIn()).toBe(true)
+    })
+
+    it('surfaces the last-superadmin refusal verbatim', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const detail = 'You are the last active superadmin.'
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonErrorResponse(409, detail)))
+
+        const { deleteAccount } = await import('./api')
+
+        await expect(deleteAccount('hunter2')).rejects.toThrow(detail)
+    })
+
+    it('reports the status when a proxy answers with HTML', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlErrorResponse(502)))
+
+        const { deleteAccount } = await import('./api')
+
+        await expect(deleteAccount('hunter2'))
+            .rejects.toThrow('Failed to delete account (502)')
+    })
+})
