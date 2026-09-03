@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { getNewItems, acknowledgeNewItems, uploadEbookCover, uploadAudiobookCover, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import { useAuth } from '../contexts/AuthContext'
+// Server timestamps are naive UTC — parse via the shared helper (issue #216).
+import { formatDate } from '../lib/datetime'
 
 function formatSize(bytes) {
     if (!bytes) return '—'
@@ -10,10 +12,6 @@ function formatSize(bytes) {
     return (bytes / 1024).toFixed(0) + ' KB'
 }
 
-function formatDate(dt) {
-    if (!dt) return '—'
-    return new Date(dt).toLocaleDateString()
-}
 
 // Defined outside so React never sees it as a new component type on re-render
 function BookTable({ items, type, selected, onCheck, canEdit, onEdit }) {

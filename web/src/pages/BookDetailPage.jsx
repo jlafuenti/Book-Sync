@@ -8,6 +8,7 @@ import { AudioPlayerView } from '../components/AudioPlayer'
 import CoverImg from '../components/CoverImg'
 import { useAuth } from '../contexts/AuthContext'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
+import { formatDateTime } from '../lib/datetime'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -34,9 +35,10 @@ function positionTarget(book, mediaType, mediaId) {
     return book?.pair_id ? ['pair', book.pair_id] : [mediaType, mediaId]
 }
 
+// Server timestamps are naive UTC — parse them through the shared helper
+// (issue #216), never through a bare `new Date()`.
 function formatDate(iso) {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleDateString('en-US', {
+    return formatDateTime(iso, {
         year: 'numeric', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit'
     })

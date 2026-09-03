@@ -233,6 +233,27 @@ otherwise one layer rejects uploads another would have accepted.
 | `/data/imports` | ACSM import staging | Inbox / processed / failed subfolders |
 | `/backups` | nightly dumps | Retention is configurable in System → Backups. **Put this on a different disk than the DB** |
 
+### Exactly one mount per container path
+
+`docker-compose.example.yml` binds `./data:/data/app`, and that must stay the *only* mount
+targeting `/data/app`. Compose accepts a second source on the same container path — a named volume
+plus the bind, say — but only one can be in effect. The other becomes an invisible copy: covers and
+`logs/server.log` written to whichever is live, backups restored into whichever is not, and
+removing the "wrong" line later silently swaps the whole directory.
+
+To check an existing deployment:
+
+```bash
+docker inspect -f '{{json .Mounts}}' book-sync-server-1 | python3 -m json.tool
+```
+
+If two entries share `"Destination": "/data/app"`, copy anything unique out of the inactive source,
+delete that line from `docker-compose.yml`, and `docker compose up -d`.
+
+`./data` is a bind mount **inside the git checkout** (`data/` is gitignored, so nothing leaks, but
+it is still there). Never run `git clean -xfd` in the checkout during an upgrade — it deletes the
+covers, working files and logs along with the untracked build junk you meant to remove.
+
 ## Users
 
 The first account is the superadmin created on first boot. Additional users register themselves
@@ -241,3 +262,15 @@ The first account is the superadmin created on first boot. Additional users regi
 
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.
+
+### Audit log retention
+
+Security-relevant events (logins, failed logins, lockouts, role and password changes) go to the
+`audit_logs` table, readable by admins in the user-management Audit Log tab. Each row holds a user id, the
+client IP and a short description — on a failed login that description includes the username that
+was typed — so it is the most personal table in every nightly dump.
+
+Rows are deleted once they are older than **`audit_log_retention_days`, which defaults to 90**.
+Set it to `0` to keep the log forever. The value lives in system settings (`PUT /api/settings/`,
+admin only) and the prune runs on the backup scheduler's tick (every 10 minutes), so a change
+takes effect without a restart. The `details` text is capped at 500 characters at write time.

@@ -56,6 +56,11 @@ vi.mock('../components/EnhancedMetadataModal', () => ({ default: () => <div data
 vi.mock('../components/BulkMatchModal', () => ({ default: () => null }))
 vi.mock('../components/MetadataCleanupModal', () => ({ default: () => null }))
 
+// Mobile vs desktop is driven by useIsMobile; a per-test flag keeps the
+// desktop tests below unchanged while the mobile ones (issue #213) flip it.
+const { isMobileMock } = vi.hoisted(() => ({ isMobileMock: vi.fn(() => false) }))
+vi.mock('../hooks/useIsMobile', () => ({ default: () => isMobileMock() }))
+
 const ebook = (id, extra = {}) => ({
     id, title: `Ebook ${id}`, author: 'Author A', series: null, series_index: null, format: 'epub',
     cover_path: null, uploaded_at: '2026-01-01T00:00:00Z', file_size: 100, acknowledged: true, ...extra,
@@ -110,6 +115,7 @@ beforeEach(() => {
     getAllProgressMock.mockReset().mockResolvedValue([])
     acknowledgeNewItemsMock.mockReset().mockResolvedValue({})
     acknowledgeNewPairsMock.mockReset().mockResolvedValue({})
+    isMobileMock.mockReset().mockReturnValue(false)
     observers = []
     // jsdom has no IntersectionObserver; capture the callback so a test can
     // "scroll the sentinel into view".
@@ -246,5 +252,60 @@ describe('LibraryPage server-driven browse (issue #120)', () => {
         getLibraryFacetsMock.mockResolvedValue({ ...FACETS, counts: { ...FACETS.counts, ebooks: 0, audiobooks: 0 } })
         renderPage()
         expect(await screen.findByText('No books yet')).toBeInTheDocument()
+    })
+})
+
+// Issue #213: on mobile the only search control is the box on the page, so it
+// must be the same URL-backed control the desktop global bar is. A `?search=`
+// in the URL (shared link, or a rotation past the 768px breakpoint) used to
+// leave the box empty, inert and impossible to clear.
+describe('LibraryPage mobile search is URL-backed (issue #213)', () => {
+    beforeEach(() => {
+        isMobileMock.mockReturnValue(true)
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3)], 1))
+    })
+
+    const mobileInput = () => screen.getByLabelText('Search books')
+
+    it('seeds the mobile input from ?search= in the URL', async () => {
+        renderPage('/library?search=dune')
+        await screen.findByText('Ebook 3')
+
+        expect(mobileInput()).toHaveValue('dune')
+        await waitFor(() => expect(lastQuery()).toEqual(expect.objectContaining({ q: 'dune' })))
+    })
+
+    it('typing in the mobile input writes ?search= and reaches the server as q', async () => {
+        renderPage('/library?search=dune')
+        await screen.findByText('Ebook 3')
+
+        fireEvent.change(mobileInput(), { target: { value: 'frank' } })
+
+        expect(mobileInput()).toHaveValue('frank')
+        expect(screen.getByTestId('location').textContent).toContain('search=frank')
+        await waitFor(() => expect(lastQuery()).toEqual(expect.objectContaining({ q: 'frank' })))
+    })
+
+    it('the clear button drops ?search= and the next query has no q', async () => {
+        renderPage('/library?search=dune&tab=ebooks')
+        await screen.findByText('Ebook 3')
+        await waitFor(() => expect(lastQuery()).toEqual(expect.objectContaining({ q: 'dune' })))
+
+        fireEvent.click(screen.getByLabelText('Clear search'))
+
+        expect(mobileInput()).toHaveValue('')
+        expect(screen.getByTestId('location').textContent).not.toContain('search=')
+        expect(screen.getByTestId('location').textContent).toContain('tab=ebooks')
+        await waitFor(() => expect(lastQuery().q).toBeUndefined())
+    })
+
+    it('clearing the input itself also drops ?search=', async () => {
+        renderPage('/library?search=dune')
+        await screen.findByText('Ebook 3')
+
+        fireEvent.change(mobileInput(), { target: { value: '' } })
+
+        expect(screen.getByTestId('location').textContent).not.toContain('search=')
+        await waitFor(() => expect(lastQuery().q).toBeUndefined())
     })
 })

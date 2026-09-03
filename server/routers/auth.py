@@ -172,6 +172,11 @@ get_editor_user = require_role("editor")
 # Audit log helper
 # ---------------------------------------------------------------------------
 
+# Hard cap on the audit `details` column at write time (issue #261). The column
+# is `Text`, so nothing in the schema bounds it.
+AUDIT_DETAILS_MAX_CHARS = 500
+
+
 async def log_audit(
     db: AsyncSession,
     action: str,
@@ -180,8 +185,15 @@ async def log_audit(
     details: Optional[str] = None,
     ip_address: Optional[str] = None,
 ):
-    """Record a security-relevant event in the audit log."""
+    """Record a security-relevant event in the audit log.
+
+    `details` is truncated to AUDIT_DETAILS_MAX_CHARS here rather than at each
+    call site: some of it is attacker-supplied (a failed login embeds the
+    username that was typed) and the column is an uncapped `Text` — issue #261.
+    """
     from models.audit_log import AuditLog
+    if details is not None and len(details) > AUDIT_DETAILS_MAX_CHARS:
+        details = details[: AUDIT_DETAILS_MAX_CHARS - 1] + "…"
     entry = AuditLog(
         user_id=user_id,
         action=action,

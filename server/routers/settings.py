@@ -66,6 +66,8 @@ DEFAULT_SETTINGS = {
     "transcription_provider": "remote_with_fallback",
     "transcription_remote_url": "",
     "transcription_remote_key": "",
+    # Must match transcription_providers.DEFAULT_REMOTE_TIMEOUT_SEC, which owns
+    # the knob's semantics (issue #248).
     "transcription_remote_timeout": 86400,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium",
@@ -87,6 +89,10 @@ DEFAULT_SETTINGS = {
     "backup_hour": 3,
     "backup_keep_daily": 14,
     "backup_keep_monthly": 6,
+    # Audit-log retention in days (issue #261) — owned by
+    # services/audit_retention.py. Default must match
+    # audit_retention.DEFAULT_RETENTION_DAYS. 0 means keep forever.
+    "audit_log_retention_days": 90,
 }
 
 @router.get("/", response_model=Dict[str, Any])
@@ -155,6 +161,29 @@ async def update_settings(
             offhours.validate_settings(new_settings, stored=stored)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    # The remote timeout is honoured as stored since #248, so a typo here would
+    # abandon every transcription seconds in. Rejected before anything is
+    # written, so a bad value takes the rest of the PUT down with it.
+    if "transcription_remote_timeout" in new_settings:
+        from services.transcription_providers import MIN_REMOTE_TIMEOUT_SEC
+
+        try:
+            timeout = int(new_settings["transcription_remote_timeout"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail="transcription_remote_timeout must be a whole number of seconds",
+            )
+        if timeout < MIN_REMOTE_TIMEOUT_SEC:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"transcription_remote_timeout must be at least "
+                    f"{MIN_REMOTE_TIMEOUT_SEC}s — the worker request blocks for "
+                    f"the whole transcription, so a short timeout fails every job"
+                ),
+            )
 
     for key, value in new_settings.items():
         # Route abs_api_token through the encrypted credential store. An empty

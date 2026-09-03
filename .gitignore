@@ -104,6 +104,13 @@ android/app/src/test/resources/sync_parity/
 # Playwright MCP snapshots/screenshots
 .playwright-mcp/
 
+# Agent-workflow plans and specs. Five of these shipped under docs/ as if they
+# were documentation, describing work that had already landed and contradicting
+# the current testing rules (issue #241). Plans belong in the issue/PR; docs/ is
+# for documentation. Pinned from the other side by
+# server/tests/test_docs_contract.py.
+docs/superpowers/
+
 # Backup/scratch copies of config files carry exactly the same secrets as the
 # original, but the rules above match `/docker-compose.yml` and `.env` by name
 # only (issue #187). One `git add -A` is all it takes.
