@@ -4,9 +4,9 @@ import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
 import com.booksync.data.remote.RegisterRequest
+import com.booksync.data.remote.RegisterResponse
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
-import com.booksync.data.remote.UserResponse
 import com.booksync.data.remote.UserScopeProvider
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -34,19 +34,27 @@ import java.io.IOException
 /**
  * "Request access" on the Android login screen (issue #221).
  *
- * The endpoint, the DTO and the Retrofit declaration already existed; only the
- * UI wiring was missing, so what has to be pinned is the ViewModel contract the
- * screen drives: the request is sent exactly once with what was typed, success
- * shows the pending-approval message and drops back to sign-in, and a server
- * that has registration switched off shows *its own* reason rather than a
- * generic failure — a 403 body of `{"detail": "Public registration is
- * disabled"}` is the only thing that tells the user not to keep trying.
+ * The endpoint and the Retrofit declaration already existed — but the
+ * declaration was wrong about the response and had never been exercised, so
+ * "only UI wiring" turned out to be optimistic; see [RegisterWiringTest].
+ *
+ * What has to be pinned here is the ViewModel contract the screen drives: the
+ * request is sent exactly once with what was typed, success shows a
+ * pending-approval message and drops back to sign-in whatever the body looked
+ * like, and a server that has registration switched off shows *its own* reason
+ * rather than a generic failure — a 403 body of `{"detail": "Public
+ * registration is disabled"}` is the only thing that tells the user not to keep
+ * trying.
  *
  * Compose screens are excluded from coverage (no emulator or Robolectric in
  * CI), so these target [LoginViewModel] directly — same shape as
  * `ui/account/AccountViewModelLogoutTest`.
  */
 private const val TEST_SERVER_URL = "https://tandem.example.com"
+
+/** Verbatim from `server/routers/auth.py`; see RegisterWiringTest. */
+private const val SERVER_PENDING_MESSAGE =
+    "Access request submitted. An admin must approve your account before you can sign in."
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoginViewModelRegisterTest {
@@ -62,22 +70,15 @@ class LoginViewModelRegisterTest {
 
         api = mockk()
         tokenManager = mockk(relaxed = true)
-        coEvery { api.register(any()) } returns pendingUser()
+        // What the server actually sends: a bare message, no user object. See
+        // RegisterWiringTest for the decode contract this shape comes from.
+        coEvery { api.register(any()) } returns RegisterResponse(message = SERVER_PENDING_MESSAGE)
     }
 
     @After
     fun tearDown() {
         Dispatchers.resetMain()
     }
-
-    private fun pendingUser() = UserResponse(
-        id = 7,
-        username = "newcomer",
-        email = "newcomer@example.com",
-        is_admin = false,
-        is_active = false,
-        created_at = "2026-01-01T00:00:00Z",
-    )
 
     private fun newViewModel(): LoginViewModel {
         val serverUrlManager = mockk<ServerUrlManager>()
@@ -107,15 +108,41 @@ class LoginViewModelRegisterTest {
     }
 
     @Test
-    fun `a successful request shows the pending-approval message`() {
+    fun `a successful request shows the server's pending-approval message`() {
         val vm = newViewModel()
 
         vm.register("newcomer", "newcomer@example.com", "hunter2")
 
         // The account exists but cannot sign in yet; saying so is the whole
-        // point of the flow.
+        // point of the flow. Preferring the server's own sentence mirrors
+        // LoginPage.jsx, so an admin who customises it is heard on both clients.
+        assertEquals(SERVER_PENDING_MESSAGE, vm.message.value)
+        assertNull(vm.error.value)
+    }
+
+    @Test
+    fun `a server that sends no message still confirms the request`() {
+        // The 201 is the fact that matters; the sentence is decoration. A body
+        // this app does not recognise must not read as a failure — that is the
+        // bug this whole path was rewritten for.
+        coEvery { api.register(any()) } returns RegisterResponse()
+
+        val vm = newViewModel()
+        vm.register("newcomer", "newcomer@example.com", "hunter2")
+
         assertEquals(REGISTRATION_PENDING_MESSAGE, vm.message.value)
         assertNull(vm.error.value)
+        assertFalse(vm.isRegistering.value)
+    }
+
+    @Test
+    fun `a blank message falls back rather than showing an empty banner`() {
+        coEvery { api.register(any()) } returns RegisterResponse(message = "   ")
+
+        val vm = newViewModel()
+        vm.register("newcomer", "newcomer@example.com", "hunter2")
+
+        assertEquals(REGISTRATION_PENDING_MESSAGE, vm.message.value)
     }
 
     @Test
