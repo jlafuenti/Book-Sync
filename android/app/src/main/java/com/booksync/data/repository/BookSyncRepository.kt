@@ -208,6 +208,7 @@ class BookSyncRepository @Inject constructor(
         bookPairDao.upsertPairs(entities)
         val remoteIds = remotePairs.map { it.id }
         if (remoteIds.isEmpty()) bookPairDao.deleteAll() else bookPairDao.deleteOrphansExcept(remoteIds)
+        seedAcknowledged(remotePairs.filter { it.acknowledged }.map { it.id }, "pair")
         log("refreshPairs — saved ${entities.size} pairs to cache")
     }
     
@@ -239,6 +240,7 @@ class BookSyncRepository @Inject constructor(
         eBookDao.upsertEBooks(entities)
         val remoteIds = remoteEbooks.map { it.id }
         if (remoteIds.isEmpty()) eBookDao.deleteAll() else eBookDao.deleteOrphansExcept(remoteIds)
+        seedAcknowledged(remoteEbooks.filter { it.acknowledged }.map { it.id }, "ebook")
     }
 
     /** Get all audiobooks as a reactive Flow from local cache. */
@@ -464,6 +466,7 @@ class BookSyncRepository @Inject constructor(
         audioBookDao.upsertAudioBooks(entities)
         val remoteIds = remoteAudiobooks.map { it.id }
         if (remoteIds.isEmpty()) audioBookDao.deleteAll() else audioBookDao.deleteOrphansExcept(remoteIds)
+        seedAcknowledged(remoteAudiobooks.filter { it.acknowledged }.map { it.id }, "audiobook")
     }
 
     // ============ Pairing ============
@@ -2109,8 +2112,50 @@ class BookSyncRepository @Inject constructor(
     fun getNewAudiobookCountFlow(): Flow<Int> = acknowledgedItemDao.getNewAudiobookCount(scope)
     fun getNewPairCountFlow(): Flow<Int> = acknowledgedItemDao.getNewPairCount(scope)
 
+    /**
+     * Mark items as seen (issue #222).
+     *
+     * Local row first, then the server. The local write is what the NEW badge
+     * reads, so writing it first keeps the tap instant and keeps working
+     * offline; the push is what makes the same acknowledgement show up on the
+     * web and on a second device, because `acknowledged` is a property of the
+     * item on the server, not of the viewer.
+     *
+     * A failed push is swallowed on purpose (P3): the local row stands, the UI
+     * never rolls back or shows an error, and the next library refresh simply
+     * won't seed this id — the phone keeps its own acknowledgement either way.
+     * There is deliberately no retry queue.
+     */
     suspend fun acknowledgeItems(ids: List<Int>, type: String) {
+        if (ids.isEmpty()) return
         acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(scope, it, type) })
+        try {
+            when (type) {
+                "pair" -> api.acknowledgeNewPairs(AcknowledgePairsRequest(pair_ids = ids))
+                "ebook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(ebook_ids = ids))
+                "audiobook" -> api.acknowledgeNewItems(AcknowledgeItemsRequest(audiobook_ids = ids))
+                else -> log("acknowledgeItems — unknown type '$type', not pushed")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("acknowledgeItems — server push failed for $type (${ids.size} ids): ${e.message}; keeping local rows")
+        }
+    }
+
+    /**
+     * Seed [AcknowledgedItemEntity] rows from the server's `acknowledged` flag
+     * during a library refresh (issue #222) — this is how an acknowledgement
+     * made on the web reaches the phone.
+     *
+     * Insert-only: a server that reports an item as still new never removes a
+     * local row, so an acknowledgement this device made while offline is not
+     * resurrected as NEW by the next refresh.
+     */
+    private suspend fun seedAcknowledged(ids: List<Int>, type: String) {
+        if (ids.isEmpty()) return
+        val key = scopeKeyOrNull ?: return
+        acknowledgedItemDao.acknowledge(ids.map { AcknowledgedItemEntity(key, it, type) })
     }
 }
 
