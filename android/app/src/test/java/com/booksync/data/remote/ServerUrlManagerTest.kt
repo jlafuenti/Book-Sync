@@ -26,9 +26,10 @@ import org.junit.rules.TemporaryFolder
  * read from a compiled-in constant — which is what lets these tests cover the
  * empty-default case a clean clone actually builds with.
  *
- * The production server also moved from booksync.example.com (DNS record deleted)
- * to tandem.example.com, so a persisted legacy URL is migrated on construction;
- * a fresh install or app-data clear must never land on the dead hostname.
+ * There is no migration for any previously-shipped default: the app has never
+ * been published, so no install exists holding an old hostname (issue #188).
+ * A stored URL that no longer resolves fails like any other unreachable server
+ * and the user types a new one once.
  */
 class ServerUrlManagerTest {
 
@@ -67,15 +68,16 @@ class ServerUrlManagerTest {
     }
 
     @Test
-    fun `stored legacy booksync url is migrated to the build default`() = runBlocking {
+    fun `a stored url wins over the build default`() = runBlocking {
+        // What the removed legacy-URL migration used to override. Whatever is
+        // stored is the user's choice, including a host that no longer resolves.
         val dataStore = newDataStore()
-        dataStore.edit { it[key] = LEGACY_SERVER_URL }
+        dataStore.edit { it[key] = "https://old.example.com" }
 
         val manager = ServerUrlManager(dataStore, "https://tandem.example.com", seedScope)
 
-        assertEquals("https://tandem.example.com", manager.currentUrl)
-        // The migration must also rewrite the persisted value, not just the cache.
-        assertEquals("https://tandem.example.com", dataStore.data.first()[key])
+        assertEquals("https://old.example.com", manager.currentUrl)
+        assertEquals("https://old.example.com", dataStore.data.first()[key])
     }
 
     @Test

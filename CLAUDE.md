@@ -13,8 +13,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Live UI Access
 
-A production web UI exists for verification; its URL and login are in `CLAUDE.local.md`
-(gitignored — auto-loaded by Claude Code alongside this file).
+Optional and machine-local: if you have a running instance to verify against, put its
+URL and login in `CLAUDE.local.md` (gitignored, auto-loaded alongside this file), along
+with anything else specific to your machine or network — hosts, paths, remote-access
+details. Nothing of that kind belongs in this file, which is tracked and public
+(pinned by `server/tests/test_repo_hygiene.py`).
 
 ### Playwright MCP — Token Budget Rules
 
@@ -25,19 +28,16 @@ When Playwright is necessary:
 - Reserve `browser_snapshot` for cases where you need element `ref` values to drive further interactions (fill, click, etc.).
 - If a `browser_snapshot` or `browser_click` result exceeds the token limit, take a screenshot to confirm the current state instead of re-snapshotting.
 
-## Remote Hosts
+## Deployed Instances
 
-The running services are on separate hosts, accessible via MCP SSH servers:
+A deployment is typically two hosts: the server stack (FastAPI + PostgreSQL + web, and
+Calibre for conversion) and, optionally, a Jetson running the remote transcription worker
+(`jetson/README.md`). Connection details for a specific deployment are machine-local —
+keep them in `CLAUDE.local.md`.
 
-| Service | MCP Server | Path |
-|---|---|---|
-| Book server (FastAPI + PostgreSQL + web) | `ssh-docker` | `/usr/share/docker-containers/Book-Sync` |
-| Calibre (ebook conversion) | `ssh-docker` | `/usr/share/docker-containers/calibre` |
-| Transcriber (Jetson Orin Nano) | `ssh-orin` | `~/ai-services/booksync-transcriber` |
-
-Use the `ssh-docker` MCP server to inspect or manage the book server (e.g., restart containers, check logs, edit `.env`). Use the `ssh-orin` MCP server for the transcription service.
-
-**Important:** Only use SSH MCP servers to check logs or runtime state. Always read and edit code locally from this repository — do not read source files over SSH.
+**If you have remote access to a running instance, it is read-only.** Use it for logs and
+runtime state; always read and edit code locally from this repository, never over SSH, and
+never build or deploy from a session — that is the operator's step.
 
 ## Development Process
 
@@ -46,19 +46,21 @@ Use the `ssh-docker` MCP server to inspect or manage the book server (e.g., rest
 - Sync-matching logic exists on both server and Android. Any change to it must update the golden vectors in `server/tests/fixtures/sync_parity/` — both platforms assert the same contract from those fixtures. Never change matcher behavior on one platform only.
 - Security fixes: grep for sibling endpoints with the same vulnerable pattern (every place a user-supplied URL/filename/path is used) and fix them in the same PR or file an issue. If a path is deliberately left open (e.g. admin-gated SSRF via `allow_private=True`), record that decision in the issue and pin it with a test.
 - Before starting any non-trivial feature or behavior change, use superpowers:brainstorming to clarify scope and design before writing code.
-- Work on feature branches in an isolated git worktree (superpowers:using-git-worktrees) rather than directly in the main workspace, per [feedback_always_branch.md] — never commit directly to `main`.
-- Before claiming a fix or feature is complete, verify it actually works (superpowers:verification-before-completion) — run the relevant tests/checks and, per [feedback_no_commit_until_working.md], wait for explicit user confirmation before committing/pushing.
+- Work on feature branches in an isolated git worktree (superpowers:using-git-worktrees) rather than directly in the main workspace — never commit directly to `main`.
+- Before claiming a fix or feature is complete, verify it actually works (superpowers:verification-before-completion): run the relevant tests/checks, and wait for explicit confirmation that the fix works before committing or pushing.
 - When debugging, use superpowers:systematic-debugging to find root causes rather than guessing at fixes.
-- Do not run `npm run build`, Docker, or deploy commands — the user pushes to the server manually ([feedback_no_build.md]).
+- Do not run `npm run build`, Docker, or deploy commands — building and deploying is the operator's step, done manually.
 
 ## Development Commands
 
 ### Full Stack (Docker)
 ```bash
-docker compose up                                    # server + PostgreSQL + web (nginx)
-docker compose -f docker-compose.jetson.yml up -d   # GPU transcription service on port 9000
-docker compose -f docker-compose.jetson.yml logs -f # tail Jetson logs
+cp docker-compose.example.yml docker-compose.yml   # once; the real file is gitignored
+docker compose up                                  # server + PostgreSQL + web (nginx)
 ```
+The GPU transcription service is a separate deployment on its own host — its compose file
+is `jetson/docker-compose.example.yml` and its commands run from inside `jetson/` with no
+`-f` flag. See `jetson/README.md`.
 
 ### Backend (server/)
 ```bash
@@ -93,9 +95,9 @@ cd server && ./setup-testenv.sh             # once per clone/worktree — provis
 cd server && .venv/Scripts/python.exe -m pytest -q   # backend (SQLite, no Docker); fast loop: ptw -- tests/test_foo.py
 cd web && npx vitest run                    # web (watch mode: npm test; coverage: npm run coverage)
 cd android && ./gradlew :app:testDebugUnitTest   # Android JVM unit tests
-cd jetson && python -m pytest test_server.py -v  # Jetson auth tests — NOT in CI, run manually when touching jetson/server.py
+cd jetson && python -m pytest test_server.py -v  # Jetson auth tests — in CI, path-filtered to jetson/**
 ```
-CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch coverage; Android = parity tests. Local Python must mirror CI (3.12, pinned dev deps) — `setup-testenv.sh` handles this; a bare global interpreter may miss prod deps like `audible` (those tests skip). Never run the server suite with a global `python`.
+CI gates: server = 30% global floor + ≥80% patch coverage; web = vitest thresholds + ≥80% patch coverage; Android = parity tests + a Kover line-coverage floor (`koverVerifyDebug`). Local Python must mirror CI (3.12, pinned dev deps) — `setup-testenv.sh` handles this; a bare global interpreter may miss prod deps like `audible` (those tests skip). Never run the server suite with a global `python`.
 
 ## Architecture
 
@@ -106,19 +108,19 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 4. Transcription job queued (`TranscriptionQueueItem`)
 5. `queue_manager.py` processes one job at a time:
    - Tries remote Jetson if `TRANSCRIPTION_PROVIDER=remote` or `remote_with_fallback`
-   - Falls back to local OpenAI Whisper
+   - Falls back to local Whisper — but only in an image built with `--build-arg INSTALL_LOCAL_WHISPER=1`; the default image installs no local model and the fallback raises instead
    - NLTK tokenizes output into sentences
 6. Result cached as `AudioTranscript` in DB
 7. Alignment service generates `SyncMap` (sentence ↔ chapter position)
 8. Frontend/Android uses sync points to jump between ebook and audiobook positions
 
 ### Key Server Files
-- `server/main.py` — App entrypoint, registers 9 routers, lifespan startup
+- `server/main.py` — App entrypoint, registers every router in `server/routers/`, lifespan startup
 - `server/config.py` — Pydantic Settings; all env vars loaded here
 - `server/database.py` — Async SQLAlchemy session factory + superadmin bootstrap
 - `server/alembic/` — Alembic migrations (schema management); `env.py` derives a sync psycopg2 URL from `DATABASE_URL`, `versions/` holds the revisions
-- `server/models/` — ORM models: `User`, `EBook`, `AudioBook`, `BookPair`, `SyncMap`, `SyncPoint`, `AudioTranscript`, `TranscriptionQueueItem`, `Bookmark`, `UserProgress`
-- `server/routers/library.py` — Largest file (~93KB); handles directory scanning, file uploads, auto-matching, metadata extraction
+- `server/models/` — ORM models, one module per area (`book.py`, `bookmark.py`, `progress.py`, `sync_map.py`, `transcript.py`, `transcription_queue.py`, `user.py`, `refresh_token.py`, `audit_log.py`, `library_issue.py`, `import_source.py`, `settings.py`); read the directory rather than trusting a list here
+- `server/routers/library.py` — Largest file (~155 KB / 3,800 lines); handles directory scanning, file uploads, auto-matching, metadata extraction
 - `server/services/queue_manager.py` — Background async job processor with cancellation and retry.
   **Single-process only** (issue #252): the queue claim has no row lock, cancel/pause state is in
   module globals, startup recovery re-queues every `in_progress` row, and the import/backup
@@ -130,12 +132,21 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 - `server/services/epub_parser.py` — EPUB metadata extraction
 
 ### Key Config Variables (`server/config.py`)
+Names below are the env-var **aliases** — what `Settings` actually reads. `extra = "ignore"`
+(`config.py`) means a misspelled variable is silently discarded, so check the alias in
+`config.py` (or the env tables in `README.md`) rather than guessing one.
 - `DATABASE_URL` — PostgreSQL async URL (asyncpg)
-- `TRANSCRIPTION_PROVIDER` — `local` | `remote` | `remote_with_fallback`
-- `REMOTE_TRANSCRIPTION_URL` — URL to Jetson server (default port 9000)
+- `JWT_SECRET_KEY`, `CREDENTIAL_ENC_KEYS` — Token signing and at-rest credential encryption
+- `EBOOK_DIR`, `AUDIOBOOK_DIR`, `APP_DATA_DIR`, `COVERS_DIR`, `IMPORTS_DIR`, `BACKUPS_DIR` — File system paths
 - `WHISPER_MODEL`, `WHISPER_DEVICE` — Local Whisper model and device (cpu/cuda)
-- `EBOOKS_PATH`, `AUDIOBOOKS_PATH`, `APP_DATA_PATH` — File system paths
+- `TRANSCRIPTION_PROVIDER`, `TRANSCRIPTION_REMOTE_URL` — Provider mode and remote worker URL
 - `GOOGLE_BOOKS_API_KEY` — Optional; enables metadata enrichment
+
+**Much of the runtime configuration is DB-backed, not env-backed.** The transcription
+provider/URL/timeout, the Audiobookshelf connection, the off-hours window, backups and
+retention live in the `system_settings` table (defaults in `routers/settings.py`) and are
+edited from the System page. Grepping the filesystem for a host or a mode answers the
+wrong question — read the table.
 
 ### Cross-Device Position Sync
 Chapter + sentence index is the portable anchor; a Readium locator (Android) and
@@ -204,4 +215,6 @@ do not remove it without replacing that guarantee.
 ### Frontend Structure (`web/src/`)
 - `api.js` — Centralized API client with automatic token refresh
 - `App.jsx` — React Router root with auth guard
-- `pages/` — LibraryPage, PairsPage, SeriesPage, TranscriptionPage, TranscriptionQueuePage, TranscriptionEditorPage, SystemPage, BookDetailPage
+- `pages/` — one component per route; read the directory for the full set. The ones you will
+  touch most: HomePage (landing), LibraryPage, BookDetailPage, PairsPage, SystemPage,
+  TranscriptionPage/TranscriptionQueuePage/TranscriptionEditorPage

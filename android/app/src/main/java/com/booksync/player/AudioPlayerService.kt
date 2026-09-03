@@ -175,7 +175,7 @@ class AudioPlayerService : MediaLibraryService() {
 
     // Local HTTP server that serves downloaded audiobooks to the Cast receiver over the LAN.
     // Started in castSessionListener.onSessionStarted, torn down in onSessionEnded. Avoids
-    // depending on public DNS for tandem.example.com — Google Home devices hardcode 8.8.8.8.
+    // depending on public DNS for a LAN-only hostname — Google Home devices hardcode 8.8.8.8.
     private var localCastServer: LocalCastHttpServer? = null
     private var localCastIp: String? = null
     private var localCastPort: Int? = null
