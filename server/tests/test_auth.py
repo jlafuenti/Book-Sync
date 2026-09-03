@@ -68,6 +68,68 @@ async def test_successful_login_writes_audit_row(client, make_user, db):
 
 
 # ---------------------------------------------------------------------------
+# Audit-row size (issue #261)
+#
+# `details` is Text and on a failed login embeds the attempted username, so its
+# size was whatever the attacker typed. Two independent guards: the schema
+# refuses an over-long username outright, and log_audit truncates whatever it
+# is handed.
+# ---------------------------------------------------------------------------
+
+async def test_login_with_a_huge_username_is_rejected_before_it_is_logged(client, db):
+    r = await client.post(
+        "/api/auth/login", json={"username": "x" * 10_000, "password": "pw"}
+    )
+    assert r.status_code == 422
+
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_login_at_the_username_limit_writes_a_bounded_details_row(client, db):
+    """50 chars is the max UserCreate already allowed; the row it produces must
+    still be well under the details cap."""
+    r = await client.post(
+        "/api/auth/login", json={"username": "y" * 50, "password": "pw"}
+    )
+    assert r.status_code == 401
+
+    rows = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "login_failed"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert len(rows[0].details) <= 500
+
+
+async def test_log_audit_truncates_over_long_details(db):
+    """The cap lives in log_audit, not in the login route — every writer gets it."""
+    from routers.auth import log_audit
+
+    await log_audit(db, "test_action", details="z" * 5_000)
+    await db.commit()
+
+    row = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "test_action"))
+    ).scalars().one()
+    assert len(row.details) == 500
+    assert row.details.endswith("…")
+
+
+async def test_log_audit_leaves_short_details_alone(db):
+    from routers.auth import log_audit
+
+    await log_audit(db, "test_action", details="short and sweet")
+    await db.commit()
+
+    row = (
+        await db.execute(select(AuditLog).where(AuditLog.action == "test_action"))
+    ).scalars().one()
+    assert row.details == "short and sweet"
+
+
+# ---------------------------------------------------------------------------
 # Refresh
 # ---------------------------------------------------------------------------
 

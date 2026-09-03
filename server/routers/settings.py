@@ -89,6 +89,10 @@ DEFAULT_SETTINGS = {
     "backup_hour": 3,
     "backup_keep_daily": 14,
     "backup_keep_monthly": 6,
+    # Audit-log retention in days (issue #261) — owned by
+    # services/audit_retention.py. Default must match
+    # audit_retention.DEFAULT_RETENTION_DAYS. 0 means keep forever.
+    "audit_log_retention_days": 90,
 }
 
 @router.get("/", response_model=Dict[str, Any])
