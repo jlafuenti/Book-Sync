@@ -52,3 +52,36 @@ describe('PairsPage unpaired tabs', () => {
         expect(await screen.findByText('Lonely Audio')).toBeInTheDocument()
     })
 })
+
+// Issue #215: the pair table's title link is the third consumer of the
+// routing rule, and it used to compare two always-equal `updated_at` stamps
+// like Home and the Library did.
+describe('PairsPage pair link routes on bookmarks.source', () => {
+    const sameInstant = '2026-03-01T00:00:00Z'
+
+    function setupPair(source) {
+        getPairsMock.mockResolvedValue([{
+            id: 7, status: 'synced',
+            ebook: { id: 10, title: 'Ship of Magic', author: 'Robin Hobb', format: 'epub' },
+            audiobook: { id: 20, title: 'Ship of Magic', author: 'Robin Hobb', format: 'm4b' },
+        }])
+        getAllProgressMock.mockResolvedValue([
+            { media_type: 'ebook', ebook_id: 10, book_pair_id: 7, source, updated_at: sameInstant },
+            { media_type: 'audiobook', audiobook_id: 20, book_pair_id: 7, source, updated_at: sameInstant },
+        ])
+    }
+
+    it('links to the audiobook when the pair`s source claims it', async () => {
+        setupPair('audiobook')
+        renderTab('paired')
+        expect(await screen.findByText('Ship of Magic'))
+            .toHaveAttribute('href', '/book/audiobook/20')
+    })
+
+    it('links to the ebook when the source claims the ebook', async () => {
+        setupPair('ebook')
+        renderTab('paired')
+        expect(await screen.findByText('Ship of Magic'))
+            .toHaveAttribute('href', '/book/ebook/10')
+    })
+})

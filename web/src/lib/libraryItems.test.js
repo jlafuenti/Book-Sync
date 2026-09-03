@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from './libraryItems'
+import { pairTargetPath } from '../utils/pairRouting'
 
 // Issue #120: LibraryPage renders `LibraryItem`s from /api/library/items.
 // These helpers turn one into the flat "entry" shape the cards, rows,
@@ -36,8 +37,15 @@ describe('toDisplayEntry', () => {
         expect(e.author).toBe('R. Hobb')
     })
 
-    it('a pair takes lastFormat from the progress grouped by pair id', () => {
-        const byPair = { 7: [{ media_type: 'audiobook', updated_at: '2026-03-01T00:00:00Z' }] }
+    // Issue #215: the routing key is `bookmarks.source`, projected onto both
+    // progress rows. The `updated_at` comparison this replaced always tied,
+    // because a pair-scoped write stamps both rows in the same loop.
+    it('a pair takes its source from the progress grouped by pair id', () => {
+        const sameInstant = '2026-03-01T00:00:00Z'
+        const byPair = { 7: [
+            { media_type: 'ebook', source: 'audiobook', updated_at: sameInstant },
+            { media_type: 'audiobook', source: 'audiobook', updated_at: sameInstant },
+        ] }
         const e = toDisplayEntry({ kind: 'pair', pair }, byPair)
         expect(e.lastFormat).toBe('audiobook')
     })
@@ -106,5 +114,34 @@ describe('patchMedia', () => {
     it('patches a standalone medium', () => {
         const out = patchMedia(items, 'audiobook', 21, { series: 'Liveship' })
         expect(out[2].audiobook.series).toBe('Liveship')
+    })
+})
+
+// The Library's pair-tap: an entry's `lastFormat` (the pair's
+// `bookmarks.source`) plus pairTargetPath decides which detail page opens.
+// Issue #215 — this used to be driven by two always-equal timestamps, so the
+// Library, like Home, always opened the ebook.
+describe('a pair entry routes on its source, not on timestamps', () => {
+    const sameInstant = '2026-03-01T00:00:00Z'
+    const rows = (source) => ({ 7: [
+        { media_type: 'ebook', source, updated_at: sameInstant },
+        { media_type: 'audiobook', source, updated_at: sameInstant },
+    ] })
+    const entryFor = (source) => toDisplayEntry({ kind: 'pair', pair }, rows(source))
+
+    it('source=audiobook opens the audiobook', () => {
+        const e = entryFor('audiobook')
+        expect(pairTargetPath(e, e.lastFormat)).toBe('/book/audiobook/20')
+    })
+
+    it('source=ebook opens the ebook', () => {
+        const e = entryFor('ebook')
+        expect(pairTargetPath(e, e.lastFormat)).toBe('/book/ebook/10')
+    })
+
+    it('no source falls back to the ebook', () => {
+        const e = entryFor(undefined)
+        expect(e.lastFormat).toBeNull()
+        expect(pairTargetPath(e, e.lastFormat)).toBe('/book/ebook/10')
     })
 })

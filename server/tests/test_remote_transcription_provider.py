@@ -382,3 +382,51 @@ async def test_discard_checkpoint_deletes_remote_state(tmp_path):
         "DELETE", "/v1/checkpoint",
         {"filename": "book.m4b", "size": str(audio_file.stat().st_size)},
     )]
+
+
+# ---------------------------------------------------------------------------
+# Progress polling (issue #244)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_poll_progress_skips_callback_when_status_unchanged():
+    """Polling stays at 2 Hz, but an identical status must not be re-reported
+    — downstream every callback is a DB write."""
+    import asyncio
+
+    payloads = [
+        {"active": True, "progress": 0.10, "message": "Transcribing: 1:00 / 20:00 (5%)"},
+        {"active": True, "progress": 0.10, "message": "Transcribing: 1:00 / 20:00 (5%)"},
+        {"active": True, "progress": 0.10, "message": "Transcribing: 1:00 / 20:00 (5%)"},
+        {"active": True, "progress": 0.11, "message": "Transcribing: 1:07 / 20:00 (5%)"},
+    ]
+    stop_event = asyncio.Event()
+    reported = []
+
+    # Serve the payloads in order, then stop the loop.
+    served = []
+
+    def ordered_handler(request: httpx.Request) -> httpx.Response:
+        if not payloads:
+            stop_event.set()
+            return _json_response(200, {"active": False})
+        payload = payloads.pop(0)
+        served.append(payload)
+        if not payloads:
+            stop_event.set()
+        return _json_response(200, payload)
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", ordered_handler
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider._poll_progress(
+            stop_event, lambda p, d, m: reported.append((p, m))
+        )
+
+    assert len(served) == 4, "all four polls should still have happened"
+    assert reported == [
+        (0.10, "Transcribing: 1:00 / 20:00 (5%)"),
+        (0.11, "Transcribing: 1:07 / 20:00 (5%)"),
+    ]
