@@ -49,7 +49,13 @@ class Bookmark(Base):
     __tablename__ = "bookmarks"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # CASCADE mirrors `User.bookmarks`'s ORM cascade at the database level
+    # (issue #198): the ORM one only fires for a delete the session performs,
+    # and the DB should not be able to refuse — or orphan — what the ORM
+    # intends.
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # Scope: exactly one of book_pair_id, or ebook_id/audiobook_id for
     # standalone media, which previously had no canonical position row at all.
     book_pair_id: Mapped[int] = mapped_column(

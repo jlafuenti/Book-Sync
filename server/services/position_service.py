@@ -13,7 +13,7 @@ projection this module maintains.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from sqlalchemy import and_, or_, select, update
@@ -41,6 +41,20 @@ class PositionScopeError(ValueError):
 # Anonymous writers share this key, and stop sharing the moment the client
 # starts identifying itself.
 UNATTRIBUTED_DEVICE_ID = "unattributed"
+
+# How far ahead of the server a client's `captured_at` may be and still be
+# believed (issue #197). `captured_at` is client wall-clock, and staleness is
+# decided by comparing it against what is stored — so one device with a wrong
+# clock used to park a far-future timestamp on the record, after which every
+# honest write from every device compared older and was rejected with 409. The
+# clients read 409 as "keep your local row", so nothing surfaced: position sync
+# for that book simply stopped until the wall clock caught up.
+#
+# Beyond this bound the server stamps its own time instead. The write is never
+# rejected — rejecting throws the position away, which is the thing being
+# protected — and a clamped write still orders correctly against other devices
+# because it can never claim more than "now".
+MAX_CLOCK_SKEW = timedelta(seconds=120)
 
 
 async def _insert_or_reread(db: AsyncSession, row, reread):
@@ -413,10 +427,25 @@ async def apply_position(
     """
     bookmark = await read_position(db, user_id, ref)
 
-    if bookmark is not None and is_stale(update.captured_at, bookmark.captured_at):
+    # Client wall-clock is trusted only up to `MAX_CLOCK_SKEW`; past that the
+    # server stamps its own time (issue #197). `captured_at` is used from here
+    # on rather than `update.captured_at`, so the clamp governs both staleness
+    # comparisons *and* what is stored — clamping only one of the two would
+    # either leave the poison timestamp on the record or let a skewed device
+    # keep beating honest writes.
+    now = utcnow()
+    captured_at = update.captured_at
+    if captured_at is not None and captured_at > now + MAX_CLOCK_SKEW:
+        logger.warning(
+            "clamping future captured_at from device %s by %s",
+            update.device_id, captured_at - now,
+        )
+        captured_at = now
+
+    if bookmark is not None and is_stale(captured_at, bookmark.captured_at):
         return bookmark, False
 
-    stamped = update.captured_at or utcnow()
+    stamped = captured_at or now
 
     if bookmark is None:
         new_fields = dict(
@@ -441,7 +470,7 @@ async def apply_position(
         # If we lost the race, the row now in hand is the winner's and has never
         # been staleness-checked. A newly inserted row has captured_at=None, so
         # this is a no-op on the ordinary path.
-        if is_stale(update.captured_at, bookmark.captured_at):
+        if is_stale(captured_at, bookmark.captured_at):
             return bookmark, False
 
     before_anchor = _anchor_of(bookmark)

@@ -34,7 +34,20 @@ class User(Base):
     )
 
     # Relationships
+    #
+    # Both cascades matter: the ORM one deletes the children in the same flush
+    # as the user (so `DELETE /api/users/{id}` works), and the matching
+    # `ondelete="CASCADE"` on the FK itself (migration 0011) means the database
+    # would do it anyway — for a DELETE issued in SQL, or a row the session
+    # never loaded. `user_progress` had neither, so deleting anyone who had
+    # opened a book raised a ForeignKeyViolation on Postgres and the admin got
+    # a bare 500 (issue #198).
+    #
+    # `audit_logs` is deliberately not cascaded: its `user_id` is SET NULL, so
+    # the record of what an account did outlives the account.
     bookmarks = relationship("Bookmark", back_populates="user", cascade="all, delete-orphan")
+    progress = relationship("UserProgress", back_populates="user",
+                            cascade="all, delete-orphan")
 
     def has_role(self, minimum_role: str) -> bool:
         """Check if user's role meets or exceeds the minimum required role."""
