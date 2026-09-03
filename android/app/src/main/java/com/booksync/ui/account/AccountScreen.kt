@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +61,7 @@ import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.BuildConfig
+import com.booksync.R
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.theme.TandemTheme
@@ -115,6 +117,14 @@ fun AccountScreen(
     var showChangePassword     by remember { mutableStateOf(false) }
     var confirmLogout          by remember { mutableStateOf(false) }
     var confirmClearDownloads  by remember { mutableStateOf(false) }
+    var showDeleteAccount      by remember { mutableStateOf(false) }
+
+    if (showDeleteAccount) {
+        DeleteAccountDialog(
+            isOnline = isOnline,
+            onDismiss = { showDeleteAccount = false },
+        )
+    }
 
     if (showChangePassword) {
         ChangePasswordSheet(
@@ -440,6 +450,28 @@ fun AccountScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                }
+            }
+
+            // Danger zone. Play requires an in-app deletion path for any app
+            // that can create an account (issue #146), and Tandem's login
+            // screen offers "Request access". Kept below Log out, in its own
+            // section, and behind a typed confirmation — the two rows do very
+            // different things and sit a few millimetres apart.
+            item { SectionTitle("Danger zone") }
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard),
+                ) {
+                    ActionRow(
+                        title = stringResource(R.string.delete_account_title),
+                        description = stringResource(R.string.delete_account_row_description),
+                        destructive = true,
+                        onClick = { showDeleteAccount = true },
+                    )
                 }
             }
         }

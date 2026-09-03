@@ -17,6 +17,7 @@ import re
 import pytest
 
 from schemas import (
+    AccountDelete,
     BookPairCreate,
     PasswordChange,
     PositionHintPayload,
@@ -37,6 +38,7 @@ _APIDTOS = os.path.join(
 
 # Kotlin request DTO -> server Pydantic model. Request bodies only.
 REQUEST_MAP = {
+    "AccountDeleteRequest": AccountDelete,
     "LoginRequest": UserLogin,
     "RegisterRequest": UserCreate,
     "RefreshRequest": TokenRefresh,
@@ -232,6 +234,30 @@ async def test_user_child_fks_cascade_on_delete(table, column):
     assert fks[0].get("options", {}).get("ondelete", "").upper() == "CASCADE", (
         f"{table}.{column} must be ON DELETE CASCADE — deleting a user who has "
         f"read anything 500s on Postgres otherwise (issue #198)"
+    )
+
+
+# A bookmark's children have to go the same way (issue #146). Deleting a user
+# cascades to `bookmarks` in the database; if `bookmark_logs.bookmark_id` has no
+# ON DELETE action of its own, Postgres refuses that cascade and self-service
+# account deletion 500s — the #198 failure one table further down. The ORM
+# cascade on `Bookmark.logs` hides it whenever the session performs the delete,
+# which is exactly why this is reflected from the schema instead.
+_CASCADING_BOOKMARK_FKS = [("bookmark_logs", "bookmark_id"),
+                           ("position_hints", "bookmark_id")]
+
+
+@pytest.mark.parametrize("table,column", _CASCADING_BOOKMARK_FKS,
+                         ids=[t for t, _ in _CASCADING_BOOKMARK_FKS])
+async def test_bookmark_child_fks_cascade_on_delete(table, column):
+    fks = [fk for fk in await _reflected_fks(table)
+           if fk["constrained_columns"] == [column]
+           and fk["referred_table"] == "bookmarks"]
+    assert len(fks) == 1, f"expected one {table}.{column} -> bookmarks.id FK, got {fks}"
+    assert fks[0].get("options", {}).get("ondelete", "").upper() == "CASCADE", (
+        f"{table}.{column} must be ON DELETE CASCADE — the user delete cascades "
+        f"into `bookmarks`, and the database has to be allowed to finish the job "
+        f"(issue #146)"
     )
 
 

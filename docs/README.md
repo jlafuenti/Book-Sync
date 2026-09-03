@@ -19,7 +19,7 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
-| [operations.md](operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, storage, restart policies |
+| [operations.md](operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, storage, restart policies, account deletion |
 | [backup-restore.md](backup-restore.md) | Backup schedule, restore procedure, test drills |
 | [../jetson/README.md](../jetson/README.md) | Deploying the remote transcription worker on a Jetson Orin Nano |
 
@@ -34,7 +34,7 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
-| [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
+| [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable — and the Data safety answers, including the `/account-deletion` link Play requires |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |
 
 ## Historical
