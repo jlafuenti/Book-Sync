@@ -21,9 +21,18 @@ interface BookSyncApi {
      * before any credentials exist. Returns 503 when the server is up but its
      * database is not, which surfaces as an `HttpException` rather than success —
      * correct, since signing in would fail too.
+     *
+     * Takes an **absolute** URL, and carries [BYPASS_BASE_URL_HEADER] so
+     * `BaseUrlInterceptor` leaves it alone. The address being probed is by
+     * definition not the configured one — that is the question — and it must not
+     * be stored to become reachable: storing an unverified address put a
+     * mistyped host in DataStore and replaced the first-run screen with a login
+     * form for a server that does not exist. Only a verified address is stored,
+     * afterwards.
      */
-    @GET("api/health")
-    suspend fun getHealth(): HealthResponse
+    @Headers("$BYPASS_BASE_URL_HEADER: 1")
+    @GET
+    suspend fun getHealth(@Url url: String): HealthResponse
 
     // ============ Auth ============
 
