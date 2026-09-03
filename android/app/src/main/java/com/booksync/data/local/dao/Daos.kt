@@ -193,6 +193,14 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE scopeKey = :scope AND bookPairId = :pairId")
     fun getBookmarkFlow(scope: String, pairId: Int): Flow<BookmarkEntity?>
 
+    /**
+     * Every bookmark for this account, for the library's "Recently opened" sort
+     * (issue #223). A pair's last-opened moment lives here, not in
+     * `user_progress` — see [com.booksync.data.repository.LastOpenedTimes].
+     */
+    @Query("SELECT * FROM bookmarks WHERE scopeKey = :scope")
+    fun getAllBookmarksFlow(scope: String): Flow<List<BookmarkEntity>>
+
     @Upsert
     suspend fun upsertBookmark(bookmark: BookmarkEntity)
 

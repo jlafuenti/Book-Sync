@@ -122,6 +122,29 @@ class DiagnosticLogger @Inject constructor(
         writeRaw(channel, line)
     }
 
+    /**
+     * Append a crash report to the app log **whether or not diagnostics are on**
+     * (issue #230).
+     *
+     * Every other write here is gated on [isEnabled], which is right for
+     * ordinary logging — it is opt-in, and it is noisy. A crash is the one event
+     * nobody can turn diagnostics on in advance for: by the time the user knows
+     * they need the log, the process is already gone. Written raw, with no
+     * timestamp prefix, because [CrashReportFormatter] carries its own header.
+     */
+    fun appendCrashReport(report: String) {
+        val file = logFile(LogChannel.APP)
+        try {
+            if (file.exists() && file.length() > LOG_MAX_BYTES) {
+                file.copyTo(File(context.filesDir, "${LogChannel.APP.logFileName}.bak"), overwrite = true)
+                file.delete()
+            }
+            file.appendText(report)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write crash report", e)
+        }
+    }
+
     // ----------------------------------------------------------------
     // File access
     // ----------------------------------------------------------------

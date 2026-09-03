@@ -57,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import java.io.File
 import androidx.compose.ui.text.style.TextOverflow
@@ -337,9 +338,12 @@ private fun LibraryTopBar(
                         Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
                     }
                     DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                        LibrarySort.values().forEach { sort ->
+                        // Not every value, every value that means something here
+                        // (issue #223): "Series order" and "Most books" are
+                        // no-ops outside series mode.
+                        sortOptionsFor(uiState).forEach { sort ->
                             DropdownMenuItem(
-                                text = { Text(sort.label) },
+                                text = { Text(stringResource(sort.labelRes)) },
                                 trailingIcon = {
                                     if (uiState.sort == sort) {
                                         Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
