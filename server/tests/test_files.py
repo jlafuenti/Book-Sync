@@ -186,6 +186,66 @@ async def test_get_cover_rejects_access_token_with_stale_token_version(
     assert r.status_code == 401
 
 
+async def test_get_cover_rejects_a_media_token_from_a_signed_out_device(
+    make_user, temp_covers_dir, db,
+):
+    """Issue #250 reopened #206 from the other side.
+
+    A per-device logout does not bump `token_version`, so `ver` alone can no
+    longer tell whether the session behind a token is over. Media tokens carry
+    the minting session as `sid`; without checking it here a signed-out browser
+    would go on streaming covers and audio for the rest of the token's life.
+    """
+    from models.refresh_token import RefreshToken
+    from utils import utcnow
+
+    (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
+    user = await make_user(username="reader", role="user")
+    session = RefreshToken(user_id=user.id, jti="session-a", device_id="device-a")
+    db.add(session)
+    await db.commit()
+
+    token = create_media_token(user, "cover", "cover.jpg", session_jti="session-a")
+    async with _files_client() as client:
+        assert (await client.get(
+            f"/api/files/covers/cover.jpg?token={token}"
+        )).status_code == 200
+
+        session.revoked_at = utcnow()
+        await db.commit()
+
+        r = await client.get(f"/api/files/covers/cover.jpg?token={token}")
+    assert r.status_code == 401
+
+
+async def test_get_cover_rejects_an_access_token_from_a_signed_out_device(
+    make_user, temp_covers_dir, db,
+):
+    """The header branch of the same hole: the access token names the session
+    too, and a device that has signed out must not keep the download
+    endpoints."""
+    from models.refresh_token import RefreshToken
+    from utils import utcnow
+
+    (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
+    user = await make_user(username="reader", role="user")
+    session = RefreshToken(user_id=user.id, jti="session-b", device_id="device-b")
+    db.add(session)
+    await db.commit()
+
+    header = {"Authorization": f"Bearer {create_access_token(user, 'session-b')}"}
+    async with _files_client() as client:
+        assert (await client.get(
+            "/api/files/covers/cover.jpg", headers=header
+        )).status_code == 200
+
+        session.revoked_at = utcnow()
+        await db.commit()
+
+        r = await client.get("/api/files/covers/cover.jpg", headers=header)
+    assert r.status_code == 401
+
+
 async def test_get_cover_requires_some_auth(make_user, temp_covers_dir):
     (temp_covers_dir / "cover.jpg").write_bytes(b"jpeg-bytes")
     async with _files_client() as client:
