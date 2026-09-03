@@ -34,7 +34,8 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
-| [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
+| [privacy.md](privacy.md) | The privacy policy, published from here via GitHub Pages — what leaves the device, and who holds it |
+| [play-listing.md](play-listing.md) | Draft Play Store listing text, the Data safety form answers and the content-rating notes — kept in the repo so they are reviewable |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |
 
 ## Historical
