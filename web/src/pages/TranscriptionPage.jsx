@@ -4,6 +4,7 @@ import {
     getPairs,
     startTranscription, getTranscriptionStatus, cancelTranscription, addToQueue,
     getTranscriptionQueue, getQueueHistory, removeFromQueue, updateQueuePriority,
+    requeueQueueItem,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
@@ -173,8 +174,10 @@ function TranscriptionPage({ tab }) {
         } catch { /* silent */ }
     }
 
-    const loadHistory = async () => {
-        if (historyLoaded && queueHistory.length > 0) return
+    // `force` bypasses the once-per-visit cache: after a retry the table has to
+    // be re-read, and the cached branch would silently return the stale rows.
+    const loadHistory = async (force = false) => {
+        if (!force && historyLoaded && queueHistory.length > 0) return
         setHistoryLoading(true)
         try {
             const data = await getQueueHistory(100)
@@ -266,6 +269,17 @@ function TranscriptionPage({ tab }) {
         if (!confirm('Remove this item from the queue?')) return
         try { await removeFromQueue(itemId); loadQueue() }
         catch (err) { setError(err.message) }
+    }
+
+    // Issue #247: History showed the failure and nothing to do about it. The
+    // server queues a fresh row for the same pair, so both lists move — the
+    // history row stays as the record, a new pending item joins the queue.
+    const handleRetry = async (itemId) => {
+        setError('')
+        try {
+            await requeueQueueItem(itemId)
+            await Promise.all([loadHistory(true), loadQueue()])
+        } catch (err) { setError(err.message) }
     }
 
     const handleMovePriority = async (itemId, direction) => {
@@ -1332,6 +1346,7 @@ function TranscriptionPage({ tab }) {
                                                 <th className="sortable" onClick={() => toggleHistorySort('completed_at')}>Completed<SortIndicator col="completed_at" /></th>
                                                 <th>Duration</th>
                                                 <th>Message</th>
+                                                {canCancel && <th>Actions</th>}
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1361,6 +1376,20 @@ function TranscriptionPage({ tab }) {
                                                             {item.error_message || item.message || '—'}
                                                         </div>
                                                     </td>
+                                                    {canCancel && (
+                                                        <td>
+                                                            {(item.status === 'failed' || item.status === 'cancelled') && (
+                                                                <button
+                                                                    className="btn btn-secondary btn-sm"
+                                                                    onClick={() => handleRetry(item.id)}
+                                                                    title="Queue this book again"
+                                                                    style={{ whiteSpace: 'nowrap' }}
+                                                                >
+                                                                    ↻ Retry
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                    )}
                                                 </tr>
                                             ))}
                                         </tbody>
