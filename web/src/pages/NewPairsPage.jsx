@@ -284,7 +284,7 @@ export default function NewPairsPage() {
                                     }}
                                 >
                                     {/* Row header */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem', background: 'var(--surface)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem', background: 'var(--bg-card)' }}>
                                         <input
                                             type="checkbox"
                                             checked={selected.has(pair.id)}
@@ -343,7 +343,7 @@ export default function NewPairsPage() {
 
                                     {/* Inline discrepancy resolver */}
                                     {isExpanded && hasDisc && (
-                                        <div style={{ padding: '1rem', borderTop: '1px solid var(--border)', background: 'var(--bg)' }}>
+                                        <div style={{ padding: '1rem', borderTop: '1px solid var(--border)', background: 'var(--bg-primary)' }}>
                                             <table style={{ width: '100%', fontSize: '0.9em' }}>
                                                 <thead>
                                                     <tr>

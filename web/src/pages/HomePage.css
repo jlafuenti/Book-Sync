@@ -289,6 +289,85 @@
     margin-top: 2px;
 }
 
+/* ---- Mobile card actions + sheet (issue #273) ----
+   The desktop card puts Read/Listen in a hover overlay and the rest behind a
+   3-dot menu. A phone has no hover, so these controls take their place: two
+   persistent tap targets and a bottom sheet for the rest. Rendered only when
+   useIsMobile() is true, so no desktop rule has to undo them. */
+
+.home-book-card-actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.home-card-action {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: var(--transition);
+}
+
+.home-card-action:active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.home-card-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: flex-end;
+}
+
+.home-card-sheet {
+    width: 100%;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border-light);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.home-card-sheet-title {
+    padding: 14px 20px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid var(--border);
+}
+
+.home-card-sheet button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 15px 20px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.home-card-sheet button:active {
+    background: var(--bg-card-hover);
+}
+
 /* ---- Transcription Status Card ---- */
 
 .home-tx-card {
@@ -571,15 +650,10 @@
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     }
 
-    /* Hide desktop hover overlay on mobile */
-    .home-book-card-overlay {
-        display: none !important;
-    }
-
-    /* Hide desktop 3-dot menu on mobile */
-    .home-book-card-menu {
-        display: none !important;
-    }
+    /* The hover overlay and 3-dot menu are not rendered at all below this
+       breakpoint (BookCard branches on useIsMobile). They used to be painted
+       out with display:none, which left Read/Listen/Mark Complete unreachable
+       on a phone — issue #273; .home-book-card-actions replaces them. */
 
     /* Disable desktop hover scale on mobile */
     .home-book-card:hover {
@@ -692,7 +766,7 @@
         border-radius: 4px;
         overflow: hidden;
         flex-shrink: 0;
-        background: linear-gradient(to bottom, rgba(var(--accent-rgb, 189, 157, 255), 0.3), var(--bg-primary));
+        background: linear-gradient(to bottom, rgba(var(--accent-rgb), 0.3), var(--bg-primary));
     }
 
     .home-recent-card-mobile .recent-card-thumb img {
