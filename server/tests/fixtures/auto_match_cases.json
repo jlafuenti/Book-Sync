@@ -1,0 +1,267 @@
+[
+  {
+    "name": "exact_title_no_authors",
+    "why": "Both sides bare: an identical title is a match on the title score alone.",
+    "ebook": {
+      "title": "Mistborn"
+    },
+    "audiobook": {
+      "title": "Mistborn"
+    },
+    "expected_score": 100.0
+  },
+  {
+    "name": "exact_title_same_author",
+    "why": "Identical title and author - the author boost is capped at 100.",
+    "ebook": {
+      "title": "Mistborn",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "Mistborn",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "author_initials_and_suffix_punctuation",
+    "why": "'L.E. Modesitt Jr.' and 'L. E. Modesitt, Jr.' are the same person once periods and commas are stripped, so the author gate passes and boosts.",
+    "ebook": {
+      "title": "The Magic of Recluce",
+      "author": "L.E. Modesitt Jr."
+    },
+    "audiobook": {
+      "title": "The Magic of Recluce",
+      "author": "L. E. Modesitt, Jr."
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "author_surname_first",
+    "why": "'Butcher, Jim' vs 'Jim Butcher' - token_set_ratio after comma stripping.",
+    "ebook": {
+      "title": "Storm Front",
+      "author": "Butcher, Jim"
+    },
+    "audiobook": {
+      "title": "Storm Front",
+      "author": "Jim Butcher"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "leading_article_stripped_from_title",
+    "why": "'The Hobbit' and 'Hobbit' normalize to the same string.",
+    "ebook": {
+      "title": "The Hobbit",
+      "author": "J.R.R. Tolkien"
+    },
+    "audiobook": {
+      "title": "Hobbit",
+      "author": "J. R. R. Tolkien"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "same_series_same_index",
+    "why": "Series names agree and both indexes are 2 - nothing rejects it.",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 2
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 2.0
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "series_name_with_leading_article",
+    "why": "'The Dresden Files' vs 'Dresden Files' compare equal after article strip.",
+    "ebook": {
+      "title": "Fool Moon",
+      "author": "Jim Butcher",
+      "series": "The Dresden Files",
+      "series_index": 2
+    },
+    "audiobook": {
+      "title": "Fool Moon",
+      "author": "Jim Butcher",
+      "series": "Dresden Files",
+      "series_index": 2
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "only_one_side_has_series",
+    "why": "Missing series metadata on one side is not evidence of a different book.",
+    "ebook": {
+      "title": "Elantris",
+      "author": "Brandon Sanderson",
+      "series": "Cosmere",
+      "series_index": 1
+    },
+    "audiobook": {
+      "title": "Elantris",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "series_index_1_and_1_5_truncate_equal",
+    "why": "PINS A QUESTIONABLE RULE (issue #253): int() truncation makes the novella 1.5 the same book as 1, so a #1.5 audiobook can be paired with the #1 ebook.",
+    "ebook": {
+      "title": "The Emperor's Soul",
+      "author": "Brandon Sanderson",
+      "series": "Elantris",
+      "series_index": 1
+    },
+    "audiobook": {
+      "title": "The Emperor's Soul",
+      "author": "Brandon Sanderson",
+      "series": "Elantris",
+      "series_index": 1.5
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "title_near_miss_matches_when_one_side_has_no_author",
+    "why": "PINS A QUESTIONABLE RULE (issue #253): with no author on the audiobook the author gate is skipped entirely and a title score alone pairs two different books.",
+    "ebook": {
+      "title": "The Way of Kings",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "The Way of Kings Prime"
+    },
+    "expected_score": 80.0
+  },
+  {
+    "name": "hash_exclusion_blocks_the_pair",
+    "why": "A manual unpair recorded the audiobook's hash on the ebook - never re-pair.",
+    "ebook": {
+      "title": "Mistborn",
+      "file_hash": "eeee",
+      "auto_pair_excluded_hashes": [
+        "aaaa"
+      ]
+    },
+    "audiobook": {
+      "title": "Mistborn",
+      "file_hash": "aaaa"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "hash_exclusion_recorded_on_the_audiobook_side",
+    "why": "The exclusion is symmetric: either side's list blocks the pair.",
+    "ebook": {
+      "title": "Mistborn",
+      "file_hash": "eeee"
+    },
+    "audiobook": {
+      "title": "Mistborn",
+      "file_hash": "aaaa",
+      "auto_pair_excluded_hashes": [
+        "eeee"
+      ]
+    },
+    "expected_score": null
+  },
+  {
+    "name": "exclusion_is_not_honoured_without_a_file_hash",
+    "why": "PINS A QUESTIONABLE RULE (issue #253): the exclusion is keyed by file hash, so a hash-less row (legacy) is re-paired on the next scan despite the unpair.",
+    "ebook": {
+      "title": "Mistborn",
+      "file_hash": null,
+      "auto_pair_excluded_hashes": [
+        "aaaa"
+      ]
+    },
+    "audiobook": {
+      "title": "Mistborn",
+      "file_hash": null,
+      "auto_pair_excluded_hashes": [
+        "eeee"
+      ]
+    },
+    "expected_score": 100.0
+  },
+  {
+    "name": "different_authors_reject_a_perfect_title",
+    "why": "Same title, different people - the author gate rejects before scoring.",
+    "ebook": {
+      "title": "The Gathering Storm",
+      "author": "Robert Jordan"
+    },
+    "audiobook": {
+      "title": "The Gathering Storm",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "same_series_different_index",
+    "why": "Book 2 is not book 5, however similar the titles.",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 2
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 5
+    },
+    "expected_score": null
+  },
+  {
+    "name": "different_series_same_title",
+    "why": "Series names below 85 are different series regardless of the title score.",
+    "ebook": {
+      "title": "Homecoming",
+      "author": "Some Author",
+      "series": "Wheel of Time",
+      "series_index": 3
+    },
+    "audiobook": {
+      "title": "Homecoming",
+      "author": "Some Author",
+      "series": "Stormlight Archive",
+      "series_index": 3
+    },
+    "expected_score": null
+  },
+  {
+    "name": "title_near_miss_below_threshold",
+    "why": "Two unrelated titles by the same author score under the threshold.",
+    "ebook": {
+      "title": "Warbreaker",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "Skyward",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "empty_titles_on_both_sides",
+    "why": "Degenerate metadata must not become a 100-scoring pair.",
+    "ebook": {
+      "title": "",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": 100
+  }
+]
