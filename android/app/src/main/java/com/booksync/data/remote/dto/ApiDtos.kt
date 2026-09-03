@@ -22,6 +22,26 @@ data class RegisterRequest(
     val password: String
 )
 
+/**
+ * `POST /api/auth/register` (issue #221).
+ *
+ * A bare message, not a user. The route has no `response_model` and returns
+ * `{"message": "Access request submitted. …"}` — the account is created
+ * *pending*, so there is no session and nothing to describe. The declaration
+ * used to say [UserResponse], which had simply never been exercised: on a
+ * device the 201 decoded into "Fields [id, username, email, …] are required",
+ * and a request that had succeeded was shown to the user as a red error.
+ *
+ * Nullable with a default for the same reason [HealthResponse] is. This runs on
+ * the login screen, against whatever version of the server someone happens to
+ * host, and the 201 is the fact that matters — a body this app does not
+ * recognise must never turn a created account into a failure.
+ */
+@Serializable
+data class RegisterResponse(
+    val message: String? = null,
+)
+
 @Serializable
 data class TokenResponse(
     val access_token: String,
@@ -52,6 +72,23 @@ data class UserResponse(
     val must_reset_password: Boolean = false,
 )
 
+/**
+ * `GET /api/health` (issue #175) — the first-run "Check connection" probe.
+ *
+ * Every field is optional on purpose. The probe's job is to tell a stranger
+ * whether there is a Tandem server at the address they typed, and a server old
+ * enough to answer with a payload we don't recognise is still a server they can
+ * sign in to. A missing field must not become "connection failed": today's
+ * server sends `{"status": "healthy"}` and nothing else, so the version fields
+ * are absent from every deployment currently running.
+ */
+@Serializable
+data class HealthResponse(
+    val status: String? = null,
+    val api_version: Int? = null,
+    val app_version: String? = null,
+)
+
 @Serializable
 data class UpdateMeRequest(
     val theme: String? = null
@@ -79,7 +116,11 @@ data class EBookResponse(
     val format: String,
     val series: String? = null,
     val series_index: Float? = null,
-    val uploaded_at: String
+    val uploaded_at: String,
+    // Server-side "seen" flag (issue #222). Defaults to true so a server too old
+    // to send it leaves the phone's own acknowledged_items table alone rather
+    // than declaring the whole library new.
+    val acknowledged: Boolean = true
 )
 
 @Serializable
@@ -94,7 +135,9 @@ data class AudioBookResponse(
     val series: String? = null,
     val series_index: Float? = null,
     val uploaded_at: String,
-    val cover_path: String? = null
+    val cover_path: String? = null,
+    // See EBookResponse.acknowledged (issue #222).
+    val acknowledged: Boolean = true
 )
 
 @Serializable
@@ -108,7 +151,9 @@ data class BookPairResponse(
     // The server's live sync-map version (issue #55). Null means *unknown* —
     // either the pair has no map, or the endpoint didn't load it — so a null
     // must never be read as "the map went away" and must not drop the cache.
-    val sync_map_version: Int? = null
+    val sync_map_version: Int? = null,
+    // See EBookResponse.acknowledged (issue #222).
+    val acknowledged: Boolean = true
 )
 
 /**
@@ -129,6 +174,30 @@ data class BookMetadataResponse(
     val publish_year: Int? = null,
     val language: String? = null,
     val narrators: String? = null,
+)
+
+/**
+ * Bodies for the two acknowledge endpoints (issue #222). Field names match the
+ * server's `AcknowledgeItemsRequest` / `AcknowledgePairsRequest`
+ * (`server/schemas.py`), which the web already posts to.
+ */
+@Serializable
+data class AcknowledgeItemsRequest(
+    val ebook_ids: List<Int> = emptyList(),
+    val audiobook_ids: List<Int> = emptyList(),
+)
+
+@Serializable
+data class AcknowledgePairsRequest(
+    val pair_ids: List<Int>,
+)
+
+/** Counts returned by both acknowledge endpoints. Only ever logged. */
+@Serializable
+data class AcknowledgeResponse(
+    val acknowledged_ebooks: Int = 0,
+    val acknowledged_audiobooks: Int = 0,
+    val acknowledged_pairs: Int = 0,
 )
 
 @Serializable

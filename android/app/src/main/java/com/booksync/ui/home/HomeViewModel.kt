@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -196,6 +197,21 @@ class HomeViewModel @Inject constructor(
     val newPairs: StateFlow<List<BookPairEntity>> =
         repository.getNewPairsFlow()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
+
+    /**
+     * Dismiss the whole "New Pairs" section (issue #222).
+     *
+     * Pairs only — the Library's "Acknowledge all" clears ebooks and audiobooks
+     * too, and that being the *only* way to clear this section is the bug.
+     * Reads the flow rather than [newPairs] so the action works whether or not
+     * the carousel currently has a subscriber.
+     */
+    fun dismissNewPairs() {
+        viewModelScope.launch {
+            val ids = repository.getNewPairsFlow().first().map { it.id }
+            if (ids.isNotEmpty()) repository.acknowledgeItems(ids, "pair")
+        }
+    }
 
     // --- In Queue (polls TranscriptionRepository every 10 s) ---------------
     private val _queueItems = MutableStateFlow<List<HomeQueueItem>>(emptyList())

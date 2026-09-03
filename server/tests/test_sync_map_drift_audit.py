@@ -84,8 +84,12 @@ async def _seed_pair(db, tmp_path, *, filename="book.epub", docs=None):
         docs or [("c1.xhtml", CH1), ("c2.xhtml", CH2)],
     )
     eb = EBook(title="The Aeronaut's Windlass", filename=filename, file_path=path)
-    ab = AudioBook(title="The Aeronaut's Windlass", filename="a.m4b",
-                   file_path=str(tmp_path / "a.m4b"))
+    # The audio path is derived from `filename` so that seeding two pairs in one
+    # test gives two distinct audiobooks. `audiobooks.file_path` is unique since
+    # issue #256; a fixed "a.m4b" made the second call an IntegrityError.
+    audio_name = f"{filename.rsplit('.', 1)[0]}.m4b"
+    ab = AudioBook(title="The Aeronaut's Windlass", filename=audio_name,
+                   file_path=str(tmp_path / audio_name))
     db.add_all([eb, ab])
     await db.flush()
     pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)

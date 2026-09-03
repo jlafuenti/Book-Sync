@@ -4,7 +4,10 @@ Book models: EBook, AudioBook, and BookPair (the link between them).
 
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey, Float, JSON, inspect
+from sqlalchemy import (
+    String, Text, DateTime, Integer, BigInteger, Boolean, Enum, ForeignKey,
+    Float, Index, JSON, UniqueConstraint, inspect,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -72,6 +75,23 @@ class EBook(Base):
     # Hashes of audiobooks this ebook must not be auto-paired with (set on manual unpair)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
+    # `file_path` is the identity key: the scan, the ACSM/convert path and the
+    # importers all look a row up by it with `.scalar_one_or_none()`. Every
+    # insert is check-then-insert on one worker, so nothing *produces* a
+    # duplicate today — but one arriving any other way (a manual insert, a
+    # restore from an older dump, a second worker later) makes every one of
+    # those lookups raise `MultipleResultsFound`, and the whole library scan
+    # 500s until a row is deleted by hand. That is issue #64 again, in a
+    # different table; here it is unrepresentable instead (issue #256).
+    #
+    # `file_hash` is the auto-pair and duplicate-detection key, read per file
+    # per scan; indexed for the lookup, not constrained — two identical files at
+    # different paths are legitimate.
+    __table_args__ = (
+        Index("ux_ebooks_file_path", "file_path", unique=True),
+        Index("ix_ebooks_file_hash", "file_hash"),
+    )
+
     # Relationships
     pairs = relationship("BookPair", back_populates="ebook", cascade="all, delete-orphan")
 
@@ -125,6 +145,13 @@ class AudioBook(Base):
     # Hashes of ebooks this audiobook must not be auto-paired with (set on manual unpair)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
+    # Same reasoning as `EBook` above (issue #256): `file_path` is the identity
+    # key every scan lookup assumes is unique, `file_hash` is a hot read.
+    __table_args__ = (
+        Index("ux_audiobooks_file_path", "file_path", unique=True),
+        Index("ix_audiobooks_file_hash", "file_hash"),
+    )
+
     # Relationships
     pairs = relationship("BookPair", back_populates="audiobook", cascade="all, delete-orphan")
 
@@ -152,6 +179,20 @@ class BookPair(Base):
 
     # New-pairs inbox: cleared once user resolves/skips all discrepancies or manually acknowledges
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Both FKs are read as predicates, not just joined through: the library
+    # browse's paired/unpaired filter runs `EXISTS (SELECT 1 FROM book_pairs
+    # WHERE ebook_id = ebooks.id)` per row on every page. Unindexed that is a
+    # sequential scan per item.
+    #
+    # The unique constraint is belt-and-braces: `create_pair` already rejects a
+    # duplicate pairing with 409, so this only stops the check-then-insert being
+    # the *sole* guarantee (issue #256).
+    __table_args__ = (
+        Index("ix_book_pairs_ebook_id", "ebook_id"),
+        Index("ix_book_pairs_audiobook_id", "audiobook_id"),
+        UniqueConstraint("ebook_id", "audiobook_id", name="uq_book_pairs_pair"),
+    )
 
     # Relationships
     ebook = relationship("EBook", back_populates="pairs")

@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "BookSync"
+rootProject.name = "Tandem"
 include(":app")

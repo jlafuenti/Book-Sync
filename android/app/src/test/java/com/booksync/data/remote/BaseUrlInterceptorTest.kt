@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 
@@ -125,5 +126,58 @@ class BaseUrlInterceptorTest {
         runCatching { call(client()).close() }
 
         assertEquals(0, serverA.requestCount)
+    }
+
+    // -- The first-run probe's exemption (issue #175) -----------------------
+    //
+    // "Check connection" has to reach a server that is *not* the configured one
+    // — that is the whole question it answers — and it must not store the
+    // address to get there. Rewriting by host is not an option: Retrofit's base
+    // URL is a placeholder that differs from the configured server on every
+    // request, so "leave it alone when the host differs" would exempt the entire
+    // app. The probe marks itself instead.
+
+    @Test
+    fun `a request marked as a probe keeps its own host`() {
+        serverA.enqueue(MockResponse().setResponseCode(200).setBody("configured"))
+        serverB.enqueue(MockResponse().setResponseCode(200).setBody("probed"))
+        configured = serverA.url("/").toString().removeSuffix("/")
+
+        val response = client().newCall(
+            Request.Builder()
+                .url(serverB.url("/api/health"))
+                .header(BYPASS_BASE_URL_HEADER, "1")
+                .build(),
+        ).execute()
+
+        assertEquals("probed", response.body?.string())
+        assertEquals(0, serverA.requestCount)
+        assertEquals(1, serverB.requestCount)
+    }
+
+    @Test
+    fun `the probe marker is stripped before the request goes out`() {
+        // It is an instruction to our own interceptor, not something a server
+        // should ever see.
+        serverB.enqueue(MockResponse().setResponseCode(200))
+        configured = serverA.url("/").toString().removeSuffix("/")
+
+        client().newCall(
+            Request.Builder()
+                .url(serverB.url("/api/health"))
+                .header(BYPASS_BASE_URL_HEADER, "1")
+                .build(),
+        ).execute().close()
+
+        assertNull(serverB.takeRequest().getHeader(BYPASS_BASE_URL_HEADER))
+    }
+
+    @Test
+    fun `an ordinary request is still rewritten`() {
+        // The counterweight: the exemption must be opt-in, not the default.
+        serverA.enqueue(MockResponse().setResponseCode(200).setBody("a"))
+        configured = serverA.url("/").toString().removeSuffix("/")
+
+        assertEquals("a", call(client()).body?.string())
     }
 }
