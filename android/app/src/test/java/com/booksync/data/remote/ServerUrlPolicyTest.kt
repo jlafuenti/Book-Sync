@@ -39,6 +39,26 @@ class ServerUrlPolicyTest {
         assertFalse(shouldExpandAdvanced("https://host"))
     }
 
+    // -- Issue #175: the first-run screen ----------------------------------
+
+    @Test
+    fun `the first-run screen is shown only when no server is configured`() {
+        // Same input as `shouldExpandAdvanced`, deliberately a separate name:
+        // one decides whether to explain what Tandem is to a stranger who
+        // installed from Play, the other decides whether a returning user's
+        // "Advanced" section starts open. They agree today and need not later.
+        assertTrue(shouldShowFirstRun(""))
+        assertTrue(shouldShowFirstRun("   "))
+        assertFalse(shouldShowFirstRun("https://host"))
+    }
+
+    @Test
+    fun `the first run screen links to the project, not to anyone's server`() {
+        // The whole point of the screen is telling someone where to get a
+        // server; a link to a personal host would be worse than none.
+        assertTrue(TANDEM_REPO_URL.startsWith("https://github.com/"))
+    }
+
     // -- Issue #149: normalizeServerUrl ------------------------------------
     //
     // Everything below exists because an unvalidated server URL was a permanent

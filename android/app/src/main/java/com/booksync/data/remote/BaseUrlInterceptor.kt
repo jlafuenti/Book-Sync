@@ -32,6 +32,23 @@ import javax.inject.Singleton
  * request then fails against the placeholder, which is a connection error the
  * login screen already handles, rather than being sent somewhere unintended.
  */
+/**
+ * Marks a request that already knows where it is going (issue #175).
+ *
+ * Only the first-run "Check connection" probe sets it. That probe asks whether
+ * there is a Tandem server at an address the user has just typed and which is
+ * deliberately *not* stored — storing an unverified address is what put a
+ * mistyped host in DataStore and tore the welcome screen down mid-probe. So the
+ * one request in the app that must keep its own host has to say so.
+ *
+ * A marker rather than "leave it alone when the host differs from the configured
+ * one": Retrofit's base URL is [UNCONFIGURED_BASE_URL], a placeholder that
+ * differs from the configured server on *every* request, so that rule would
+ * exempt the whole app. Stripped below — it is an instruction to this
+ * interceptor, not something a server should ever see.
+ */
+const val BYPASS_BASE_URL_HEADER = "X-Tandem-Absolute-Url"
+
 @Singleton
 class BaseUrlInterceptor @Inject constructor(
     private val serverUrlManager: ServerUrlManager,
@@ -39,6 +56,13 @@ class BaseUrlInterceptor @Inject constructor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+
+        if (request.header(BYPASS_BASE_URL_HEADER) != null) {
+            return chain.proceed(
+                request.newBuilder().removeHeader(BYPASS_BASE_URL_HEADER).build(),
+            )
+        }
+
         val configured = serverUrlManager.currentUrl
 
         if (configured.isBlank()) return chain.proceed(request)

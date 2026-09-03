@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Issue #229. The app had no string resources at all: every label was a Kotlin
+  literal and `android:label` was the word "Tandem" typed into the manifest, so
+  localisation meant a refactor across every Compose screen and no QA or
+  accessibility pass could enumerate what the app says.
+
+  Strings are migrated screen by screen as screens are touched, starting with
+  the login / first-run screen (issues #221 and #175). New user-facing text
+  belongs here rather than inline.
+-->
+<resources>
+
+    <!-- Launcher label and the wordmark on the login screen. The Play listing
+         name; not to be confused with the `com.booksync` applicationId, which is
+         an identifier and permanent (see the naming note in README.md). -->
+    <string name="app_name">Tandem</string>
+
+    <!-- ============ Login ============ -->
+    <string name="login_tagline">Sync your reading &amp; listening</string>
+    <string name="login_username">Username</string>
+    <string name="login_email">Email</string>
+    <string name="login_password">Password</string>
+    <string name="login_sign_in">Sign In</string>
+    <string name="login_request_access">Request Access</string>
+    <string name="login_need_account">Need an account?</string>
+    <string name="login_have_account">Already have an account?</string>
+    <string name="login_approval_note">Account requests must be approved by an admin before you can sign in.</string>
+
+    <!-- ============ Server URL (Advanced) ============ -->
+    <string name="login_advanced">Advanced</string>
+    <string name="login_server_url">Server URL</string>
+    <string name="login_save">Save</string>
+    <string name="login_server_unset_hint">No server configured yet — enter your Tandem server URL to sign in.</string>
+    <string name="login_server_set_hint">The new server applies immediately.</string>
+
+    <!-- ============ First run (issue #175) ============ -->
+    <!-- Shown to someone who installed from Play and has never seen Tandem.
+         The first two lines have to land before the URL field, or the screen is
+         a password prompt for a product they have not heard of. -->
+    <string name="first_run_title">Welcome to Tandem</string>
+    <string name="first_run_what_it_is">Tandem keeps your place in sync between an ebook and its audiobook, so you can switch between reading and listening without losing your spot.</string>
+    <string name="first_run_needs_server">Tandem is not a bookstore or a subscription: it is a client for a Tandem server that you — or someone you know — runs on your own machine, holding your own books.</string>
+    <string name="first_run_repo_link">Set up a server: github.com/jlafuenti/Book-Sync</string>
+    <string name="first_run_server_label">Tandem server address</string>
+    <string name="first_run_check_connection">Check connection</string>
+    <string name="first_run_checking">Checking…</string>
+    <string name="first_run_connected">Connected — this is a Tandem server.</string>
+    <string name="first_run_continue">Continue to sign in</string>
+    <string name="first_run_skip">I already have a server — skip</string>
+
+</resources>
