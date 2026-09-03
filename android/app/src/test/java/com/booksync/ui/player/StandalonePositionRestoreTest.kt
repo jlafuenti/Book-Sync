@@ -91,6 +91,8 @@ class StandalonePositionRestoreTest {
         appContext = mockk(relaxed = true),
         serverUrlManager = mockk(relaxed = true),
             coverArtHelper = mockk(relaxed = true),
+        networkMonitor = mockk(relaxed = true),
+        castSessionMonitor = mockk(relaxed = true),
         savedStateHandle = SavedStateHandle(mapOf("audiobookId" to 17)),
     )
 

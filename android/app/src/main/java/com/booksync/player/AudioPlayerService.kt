@@ -19,7 +19,10 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -128,6 +131,14 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
     @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
+
+    /**
+     * The app's own client — the one carrying `AuthInterceptor` and
+     * `TokenAuthenticator` — handed to ExoPlayer so streaming a book that is not
+     * downloaded sends the same Bearer header as every other request, and a 401
+     * mid-stream refreshes rather than stopping playback (issue #171).
+     */
+    @Inject lateinit var okHttpClient: okhttp3.OkHttpClient
 
     private var mediaLibrarySession: MediaLibrarySession? = null
     private var castPlayer: CastPlayer? = null
@@ -366,6 +377,17 @@ class AudioPlayerService : MediaLibraryService() {
         }
 
         val localPlayer = ExoPlayer.Builder(this)
+            // Streaming goes out on the app's authenticated client (issue #171).
+            // DefaultDataSource wraps it so file://, content:// and asset:// URIs
+            // still resolve locally — a downloaded book never touches the network.
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(
+                    DefaultDataSource.Factory(
+                        this,
+                        OkHttpDataSource.Factory(okHttpClient),
+                    )
+                )
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
@@ -671,6 +693,21 @@ class AudioPlayerService : MediaLibraryService() {
         val currentPlayer = session.player
         if (currentPlayer === newPlayer) return
 
+        // Cast serves the *phone's* copy over the LAN (LocalCastHttpServer) — the
+        // receiver cannot send a Bearer header, so there is no server-side Cast
+        // path. A book that is only being streamed therefore cannot be cast, and
+        // handing the receiver the server URL anyway would earn a 401 and an idle
+        // television. Refuse before the swap and keep playing on the phone
+        // (issue #171); the player screen disables the Cast button for the same
+        // reason, so this is the belt to that braces.
+        if (newPlayer is CastPlayer) {
+            val candidate = currentPlayer.currentMediaItem ?: lastLocalMediaItem
+            if (candidate == null || !hasLocalCopy(candidate)) {
+                Log.w(TAG, "switchToPlayer: not casting — audiobook is not downloaded")
+                return
+            }
+        }
+
         // Every cast transition is a session boundary — log it when saving.
         // claimFormat=false: a cast handoff isn't itself a playback command
         // (the ExoPlayer<->CastPlayer switch, not a play/pause/seek), and
@@ -704,13 +741,23 @@ class AudioPlayerService : MediaLibraryService() {
             lastKnownCastPositionMs = positionMs
             val sourceLocalItem = currentItem?.also { lastLocalMediaItem = it } ?: lastLocalMediaItem
             if (sourceLocalItem != null) {
-                val castItem = buildCastMediaItem(sourceLocalItem) ?: sourceLocalItem
-                sendDirectCastLoad(castItem, positionMs, autoplay = shouldPlay)
+                // No `?: sourceLocalItem` fallback: that quietly sent the receiver
+                // whatever URI local playback was using, which since issue #171 can
+                // be the server's authenticated stream URL. Better to load nothing
+                // than to make the television ask for a token it does not have.
+                val castItem = buildCastMediaItem(sourceLocalItem)
+                if (castItem == null) {
+                    Log.w(TAG, "switchToPlayer: no LAN cast URL for this book; nothing loaded")
+                } else {
+                    sendDirectCastLoad(castItem, positionMs, autoplay = shouldPlay)
+                }
             }
         } else {
             // Returning to local. CastPlayer's currentMediaItem carries the http:// LAN URL
             // with an unmappable mediaId, so rebuild from the remembered pre-cast local item.
-            // Never hand ExoPlayer an http:// URI — cleartext is blocked and we want the file.
+            // Never replay the LAN URL through ExoPlayer: the local cast server is being torn
+            // down as we speak. [buildLocalMediaItem] resolves the book afresh — the
+            // downloaded file if there is one, the server stream otherwise (issue #171).
             val sourceItem = lastLocalMediaItem ?: currentItem
             val localItem = sourceItem?.let { buildLocalMediaItem(it) }
             if (localItem != null) {
@@ -721,6 +768,22 @@ class AudioPlayerService : MediaLibraryService() {
                 Log.w(TAG, "switchToPlayer: no local item to restore after Cast; ExoPlayer left idle")
             }
         }
+    }
+
+    /**
+     * Is this book's audio actually on the phone? The Cast precondition
+     * (issue #171) — checked before the player swap so a stream-only book keeps
+     * playing here instead of being handed to a receiver that cannot fetch it.
+     */
+    private fun hasLocalCopy(item: MediaItem): Boolean {
+        val filename = when (val id = MediaId.parse(item.mediaId)) {
+            is MediaId.Pair ->
+                runBlocking { repository.getPairById(id.pairId) }?.audiobookFilename
+            is MediaId.Audiobook ->
+                runBlocking { repository.getAudiobookById(id.audiobookId) }?.filename
+            null -> null
+        } ?: return false
+        return repository.localAudioFile(filename)?.isFile == true
     }
 
     /**
@@ -867,25 +930,47 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     /**
-     * Rebuilds a MediaItem with a local file:// URI for ExoPlayer.
-     * Used when switching back from Cast to local playback.
-     * Returns null if the mediaId is unrecognised or the file is missing.
+     * The URI ExoPlayer should play for one audiobook: the downloaded file when
+     * it is there, otherwise the server's stream URL (issue #171). Null only
+     * when there is neither — no file *and* no usable server URL.
+     *
+     * The single place this service turns a book into a URI, so every entry
+     * point (phone screen, Android Auto browse, notification resume, the
+     * Cast-to-local restore) gets the same answer. Pinned by
+     * `MediaSourceWiringTest`.
+     */
+    private fun mediaUriFor(localFile: File?, audiobookId: Int): Uri? =
+        MediaSourceSelector.select(localFile, serverUrlManager.currentUrl, audiobookId)?.toUri()
+
+    /**
+     * Rebuilds a MediaItem for ExoPlayer, used when switching back from Cast to
+     * local playback. Points at the downloaded file if there is one and at the
+     * server otherwise; null if the mediaId is unrecognised.
+     *
+     * The one path that *has* to look the book up, because all it is given is a
+     * mediaId. A standalone audiobook survives a missing Room row — its id is in
+     * the mediaId, which is all the stream URL needs (issue #338) — while a pair
+     * still cannot, since only the row knows which audiobook it points at.
      */
     private fun buildLocalMediaItem(original: MediaItem): MediaItem? {
-        val mediaId = original.mediaId
-        val audioFile = when (val id = MediaId.parse(mediaId)) {
+        val uri = when (val id = MediaId.parse(original.mediaId)) {
             is MediaId.Pair -> {
-                val pair = runBlocking { repository.getPairById(id.pairId) } ?: return null
-                repository.localAudioFile(pair.audiobookFilename) ?: return null
+                val pair = runBlocking { repository.getPairById(id.pairId) }
+                mediaUriFor(
+                    pair?.audiobookFilename?.let { repository.localAudioFile(it) },
+                    pair?.audiobookId ?: 0,
+                )
             }
             is MediaId.Audiobook -> {
-                val audio = runBlocking { repository.getAudiobookById(id.audiobookId) } ?: return null
-                repository.localAudioFile(audio.filename) ?: return null
+                val audio = runBlocking { repository.getAudiobookById(id.audiobookId) }
+                mediaUriFor(
+                    audio?.filename?.let { repository.localAudioFile(it) },
+                    id.audiobookId,
+                )
             }
-            null -> return null
-        }
-        if (!audioFile.exists()) return null
-        return original.buildUpon().setUri(Uri.fromFile(audioFile)).build()
+            null -> null
+        } ?: return null
+        return original.buildUpon().setUri(uri).build()
     }
 
     // =========================================================
@@ -1570,9 +1655,12 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     /**
-     * Null when the server's filename is not a plain name (issue #177): the
-     * book simply does not appear rather than the app resolving a path outside
-     * the audiobooks directory.
+     * Null only when there is nothing playable at all — no downloaded file
+     * *and* no configured server.
+     *
+     * A filename the app refuses to resolve (issue #177) no longer removes the
+     * book from the browse tree: it means "not downloaded", and the stream URL
+     * is built from the audiobook id, which never came from a filename.
      */
     private fun buildPairMediaItem(
         pair: BookPairEntity,
@@ -1587,7 +1675,10 @@ class AudioPlayerService : MediaLibraryService() {
         }
         return MediaItem.Builder()
             .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(Uri.fromFile(repository.localAudioFile(pair.audiobookFilename) ?: return null))
+            .setUri(
+                mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
+                    ?: return null
+            )
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(pair.audiobookTitle)
@@ -1616,7 +1707,7 @@ class AudioPlayerService : MediaLibraryService() {
         }
         return MediaItem.Builder()
             .setMediaId(MediaId.Audiobook(audio.id).value)
-            .setUri(Uri.fromFile(repository.localAudioFile(audio.filename) ?: return null))
+            .setUri(mediaUriFor(repository.localAudioFile(audio.filename), audio.id) ?: return null)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(audio.title)

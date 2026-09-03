@@ -51,12 +51,23 @@ class ReaderViewModel @Inject constructor(
     private val _downloadingProgress = MutableStateFlow<String?>(null)
     val downloadingProgress = _downloadingProgress.asStateFlow()
 
+    /**
+     * Set the first time this screen asks for the EPUB, and never cleared — see
+     * [shouldAutoDownloadEbook]. Cancelling sets it too, so a cancel sticks.
+     */
+    private var autoDownloadRequested = false
+
     init {
         viewModelScope.launch {
             repository.getPairsFlow().collect { pairs ->
                 val p = pairs.find { it.id == pairId }
                 _pair.value = p
                 _isReady.value = p?.ebookDownloaded == true
+                // Fetch it rather than asking (issue #171). The prompt this
+                // replaces stood between "Read" and a two-megabyte file.
+                if (p != null && shouldAutoDownloadEbook(p.ebookDownloaded, autoDownloadRequested)) {
+                    downloadEbook()
+                }
             }
         }
         observeWorkManager()
@@ -93,9 +104,23 @@ class ReaderViewModel @Inject constructor(
 
     fun downloadEbook() {
         val p = _pair.value ?: return
+        autoDownloadRequested = true
         val request = DownloadWorker.request(p.id, "EBOOK")
-        workManager.enqueueUniqueWork("download_ebook_${p.id}", ExistingWorkPolicy.REPLACE, request)
+        workManager.enqueueUniqueWork(ebookWorkName(p.id), ExistingWorkPolicy.REPLACE, request)
     }
+
+    /**
+     * Stop the automatic fetch. Leaves [autoDownloadRequested] set so the next
+     * `getPairsFlow` emission does not immediately start it again — the screen
+     * falls back to the explicit "Download Ebook" button (issue #171).
+     */
+    fun cancelEbookDownload() {
+        val p = _pair.value ?: return
+        autoDownloadRequested = true
+        workManager.cancelUniqueWork(ebookWorkName(p.id))
+    }
+
+    private fun ebookWorkName(id: Int) = "download_ebook_$id"
 
     fun markComplete() {
         viewModelScope.launch {
@@ -231,7 +256,11 @@ fun ReaderScreen(
                     Text("Opening reader...")
                 }
             } else {
-                // Ebook not downloaded
+                // Fetching the EPUB, which the ViewModel started on its own
+                // (issue #171). This used to be a dead-end prompt — "Ebook Not
+                // Downloaded" with a button — on a screen the user reached by
+                // pressing Read. It is still a waiting state, but the waiting
+                // has already begun, and Cancel is right there.
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(32.dp),
@@ -243,14 +272,16 @@ fun ReaderScreen(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                     Spacer(Modifier.height(16.dp))
+                    val fetching = downloadingProgress != null
                     Text(
-                        "Ebook Not Downloaded",
+                        if (fetching) "Preparing your book" else "Ebook not downloaded",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Download the ebook to start reading.",
+                        if (fetching) "The ebook is downloading and will open by itself."
+                        else "Download it to start reading.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -262,6 +293,13 @@ fun ReaderScreen(
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             Text(downloadingProgress!!, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        // A download the user did not ask for must always be
+                        // stoppable — this is the visible way out on a metered
+                        // connection.
+                        TextButton(onClick = { viewModel.cancelEbookDownload(); onBack() }) {
+                            Text("Cancel")
                         }
                     } else {
                         FilledTonalButton(onClick = { viewModel.downloadEbook() }) {
