@@ -21,6 +21,7 @@ The load-bearing rules:
   device capture, and must not win a staleness comparison against a real write.
 """
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -34,7 +35,7 @@ from services.alignment import AlignedPoint
 from services.sync_engine import save_sync_map
 from utils import utcnow
 
-from tests.factories import make_book_pair
+from tests.factories import ensure_users, make_book_pair
 
 
 # The "old" map: two chapters, one sentence each per chapter plus a filler.
@@ -57,6 +58,13 @@ NEW_POINTS = [
     ("how vexingly quick daft zebras jump", 1, 1, 11_000),
     ("sphinx of black quartz judge my vow", 1, 2, 16_000),
 ]
+
+
+@pytest.fixture(autouse=True)
+async def _readers(db):
+    """The hard-coded `user_id=1`/`2` below need real rows now that the harness
+    enforces foreign keys (issue #198)."""
+    await ensure_users(db, 1, 2)
 
 
 def _aligned(points):

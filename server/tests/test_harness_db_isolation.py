@@ -37,3 +37,16 @@ def test_test_db_filename_is_not_the_old_shared_name():
     assert not re.search(r"/booksync_test\.db$", url), (
         "test DB is back on the fixed shared path that caused cross-run collisions"
     )
+
+
+async def test_sqlite_harness_enforces_foreign_keys(db):
+    """SQLite defaults to `PRAGMA foreign_keys=OFF`; conftest turns it on.
+
+    Without it no cascade or FK behaviour in the schema is exercised by CI at
+    all — the harness happily deleted a user and left orphan `user_progress`
+    rows behind, while production (Postgres, which always enforces) returned a
+    500 (issue #198).
+    """
+    from sqlalchemy import text
+
+    assert (await db.execute(text("PRAGMA foreign_keys"))).scalar() == 1

@@ -36,7 +36,7 @@ from services.position_service import invalidate_parse_coordinates_for_ebook
 from services.sync_engine import save_sync_map
 from utils import utcnow
 
-from tests.factories import make_book_pair, make_ebook, make_sync_map
+from tests.factories import ensure_users, make_book_pair, make_ebook, make_sync_map
 
 # A map before and after a re-transcription: the same sentences, with two new
 # ones ahead of them, so every index in chapter 0 shifts by two.
@@ -409,6 +409,7 @@ class TestRemapAfterInvalidationIsAnUpgrade:
 
     async def test_remap_re_expresses_a_cleared_row_from_its_preview(self, db):
         pair = await make_book_pair(db)
+        await ensure_users(db, 1)
         await save_sync_map(db, pair.id, _aligned(OLD_MAP))
         await db.commit()
 
@@ -449,6 +450,7 @@ class TestRemapAfterInvalidationIsAnUpgrade:
         degrades to the top of the chapter it already named — it does not come
         back holding a coordinate of a parse that no longer exists."""
         pair = await make_book_pair(db)
+        await ensure_users(db, 1)
         await save_sync_map(db, pair.id, _aligned(OLD_MAP))
         await db.commit()
 

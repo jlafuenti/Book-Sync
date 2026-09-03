@@ -27,7 +27,13 @@ class UserProgress(Base):
     __tablename__ = "user_progress"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # CASCADE: a progress row is meaningless without its user, and without the
+    # DB-side action deleting an account raised a ForeignKeyViolation on
+    # Postgres (issue #198). Kept in step with `User.progress`'s ORM cascade —
+    # `tests/test_schema_contract.py` pins both halves.
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     
     # What media is this progress for?
     book_pair_id: Mapped[int] = mapped_column(ForeignKey("book_pairs.id"), nullable=True, index=True)
@@ -86,6 +92,8 @@ class UserProgress(Base):
             postgresql_where=text("media_type = 'AUDIOBOOK' AND audiobook_id IS NOT NULL"),
         ),
     )
+
+    user = relationship("User", back_populates="progress")
 
     def __repr__(self) -> str:
         return f"<UserProgress(user={self.user_id}, type={self.media_type})>"
