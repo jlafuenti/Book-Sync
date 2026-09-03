@@ -91,6 +91,7 @@ class LoginViewModelRegisterTest {
             serverUrlManager = serverUrlManager,
             userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
             firstRunGate = FirstRunGate(),
+            serverVersionGate = com.booksync.data.remote.ServerVersionGate(api, serverUrlManager),
         )
     }
 
