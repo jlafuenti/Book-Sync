@@ -57,6 +57,18 @@ object AppModule {
      * the first-run screen then offers no demo button. Assembled here rather
      * than read from `BuildConfig` in the ViewModel so "there is no demo" is an
      * ordinary injectable state a unit test can set.
+     *
+     * **This is the only optional thing in the demo wiring, and deliberately so.**
+     * `DemoSignIn` is bound by its own `@Inject` constructor and injected
+     * unconditionally; it is inert without an account, because nothing can start
+     * it (`LoginViewModel.signInToDemo` returns early on a null account). The
+     * version that tried to make it optional too —
+     * `provideDemoSignIn(account: DemoAccount?, signIn: Provider<DemoSignIn>)` —
+     * crashed every launch with a `StackOverflowError`: Dagger's key ignores
+     * Kotlin nullability, so that function *was* the binding for `DemoSignIn`,
+     * and asking it for a `Provider<DemoSignIn>` re-entered it forever. The
+     * `Provider` indirection hides the cycle from Dagger's compile-time check,
+     * so nothing failed the build. `DiGraphWiringTest` is the guard.
      */
     @Provides
     @Singleton
@@ -66,21 +78,6 @@ object AppModule {
             username = com.booksync.BuildConfig.DEMO_USER,
             password = com.booksync.BuildConfig.DEMO_PASSWORD,
         )
-
-    /**
-     * The demo sign-in machinery, or null in a build with no demo account
-     * (issue #147).
-     *
-     * Tied to [provideDemoAccount] so the two can never disagree: a build with no
-     * credentials has nothing that could start a demo sign-in, and the first-run
-     * screen has nothing to render a button for.
-     */
-    @Provides
-    @Singleton
-    fun provideDemoSignIn(
-        account: com.booksync.data.remote.DemoAccount?,
-        signIn: javax.inject.Provider<com.booksync.data.remote.DemoSignIn>,
-    ): com.booksync.data.remote.DemoSignIn? = if (account == null) null else signIn.get()
 
     @Provides
     @Singleton

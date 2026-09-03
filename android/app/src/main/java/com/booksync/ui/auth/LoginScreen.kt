@@ -113,8 +113,14 @@ class LoginViewModel @Inject constructor(
     val demoAccount: DemoAccount? = null,
     /**
      * Runs the demo sign-in, and outlives this ViewModel on purpose — see
-     * [DemoSignIn]. Defaulted for the same reason as [demoAccount]: the tests
-     * that predate the demo do not care about it.
+     * [DemoSignIn].
+     *
+     * Injected unconditionally, even in a build with no demo: it is inert
+     * without an account, because [signInToDemo] returns before touching it.
+     * Making it optional in the graph instead is what crashed every launch with
+     * a `StackOverflowError` — see `provideDemoAccount` in
+     * [com.booksync.di.AppModule]. Nullable and defaulted only so the tests that
+     * predate the demo can keep constructing this without it.
      */
     private val demoSignIn: DemoSignIn? = null,
 ) : ViewModel() {
