@@ -566,7 +566,7 @@ class PlayerViewModel @Inject constructor(
         mediaController: MediaController,
     ) {
         if (!audio.isDownloaded) return
-        val audioFile = java.io.File(appContext.filesDir, "audiobooks/${audio.filename}")
+        val audioFile = repository.localAudioFile(audio.filename) ?: return
         if (!audioFile.exists()) return
 
         loadCoverArt(audioFile)
@@ -766,7 +766,7 @@ class PlayerViewModel @Inject constructor(
      */
     private fun loadChaptersFromFile() {
         val audioFile: java.io.File? = when {
-            isStandalone -> _standaloneAudio.value?.let { java.io.File(appContext.filesDir, "audiobooks/${it.filename}") }
+            isStandalone -> _standaloneAudio.value?.let { repository.localAudioFile(it.filename) }
             else -> _pair.value?.takeIf { it.audiobookDownloaded }?.let { repository.getAudiobookFile(it) }
         }
         if (audioFile == null || !audioFile.exists()) return
