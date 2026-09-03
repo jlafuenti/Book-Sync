@@ -117,7 +117,7 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
 #
 # `file_path` is the identity key the scan and the conversion path look rows up
 # by, with `.scalar_one_or_none()`. Nothing in the schema enforced that until
-# 0011: one duplicate row — a manual insert, a restore from an older dump, a
+# 0012: one duplicate row — a manual insert, a restore from an older dump, a
 # future concurrent ingest — and the whole library scan 500s on
 # `MultipleResultsFound`, exactly the failure #64 fixed for `user_progress`.
 #
@@ -126,8 +126,8 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
 # SQLite suite and pin the names, because the names are what the dedupe SQL, the
 # downgrade, and any later `op.drop_index` have to agree on.
 
-_MIGRATION_0011 = os.path.join(
-    _SERVER_DIR, "alembic", "versions", "0011_book_file_path_indexes.py"
+_MIGRATION_0012 = os.path.join(
+    _SERVER_DIR, "alembic", "versions", "0012_book_file_path_indexes.py"
 )
 
 # index name -> (table, columns, unique)
@@ -190,6 +190,55 @@ def test_the_migration_creates_each_name_the_models_declare(name):
     """Same names on both sides — SQLite tests build from the models, production
     builds from the migration, and only matching names make those the same
     database."""
-    with open(_MIGRATION_0011, encoding="utf-8") as fh:
+    with open(_MIGRATION_0012, encoding="utf-8") as fh:
         source = fh.read()
-    assert name in source, f"{name} is declared on a model but never created by 0011"
+    assert name in source, f"{name} is declared on a model but never created by 0012"
+
+
+# ---------------------------------------------------------------------------
+# ON DELETE contract (issue #198)
+#
+# The ORM cascade and the database's own FK action have to agree, and Alembic
+# autogenerate does not diff `ondelete` — a hand-written migration set these,
+# and nothing but a test stops the model and the migration drifting apart
+# again. Reflected from the live test schema, so this asserts what the database
+# actually has, not what the declaration says.
+#
+# `audit_logs` is deliberately NOT in this list: history must survive the user,
+# so its `user_id` stays `SET NULL`.
+# ---------------------------------------------------------------------------
+
+_CASCADING_USER_FKS = [("user_progress", "user_id"), ("bookmarks", "user_id")]
+
+
+async def _reflected_fks(table):
+    from sqlalchemy import inspect
+
+    from database import engine
+
+    async with engine.connect() as conn:
+        return await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys(table)
+        )
+
+
+@pytest.mark.parametrize("table,column", _CASCADING_USER_FKS,
+                         ids=[t for t, _ in _CASCADING_USER_FKS])
+async def test_user_child_fks_cascade_on_delete(table, column):
+    fks = [fk for fk in await _reflected_fks(table)
+           if fk["constrained_columns"] == [column]
+           and fk["referred_table"] == "users"]
+    assert len(fks) == 1, f"expected one {table}.{column} -> users.id FK, got {fks}"
+    assert fks[0].get("options", {}).get("ondelete", "").upper() == "CASCADE", (
+        f"{table}.{column} must be ON DELETE CASCADE — deleting a user who has "
+        f"read anything 500s on Postgres otherwise (issue #198)"
+    )
+
+
+async def test_audit_log_user_fk_is_set_null_not_cascade():
+    """Deleting an account must not erase the audit trail of what it did."""
+    fks = [fk for fk in await _reflected_fks("audit_logs")
+           if fk["referred_table"] == "users"]
+    assert fks
+    for fk in fks:
+        assert fk.get("options", {}).get("ondelete", "").upper() == "SET NULL"

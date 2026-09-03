@@ -332,8 +332,8 @@ def test_duplicate_user_progress_rows_are_deduped_then_constrained():
             ))
 
 
-def test_0011_creates_the_library_indexes_and_enforces_the_path():
-    """0011's DDL, on the database that actually gets it (issue #256).
+def test_0012_creates_the_library_indexes_and_enforces_the_path():
+    """0012's DDL, on the database that actually gets it (issue #256).
 
     The dedupe half is unit-tested on SQLite; this is the half that only a real
     Postgres can answer — that the indexes are created under the names the models

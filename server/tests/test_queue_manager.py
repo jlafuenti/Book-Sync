@@ -135,6 +135,30 @@ async def test_add_to_queue_skips_nonexistent_pair(db):
     assert created == []
 
 
+async def test_add_to_queue_without_a_session_still_commits_on_its_own(db):
+    """The background/router callers pass no session and must keep committing.
+
+    `add_to_queue` grew an optional `db` parameter (issue #199) so the library
+    endpoints can queue inside their own request transaction. Callers that pass
+    nothing — `routers/transcription.py`, `routers/troubleshoot.py`, the queue
+    loop — operate on already-committed pairs and rely on the old behaviour:
+    open a session, write, commit. Nothing else commits for them.
+    """
+    pair = await make_book_pair(db)
+
+    created = await queue_manager.add_to_queue([pair.id])
+    assert len(created) == 1
+
+    # Durable without any commit from this test's session.
+    async with async_session() as s:
+        rows = (await s.execute(
+            select(TranscriptionQueueItem)
+            .where(TranscriptionQueueItem.book_pair_id == pair.id)
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].status == "pending"
+
+
 # ---------------------------------------------------------------------------
 # cancel / remove / priority
 # ---------------------------------------------------------------------------

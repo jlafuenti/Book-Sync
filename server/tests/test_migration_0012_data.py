@@ -1,5 +1,5 @@
 """
-Migration 0011's dedupe step, exercised without Postgres (issue #256).
+Migration 0012's dedupe step, exercised without Postgres (issue #256).
 
 The DDL half — creating the unique/plain indexes — needs a real Postgres and is
 covered by the migrations CI job. The *data* half is what runs against a
@@ -41,7 +41,7 @@ from tests.factories import (
 
 _MIGRATION = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "alembic", "versions", "0011_book_file_path_indexes.py",
+    "alembic", "versions", "0012_book_file_path_indexes.py",
 )
 
 DUP_PATH = "/books/dup.epub"
@@ -49,7 +49,7 @@ DUP_AUDIO = "/audio/dup.m4b"
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("migration_0011", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("migration_0012", _MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -63,7 +63,7 @@ async def _dedupe(db):
 
 
 async def _twin_ebooks(db, path=DUP_PATH):
-    """Two `ebooks` rows for the same file — the state 0011 has to clean up."""
+    """Two `ebooks` rows for the same file — the state 0012 has to clean up."""
     await suspend_file_path_uniqueness(db)
     keeper = EBook(title="Keeper", filename="dup.epub", file_path=path)
     loser = EBook(title="Loser", filename="dup.epub", file_path=path)
