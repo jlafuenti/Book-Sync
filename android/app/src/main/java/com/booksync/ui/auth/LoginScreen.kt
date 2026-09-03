@@ -2,17 +2,23 @@ package com.booksync.ui.auth
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentType
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -25,7 +31,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.booksync.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -33,9 +38,14 @@ import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
+import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
+import com.booksync.data.remote.TANDEM_REPO_URL
 import com.booksync.data.remote.normalizeServerUrl
+import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.shouldExpandAdvanced
+import com.booksync.data.remote.shouldShowFirstRun
 import com.booksync.data.remote.LoginRequest
+import com.booksync.data.remote.RegisterRequest
 import com.booksync.data.remote.ServerUrlManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,10 +53,32 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
+import java.io.IOException
 import javax.inject.Inject
-import android.content.Context
+import android.content.Intent
+import android.net.Uri
 
 import com.booksync.data.remote.TokenManager
+
+/**
+ * Result of the first-run "Check connection" probe (issue #175).
+ *
+ * A stranger typing an address cannot tell a typo from a server that is down, and
+ * the old screen answered neither — it accepted anything and only failed later,
+ * at sign-in, as "Login failed".
+ */
+sealed interface ConnectionState {
+    /** Nothing tried yet, or the address was edited since the last attempt. */
+    data object Idle : ConnectionState
+
+    data object Checking : ConnectionState
+
+    /** `GET /api/health` answered. The address is stored by then. */
+    data object Connected : ConnectionState
+
+    data class Failed(val message: String) : ConnectionState
+}
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
@@ -61,6 +93,17 @@ class LoginViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
+    /** Non-failure notice — today only the pending-approval line after a register. */
+    private val _message = MutableStateFlow<String?>(null)
+    val message = _message.asStateFlow()
+
+    /** Which form the single set of fields is currently acting as (issue #221). */
+    private val _isRegistering = MutableStateFlow(false)
+    val isRegistering = _isRegistering.asStateFlow()
+
+    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+    val connectionState = _connectionState.asStateFlow()
+
     val currentServerUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
 
@@ -69,10 +112,24 @@ class LoginViewModel @Inject constructor(
         _error.value = null
     }
 
+    /**
+     * Switch between "Sign in" and "Request access".
+     *
+     * Clears both banners: a refusal or a confirmation from the other form is
+     * about a request the user is no longer making, and leaving it up makes the
+     * new form look like it has already failed or already succeeded.
+     */
+    fun setRegistering(registering: Boolean) {
+        _isRegistering.value = registering
+        _error.value = null
+        _message.value = null
+    }
+
     fun login(username: String, password: String, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
+            _message.value = null
             try {
                 val tokens = api.login(LoginRequest(username, password))
                 tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
@@ -84,6 +141,42 @@ class LoginViewModel @Inject constructor(
                 onSuccess()
             } catch (e: Exception) {
                 _error.value = e.message ?: "Login failed"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Request an account (issue #221) — `POST /api/auth/register`.
+     *
+     * The account is created *pending*: the server will not issue tokens for it
+     * until an admin approves, so success has to say so rather than looking like
+     * a sign-in that silently did nothing.
+     *
+     * A refusal shows the server's own `detail`. That sentence is the only thing
+     * that distinguishes "this server does not take requests at all"
+     * (`ALLOW_PUBLIC_REGISTRATION=false` → 403 "Public registration is disabled")
+     * from "try a different username" — `HttpException.message` is "HTTP 403
+     * Forbidden", which tells the user nothing about which one they hit.
+     */
+    fun register(username: String, email: String, password: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _message.value = null
+            try {
+                api.register(RegisterRequest(username, email, password))
+                _message.value = REGISTRATION_PENDING_MESSAGE
+                // Back to the sign-in form, which is where the message belongs:
+                // the next useful action is signing in, once approved.
+                _isRegistering.value = false
+            } catch (e: HttpException) {
+                _error.value = e.serverDetail() ?: "Request failed (HTTP ${e.code()})"
+            } catch (e: IOException) {
+                _error.value = "Could not reach the server — check the address and your connection."
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Request failed"
             } finally {
                 _isLoading.value = false
             }
@@ -105,23 +198,107 @@ class LoginViewModel @Inject constructor(
             }
         }
     }
+
+    /** The address was edited; the previous verdict is about a different server. */
+    fun resetConnectionState() {
+        _connectionState.value = ConnectionState.Idle
+    }
+
+    /**
+     * Probe `{url}/api/health` and say whether there is a Tandem server there
+     * (issue #175).
+     *
+     * The address is **stored first** because that is how the request reaches it:
+     * `BaseUrlInterceptor` rewrites every request from
+     * `ServerUrlManager.currentUrl`, so there is no way to send one to a URL that
+     * is not the configured one. Storing is harmless — a wrong value is
+     * overwritten by the next attempt, and it is the value the user wants anyway.
+     * It is validated by [normalizeServerUrl] before it goes anywhere near
+     * storage; issue #149 is what happens when it isn't.
+     *
+     * Nothing here may throw. Its input is a string a stranger just typed, so a
+     * dead host, a wrong port, a captive portal answering HTML and a body the
+     * converter cannot parse are all ordinary cases, and each has to end as a
+     * sentence on screen — which is the entire reason this screen exists.
+     */
+    fun checkConnection(url: String) {
+        viewModelScope.launch {
+            _connectionState.value = ConnectionState.Checking
+
+            val normalized = normalizeServerUrl(url)
+            if (normalized == null || !serverUrlManager.setServerUrl(normalized)) {
+                _connectionState.value = ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
+                return@launch
+            }
+
+            _connectionState.value = try {
+                api.getHealth()
+                ConnectionState.Connected
+            } catch (e: HttpException) {
+                // 404 means something answered but it is not Tandem — a router
+                // admin page, say. Calling that "couldn't reach it" would send
+                // the user off to check their wifi.
+                val hint = if (e.code() == 404) {
+                    "No Tandem server at $normalized"
+                } else {
+                    "$normalized answered HTTP ${e.code()}"
+                }
+                ConnectionState.Failed("$hint — check the address and that the server is running.")
+            } catch (e: IOException) {
+                ConnectionState.Failed(
+                    "Could not reach $normalized — check the address, that you are on the " +
+                        "right network, and that the server is running.",
+                )
+            } catch (e: Exception) {
+                ConnectionState.Failed("$normalized did not answer like a Tandem server.")
+            }
+        }
+    }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
     viewModel: LoginViewModel = hiltViewModel(),
 ) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    val isLoading by viewModel.isLoading.collectAsState()
-    val error by viewModel.error.collectAsState()
     val currentServerUrl by viewModel.currentServerUrl.collectAsState()
-    // With no server configured yet, the URL field is the only useful control on
-    // this screen — start expanded rather than hidden behind the toggle.
-    var showAdvanced by remember { mutableStateOf(shouldExpandAdvanced(currentServerUrl)) }
-    var serverUrlEdit by remember(currentServerUrl) { mutableStateOf(currentServerUrl) }
+
+    // Decided once, on the value the app actually launched with, and kept across
+    // configuration changes. Not derived from `currentServerUrl` on every
+    // recomposition: "Check connection" stores the URL, so a derived flag would
+    // yank the screen away the instant the probe is sent — including when it
+    // fails, which is exactly when the explanation is still needed.
+    var firstRunDismissed by rememberSaveable { mutableStateOf(false) }
+    val startedUnconfigured = rememberSaveable { shouldShowFirstRun(currentServerUrl) }
+
+    if (startedUnconfigured && !firstRunDismissed) {
+        FirstRunScreen(viewModel = viewModel, onDone = { firstRunDismissed = true })
+    } else {
+        SignInScreen(
+            onLoginSuccess = onLoginSuccess,
+            viewModel = viewModel,
+            currentServerUrl = currentServerUrl,
+        )
+    }
+}
+
+/**
+ * What someone who installed from Play sees before anything asks for a password
+ * (issue #175).
+ *
+ * Three things have to land, in this order: what Tandem does, that it needs a
+ * server they run, and where to get one. Then the address field. The old screen
+ * had only the field, behind an "Advanced" disclosure, with one line of hint —
+ * which reads as a broken login form, not as a product.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FirstRunScreen(
+    viewModel: LoginViewModel,
+    onDone: () -> Unit,
+) {
+    val connection by viewModel.connectionState.collectAsState()
+    var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
 
     Surface(
@@ -131,6 +308,207 @@ fun LoginScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 28.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                contentDescription = stringResource(R.string.app_name),
+                tint = Color.Unspecified,
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(16.dp)),
+            )
+            Text(
+                text = stringResource(R.string.first_run_title),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+            )
+
+            Text(
+                text = stringResource(R.string.first_run_what_it_is),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+            Text(
+                text = stringResource(R.string.first_run_needs_server),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+
+            TextButton(
+                onClick = {
+                    // No custom tabs dependency in this module; the chooser is
+                    // enough, and a device with no browser must not crash the
+                    // one screen a new install can reach.
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(TANDEM_REPO_URL))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+                modifier = Modifier.padding(bottom = 16.dp),
+            ) {
+                Text(stringResource(R.string.first_run_repo_link))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.padding(start = 6.dp).size(16.dp),
+                )
+            }
+
+            OutlinedTextField(
+                value = serverUrlEdit,
+                onValueChange = {
+                    serverUrlEdit = it
+                    // The previous verdict was about a different address.
+                    viewModel.resetConnectionState()
+                },
+                label = { Text(stringResource(R.string.first_run_server_label)) },
+                placeholder = { Text("https://tandem.example.com") },
+                singleLine = true,
+                isError = connection is ConnectionState.Failed,
+                supportingText = {
+                    when (val state = connection) {
+                        is ConnectionState.Failed -> Text(state.message)
+                        // Inline, not only after pressing: the rule for what
+                        // counts as an address is one function, `normalizeServerUrl`.
+                        else -> if (serverUrlEdit.isNotBlank() &&
+                            normalizeServerUrl(serverUrlEdit) == null
+                        ) {
+                            Text(INVALID_SERVER_URL_MESSAGE)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { viewModel.checkConnection(serverUrlEdit) },
+                ),
+            )
+
+            Button(
+                onClick = { viewModel.checkConnection(serverUrlEdit) },
+                enabled = normalizeServerUrl(serverUrlEdit) != null &&
+                    connection !is ConnectionState.Checking,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .height(52.dp),
+            ) {
+                if (connection is ConnectionState.Checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text(
+                        stringResource(R.string.first_run_check_connection),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = connection is ConnectionState.Connected) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 16.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Text(
+                            text = stringResource(R.string.first_run_connected),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                    Button(
+                        onClick = onDone,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .height(52.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.first_run_continue),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+
+            // The escape hatch. Someone re-installing already knows all of this,
+            // and a probe can fail for reasons that do not stop a sign-in (a VPN
+            // that only routes some traffic, say) — so the screen must never be
+            // a wall.
+            TextButton(onClick = onDone, modifier = Modifier.padding(top = 8.dp)) {
+                Text(stringResource(R.string.first_run_skip))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SignInScreen(
+    onLoginSuccess: () -> Unit,
+    viewModel: LoginViewModel,
+    currentServerUrl: String,
+) {
+    var username by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    val isLoading by viewModel.isLoading.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val message by viewModel.message.collectAsState()
+    val isRegistering by viewModel.isRegistering.collectAsState()
+    // With no server configured yet, the URL field is the only useful control on
+    // this screen — start expanded rather than hidden behind the toggle.
+    var showAdvanced by remember { mutableStateOf(shouldExpandAdvanced(currentServerUrl)) }
+    var serverUrlEdit by remember(currentServerUrl) { mutableStateOf(currentServerUrl) }
+
+    val canSubmit = username.isNotBlank() && password.isNotBlank() &&
+        (!isRegistering || email.isNotBlank()) &&
+        currentServerUrl.isNotBlank() && !isLoading
+
+    fun submit() {
+        if (!canSubmit) return
+        if (isRegistering) {
+            viewModel.register(username, email, password)
+        } else {
+            viewModel.login(username, password, onLoginSuccess)
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(32.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -138,7 +516,7 @@ fun LoginScreen(
             // Logo
             Icon(
                 painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                contentDescription = "Tandem",
+                contentDescription = stringResource(R.string.app_name),
                 tint = Color.Unspecified,
                 modifier = Modifier
                     .size(72.dp)
@@ -146,13 +524,13 @@ fun LoginScreen(
                     .padding(bottom = 8.dp)
             )
             Text(
-                text = "Tandem",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                text = "Sync your reading & listening",
+                text = stringResource(R.string.login_tagline),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 32.dp),
@@ -177,11 +555,30 @@ fun LoginScreen(
                 }
             }
 
+            // Pending-approval notice after a successful "Request access".
+            message?.let { msg ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                ) {
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
             // Username
             OutlinedTextField(
                 value = username,
                 onValueChange = { username = it },
-                label = { Text("Username") },
+                label = { Text(stringResource(R.string.login_username)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -190,32 +587,49 @@ fun LoginScreen(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             )
 
+            // Email — only while requesting access, mirroring LoginPage.jsx.
+            AnimatedVisibility(visible = isRegistering) {
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text(stringResource(R.string.login_email)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .semantics { contentType = ContentType.EmailAddress },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Next,
+                    ),
+                )
+            }
+
             // Password
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Password") },
+                label = { Text(stringResource(R.string.login_password)) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 24.dp)
-                    .semantics { contentType = ContentType.Password },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
-                        if (username.isNotBlank() && password.isNotBlank()) {
-                            viewModel.login(username, password, onLoginSuccess)
+                    .semantics {
+                        contentType = if (isRegistering) {
+                            ContentType.NewPassword
+                        } else {
+                            ContentType.Password
                         }
-                    }
-                ),
+                    },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
             )
 
-            // Login Button
+            // Submit — "Sign In" or "Request Access"
             Button(
-                onClick = { viewModel.login(username, password, onLoginSuccess) },
-                enabled = username.isNotBlank() && password.isNotBlank() &&
-                    currentServerUrl.isNotBlank() && !isLoading,
+                onClick = { submit() },
+                enabled = canSubmit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -227,8 +641,55 @@ fun LoginScreen(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text("Sign In", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = stringResource(
+                            if (isRegistering) {
+                                R.string.login_request_access
+                            } else {
+                                R.string.login_sign_in
+                            },
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
+            }
+
+            // Mode toggle (issue #221). Same gate as the button above: with no
+            // server there is nothing to request an account from.
+            TextButton(
+                onClick = { viewModel.setRegistering(!isRegistering) },
+                enabled = currentServerUrl.isNotBlank() && !isLoading,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Text(
+                    text = stringResource(
+                        if (isRegistering) {
+                            R.string.login_have_account
+                        } else {
+                            R.string.login_need_account
+                        },
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = " " + stringResource(
+                        if (isRegistering) {
+                            R.string.login_sign_in
+                        } else {
+                            R.string.login_request_access
+                        },
+                    ),
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            AnimatedVisibility(visible = isRegistering) {
+                Text(
+                    text = stringResource(R.string.login_approval_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
             }
 
             // Advanced toggle — server URL configuration
@@ -236,7 +697,7 @@ fun LoginScreen(
                 onClick = { showAdvanced = !showAdvanced },
                 modifier = Modifier.padding(top = 16.dp),
             ) {
-                Text("Advanced")
+                Text(stringResource(R.string.login_advanced))
                 Icon(
                     imageVector = if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,
@@ -253,7 +714,7 @@ fun LoginScreen(
                             // busy correcting the very thing it complains about.
                             viewModel.clearError()
                         },
-                        label = { Text("Server URL") },
+                        label = { Text(stringResource(R.string.login_server_url)) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -274,14 +735,16 @@ fun LoginScreen(
                             normalizeServerUrl(serverUrlEdit).let { it == null || it != currentServerUrl },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                     ) {
-                        Text("Save")
+                        Text(stringResource(R.string.login_save))
                     }
                     Text(
-                        text = if (currentServerUrl.isBlank()) {
-                            "No server configured yet — enter your Tandem server URL to sign in."
-                        } else {
-                            "The new server applies immediately."
-                        },
+                        text = stringResource(
+                            if (currentServerUrl.isBlank()) {
+                                R.string.login_server_unset_hint
+                            } else {
+                                R.string.login_server_set_hint
+                            },
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),
