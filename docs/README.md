@@ -34,7 +34,9 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [release.md](release.md) | The Play release path: closed-test requirement, timeline, and the prerequisites to clear first |
 | [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
+| [demo-server.md](demo-server.md) | Standing up the public demo server: sizing, compose/Caddy, the `playreview` account, the public-domain library, and the Play App-access text |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |
 
 ## Historical
