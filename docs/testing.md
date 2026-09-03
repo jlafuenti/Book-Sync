@@ -312,6 +312,16 @@ The Media3 media-id wire format has exactly one owner, `player/MediaId.kt`, so i
 `pair_N` / `audiobook_N` dispatch is a pure function `MediaIdTest` can pin end to end even
 though `AudioPlayerService` itself is excluded below.
 
+The same trick carries the service's *decisions* out of the excluded class and into small
+pure ones: `HeartbeatThrottle` (when a heartbeat may push, #65), `ContinuousPlaybackLog`
+(when a 30-min history entry is due) and `PauseSavePolicy` (whether the stop being saved
+right now may claim the format, #226) each have their own test. What is left inside the
+service is only the wiring, and that is pinned by reading the source —
+`BoundarySaveWiringTest`, `SeekFlushWiringTest` and `PauseOwnershipWiringTest` assert that
+the call sites exist and that no second owner has appeared, e.g. that `CMD_USER_PAUSE` is
+declared, registered and handled, and that `PlayerViewModel`'s poll loop writes no position
+of its own.
+
 The module has **mockk** and **kotlinx-coroutines-test** (`testOptions.unitTests
 .isReturnDefaultValues = true`), so ViewModels are testable off-device: mock the
 collaborators, `Dispatchers.setMain(UnconfinedTestDispatcher())` so `viewModelScope.launch`
