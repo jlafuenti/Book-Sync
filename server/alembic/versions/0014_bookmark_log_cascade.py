@@ -14,7 +14,12 @@ the ORM loads the children and deletes them itself. The database has to agree,
 for the rows the session never loaded and for a delete written in SQL.
 
 ``position_hints.bookmark_id`` already had ``ON DELETE CASCADE`` (migration
-0007) and is left alone.
+0007) and is left alone, and so does ``refresh_tokens.user_id`` (0013, issue
+#250) — a per-device session is deleted by the database when its user is, with
+no ORM relationship involved at all.
+
+This sits after ``0013_refresh_tokens`` purely by ordering; the two revisions
+are unrelated and touch different tables.
 
 Alembic autogenerate does not diff ``ondelete``, so this is hand-written and
 ``tests/test_schema_contract.py`` pins the result by reflection — the same
@@ -25,8 +30,8 @@ psycopg2 URL; the SQLite test suite builds its schema with ``create_all``), but
 the SQLite branch is real: batch mode copies the table, and the baseline's
 unnamed constraint is addressed through Alembic's ``naming_convention`` recipe.
 
-Revision ID: 0013_bookmark_log_cascade
-Revises: 0012_book_path_indexes
+Revision ID: 0014_bookmark_log_cascade
+Revises: 0013_refresh_tokens
 Create Date: 2026-09-03
 
 """
@@ -38,8 +43,8 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 # NOTE: keep this at or under 32 chars — see the note in
 # 0002_conflict_resolution.py (alembic_version is a VARCHAR(32)).
-revision: str = "0013_bookmark_log_cascade"
-down_revision: Union[str, None] = "0012_book_path_indexes"
+revision: str = "0014_bookmark_log_cascade"
+down_revision: Union[str, None] = "0013_refresh_tokens"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
