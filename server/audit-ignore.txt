@@ -6,5 +6,30 @@
 # comment explaining why the advisory is unreachable or otherwise justified,
 # and should be re-checked whenever the owning pin changes. See issue #157.
 #
-# Currently empty: as of the issue-157 upgrade, `pip-audit -r requirements.txt
-# --strict` reports no known vulnerabilities.
+# ---------------------------------------------------------------------------
+
+# PYSEC-2026-3740 — nltk path traversal in model-artifact APIs (CVSS 8.3).
+#
+# Not reachable from this codebase, and there is nothing to upgrade to: 3.10.3
+# is the latest release (12 Aug 2026) and is itself the affected version. Drop
+# this entry and bump the pin as soon as NLTK ships a fix — tracked in #335.
+#
+# The advisory covers model-artifact APIs that use raw file operations on
+# caller-controlled paths, bypassing NLTK's own pathsec sandbox — verified in
+# the pinned source:
+#   nltk/parse/transitionparser.py:564  pickle.dump(model, open(modelfile, "wb"))
+#   nltk/parse/transitionparser.py:583  with open(modelFile, "rb")
+#   nltk/tag/perceptron.py:178          with open(path, "w")
+#
+# We call exactly one NLTK entry point, nltk.sent_tokenize
+# (services/epub_parser.py), plus nltk.data.find/download for punkt_tab
+# (services/nltk_data.py). That path is the one that DOES enforce pathsec:
+# sent_tokenize -> PunktTokenizer.load_lang -> nltk.data.find -> open_datafile,
+# and nltk/data.py imports open/ZipFile/urlopen from nltk.pathsec ("Path
+# validation is enforced by pathsec.open()"). load_punkt_params reads .tab/.txt
+# via PunktDecoder — no pickle and no model artifacts anywhere in it.
+#
+# Nothing in server/ references TransitionParser, PerceptronTagger, maxent,
+# pos_tag or ne_chunk. Exploitation requires calling those APIs with an
+# attacker-controlled path; importing nltk does not.
+PYSEC-2026-3740
