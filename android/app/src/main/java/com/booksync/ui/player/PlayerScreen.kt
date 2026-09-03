@@ -611,7 +611,6 @@ class PlayerViewModel @Inject constructor(
                 if (ctrl.isConnected) {
                     _positionMs.value = ctrl.currentPosition
                     _durationMs.value = maxOf(_durationMs.value, ctrl.duration.coerceAtLeast(0))
-                    val wasPlaying = _isPlaying.value
                     _isPlaying.value = ctrl.isPlaying
 
                     // Update current chapter index based on position
@@ -623,28 +622,37 @@ class PlayerViewModel @Inject constructor(
                         loadChaptersFromService(ctrl)
                     }
 
-                    // No heartbeat or 30-min tick here: AudioPlayerService owns
-                    // the one periodic save (see its startAutoPositionSave).
-                    // This screen used to run an identical 5-second loop, so
-                    // whenever the player was open every tick produced TWO
-                    // server writes — doubling write volume and the offline
-                    // queue, and making the app's own two near-simultaneous
-                    // writes race into 409s in the server's apply_position.
-                    // The service loop is driven by onIsPlayingChanged, so it
-                    // covers this screen's playback too.
+                    // This loop writes NOTHING. AudioPlayerService owns every
+                    // playback-position write — the periodic heartbeat, the
+                    // 30-min tick, the seek flush and the pause boundary alike
+                    // (see its startAutoPositionSave). It is driven by
+                    // onIsPlayingChanged, so it covers this screen's playback
+                    // too.
                     //
-                    // Pause → log this as a session boundary. This is the phone
-                    // screen's own pause detection (as opposed to
-                    // AudioPlayerService's, which also serves Android Auto and
-                    // can't tell a deliberate pause from an involuntary one) —
-                    // claimFormat=true: an explicit playback command, not a
-                    // background save.
-                    if (wasPlaying && !ctrl.isPlaying) {
-                        saveBookmark(appendToLog = true, claimFormat = true)
-                    }
+                    // This loop used to detect the pause edge here and save
+                    // again, purely so the phone screen could claim the format
+                    // (the service listener can't tell a deliberate pause from
+                    // focus loss). That meant TWO PUT /api/sync/position calls
+                    // within ~500 ms on every pause, three on "switch to
+                    // reader" — doubled write volume, a doubled offline queue,
+                    // and the app's own writes racing into 409s in the
+                    // server's apply_position. The intent now travels as
+                    // CMD_USER_PAUSE instead (issue #226, see togglePlayback);
+                    // the write stays in one place.
                 }
             }
         }
+    }
+
+    /**
+     * Test seam (issue #226): supply the [MediaController] that
+     * `connectToService` would normally hand over, so the JVM unit tests can
+     * drive [togglePlayback] / [stopAndSave] without a live media session.
+     * Nothing in production calls this.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun attachControllerForTest(mediaController: MediaController) {
+        controller = mediaController
     }
 
     fun ensureMediaLoaded() {
@@ -661,6 +669,7 @@ class PlayerViewModel @Inject constructor(
     fun togglePlayback() {
         val ctrl = controller ?: return
         if (ctrl.isPlaying) {
+            announceUserPause(ctrl)
             ctrl.pause()
         } else {
             // Ensure media is loaded before playing
@@ -676,6 +685,28 @@ class PlayerViewModel @Inject constructor(
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs)
         _positionMs.value = positionMs
+    }
+
+    /**
+     * Tell the service this next stop was asked for (issue #226).
+     *
+     * AudioPlayerService writes the position for every stop, but its
+     * `onIsPlayingChanged` listener cannot tell a deliberate pause from audio
+     * focus loss, a Bluetooth disconnect or the sleep timer, so it treats them
+     * all as background saves. This screen is the only place that knows the
+     * difference, and this command is the whole of its contribution — the
+     * write itself stays with the service. Sending it before `pause()` arms
+     * exactly one stop (see `PauseSavePolicy`).
+     */
+    private fun announceUserPause(ctrl: MediaController) {
+        // Bundle() rather than Bundle.EMPTY: the JVM unit tests link against
+        // the stub android.jar, where the static EMPTY is null and
+        // SessionCommand's checkNotNull(extras) throws. An empty Bundle costs
+        // nothing and keeps this path unit-testable.
+        ctrl.sendCustomCommand(
+            SessionCommand(AudioPlayerService.CMD_USER_PAUSE, Bundle()),
+            Bundle(),
+        )
     }
 
     /**
@@ -839,9 +870,16 @@ class PlayerViewModel @Inject constructor(
     /**
      * Save the current playback position.
      *
-     * @param appendToLog false for 5-second heartbeat saves (position-only, no
-     *   history entry). True for pause / stop / 30-min-tick boundaries — those
-     *   produce a BookmarkLog row and reset the 30-min continuous-playback timer.
+     * The ViewModel's last remaining position write, reached only from
+     * [onCleared] (issue #226): AudioPlayerService owns the heartbeat, the
+     * seek flush and the pause boundary. **Do not add a call site here.** If a
+     * new moment needs a save, it belongs in the service, which sees every
+     * playback surface — phone, Android Auto, notification and Cast.
+     *
+     * @param appendToLog false for position-only saves (no history entry).
+     *   True only for a genuine session boundary — a BookmarkLog row plus a
+     *   reset of the 30-min continuous-playback timer. Teardown is not one:
+     *   the pause that preceded it already logged through the service.
      * @param claimFormat whether this save may claim "audiobook" as the format
      *   `resolvePairOpenTarget` routes to next (see
      *   [BookSyncRepository.savePlaybackPosition]'s doc for the full rule).
@@ -883,24 +921,42 @@ class PlayerViewModel @Inject constructor(
     }
 
     /**
-     * Pause playback and save bookmark. Called when switching to reader — this
-     * is a session boundary so we do log a history entry. claimFormat=true:
-     * an explicit user command (the "switch to reader" button), not a
-     * background save.
+     * Pause playback on the way to the reader.
+     *
+     * The name is historical: this no longer saves. It used to `pause()` and
+     * then `saveBookmark(appendToLog = true, claimFormat = true)`, which — on
+     * top of the service's own pause listener and the poll loop's pause
+     * detection — made "switch to reader" three position writes for one
+     * boundary (issue #226). The pause is announced as a deliberate one and
+     * AudioPlayerService does the single write with `claimFormat = true`.
+     *
+     * A stop that changes nothing (the player was already paused) writes
+     * nothing, which is correct: the position was persisted by the pause that
+     * got it here, and any seek since then was flushed by the service
+     * (issue #166).
      */
     fun stopAndSave() {
-        controller?.pause()
-        saveBookmark(appendToLog = true, claimFormat = true)
+        val ctrl = controller ?: return
+        announceUserPause(ctrl)
+        ctrl.pause()
     }
 
     override fun onCleared() {
         positionPollingJob?.cancel()
-        // Save final position before cleanup — user closing the player is a
-        // stop event. claimFormat reflects whether the player was actually
-        // playing at this moment: if it's paused/idle at teardown, this save
-        // must not claim the format (product rule — a background/idle save
-        // doesn't count as consumption, even at session end).
-        saveBookmark(appendToLog = true, claimFormat = _isPlaying.value)
+        // Save final position before cleanup. This is the one position write
+        // left in this ViewModel (issue #226) and it stays because the
+        // controller may already be disconnected here, so the service's own
+        // teardown save is not guaranteed to have seen the last position.
+        //
+        // appendToLog=false: it is not a session boundary of its own. The
+        // pause that preceded it already wrote the history row through the
+        // service; logging again would put two entries on the same boundary.
+        //
+        // claimFormat reflects whether the player was actually playing at this
+        // moment: if it's paused/idle at teardown, this save must not claim the
+        // format (product rule — a background/idle save doesn't count as
+        // consumption, even at session end).
+        saveBookmark(appendToLog = false, claimFormat = _isPlaying.value)
         controller?.release()
         controller = null
         super.onCleared()

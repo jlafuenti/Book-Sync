@@ -74,6 +74,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *   SET_SLEEP_TIMER(minutes: Int) — 0 to cancel
  *   GET_SPEED
  *   GET_CHAPTERS
+ *   SUPPRESS_NEXT_SEEK_FLUSH
+ *   USER_PAUSE — "the stop you are about to see was asked for"
  */
 @AndroidEntryPoint
 class AudioPlayerService : MediaLibraryService() {
@@ -90,6 +92,13 @@ class AudioPlayerService : MediaLibraryService() {
         // still true from the previous session — and the restore seek was
         // flushed with claimFormat=true on a mere screen open (found live).
         const val CMD_SUPPRESS_NEXT_SEEK_FLUSH = "SUPPRESS_NEXT_SEEK_FLUSH"
+        // Sent by PlayerViewModel immediately before a deliberate pause
+        // (play/pause tap, "switch to reader"). The service owns the one
+        // position write for a stop; this command is the only thing the screen
+        // knows that the service cannot infer — that this particular stop was
+        // asked for, so its save may claim the format. Consumed by exactly one
+        // stop; see [PauseSavePolicy] and issue #226.
+        const val CMD_USER_PAUSE = "USER_PAUSE"
 
         private const val TAG = "AudioPlayerService"
         private const val PREFS_NAME = "audio_player_prefs"
@@ -135,6 +144,10 @@ class AudioPlayerService : MediaLibraryService() {
     // by pushes that actually landed — heartbeat or boundary — so a failed PUT
     // is retried on the next tick rather than 30s later.
     private val heartbeatThrottle = HeartbeatThrottle(NETWORK_SAVE_INTERVAL_MS)
+    // Whether the stop the pause listener is about to save may claim the format
+    // (issue #226). Armed by CMD_USER_PAUSE, consumed by the next stop; an
+    // involuntary stop (focus loss, Bluetooth, sleep timer) finds it unarmed.
+    private val pauseSavePolicy = PauseSavePolicy()
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var sharedPrefs: SharedPreferences
 
@@ -256,18 +269,34 @@ class AudioPlayerService : MediaLibraryService() {
         val playerListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) {
+                    // Drop a CMD_USER_PAUSE that never produced a stop (sent
+                    // while the player was already paused) — it must not leak
+                    // onto a later involuntary stop.
+                    pauseSavePolicy.onPlaybackStarted()
                     startAutoPositionSave()
                 } else {
                     stopAutoPositionSave()
                     // Pause is a session boundary — log it. Also covers the
                     // sleep-timer path, which drops playWhenReady to false.
-                    // claimFormat=false: this listener fires for ANY reason
-                    // playback stopped (a deliberate pause, audio focus loss,
-                    // Bluetooth disconnect, the sleep timer) and can't tell
-                    // them apart, so it can't be trusted to claim the format —
-                    // this is the exact background-save-hijacks-routing bug
-                    // the claimFormat split exists to fix.
-                    saveCurrentPositionForAuto(appendToLog = true, claimFormat = false, detached = true)
+                    // This is THE position write for a stop (issue #226): the
+                    // player screen used to run a second one from its 500 ms
+                    // poll loop just to claim the format, so every pause with
+                    // the screen open produced two PUTs and "switch to reader"
+                    // three.
+                    //
+                    // The listener still can't see WHY playback stopped — a
+                    // deliberate pause, audio focus loss, a Bluetooth
+                    // disconnect, the sleep timer all land here. So the screen
+                    // announces its deliberate pauses with CMD_USER_PAUSE and
+                    // [PauseSavePolicy] hands the verdict over: armed → this
+                    // one stop may claim the format; unarmed → claimFormat
+                    // stays false, the background-save-hijacks-routing bug the
+                    // claimFormat split exists to fix.
+                    saveCurrentPositionForAuto(
+                        appendToLog = true,
+                        claimFormat = pauseSavePolicy.consumeClaimFormat(),
+                        detached = true,
+                    )
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -884,12 +913,13 @@ class AudioPlayerService : MediaLibraryService() {
      * @param claimFormat whether this save may claim "audiobook" as the format
      *   `resolvePairOpenTarget` routes to next (see
      *   [BookSyncRepository.savePlaybackPosition]'s doc for the full rule).
-     *   No default — every call site decides explicitly. Only the
-     *   still-playing heartbeat loop ([startAutoPositionSave]) passes true;
-     *   every other call site here (pause, natural end, cast transition,
-     *   controller disconnect) is a boundary where the player either isn't
-     *   playing or the listener can't tell a deliberate command from an
-     *   involuntary stop, so they all pass false.
+     *   No default — every call site decides explicitly. The still-playing
+     *   heartbeat loop ([startAutoPositionSave]) and the user-seek flush pass
+     *   true; the pause listener asks [PauseSavePolicy], which says true only
+     *   for a stop the player screen announced with [CMD_USER_PAUSE]
+     *   (issue #226). Every remaining call site (natural end, cast transition,
+     *   controller disconnect, onDestroy) is a boundary where the player isn't
+     *   playing and nothing announced a user command, so they pass false.
      */
     private fun saveCurrentPositionForAuto(
         appendToLog: Boolean = false,
@@ -995,6 +1025,12 @@ class AudioPlayerService : MediaLibraryService() {
      * an identical 5-second loop of its own whenever the player screen was
      * open, which doubled the server write volume and made the app's two
      * near-simultaneous writes race each other into 409s in `apply_position`.
+     *
+     * The same is now true of the *boundary* saves: this service owns every
+     * playback-position write, periodic and boundary alike (issue #226). The
+     * screen contributes only [CMD_USER_PAUSE], the intent the service cannot
+     * infer. If you are about to add a position write to `PlayerScreen.kt`,
+     * add it here instead.
      *
      * Every tick writes Room; only every [NETWORK_SAVE_INTERVAL_MS] does one
      * also push to the server (issue #65) — see [HeartbeatThrottle]. Boundary
@@ -1124,6 +1160,7 @@ class AudioPlayerService : MediaLibraryService() {
                 .add(SessionCommand(CMD_GET_SPEED, Bundle.EMPTY))
                 .add(SessionCommand(CMD_GET_CHAPTERS, Bundle.EMPTY))
                 .add(SessionCommand(CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle.EMPTY))
+                .add(SessionCommand(CMD_USER_PAUSE, Bundle.EMPTY))
                 .build()
             // AudiobookPlayer (ForwardingPlayer) already removes SEEK_TO_PREVIOUS/NEXT globally,
             // so no per-controller command restriction is needed here.
@@ -1162,6 +1199,12 @@ class AudioPlayerService : MediaLibraryService() {
                 }
                 CMD_SUPPRESS_NEXT_SEEK_FLUSH -> {
                     suppressNextSeekFlush = true
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                CMD_USER_PAUSE -> {
+                    // Arms the NEXT stop only. The pause itself comes through
+                    // the normal transport command right after this.
+                    pauseSavePolicy.onUserPauseCommand()
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             }

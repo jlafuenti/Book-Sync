@@ -76,9 +76,12 @@ class PlayerViewModelTeardownTest {
 
         clearViewModel(vm)
 
+        // appendToLog = false since issue #226: the pause that preceded
+        // teardown already logged the boundary through AudioPlayerService, so
+        // this save carries the position only.
         verify(exactly = 1) {
             repository.savePlaybackPositionDetached(
-                pairId = 42, audioPositionMs = any(), appendToLog = true, claimFormat = any())
+                pairId = 42, audioPositionMs = any(), appendToLog = false, claimFormat = any())
         }
     }
 
