@@ -69,6 +69,13 @@ DEFAULT_SETTINGS = {
     # Must match transcription_providers.DEFAULT_REMOTE_TIMEOUT_SEC, which owns
     # the knob's semantics (issue #248).
     "transcription_remote_timeout": 86400,
+    # Retry ladder for a provider that is down (issue #242) — owned by
+    # services/queue_manager.py. Defaults must match DEFAULT_RETRY_MAX and
+    # DEFAULT_RETRY_BASE_SECONDS there. The delay doubles per retry (capped at
+    # queue_manager.RETRY_DELAY_CAP_SECONDS), so 5 x 30 s spans ~15 minutes —
+    # long enough to ride out a worker reboot and a model load.
+    "transcription_retry_max": 5,
+    "transcription_retry_base_seconds": 30,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium",
     # Off-hours transcription window (issue #106) — owned by services/offhours.py.
