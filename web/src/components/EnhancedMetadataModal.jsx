@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, enrichAudiobookFromAbs } from '../api';
 import ChapterEditor from './ChapterEditor';
 import MatchTab from './MatchTab';
+import { formatDateTime } from '../lib/datetime';
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -21,9 +22,9 @@ function formatDuration(seconds) {
     return `${s}s`
 }
 
+// Naive-UTC server timestamps go through the shared parser (issue #216).
 function formatDate(iso) {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleDateString('en-US', {
+    return formatDateTime(iso, {
         year: 'numeric', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit'
     })

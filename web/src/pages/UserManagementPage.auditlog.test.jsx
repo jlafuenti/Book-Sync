@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 import { UserManagementSection } from './UserManagementPage'
+import { formatDate } from '../lib/datetime'
 
 const { getUsersMock, getAuditLogMock } = vi.hoisted(() => ({
     getUsersMock: vi.fn(),
@@ -58,6 +59,24 @@ describe('UserManagementSection audit log', () => {
         await openAuditTab()
         expect(await screen.findByText('Login Locked')).toBeTruthy()
         expect(screen.queryByText('login_locked')).toBeNull()
+    })
+
+    // Issue #216: `created_at` arrives as naive UTC, so the "Created" column
+    // must be read as UTC — not as local time, which lands on the wrong day
+    // for part of every day west of UTC.
+    it('renders the user "Created" column at the UTC instant the server meant', async () => {
+        getUsersMock.mockResolvedValue([{
+            id: 2, username: 'alice', email: 'alice@example.com', role: 'user',
+            is_active: true, created_at: '2026-08-22T02:30:00',
+        }])
+        render(<UserManagementSection />)
+
+        expect(await screen.findByText('alice')).toBeTruthy()
+        expect(screen.getByText(formatDate('2026-08-22T02:30:00'))).toBeTruthy()
+        if (new Date(2026, 7, 22).getTimezoneOffset() > 0) {
+            // West of UTC this is the previous day — the old bug showed the 22nd.
+            expect(screen.queryByText(new Date('2026-08-22T02:30:00').toLocaleDateString())).toBeNull()
+        }
     })
 
     it('offers login_locked in the Action filter and queries the server for it', async () => {

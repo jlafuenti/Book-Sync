@@ -3,6 +3,8 @@ import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMeta
 import { useAuth } from '../contexts/AuthContext'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import CoverImg from '../components/CoverImg'
+// Server timestamps are naive UTC — parse via the shared helper (issue #216).
+import { formatDate } from '../lib/datetime'
 
 const FIELDS_LABEL = {
     title: 'Title',
@@ -188,11 +190,6 @@ export default function NewPairsPage() {
             await ignoreMetadataDiscrepancies(pairId, fields)
         }
         await load()
-    }
-
-    function formatDate(dt) {
-        if (!dt) return '—'
-        return new Date(dt).toLocaleDateString()
     }
 
     if (loading) return <div className="page-content"><p>Loading new pairs…</p></div>
