@@ -256,6 +256,11 @@ dependencies {
     implementation("androidx.media3:media3-session:1.7.1")
     implementation("androidx.media3:media3-ui:1.7.1")
     implementation("androidx.media3:media3-cast:1.7.1")
+    // Lets ExoPlayer stream through the app's own authenticated OkHttp client, so
+    // AuthInterceptor supplies the Bearer header and TokenAuthenticator refreshes a
+    // 401 mid-stream — no media token in the URL (issue #171). Same version as the
+    // rest of Media3; mixing versions across media3 artifacts is unsupported.
+    implementation("androidx.media3:media3-datasource-okhttp:1.7.1")
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
@@ -379,7 +384,7 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 48.40% line coverage on 2026-09-03 (1980/4091 lines);
+                    // Measured 48.55% line coverage on 2026-09-03 (2020/4161 lines);
                     // floor set a few points under, same as the server's --cov-fail-under.
                     // Ratchet: after any PR that raises the total, bump this to
                     // (new total − 3), whole percent.
