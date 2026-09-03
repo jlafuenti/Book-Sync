@@ -49,4 +49,13 @@
     <string name="first_run_continue">Continue to sign in</string>
     <string name="first_run_skip">I already have a server — skip</string>
 
+    <!-- ============ Server version handshake (issue #174) ============ -->
+    <!-- A Play install updates on the user's schedule and a self-hosted server
+         on the operator's, so the two drift. Each line names the side that is
+         behind and the one action that can fix it: they are opposite
+         instructions, and the wrong one sends someone off to make a change that
+         cannot help. Shown as a banner, never as a wall — the app still works. -->
+    <string name="version_server_newer">Your Tandem server is newer than this app — update it from Play</string>
+    <string name="version_server_older">This app needs server API v%1$d — ask your server admin to upgrade</string>
+
 </resources>
