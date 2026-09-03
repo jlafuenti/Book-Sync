@@ -224,8 +224,14 @@ class LoginViewModel @Inject constructor(
             _error.value = null
             _message.value = null
             try {
-                api.register(RegisterRequest(username, email, password))
-                _message.value = REGISTRATION_PENDING_MESSAGE
+                val submitted = api.register(RegisterRequest(username, email, password))
+                // The server's own sentence when it sent one, as LoginPage.jsx
+                // does, so an admin who reworded it is heard on both clients.
+                // Falling back rather than requiring it: the 201 is the fact
+                // that matters, and a body this build does not recognise must
+                // not turn a created account into an error.
+                _message.value = submitted.message?.takeIf { it.isNotBlank() }
+                    ?: REGISTRATION_PENDING_MESSAGE
                 // Back to the sign-in form, which is where the message belongs:
                 // the next useful action is signing in, once approved.
                 _isRegistering.value = false

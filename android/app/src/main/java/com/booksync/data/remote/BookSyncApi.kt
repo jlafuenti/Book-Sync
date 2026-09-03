@@ -39,8 +39,14 @@ interface BookSyncApi {
     @POST("api/auth/login")
     suspend fun login(@Body request: LoginRequest): TokenResponse
 
+    /**
+     * Submit an access request. 201 with a bare `{"message": …}` — the account
+     * is created pending an admin's approval, so there is no user to return and
+     * no session. Was declared as `UserResponse` until issue #221 first called
+     * it from a device; see [RegisterResponse].
+     */
     @POST("api/auth/register")
-    suspend fun register(@Body request: RegisterRequest): UserResponse
+    suspend fun register(@Body request: RegisterRequest): RegisterResponse
 
     // NOTE: /api/auth/refresh is deliberately NOT here. It lives on
     // AuthRefreshApi, which is built on a client carrying no AuthInterceptor and
