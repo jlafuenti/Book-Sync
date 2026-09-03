@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { formatDateTime } from '../lib/datetime'
 import { switchToEbook } from '../lib/handoff'
+import { handoffPositionMs } from '../lib/playbackOffsets'
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -475,7 +476,10 @@ function BookDetailPage() {
                         }
                         setReaderOpen(false)
                         setReaderInitialChapter(null)
-                        audioPlayer.play(book.paired_with.id, book.paired_with, audioPositionMs, Number(id))
+                        // The handoff is a resume: land 5s before the anchor
+                        // (issue #212, contract § Playback offsets).
+                        audioPlayer.play(book.paired_with.id, book.paired_with,
+                            handoffPositionMs(audioPositionMs), Number(id))
                         setPlayerOpen(true)
                     } : null}
                 />

@@ -16,6 +16,13 @@ import { updatePosition, getDeviceId, getDeviceName } from '../api'
  * Pausing comes first, so the audio does not keep running under the reader and
  * the playback heartbeat cannot write a newer position over the handoff.
  *
+ * No rewind here, deliberately. `lib/playbackOffsets.js` `handoffPositionMs`
+ * applies RESUME_REWIND_SECONDS in the *other* direction (issue #212): text ->
+ * audio is a resume, so playback starts a few seconds before the anchor. This
+ * direction writes the anchor itself, and "the stored anchor describes where
+ * you were, not where you resume" — subtracting the rewind here would walk the
+ * pair backwards five seconds on every switch.
+ *
  * @param {object} player  the AudioPlayerContext value (needs pause, currentTime)
  * @param {number} pairId  the pair whose canonical position is being written
  * @returns {Promise<object|null>} the server's position record, or null if the
