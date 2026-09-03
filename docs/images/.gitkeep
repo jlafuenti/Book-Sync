@@ -1,0 +1,6 @@
+# Screenshots referenced from README.md live here (issue #185).
+#
+# `.gitignore` ignores `*.png` repo-wide and excepts this folder, so a
+# screenshot dropped here is committable while stray Playwright captures
+# elsewhere still are not. `test_docs_contract.py::test_readme_image_embeds_resolve`
+# fails if the README embeds one that is not committed.
