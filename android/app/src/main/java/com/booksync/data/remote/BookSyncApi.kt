@@ -40,6 +40,35 @@ interface BookSyncApi {
     suspend fun login(@Body request: LoginRequest): TokenResponse
 
     /**
+     * Sign in at an **absolute** URL, bypassing [BaseUrlInterceptor] (issue #147).
+     *
+     * For "Try the demo", which has the same problem the health probe has and one
+     * more besides. The demo server is not the configured one — nothing is
+     * configured yet — and it must not *become* the configured one until the
+     * credentials have actually been accepted: storing it first is how the demo
+     * flow ended up writing the URL, having the login destination re-created
+     * underneath it, and losing everything after the login response.
+     *
+     * So the address travels with the request, and [ServerUrlManager.setServerUrl]
+     * happens afterwards, once there is something worth storing it for.
+     */
+    @Headers("$BYPASS_BASE_URL_HEADER: 1")
+    @POST
+    suspend fun loginAt(@Url url: String, @Body request: LoginRequest): TokenResponse
+
+    /**
+     * `GET /api/auth/me` at an absolute URL — the [loginAt] companion.
+     *
+     * Same reason: the demo flow reads the role before it has stored the server,
+     * and a request routed through the interceptor at that moment would go to
+     * whatever was configured before (nothing, on a fresh install). The bearer
+     * token still comes from [AuthInterceptor], which does not care about the host.
+     */
+    @Headers("$BYPASS_BASE_URL_HEADER: 1")
+    @GET
+    suspend fun getMeAt(@Url url: String): UserResponse
+
+    /**
      * Submit an access request. 201 with a bare `{"message": …}` — the account
      * is created pending an admin's approval, so there is no user to return and
      * no session. Was declared as `UserResponse` until issue #221 first called

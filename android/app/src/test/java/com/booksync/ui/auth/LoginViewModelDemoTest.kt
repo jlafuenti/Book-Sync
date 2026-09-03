@@ -2,6 +2,8 @@ package com.booksync.ui.auth
 
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DemoAccount
+import com.booksync.data.remote.DemoSignIn
+import com.booksync.data.remote.DemoSignInState
 import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.HealthResponse
 import com.booksync.data.remote.LoginRequest
@@ -14,12 +16,17 @@ import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.demoAccountOrNull
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,7 +34,6 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -40,23 +46,25 @@ import java.io.IOException
  * "Try the demo" on the first-run screen (issue #147).
  *
  * Play's reviewer installs the app, sees an empty Server URL field, and has
- * nothing to type — the app is a client for a server the reviewer does not have.
- * Play calls that "app not functional". The button is the Grocy pattern: one tap
- * puts the reviewer (or a curious installer) inside a working library on the
- * public demo server, with no address and no credentials to copy across.
+ * nothing to type — the app is a client for a server they do not have. Play calls
+ * that "app not functional". The button is the Grocy pattern: one tap puts the
+ * reviewer (or a curious installer) inside a working library on the public demo
+ * server, with no address and no credentials to copy across.
  *
  * The three values are build settings that default to empty, so a clean clone
- * ships no demo and no button — the same rule as `tandem.defaultServerUrl`
- * (issue #58). What this file pins is what the button does when they are set:
+ * ships no demo and no button. What this file pins is what the tap does when they
+ * are set — and in particular the two things that broke it on a device:
  *
- *  - it verifies `/api/health` **before** storing anything, exactly as
- *    "Check connection" does. A demo server that is down must not leave a
- *    stranger's install pointed at it;
- *  - it only leaves the welcome screen once the sign-in has actually
- *    succeeded. Dismissing first and failing after would strand the user on a
- *    password prompt for an account they were never given;
- *  - a refusal shows the server's own sentence, because "HTTP 401" does not
- *    distinguish a rotated demo password from a suspended demo account.
+ *  - **The flow does not live on the ViewModel.** The first cut ran it in
+ *    `viewModelScope`. On the emulator `/api/health` answered 200, the login
+ *    answered 200, and then nothing happened at all: storing the server URL
+ *    re-created the login destination, which cancelled the coroutine holding the
+ *    rest of the flow — no tokens, no dismissal, no navigation, and no error,
+ *    because a cancelled coroutine reports nothing. `the sign-in completes even
+ *    though the ViewModel's own scope never runs` is that bug.
+ *  - **Nothing is stored until the credentials are accepted.** The probe and the
+ *    sign-in both go to an absolute URL, so the disruptive write happens once,
+ *    after everything that can ordinarily fail.
  */
 private const val DEMO_URL = "https://demo.example.com"
 private const val DEMO_USER = "playreview"
@@ -68,6 +76,7 @@ class LoginViewModelDemoTest {
     private lateinit var api: BookSyncApi
     private lateinit var serverUrlManager: ServerUrlManager
     private lateinit var tokenManager: TokenManager
+    private lateinit var userScopeProvider: UserScopeProvider
 
     private val demo = DemoAccount(DEMO_URL, DEMO_USER, DEMO_PASSWORD)
 
@@ -78,12 +87,13 @@ class LoginViewModelDemoTest {
         api = mockk()
         serverUrlManager = mockk()
         tokenManager = mockk(relaxed = true)
+        userScopeProvider = mockk(relaxed = true)
         every { serverUrlManager.serverUrlFlow } returns flowOf("")
         every { serverUrlManager.currentUrl } returns ""
         coEvery { serverUrlManager.setServerUrl(any()) } returns true
         coEvery { api.getHealth(any()) } returns HealthResponse(status = "healthy")
-        coEvery { api.login(any()) } returns TokenResponse("access", "refresh")
-        coEvery { api.getMe() } returns UserResponse(
+        coEvery { api.loginAt(any(), any()) } returns TokenResponse("access", "refresh")
+        coEvery { api.getMeAt(any()) } returns UserResponse(
             id = 7,
             username = DEMO_USER,
             email = "demo@example.com",
@@ -99,17 +109,32 @@ class LoginViewModelDemoTest {
         Dispatchers.resetMain()
     }
 
+    private fun newDemoSignIn(
+        gate: FirstRunGate,
+        scope: CoroutineScope,
+    ) = DemoSignIn(
+        api = api,
+        tokenManager = tokenManager,
+        serverUrlManager = serverUrlManager,
+        userScopeProvider = userScopeProvider,
+        firstRunGate = gate,
+        serverVersionGate = ServerVersionGate(api, serverUrlManager),
+        scope = scope,
+    )
+
     private fun newViewModel(
         demoAccount: DemoAccount? = demo,
         gate: FirstRunGate = FirstRunGate(),
+        scope: CoroutineScope = CoroutineScope(UnconfinedTestDispatcher()),
     ) = LoginViewModel(
         api = api,
         tokenManager = tokenManager,
         serverUrlManager = serverUrlManager,
-        userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
+        userScopeProvider = userScopeProvider,
         firstRunGate = gate,
         serverVersionGate = ServerVersionGate(api, serverUrlManager),
         demoAccount = demoAccount,
+        demoSignIn = demoAccount?.let { newDemoSignIn(gate, scope) },
     )
 
     // -- Whether the button exists at all ----------------------------------
@@ -160,12 +185,11 @@ class LoginViewModelDemoTest {
 
     @Test
     fun `a demo tap on a build with no demo does nothing at all`() {
-        var landed = false
         val vm = newViewModel(demoAccount = null)
 
-        vm.signInToDemo { landed = true }
+        vm.signInToDemo()
 
-        assertFalse(landed)
+        assertEquals(DemoSignInState.Idle, vm.demoState.value)
         coVerify(exactly = 0) { api.getHealth(any()) }
         coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
     }
@@ -173,41 +197,138 @@ class LoginViewModelDemoTest {
     // -- The happy path ----------------------------------------------------
 
     @Test
-    fun `the demo tap stores the demo server, signs in and leaves first-run`() {
-        var landed = false
+    fun `the demo tap signs in, stores the demo server and leaves first-run`() {
         val vm = newViewModel()
 
-        vm.signInToDemo { landed = true }
+        vm.signInToDemo()
 
-        coVerify(exactly = 1) { serverUrlManager.setServerUrl(DEMO_URL) }
-        coVerify(exactly = 1) { api.login(LoginRequest(DEMO_USER, DEMO_PASSWORD)) }
+        coVerify(exactly = 1) { api.loginAt("$DEMO_URL/api/auth/login", LoginRequest(DEMO_USER, DEMO_PASSWORD)) }
         coVerify(exactly = 1) { tokenManager.saveTokens("access", "refresh") }
+        coVerify(exactly = 1) { serverUrlManager.setServerUrl(DEMO_URL) }
+        coVerify(exactly = 1) { userScopeProvider.onAuthenticated() }
+        assertEquals(DemoSignInState.Succeeded, vm.demoState.value)
         assertFalse(vm.showFirstRun.value)
-        assertTrue(landed)
-        assertNull(vm.error.value)
-        assertFalse(vm.isLoading.value)
     }
 
     @Test
-    fun `the health probe runs before the address is stored`() {
+    fun `every demo request carries the demo address itself`() {
+        // Absolute URLs, bypassing the base-URL interceptor: nothing is
+        // configured yet, so there is no base URL that would reach the demo host,
+        // and the whole point is not to configure one until the login lands.
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
-        // Absolute URL, bypassing the base-URL interceptor: nothing is
-        // configured yet, so there is no base URL that would reach it.
         coVerify(exactly = 1) { api.getHealth("$DEMO_URL/api/health") }
+        coVerify(exactly = 1) { api.loginAt("$DEMO_URL/api/auth/login", any()) }
+        coVerify(exactly = 1) { api.getMeAt("$DEMO_URL/api/auth/me") }
+    }
+
+    @Test
+    fun `nothing is stored until the credentials have been accepted`() {
+        // The ordering is the fix for the device bug: setServerUrl is what
+        // re-creates the login destination, so it must not sit between two
+        // requests that can fail.
+        val vm = newViewModel()
+
+        vm.signInToDemo()
+
+        coVerifyOrder {
+            api.getHealth(any())
+            api.loginAt(any(), any())
+            serverUrlManager.setServerUrl(DEMO_URL)
+            tokenManager.saveTokens(any(), any())
+        }
     }
 
     @Test
     fun `the demo role is learned before any screen renders`() {
-        // Same reason as the ordinary sign-in (issue #170): a screen that
-        // renders before the role is known treats the user as having none.
+        // Same reason as the ordinary sign-in (issue #170): a screen that renders
+        // before the role is known treats the user as having none.
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
         coVerify(exactly = 1) { tokenManager.saveRole("user") }
+    }
+
+    @Test
+    fun `a second tap while the first is still running is ignored`() {
+        val scope = TestScope(StandardTestDispatcher())
+        val vm = newViewModel(scope = scope)
+
+        vm.signInToDemo()
+        vm.signInToDemo()
+        scope.advanceUntilIdle()
+
+        coVerify(exactly = 1) { api.loginAt(any(), any()) }
+    }
+
+    // -- The bug this design exists for ------------------------------------
+
+    @Test
+    fun `the sign-in completes even though the ViewModel's own scope never runs`() {
+        // The regression test for the device failure. `Dispatchers.Main` here is a
+        // StandardTestDispatcher that is never advanced, so anything launched in
+        // viewModelScope simply does not execute — which is what cancellation
+        // looked like on the emulator: the login answered 200 and every step after
+        // it vanished. The demo scope runs; the ViewModel's does not.
+        Dispatchers.setMain(StandardTestDispatcher())
+        val gate = FirstRunGate()
+        val vm = newViewModel(gate = gate, scope = CoroutineScope(UnconfinedTestDispatcher()))
+
+        vm.signInToDemo()
+
+        coVerify(exactly = 1) { tokenManager.saveTokens("access", "refresh") }
+        coVerify(exactly = 1) { serverUrlManager.setServerUrl(DEMO_URL) }
+        assertTrue("the welcome screen was never dismissed", gate.dismissed.value)
+        assertEquals(DemoSignInState.Succeeded, vm.demoState.value)
+    }
+
+    @Test
+    fun `a ViewModel rebuilt mid-flight sees the result the old one started`() {
+        // The screen reads the singleton's StateFlow directly, so the result lands
+        // on whatever composition is alive when it arrives — not on the one that
+        // started it, which by then may be gone.
+        val gate = FirstRunGate()
+        val scope = TestScope(StandardTestDispatcher())
+        val signIn = newDemoSignIn(gate, scope)
+
+        LoginViewModel(
+            api = api,
+            tokenManager = tokenManager,
+            serverUrlManager = serverUrlManager,
+            userScopeProvider = userScopeProvider,
+            firstRunGate = gate,
+            serverVersionGate = ServerVersionGate(api, serverUrlManager),
+            demoAccount = demo,
+            demoSignIn = signIn,
+        ).signInToDemo()
+
+        val rebuilt = LoginViewModel(
+            api = api,
+            tokenManager = tokenManager,
+            serverUrlManager = serverUrlManager,
+            userScopeProvider = userScopeProvider,
+            firstRunGate = gate,
+            serverVersionGate = ServerVersionGate(api, serverUrlManager),
+            demoAccount = demo,
+            demoSignIn = signIn,
+        )
+        scope.advanceUntilIdle()
+
+        assertEquals(DemoSignInState.Succeeded, rebuilt.demoState.value)
+    }
+
+    @Test
+    fun `consuming the result stops the screen navigating again`() {
+        val vm = newViewModel()
+        vm.signInToDemo()
+        assertEquals(DemoSignInState.Succeeded, vm.demoState.value)
+
+        vm.consumeDemoResult()
+
+        assertEquals(DemoSignInState.Idle, vm.demoState.value)
     }
 
     // -- The demo server is down -------------------------------------------
@@ -215,17 +336,14 @@ class LoginViewModelDemoTest {
     @Test
     fun `an unreachable demo server leaves first-run up and stores nothing`() {
         coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
-        var landed = false
         val vm = newViewModel()
 
-        vm.signInToDemo { landed = true }
+        vm.signInToDemo()
 
         coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
-        coVerify(exactly = 0) { api.login(any()) }
+        coVerify(exactly = 0) { api.loginAt(any(), any()) }
         assertTrue(vm.showFirstRun.value)
-        assertFalse(landed)
-        assertNotNull(vm.error.value)
-        assertFalse(vm.isLoading.value)
+        assertTrue(vm.demoState.value is DemoSignInState.Failed)
     }
 
     @Test
@@ -235,85 +353,93 @@ class LoginViewModelDemoTest {
         )
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
         coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
         assertTrue(vm.showFirstRun.value)
-        assertNotNull(vm.error.value)
+        assertTrue(vm.demoState.value is DemoSignInState.Failed)
     }
 
     // -- The demo credentials stopped working ------------------------------
 
     @Test
-    fun `a refused demo sign-in shows the server's own sentence`() {
-        coEvery { api.login(any()) } throws HttpException(
+    fun `a refused demo sign-in shows the server's own sentence and stores nothing`() {
+        coEvery { api.loginAt(any(), any()) } throws HttpException(
             Response.error<Unit>(
                 401,
                 """{"detail":"Account is inactive"}"""
                     .toResponseBody("application/json".toMediaType()),
             ),
         )
-        var landed = false
         val vm = newViewModel()
 
-        vm.signInToDemo { landed = true }
+        vm.signInToDemo()
 
-        assertEquals("Account is inactive", vm.error.value)
-        assertFalse(landed)
+        assertEquals(
+            DemoSignInState.Failed("Account is inactive"),
+            vm.demoState.value,
+        )
+        // Refusing the credentials must not leave the install pointed at the demo:
+        // the address is only worth storing once it has proved useful.
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+        coVerify(exactly = 0) { tokenManager.saveTokens(any(), any()) }
         // The welcome screen is where the message belongs: the user never had
         // credentials of their own, so a password prompt is not the next step.
         assertTrue(vm.showFirstRun.value)
-        assertFalse(vm.isLoading.value)
     }
 
     @Test
     fun `a refusal with no readable body still says something`() {
-        coEvery { api.login(any()) } throws HttpException(
+        coEvery { api.loginAt(any(), any()) } throws HttpException(
             Response.error<Unit>(503, "".toResponseBody(null)),
         )
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
-        assertTrue(vm.error.value.orEmpty().contains("503"))
-        assertTrue(vm.showFirstRun.value)
+        val state = vm.demoState.value
+        assertTrue(state is DemoSignInState.Failed)
+        assertTrue((state as DemoSignInState.Failed).message.contains("503"))
     }
 
     @Test
     fun `a network failure during sign-in is a sentence, not a crash`() {
-        coEvery { api.login(any()) } throws IOException("connection reset")
+        coEvery { api.loginAt(any(), any()) } throws IOException("connection reset")
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
-        assertTrue(vm.error.value.orEmpty().isNotBlank())
+        val state = vm.demoState.value
+        assertTrue(state is DemoSignInState.Failed)
+        assertTrue((state as DemoSignInState.Failed).message.isNotBlank())
         assertTrue(vm.showFirstRun.value)
-        assertFalse(vm.isLoading.value)
     }
 
     @Test
-    fun `a store the manager refuses stops before any credentials are sent`() {
+    fun `a store the manager refuses is reported rather than silently succeeding`() {
+        // Close to unreachable — the URL was normalized when the build settings
+        // were read — but a session with no server to spend it on is worse than a
+        // message.
         coEvery { serverUrlManager.setServerUrl(any()) } returns false
         val vm = newViewModel()
 
-        vm.signInToDemo {}
+        vm.signInToDemo()
 
-        coVerify(exactly = 0) { api.login(any()) }
-        assertNotNull(vm.error.value)
+        coVerify(exactly = 0) { tokenManager.saveTokens(any(), any()) }
+        assertTrue(vm.demoState.value is DemoSignInState.Failed)
         assertTrue(vm.showFirstRun.value)
     }
 
     @Test
-    fun `a failed demo tap can be followed by a normal check connection`() {
-        // The error banner must not outlive the attempt it describes, or the
-        // next screen state looks like it has already failed.
-        coEvery { api.getHealth(any()) } throws IOException("offline")
+    fun `a role lookup that fails does not undo a sign-in that worked`() {
+        // Best-effort, as on the ordinary sign-in path: the role simply stays
+        // unknown, which hasMinRole treats as no permission.
+        coEvery { api.getMeAt(any()) } throws IOException("flaky")
         val vm = newViewModel()
-        vm.signInToDemo {}
-        assertNotNull(vm.error.value)
 
-        vm.clearError()
+        vm.signInToDemo()
 
-        assertNull(vm.error.value)
+        assertEquals(DemoSignInState.Succeeded, vm.demoState.value)
+        assertFalse(vm.showFirstRun.value)
     }
 }

@@ -38,8 +38,9 @@ import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.BYPASS_BASE_URL_HEADER
-import com.booksync.data.remote.DEMO_UNREACHABLE_MESSAGE
 import com.booksync.data.remote.DemoAccount
+import com.booksync.data.remote.DemoSignIn
+import com.booksync.data.remote.DemoSignInState
 import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
@@ -110,6 +111,12 @@ class LoginViewModel @Inject constructor(
      * default and injects the binding in [com.booksync.di.AppModule].
      */
     val demoAccount: DemoAccount? = null,
+    /**
+     * Runs the demo sign-in, and outlives this ViewModel on purpose — see
+     * [DemoSignIn]. Defaulted for the same reason as [demoAccount]: the tests
+     * that predate the demo do not care about it.
+     */
+    private val demoSignIn: DemoSignIn? = null,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -199,6 +206,18 @@ class LoginViewModel @Inject constructor(
     }
 
     /**
+     * Where a "Try the demo" tap has got to, straight from the singleton that is
+     * running it (issue #147).
+     *
+     * A pass-through, deliberately: no `stateIn(viewModelScope, …)` in between,
+     * because the point of [DemoSignIn] is that the flow outlives this ViewModel.
+     * A ViewModel rebuilt while the sign-in is in flight re-reads the same
+     * StateFlow and sees the result when it lands.
+     */
+    val demoState: StateFlow<DemoSignInState> =
+        demoSignIn?.state ?: MutableStateFlow(DemoSignInState.Idle).asStateFlow()
+
+    /**
      * "Try the demo" — one tap from a fresh install to a working library
      * (issue #147).
      *
@@ -208,68 +227,20 @@ class LoginViewModel @Inject constructor(
      * closed-test testers hit (issue #173). This is the Grocy answer — the build
      * carries one read-only demo login and offers it as a button.
      *
-     * The order is the whole design, and each step is there because the
-     * alternative fails somebody:
-     *
-     *  1. **Probe `/api/health` first, store nothing yet.** Same rule as
-     *     [checkConnection]: a demo server that is down must not leave a
-     *     stranger's install pointed at it with no way back but Advanced.
-     *  2. **Then store**, because [api] routes through `BaseUrlInterceptor` and
-     *     there is no other way for the login to reach the demo host.
-     *  3. **Dismiss last, only on success.** Dismissing first and failing after
-     *     would drop the user on a password prompt for an account they were
-     *     never given — the exact state the first-run screen exists to prevent.
-     *
-     * A refusal shows the server's own `detail` for the reason [register] does:
-     * "HTTP 401" does not distinguish a rotated demo password from a demo
-     * account that has been suspended, and only one of those is worth retrying.
+     * Everything the tap does happens in [DemoSignIn], on an application-scoped
+     * coroutine, and **not here**. Running it in `viewModelScope` is what broke it
+     * on a device: the sign-in stored the server URL, that re-created the login
+     * destination, and the rest of the flow — tokens, dismissal, navigation — was
+     * cancelled along with this ViewModel while the screen sat there unchanged.
      */
-    fun signInToDemo(onSuccess: () -> Unit) {
+    fun signInToDemo() {
         val demo = demoAccount ?: return
-        viewModelScope.launch {
-            _isLoading.value = true
-            _error.value = null
-            _message.value = null
-            try {
-                val reachable = try {
-                    // Absolute URL and the interceptor bypassed, exactly as the
-                    // probe does — nothing is configured yet, so there is no
-                    // base URL that would reach the demo host.
-                    serverVersionGate.record(api.getHealth("${demo.url}/api/health"))
-                    true
-                } catch (e: Exception) {
-                    false
-                }
-                if (!reachable) {
-                    _error.value = DEMO_UNREACHABLE_MESSAGE
-                    return@launch
-                }
+        demoSignIn?.start(demo)
+    }
 
-                if (!serverUrlManager.setServerUrl(demo.url)) {
-                    // Unreachable in practice — the URL was normalized when the
-                    // build settings were read — but sending the demo password
-                    // to whatever server happens to be configured instead is not
-                    // a failure mode worth leaving open.
-                    _error.value = INVALID_SERVER_URL_MESSAGE
-                    return@launch
-                }
-
-                val tokens = api.login(LoginRequest(demo.username, demo.password))
-                tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
-                userScopeProvider.onAuthenticated()
-                runCatching { tokenManager.saveRole(api.getMe().role) }
-                firstRunGate.dismiss()
-                onSuccess()
-            } catch (e: HttpException) {
-                _error.value = e.serverDetail() ?: "Demo sign-in failed (HTTP ${e.code()})"
-            } catch (e: IOException) {
-                _error.value = "Could not reach the demo server — check your connection."
-            } catch (e: Exception) {
-                _error.value = e.message ?: "Demo sign-in failed"
-            } finally {
-                _isLoading.value = false
-            }
-        }
+    /** The screen has navigated on, or shown the failure; clear the result. */
+    fun consumeDemoResult() {
+        demoSignIn?.consume()
     }
 
     /** The error Card is shared with login failures; editing either field clears it. */
@@ -490,9 +461,23 @@ fun LoginScreen(
 private fun FirstRunScreen(viewModel: LoginViewModel, onLoginSuccess: () -> Unit) {
     val connection by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
+    val demoState by viewModel.demoState.collectAsState()
     var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
+
+    // The demo sign-in runs in an application-scoped singleton, so the result can
+    // land on a composition that did not start it — that is the point of putting
+    // it there. Navigating from a LaunchedEffect on the state, rather than from a
+    // callback held by the coroutine, is what makes that survivable.
+    LaunchedEffect(demoState) {
+        if (demoState is DemoSignInState.Succeeded) {
+            viewModel.consumeDemoResult()
+            onLoginSuccess()
+        }
+    }
+
+    val demoRunning = demoState is DemoSignInState.Running
+    val demoFailure = (demoState as? DemoSignInState.Failed)?.message
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -624,14 +609,14 @@ private fun FirstRunScreen(viewModel: LoginViewModel, onLoginSuccess: () -> Unit
             // never run a server, is supposed to do on this screen.
             viewModel.demoAccount?.let {
                 OutlinedButton(
-                    onClick = { viewModel.signInToDemo(onLoginSuccess) },
-                    enabled = !isLoading && connection !is ConnectionState.Checking,
+                    onClick = viewModel::signInToDemo,
+                    enabled = !demoRunning && connection !is ConnectionState.Checking,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 12.dp)
                         .height(52.dp),
                 ) {
-                    if (isLoading) {
+                    if (demoRunning) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
@@ -655,7 +640,7 @@ private fun FirstRunScreen(viewModel: LoginViewModel, onLoginSuccess: () -> Unit
             // Demo failures land here rather than in the address field's
             // supporting text: nothing is wrong with what the user typed — they
             // typed nothing — so marking that field as the error would be a lie.
-            error?.let { msg ->
+            (demoFailure ?: error)?.let { msg ->
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.errorContainer,

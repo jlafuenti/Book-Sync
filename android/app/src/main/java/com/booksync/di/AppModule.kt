@@ -67,6 +67,21 @@ object AppModule {
             password = com.booksync.BuildConfig.DEMO_PASSWORD,
         )
 
+    /**
+     * The demo sign-in machinery, or null in a build with no demo account
+     * (issue #147).
+     *
+     * Tied to [provideDemoAccount] so the two can never disagree: a build with no
+     * credentials has nothing that could start a demo sign-in, and the first-run
+     * screen has nothing to render a button for.
+     */
+    @Provides
+    @Singleton
+    fun provideDemoSignIn(
+        account: com.booksync.data.remote.DemoAccount?,
+        signIn: javax.inject.Provider<com.booksync.data.remote.DemoSignIn>,
+    ): com.booksync.data.remote.DemoSignIn? = if (account == null) null else signIn.get()
+
     @Provides
     @Singleton
     fun provideRetryInterceptor(): com.booksync.data.remote.RetryInterceptor {
