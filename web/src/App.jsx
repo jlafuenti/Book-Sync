@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { isLoggedIn, getMe, logout } from './api'
+import { isLoggedIn, getMe, logout, getUsers } from './api'
 import { useTheme } from './ThemeContext'
 import { DEFAULT_THEME } from './themes'
 import { ThemePicker } from './components/ThemePicker'
@@ -125,6 +125,25 @@ export function AppShell({ user, setUser }) {
         setUser(null)
     }
 
+    // Pending registrations (issue #282). With ALLOW_PUBLIC_REGISTRATION on,
+    // an account request otherwise sits unseen until someone happens to open
+    // System -> Users; the count rides on the nav entry that leads there.
+    //
+    // Admin-only because GET /api/users/?filter=pending is: asking from an
+    // editor's session would buy a 403 and nothing else. A failure is
+    // swallowed — a missing badge is not worth an error on every page.
+    const isAdmin = hasMinRole('admin')
+    const [pendingUsers, setPendingUsers] = useState(0)
+    useEffect(() => {
+        if (!isAdmin) return
+        let cancelled = false
+        Promise.resolve()
+            .then(() => getUsers('pending'))
+            .then(list => { if (!cancelled) setPendingUsers(list.length) })
+            .catch(() => {})
+        return () => { cancelled = true }
+    }, [isAdmin])
+
     const isSection = (prefix) => location.pathname.startsWith(prefix)
     const isExact = (path) => location.pathname === path
     const navClass = (prefix) => isSection(prefix) ? 'nav-link active' : 'nav-link'
@@ -238,6 +257,16 @@ export function AppShell({ user, setUser }) {
                     <Link to={hasMinRole('admin') ? '/system/status' : '/system/troubleshoot'} className={navClass('/system')} title="System">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
                         <span>System</span>
+                        {pendingUsers > 0 && (
+                            <span
+                                className="badge badge-pending"
+                                data-testid="pending-users-badge"
+                                title={`${pendingUsers} account request${pendingUsers !== 1 ? 's' : ''} waiting for approval`}
+                                style={{ marginLeft: 'auto' }}
+                            >
+                                {pendingUsers}
+                            </span>
+                        )}
                     </Link>
                     )}
 

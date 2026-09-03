@@ -253,3 +253,112 @@ async def test_cancel_transcription_allows_editor(db, make_client, make_user, au
             f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
         )
     assert r.status_code != 403
+
+
+# ---------------------------------------------------------------------------
+# POST /queue/{id}/requeue  (issue #247)
+#
+# History showed a failed job's error and offered nothing to do about it. The
+# retry goes through `add_to_queue`, the same path every other entry point
+# uses: a *new* pending row, with the failed row left in History as the record
+# of what went wrong.
+# ---------------------------------------------------------------------------
+
+async def test_requeue_creates_a_new_pending_item_for_a_failed_one(
+    db, make_client, make_user, auth_header
+):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    failed = await _seed_item(
+        db, pair.id, status="failed", error_message="whisper died",
+        retry_count=3, progress=0.7,
+    )
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{failed.id}/requeue", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "pending"
+    assert body["book_pair_id"] == pair.id
+    assert body["id"] != failed.id
+
+    async with async_session() as s:
+        # The failure record is untouched — History is the audit trail.
+        old = await s.get(TranscriptionQueueItem, failed.id)
+        assert old.status == "failed"
+        assert old.error_message == "whisper died"
+        assert old.retry_count == 3
+
+        new = await s.get(TranscriptionQueueItem, body["id"])
+        assert new.status == "pending"
+        assert (new.retry_count or 0) == 0
+        assert new.error_message is None
+
+
+async def test_requeue_works_for_a_cancelled_item(db, make_client, make_user, auth_header):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="cancelled")
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{item.id}/requeue", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "pending"
+
+
+@pytest.mark.parametrize("status", ["pending", "in_progress", "completed"])
+async def test_requeue_rejects_items_that_are_not_failed_or_cancelled(
+    db, make_client, make_user, auth_header, status
+):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status=status)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{item.id}/requeue", headers=auth_header(editor)
+        )
+    assert r.status_code == 409
+
+
+async def test_requeue_returns_the_active_item_when_the_pair_is_queued_again(
+    db, make_client, make_user, auth_header
+):
+    """`add_to_queue` dedups on an active row, so retrying twice is idempotent."""
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    failed = await _seed_item(db, pair.id, status="failed")
+    active = await _seed_item(db, pair.id, status="pending")
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{failed.id}/requeue", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    assert r.json()["id"] == active.id
+
+
+async def test_requeue_requires_editor(db, make_client, make_user, auth_header):
+    user = await make_user(username="u", role="user")
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="failed")
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{item.id}/requeue", headers=auth_header(user)
+        )
+    assert r.status_code == 403
+
+
+async def test_requeue_404s_for_an_unknown_item(db, make_client, make_user, auth_header):
+    editor = await make_user(username="ed", role="editor")
+    async with make_client(transcription_router.router) as c:
+        r = await c.post("/api/transcription/queue/9999/requeue", headers=auth_header(editor))
+    assert r.status_code == 404

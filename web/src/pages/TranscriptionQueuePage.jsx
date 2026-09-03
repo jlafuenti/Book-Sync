@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
     getTranscriptionQueue, getQueueHistory, removeFromQueue, cancelTranscription,
-    updateQueuePriority, runQueueItemNow, getOffHoursStatus,
+    updateQueuePriority, runQueueItemNow, getOffHoursStatus, requeueQueueItem,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 // Queue timestamps are naive UTC (the DB columns are tz-less); the off-hours
@@ -103,6 +103,19 @@ function TranscriptionQueuePage() {
         try {
             await runQueueItemNow(itemId)
             await Promise.all([loadQueue(), loadOffHours()])
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    // Issue #247: History showed the failure and nothing to do about it. The
+    // server queues a fresh row for the same pair, so both lists move — the
+    // history row stays as the record, a new pending item appears in the queue.
+    const handleRetry = async (itemId) => {
+        setError('')
+        try {
+            await requeueQueueItem(itemId)
+            await Promise.all([loadHistory(), loadQueue()])
         } catch (err) {
             setError(err.message)
         }
@@ -498,6 +511,7 @@ function TranscriptionQueuePage() {
                                             <th style={{ ...thStyle, cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleHistorySort('completed_at')}>Completed<SortIndicator col="completed_at" /></th>
                                             <th style={thStyle}>Duration</th>
                                             <th style={thStyle}>Message</th>
+                                            {canCancel && <th style={thStyle}></th>}
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -552,6 +566,20 @@ function TranscriptionQueuePage() {
                                                         {item.error_message || item.message || '—'}
                                                     </div>
                                                 </td>
+                                                {canCancel && (
+                                                    <td style={tdStyle}>
+                                                        {(item.status === 'failed' || item.status === 'cancelled') && (
+                                                            <button
+                                                                className="btn btn-secondary btn-sm"
+                                                                onClick={() => handleRetry(item.id)}
+                                                                title="Queue this book again"
+                                                                style={{ padding: '4px 10px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                                            >
+                                                                ↻ Retry
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                )}
                                             </tr>
                                         ))}
                                     </tbody>

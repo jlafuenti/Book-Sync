@@ -709,6 +709,16 @@ export async function runQueueItemNow(itemId) {
     return resp.json();
 }
 
+// Retry a failed or cancelled history item (#247). The server queues a *new*
+// pending row for the same pair — the failed row stays in History.
+export async function requeueQueueItem(itemId) {
+    const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}/requeue`, {
+        method: 'POST',
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to retry item');
+    return resp.json();
+}
+
 // Current off-hours window state, for the queue page banner.
 export async function getOffHoursStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/offhours`);
