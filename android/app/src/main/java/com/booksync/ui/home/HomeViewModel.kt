@@ -13,6 +13,9 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.remote.ServerUrlManager
+import com.booksync.data.remote.ServerVersionGate
+import com.booksync.data.remote.VersionBanner
+import com.booksync.data.remote.VersionCompat
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -81,6 +84,7 @@ class HomeViewModel @Inject constructor(
     private val transcriptionRepository: TranscriptionRepository,
     networkMonitor: NetworkMonitor,
     serverUrlManager: ServerUrlManager,
+    private val serverVersionGate: ServerVersionGate,
     @ApplicationContext context: Context,
 ) : ViewModel() {
 
@@ -95,6 +99,33 @@ class HomeViewModel @Inject constructor(
 
     /** Synchronous server URL for building cover image URLs in composables. */
     val serverUrl: String = serverUrlManager.currentUrl
+
+    /**
+     * Non-blocking warning when the app and the server are on different API
+     * versions, or null when they agree or the server did not say (issue #174).
+     *
+     * Home is where the check runs because it is the first screen that has both
+     * a server URL and a session, and the only one a returning user reaches
+     * without passing through login — a check that lived only on the first-run
+     * screen would never fire again after the install that configured the server.
+     *
+     * The decision is here rather than in the composable on purpose: nothing in
+     * this repo measures Compose, and a version check that silently stops firing
+     * is worse than none, because it reads as "no problem".
+     */
+    val versionBanner: StateFlow<VersionBanner?> = serverVersionGate.verdict
+        .map { VersionCompat.bannerFor(it) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            VersionCompat.bannerFor(serverVersionGate.verdict.value),
+        )
+
+    init {
+        // Cached process-wide, so this is a no-op once anything has an answer —
+        // including the first-run screen's own "Check connection".
+        viewModelScope.launch { serverVersionGate.refreshOnce() }
+    }
 
     /** One-shot snackbar messages from transcription actions. */
     private val _transcriptionMessage = MutableStateFlow<String?>(null)

@@ -5,6 +5,9 @@ import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.HealthResponse
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.ServerUrlManager
+import com.booksync.data.remote.ServerVersionGate
+import com.booksync.data.remote.SUPPORTED_API_VERSION
+import com.booksync.data.remote.VersionBanner
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.UserScopeProvider
 import io.mockk.coEvery
@@ -22,6 +25,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -74,13 +78,87 @@ class LoginViewModelConnectionTest {
         Dispatchers.resetMain()
     }
 
-    private fun newViewModel(gate: FirstRunGate = FirstRunGate()) = LoginViewModel(
+    private fun newViewModel(
+        gate: FirstRunGate = FirstRunGate(),
+        versionGate: ServerVersionGate = ServerVersionGate(api, serverUrlManager),
+    ) = LoginViewModel(
         api = api,
         tokenManager = mockk<TokenManager>(relaxed = true),
         serverUrlManager = serverUrlManager,
         userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
         firstRunGate = gate,
+        serverVersionGate = versionGate,
     )
+
+    // -- The version handshake (issue #174) --------------------------------
+    //
+    // The probe already has the answer in its hand: `/api/health` carries the
+    // server's `api_version`, and this screen is the one place a brand-new
+    // install talks to a server it has never contacted. Throwing that away and
+    // discovering the mismatch later, as a 404 during sync, is what #174 is about.
+
+    @Test
+    fun `a server newer than this build raises the update-the-app banner`() {
+        coEvery { api.getHealth(any()) } returns HealthResponse(
+            status = "healthy",
+            api_version = SUPPORTED_API_VERSION + 1,
+        )
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertEquals(VersionBanner.SERVER_NEWER, vm.versionBanner.value)
+        // Still a usable server — the banner informs, it does not block.
+        assertEquals(ConnectionState.Connected(PROBE_SERVER_URL), vm.connectionState.value)
+    }
+
+    @Test
+    fun `a server older than this build raises the upgrade-the-server banner`() {
+        coEvery { api.getHealth(any()) } returns HealthResponse(
+            status = "healthy",
+            api_version = SUPPORTED_API_VERSION - 1,
+        )
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertEquals(VersionBanner.SERVER_OLDER, vm.versionBanner.value)
+    }
+
+    @Test
+    fun `a matching server raises no banner`() {
+        coEvery { api.getHealth(any()) } returns HealthResponse(
+            status = "healthy",
+            api_version = SUPPORTED_API_VERSION,
+        )
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertNull(vm.versionBanner.value)
+    }
+
+    @Test
+    fun `a server that reports no version raises no banner`() {
+        coEvery { api.getHealth(any()) } returns HealthResponse(status = "healthy")
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertNull(vm.versionBanner.value)
+    }
+
+    @Test
+    fun `a failed probe says nothing about versions`() {
+        // Nothing answered, so there is no version to disagree with. A banner
+        // here would blame a mismatch for what is a wrong address.
+        coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertNull(vm.versionBanner.value)
+    }
 
     // -- The probe itself --------------------------------------------------
 
