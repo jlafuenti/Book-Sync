@@ -10,7 +10,13 @@ import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -142,6 +148,56 @@ class ResolvePairOpenTargetTest {
             pair(ebookDownloaded = true, audiobookDownloaded = true))
 
         assertEquals(PairOpenTarget.Reader, target)
+    }
+
+    /**
+     * Cross-platform parity (issue #215): this test and the web's
+     * `pairOpenTarget.test.js` drive the *same* golden vectors
+     * (server/tests/fixtures/sync_parity/pair_open_target.json, copied onto
+     * the test classpath by the copySyncParityFixtures Gradle task), so the
+     * two clients cannot disagree about which format a pair opens in.
+     *
+     * The web disagreed for a long time: it compared the two `user_progress`
+     * rows' `updated_at` instead of reading `source`, and since a pair-scoped
+     * write stamps both rows in one loop that comparison always tied — a pair
+     * last listened to on the phone still opened the web reader.
+     *
+     * `available` is "what this client can actually open": downloaded here,
+     * present on the pair on the web.
+     */
+    private fun parityCases() = javaClass.classLoader
+        ?.getResourceAsStream("sync_parity/pair_open_target.json")
+        ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+        ?.let { Json.parseToJsonElement(it).jsonArray }
+        ?: error("pair_open_target.json not on the test classpath — copySyncParityFixtures must run")
+
+    @Test
+    fun resolvePairOpenTarget_matches_the_shared_golden_vectors() = runTest {
+        val cases = parityCases()
+        assertTrue("expected at least one golden vector", cases.size > 0)
+
+        for (case in cases) {
+            val obj = case.jsonObject
+            val name = obj["name"]!!.jsonPrimitive.content
+            val why = obj["why"]?.jsonPrimitive?.contentOrNull ?: ""
+            val source = obj["source"]?.jsonPrimitive?.contentOrNull
+            val available = obj["available"]!!.jsonObject
+            val expected = when (val e = obj["expected"]!!.jsonPrimitive.content) {
+                "ebook" -> PairOpenTarget.Reader
+                "audiobook" -> PairOpenTarget.Player
+                "details" -> PairOpenTarget.Details
+                else -> error("$name: unknown expected target '$e'")
+            }
+
+            coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns source?.let { bookmark(it) }
+
+            val target = repository().resolvePairOpenTarget(pair(
+                ebookDownloaded = available["ebook"]!!.jsonPrimitive.boolean,
+                audiobookDownloaded = available["audiobook"]!!.jsonPrimitive.boolean,
+            ))
+
+            assertEquals("$name: $why", expected, target)
+        }
     }
 
     @Test

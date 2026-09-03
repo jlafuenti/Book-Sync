@@ -88,6 +88,12 @@ vi.mock('../components/AudioPlayer', () => ({
 }))
 vi.mock('../components/CoverImg', () => ({ default: () => null }))
 
+// Viewport width is a render-time branch on this page (issue #273): the
+// Continue card's actions are a hover overlay on desktop and a tap target on
+// mobile. Mutable so one file can drive both without a second mock factory.
+const mobileRef = vi.hoisted(() => ({ value: false }))
+vi.mock('../hooks/useIsMobile', () => ({ default: () => mobileRef.value }))
+
 beforeEach(() => {
     coverSrcMock.mockReset()
     getAllProgressMock.mockReset().mockResolvedValue([])
@@ -103,6 +109,7 @@ beforeEach(() => {
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
     readerFlushSpy.mockReset()
+    mobileRef.value = false
     player.play.mockReset()
     player.pause.mockReset()
     player.currentAudiobook = null
@@ -244,10 +251,15 @@ describe('HomePage reader/player handoff', () => {
     // portable anchor rather than a CFI it would have to distrust anyway.
 
     // A Continue card's primary action is the card itself; which overlay opens
-    // follows `lastFormat`, i.e. whichever half was touched most recently.
-    function setupPair({ lastFormat = 'ebook' } = {}) {
-        const ebookAt = lastFormat === 'ebook' ? '2024-01-02T00:00:00Z' : '2024-01-01T00:00:00Z'
-        const audioAt = lastFormat === 'ebook' ? '2024-01-01T00:00:00Z' : '2024-01-02T00:00:00Z'
+    // follows `bookmarks.source` (issue #215), which the progress projection
+    // now carries on both rows.
+    //
+    // The two `updated_at` values are deliberately IDENTICAL here: a
+    // pair-scoped write stamps both `user_progress` rows in the same loop, so
+    // that is what production actually looks like. The old routing compared
+    // those timestamps, always tied, and always opened the reader.
+    function setupPair({ source = 'ebook' } = {}) {
+        const sameInstant = '2024-01-02T00:00:00Z'
         getEbooksMock.mockResolvedValue([{ id: 10, title: 'Pair Ebook', cover_path: null }])
         getAudiobooksMock.mockResolvedValue([
             { id: 20, title: 'Pair Audiobook', cover_path: null, duration_seconds: 3600 },
@@ -256,9 +268,10 @@ describe('HomePage reader/player handoff', () => {
         getAllProgressMock.mockResolvedValue([
             { id: 1, media_type: 'ebook', ebook_id: 10, epub_progress_percent: 20,
               epub_chapter: 7, book_pair_id: 100, is_completed: false,
-              updated_at: ebookAt },
+              source, updated_at: sameInstant },
             { id: 2, media_type: 'audiobook', audiobook_id: 20, audio_position_ms: 500,
-              book_pair_id: 100, is_completed: false, updated_at: audioAt },
+              book_pair_id: 100, is_completed: false,
+              source, updated_at: sameInstant },
         ])
     }
 
@@ -282,6 +295,42 @@ describe('HomePage reader/player handoff', () => {
         fireEvent.click(await screen.findByText('to-ebook'))
     }
 
+    // Issue #215: which format a Continue card opens is decided by
+    // `bookmarks.source`, not by comparing the two projection rows'
+    // `updated_at` — those are stamped in the same loop and always tie.
+    it('routes a pair whose source is `audiobook` to the player', async () => {
+        setupPair({ source: 'audiobook' })
+        render(<MemoryRouter><HomePage /></MemoryRouter>)
+
+        await clickTheContinueCard('Pair Audiobook')
+
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            20, expect.anything(), 500, 10))
+        expect(screen.queryByTestId('reader')).not.toBeInTheDocument()
+    })
+
+    it('routes a pair whose source is `ebook` to the reader', async () => {
+        setupPair({ source: 'ebook' })
+        render(<MemoryRouter><HomePage /></MemoryRouter>)
+
+        await clickTheContinueCard('Pair Ebook')
+
+        expect(await screen.findByTestId('reader')).toHaveAttribute('data-ebook-id', '10')
+        expect(player.play).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the reader when the projection carries no source', async () => {
+        // An older server (or a pair written before `source` was projected)
+        // sends no field at all; the ebook is the documented preference.
+        setupPair({ source: undefined })
+        render(<MemoryRouter><HomePage /></MemoryRouter>)
+
+        await clickTheContinueCard('Pair Ebook')
+
+        expect(await screen.findByTestId('reader')).toHaveAttribute('data-ebook-id', '10')
+        expect(player.play).not.toHaveBeenCalled()
+    })
+
     it('opens the reader on the stored chapter and hands it no CFI', async () => {
         setupPair()
         const reader = await openTheReader()
@@ -290,7 +339,11 @@ describe('HomePage reader/player handoff', () => {
         expect(reader).toHaveAttribute('data-chapter', '7')
     })
 
-    it('switching to audio takes the audio anchor from the canonical record', async () => {
+    // Issue #212: "switch to listening" is a resume, so it lands
+    // RESUME_REWIND_SECONDS (5 s) before the anchor -- the same distance an
+    // unpause does, and the same jump Android's handoff makes. The stored
+    // anchor is untouched; the rewind lives at this call site.
+    it('switching to audio rewinds 5s off the canonical anchor', async () => {
         setupPair()
         getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
         await openTheReader()
@@ -299,9 +352,20 @@ describe('HomePage reader/player handoff', () => {
 
         await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 100))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            20, expect.anything(), 42000, 10))
+            20, expect.anything(), 37000, 10))
         // The record answered, so the projection is not consulted.
         expect(getProgressMock).not.toHaveBeenCalled()
+    })
+
+    it('clamps the handoff rewind at 0 for an anchor under 5s', async () => {
+        setupPair()
+        getPositionMock.mockResolvedValue({ audio_position_ms: 3000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            20, expect.anything(), 0, 10))
     })
 
     it('falls back to the progress projection when the record has no audio position', async () => {
@@ -314,7 +378,7 @@ describe('HomePage reader/player handoff', () => {
 
         await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 20))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            20, expect.anything(), 9000, 10))
+            20, expect.anything(), 4000, 10))
     })
 
     it('issues the reader flush before starting the audiobook (issue #158)', async () => {
@@ -346,7 +410,7 @@ describe('HomePage reader/player handoff', () => {
     })
 
     it('switching to the ebook saves the audio position and opens at the returned anchor', async () => {
-        setupPair({ lastFormat: 'audiobook' })
+        setupPair({ source: 'audiobook' })
         player.currentAudiobook = { id: 20, title: 'Pair Audiobook' }
         player.pairedEbookId = 10
         player.currentTime = 12.7
@@ -369,7 +433,7 @@ describe('HomePage reader/player handoff', () => {
     })
 
     it('still opens the reader when the position save fails offline', async () => {
-        setupPair({ lastFormat: 'audiobook' })
+        setupPair({ source: 'audiobook' })
         player.currentAudiobook = { id: 20, title: 'Pair Audiobook' }
         player.pairedEbookId = 10
         player.currentTime = 5
@@ -381,5 +445,104 @@ describe('HomePage reader/player handoff', () => {
         // the canonical position itself anyway.
         const reader = await screen.findByTestId('reader')
         expect(reader).toHaveAttribute('data-chapter', 'null')
+    })
+})
+
+// Issue #273: the Continue card's Read / Listen / Mark Complete / Reset /
+// Details controls were built unconditionally and then painted out of
+// existence on mobile (`display: none !important`), leaving a phone with one
+// gesture — tap the cover — and no way to choose a format, finish a book or
+// reset it from Home. The replacement is a persistent Read/Listen pair plus a
+// tap-opened sheet for the rest, calling the same handlers as desktop.
+describe('HomePage Continue card actions on mobile', () => {
+    beforeEach(() => {
+        mobileRef.value = true
+        getEbooksMock.mockResolvedValue([{ id: 10, title: 'Pair Ebook', cover_path: null }])
+        getAudiobooksMock.mockResolvedValue([
+            { id: 20, title: 'Pair Audiobook', cover_path: null, duration_seconds: 3600 },
+        ])
+        getPairsMock.mockResolvedValue([{ id: 100, ebook: { id: 10 }, audiobook: { id: 20 } }])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 10, epub_progress_percent: 20, epub_chapter: 3,
+              book_pair_id: 100, is_completed: false, updated_at: '2024-01-01T00:00:00Z' },
+        ])
+    })
+
+    async function continueCard() {
+        const matches = await screen.findAllByText('Pair Ebook')
+        return matches.map((el) => el.closest('.continue-size')).find(Boolean)
+    }
+
+    function renderHome() {
+        return render(<MemoryRouter><HomePage /></MemoryRouter>)
+    }
+
+    // The bug was invisible to the DOM: the controls were rendered and then
+    // hidden by CSS (`.home-book-card-overlay`/`-menu { display: none
+    // !important }` in the mobile block). So "reachable on mobile" has to mean
+    // "not inside either of the two containers that stylesheet blanks out".
+    function reachable(card, title) {
+        const btn = within(card).getByTitle(title)
+        expect(btn.closest('.home-book-card-overlay'), `${title} sits in the hover overlay`).toBeNull()
+        expect(btn.closest('.home-book-card-menu'), `${title} sits in the hover menu`).toBeNull()
+        return btn
+    }
+
+    async function openSheet(card, name) {
+        fireEvent.click(reachable(card, 'More options'))
+        const item = await screen.findByRole('button', { name })
+        expect(item.closest('.home-book-card-menu'), `${name} sits in the hover menu`).toBeNull()
+        return item
+    }
+
+    it('opens the reader from a Read control that is on the card, not behind hover', async () => {
+        renderHome()
+        const card = await continueCard()
+
+        fireEvent.click(reachable(card, 'Read'))
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader).toHaveAttribute('data-ebook-id', '10')
+    })
+
+    it('starts the audiobook from a Listen control on the card', async () => {
+        renderHome()
+        const card = await continueCard()
+
+        fireEvent.click(reachable(card, 'Listen'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalled())
+        expect(player.play.mock.calls[0][0]).toBe(20)
+    })
+
+    it('reaches Mark Complete through the card sheet, with the same canonical write as desktop', async () => {
+        renderHome()
+        const card = await continueCard()
+
+        fireEvent.click(await openSheet(card, 'Mark Complete'))
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith('pair', 100, expect.objectContaining({
+            is_completed: true, device_id: 'device-abc', device_name: 'Web · Chrome', captured_at: expect.any(String),
+        })))
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('reaches Reset Progress through the card sheet, using the pair-level DELETE', async () => {
+        renderHome()
+        const card = await continueCard()
+
+        fireEvent.click(await openSheet(card, 'Reset Progress'))
+
+        await waitFor(() => expect(resetPairProgressMock).toHaveBeenCalledWith(100))
+        expect(updatePositionMock).not.toHaveBeenCalled()
+    })
+
+    it('offers View Details in the sheet and closes the sheet on choosing it', async () => {
+        renderHome()
+        const card = await continueCard()
+
+        fireEvent.click(await openSheet(card, 'View Details'))
+
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'View Details' })).not.toBeInTheDocument())
     })
 })
