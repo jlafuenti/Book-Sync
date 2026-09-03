@@ -328,3 +328,131 @@ async def test_dedupe_is_a_no_op_on_a_clean_database(db):
     await _dedupe(db)
 
     assert await _ids(db, "ebooks") == [keeper.id]
+
+
+# ---------------------------------------------------------------------------
+# The DDL half, round-tripped on SQLite
+# ---------------------------------------------------------------------------
+#
+# `upgrade()` and `downgrade()` are the two functions production actually calls,
+# and the dedupe tests above reach neither — they call `dedupe_file_paths`
+# directly, which is what lets them run without an Alembic context. So the
+# migration's most consequential lines were the only ones untested.
+#
+# Alembic's `Operations.context` binds the module-level `op` proxy to a plain
+# connection, which is enough to run both directions against the SQLite harness.
+# The DDL is dialect-neutral (`create_index`, and a `batch_alter_table` that is
+# a no-op wrapper on Postgres and a table rebuild on SQLite), so what runs here
+# is the same code path prod takes; only the emitted SQL differs. The Postgres
+# job still owns the "does this work on the real database" question
+# (test_migrations_postgres.py::test_0012_creates_the_library_indexes...).
+
+_CREATED_INDEXES = (
+    "ux_ebooks_file_path", "ix_ebooks_file_hash",
+    "ux_audiobooks_file_path", "ix_audiobooks_file_hash",
+    "ix_book_pairs_ebook_id", "ix_book_pairs_audiobook_id",
+)
+
+
+async def _rewind_to_pre_0012(db):
+    """Put the schema back to the shape 0012 expects to find.
+
+    The conftest builds SQLite from today's ORM, which already carries
+    everything 0012 adds — so `upgrade()` would fail with "index already
+    exists" against it. Dropping them first is what makes the run real rather
+    than a no-op.
+
+    Call this BEFORE seeding: dropping the `book_pairs` constraint means
+    rebuilding the table, which discards its rows.
+    """
+    await suspend_book_pair_uniqueness(db)  # also re-creates the two FK indexes
+    for index in _CREATED_INDEXES:
+        await db.execute(text(f"DROP INDEX IF EXISTS {index}"))
+    await db.commit()
+
+
+async def _run_migration(db, direction):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    migration = _load_migration()
+
+    def _apply(connection):
+        context = MigrationContext.configure(connection)
+        with Operations.context(context):
+            getattr(migration, direction)()
+
+    await db.run_sync(lambda session: _apply(session.connection()))
+    await db.commit()
+
+
+async def _index_names(db):
+    rows = (await db.execute(text(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL"
+    ))).all()
+    return {r.name for r in rows}
+
+
+async def _book_pairs_sql(db):
+    return (await db.execute(text(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'book_pairs'"
+    ))).scalar_one()
+
+
+async def test_upgrade_creates_every_index_and_the_pair_constraint(db):
+    await _rewind_to_pre_0012(db)
+    assert not (set(_CREATED_INDEXES) & await _index_names(db)), "rewind did not"
+
+    await _run_migration(db, "upgrade")
+
+    missing = set(_CREATED_INDEXES) - await _index_names(db)
+    assert not missing, f"upgrade() did not create: {sorted(missing)}"
+    assert "uq_book_pairs_pair" in await _book_pairs_sql(db)
+
+
+async def test_upgrade_dedupes_before_it_constrains(db):
+    """The ordering inside `upgrade()` is the whole reason it is not two lines.
+
+    Creating the unique index first fails on any database carrying a duplicate,
+    which is precisely the database this migration exists for.
+    """
+    await _rewind_to_pre_0012(db)
+    db.add_all([
+        EBook(title="Keeper", filename="dup.epub", file_path=DUP_PATH),
+        EBook(title="Loser", filename="dup.epub", file_path=DUP_PATH),
+    ])
+    await db.commit()
+
+    await _run_migration(db, "upgrade")
+
+    assert len(await _ids(db, "ebooks")) == 1
+    assert "ux_ebooks_file_path" in await _index_names(db)
+
+
+async def test_upgrade_then_downgrade_leaves_the_schema_and_the_data_as_found(db):
+    """Reversibility. The collapsed rows never come back — that is stated in the
+    docstring — but everything the migration did *not* delete must survive, and
+    the schema must come off cleanly enough to re-apply."""
+    await _rewind_to_pre_0012(db)
+    ebook = EBook(title="E", filename="e.epub", file_path="/books/e.epub")
+    audio = AudioBook(title="A", filename="a.m4b", file_path="/audio/a.m4b")
+    db.add_all([ebook, audio])
+    await db.flush()
+    db.add(BookPair(ebook_id=ebook.id, audiobook_id=audio.id,
+                    status=PairStatus.SYNCED))
+    await db.commit()
+    before = (await _ids(db, "ebooks"), await _ids(db, "audiobooks"),
+              await _ids(db, "book_pairs"))
+
+    await _run_migration(db, "upgrade")
+    await _run_migration(db, "downgrade")
+
+    left_over = set(_CREATED_INDEXES) & await _index_names(db)
+    assert not left_over, f"downgrade() left: {sorted(left_over)}"
+    assert "uq_book_pairs_pair" not in await _book_pairs_sql(db)
+    assert (await _ids(db, "ebooks"), await _ids(db, "audiobooks"),
+            await _ids(db, "book_pairs")) == before
+
+    # And it re-applies, which is what a botched downgrade breaks.
+    await _run_migration(db, "upgrade")
+    assert not (set(_CREATED_INDEXES) - await _index_names(db))
