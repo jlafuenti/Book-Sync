@@ -26,6 +26,7 @@ from config import (
     check_forwarded_allow_ips,
 )
 from log_filters import AccessLogSecretFilter
+from version import API_VERSION, APP_VERSION
 from middleware import MultipartBodyLimitMiddleware
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
@@ -153,7 +154,7 @@ app = FastAPI(
         "Synchronize your reading position between ebooks and audiobooks. "
         "Seamlessly switch between reading and listening."
     ),
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -194,7 +195,7 @@ async def root():
     """Health check / API info."""
     return {
         "name": "Tandem",
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "status": "running",
         "docs": "/docs",
     }
@@ -207,6 +208,14 @@ async def health():
     Returns 503 when the DB is unreachable so orchestrators and uptime
     monitors see a DB outage instead of a false "up" (issue #47). Liveness
     (process alive, dependencies not checked) is /api/livez.
+
+    The healthy payload also carries the version handshake (issue #174). This is
+    the only unauthenticated endpoint a client can ask before it has credentials,
+    which is what makes it the place to say which API this server speaks — the
+    Android app compares `api_version` against the one it was built for and warns
+    whichever side is stale. The 503 payload is deliberately left alone: uptime
+    monitors match on its shape, and a client that cannot reach the database has
+    a bigger problem than a version mismatch.
     """
     import asyncio
 
@@ -223,7 +232,11 @@ async def health():
         return JSONResponse(
             status_code=503, content={"status": "unhealthy", "db": "down"}
         )
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "app_version": APP_VERSION,
+        "api_version": API_VERSION,
+    }
 
 
 @app.get("/api/livez")

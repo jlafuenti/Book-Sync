@@ -1129,7 +1129,7 @@ function LibraryPage({ tab }) {
                 <span className="library-stat"><strong>{counts.pairs}</strong> Paired</span>
                 <span className="library-stat">Showing <strong>{filteredBooks.length}</strong> of <strong>{total}</strong></span>
                 {browse.loading && filteredBooks.length > 0 && <span className="library-stat muted">Updating…</span>}
-                {browse.error && <span className="library-stat" style={{ color: 'var(--danger, #e66)' }}>{browse.error}</span>}
+                {browse.error && <span className="library-stat" style={{ color: 'var(--error)' }}>{browse.error}</span>}
             </div>
 
             {/* Book display */}
