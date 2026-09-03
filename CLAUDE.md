@@ -119,7 +119,12 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = ≥80% patch 
 - `server/alembic/` — Alembic migrations (schema management); `env.py` derives a sync psycopg2 URL from `DATABASE_URL`, `versions/` holds the revisions
 - `server/models/` — ORM models: `User`, `EBook`, `AudioBook`, `BookPair`, `SyncMap`, `SyncPoint`, `AudioTranscript`, `TranscriptionQueueItem`, `Bookmark`, `UserProgress`
 - `server/routers/library.py` — Largest file (~93KB); handles directory scanning, file uploads, auto-matching, metadata extraction
-- `server/services/queue_manager.py` — Background async job processor with cancellation and retry
+- `server/services/queue_manager.py` — Background async job processor with cancellation and retry.
+  **Single-process only** (issue #252): the queue claim has no row lock, cancel/pause state is in
+  module globals, startup recovery re-queues every `in_progress` row, and the import/backup
+  schedulers start per process. `config.check_single_process()` refuses to boot on
+  `WEB_CONCURRENCY`/`UVICORN_WORKERS`/`GUNICORN_WORKERS` > 1; don't add `--workers` or a second
+  replica without doing the redesign in docs/operations.md, "Single process only"
 - `server/services/transcription_providers/` — Pluggable provider pattern: `local.py`, `remote.py`, `__init__.py` (factory + fallback logic)
 - `server/services/alignment.py` — Sentence-level sync point generation
 - `server/services/epub_parser.py` — EPUB metadata extraction

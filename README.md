@@ -75,6 +75,12 @@ The server applies its Alembic migrations on start (`server/entrypoint.sh`), so 
 schema step. **An existing database created before Alembic must be stamped once** —
 `alembic stamp head` — or `upgrade head` will try to create tables that already exist.
 
+> **Run the `server` service as a single process.** No `uvicorn --workers`, no `WEB_CONCURRENCY`, no
+> second replica. The transcription queue claim, its cancellation state and the import/backup
+> schedulers are all process-local, so a second worker transcribes the same audiobook twice and
+> re-queues the other worker's running job. The server refuses to boot if the environment asks for
+> more than one worker — see [docs/operations.md](docs/operations.md), "Single process only".
+
 ### First run
 
 1. **Get the admin password.** On a fresh database the server creates a single superadmin named
