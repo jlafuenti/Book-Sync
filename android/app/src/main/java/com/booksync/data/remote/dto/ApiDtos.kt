@@ -79,7 +79,11 @@ data class EBookResponse(
     val format: String,
     val series: String? = null,
     val series_index: Float? = null,
-    val uploaded_at: String
+    val uploaded_at: String,
+    // Server-side "seen" flag (issue #222). Defaults to true so a server too old
+    // to send it leaves the phone's own acknowledged_items table alone rather
+    // than declaring the whole library new.
+    val acknowledged: Boolean = true
 )
 
 @Serializable
@@ -94,7 +98,9 @@ data class AudioBookResponse(
     val series: String? = null,
     val series_index: Float? = null,
     val uploaded_at: String,
-    val cover_path: String? = null
+    val cover_path: String? = null,
+    // See EBookResponse.acknowledged (issue #222).
+    val acknowledged: Boolean = true
 )
 
 @Serializable
@@ -108,7 +114,9 @@ data class BookPairResponse(
     // The server's live sync-map version (issue #55). Null means *unknown* —
     // either the pair has no map, or the endpoint didn't load it — so a null
     // must never be read as "the map went away" and must not drop the cache.
-    val sync_map_version: Int? = null
+    val sync_map_version: Int? = null,
+    // See EBookResponse.acknowledged (issue #222).
+    val acknowledged: Boolean = true
 )
 
 /**
@@ -129,6 +137,30 @@ data class BookMetadataResponse(
     val publish_year: Int? = null,
     val language: String? = null,
     val narrators: String? = null,
+)
+
+/**
+ * Bodies for the two acknowledge endpoints (issue #222). Field names match the
+ * server's `AcknowledgeItemsRequest` / `AcknowledgePairsRequest`
+ * (`server/schemas.py`), which the web already posts to.
+ */
+@Serializable
+data class AcknowledgeItemsRequest(
+    val ebook_ids: List<Int> = emptyList(),
+    val audiobook_ids: List<Int> = emptyList(),
+)
+
+@Serializable
+data class AcknowledgePairsRequest(
+    val pair_ids: List<Int>,
+)
+
+/** Counts returned by both acknowledge endpoints. Only ever logged. */
+@Serializable
+data class AcknowledgeResponse(
+    val acknowledged_ebooks: Int = 0,
+    val acknowledged_audiobooks: Int = 0,
+    val acknowledged_pairs: Int = 0,
 )
 
 @Serializable

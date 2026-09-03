@@ -71,6 +71,18 @@ interface BookSyncApi {
     @DELETE("api/library/pairs/{pairId}")
     suspend fun deletePair(@Path("pairId") pairId: Int): Response<Unit>
 
+    // ---- Acknowledging NEW items (issue #222) ----
+    // `acknowledged` is a property of the item on the server, not of the
+    // viewer, so these are the same two endpoints the web posts to
+    // (web/src/api.js acknowledgeNewItems / acknowledgeNewPairs) and clearing
+    // NEW here clears it everywhere.
+
+    @POST("api/library/new-items/acknowledge")
+    suspend fun acknowledgeNewItems(@Body request: AcknowledgeItemsRequest): AcknowledgeResponse
+
+    @POST("api/library/new-pairs/acknowledge")
+    suspend fun acknowledgeNewPairs(@Body request: AcknowledgePairsRequest): AcknowledgeResponse
+
     // ============ Search ============
 
     @GET("api/library/search")
