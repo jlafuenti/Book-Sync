@@ -38,6 +38,8 @@ import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.BYPASS_BASE_URL_HEADER
+import com.booksync.data.remote.DEMO_UNREACHABLE_MESSAGE
+import com.booksync.data.remote.DemoAccount
 import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
@@ -99,6 +101,15 @@ class LoginViewModel @Inject constructor(
     private val userScopeProvider: UserScopeProvider,
     private val firstRunGate: FirstRunGate,
     private val serverVersionGate: ServerVersionGate,
+    /**
+     * The public demo login this build carries, or null (issue #147). Null in a
+     * clean clone, and then the first-run screen offers no demo button.
+     *
+     * Defaulted so the existing test call sites, which are about a build with no
+     * demo, keep constructing this the way they always did. Hilt ignores the
+     * default and injects the binding in [com.booksync.di.AppModule].
+     */
+    val demoAccount: DemoAccount? = null,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -183,6 +194,80 @@ class LoginViewModel @Inject constructor(
                 // dismissing on a refused write would drop the user on a sign-in
                 // form with no server, the state this screen exists to prevent.
                 _connectionState.value = ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
+            }
+        }
+    }
+
+    /**
+     * "Try the demo" — one tap from a fresh install to a working library
+     * (issue #147).
+     *
+     * Play's reviewer installs the app, finds an empty address field, and has
+     * nothing to type: Tandem is a client for a server they do not have. That is
+     * an "app not functional" rejection, and it is the same wall the twelve
+     * closed-test testers hit (issue #173). This is the Grocy answer — the build
+     * carries one read-only demo login and offers it as a button.
+     *
+     * The order is the whole design, and each step is there because the
+     * alternative fails somebody:
+     *
+     *  1. **Probe `/api/health` first, store nothing yet.** Same rule as
+     *     [checkConnection]: a demo server that is down must not leave a
+     *     stranger's install pointed at it with no way back but Advanced.
+     *  2. **Then store**, because [api] routes through `BaseUrlInterceptor` and
+     *     there is no other way for the login to reach the demo host.
+     *  3. **Dismiss last, only on success.** Dismissing first and failing after
+     *     would drop the user on a password prompt for an account they were
+     *     never given — the exact state the first-run screen exists to prevent.
+     *
+     * A refusal shows the server's own `detail` for the reason [register] does:
+     * "HTTP 401" does not distinguish a rotated demo password from a demo
+     * account that has been suspended, and only one of those is worth retrying.
+     */
+    fun signInToDemo(onSuccess: () -> Unit) {
+        val demo = demoAccount ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            _message.value = null
+            try {
+                val reachable = try {
+                    // Absolute URL and the interceptor bypassed, exactly as the
+                    // probe does — nothing is configured yet, so there is no
+                    // base URL that would reach the demo host.
+                    serverVersionGate.record(api.getHealth("${demo.url}/api/health"))
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (!reachable) {
+                    _error.value = DEMO_UNREACHABLE_MESSAGE
+                    return@launch
+                }
+
+                if (!serverUrlManager.setServerUrl(demo.url)) {
+                    // Unreachable in practice — the URL was normalized when the
+                    // build settings were read — but sending the demo password
+                    // to whatever server happens to be configured instead is not
+                    // a failure mode worth leaving open.
+                    _error.value = INVALID_SERVER_URL_MESSAGE
+                    return@launch
+                }
+
+                val tokens = api.login(LoginRequest(demo.username, demo.password))
+                tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
+                userScopeProvider.onAuthenticated()
+                runCatching { tokenManager.saveRole(api.getMe().role) }
+                firstRunGate.dismiss()
+                onSuccess()
+            } catch (e: HttpException) {
+                _error.value = e.serverDetail() ?: "Demo sign-in failed (HTTP ${e.code()})"
+            } catch (e: IOException) {
+                _error.value = "Could not reach the demo server — check your connection."
+            } catch (e: Exception) {
+                _error.value = e.message ?: "Demo sign-in failed"
+            } finally {
+                _isLoading.value = false
             }
         }
     }
@@ -378,7 +463,10 @@ fun LoginScreen(
     val showFirstRun by viewModel.showFirstRun.collectAsState()
 
     if (showFirstRun) {
-        FirstRunScreen(viewModel = viewModel)
+        // onLoginSuccess reaches this screen too: "Try the demo" signs in from
+        // here, so the welcome screen can be the last one a reviewer sees before
+        // the library (issue #147).
+        FirstRunScreen(viewModel = viewModel, onLoginSuccess = onLoginSuccess)
     } else {
         SignInScreen(
             onLoginSuccess = onLoginSuccess,
@@ -399,8 +487,10 @@ fun LoginScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FirstRunScreen(viewModel: LoginViewModel) {
+private fun FirstRunScreen(viewModel: LoginViewModel, onLoginSuccess: () -> Unit) {
     val connection by viewModel.connectionState.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
     var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
 
@@ -520,6 +610,65 @@ private fun FirstRunScreen(viewModel: LoginViewModel) {
                     Text(
                         stringResource(R.string.first_run_check_connection),
                         fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            // "Try the demo" (issue #147). Only in a build that was given all
+            // three demo settings — a clean clone has none of them, so nothing
+            // is rendered here and the screen is exactly what it was.
+            //
+            // Under "Check connection" on purpose: someone who has a server is
+            // one field and one tap from being done, and the demo is the answer
+            // to the *other* question — what a Play reviewer, or anyone who has
+            // never run a server, is supposed to do on this screen.
+            viewModel.demoAccount?.let {
+                OutlinedButton(
+                    onClick = { viewModel.signInToDemo(onLoginSuccess) },
+                    enabled = !isLoading && connection !is ConnectionState.Checking,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .height(52.dp),
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(
+                            stringResource(R.string.first_run_try_demo),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.first_run_demo_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+
+            // Demo failures land here rather than in the address field's
+            // supporting text: nothing is wrong with what the user typed — they
+            // typed nothing — so marking that field as the error would be a lie.
+            error?.let { msg ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                ) {
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = TextAlign.Center,
                     )
                 }
             }

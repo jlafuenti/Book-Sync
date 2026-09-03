@@ -50,6 +50,23 @@ object AppModule {
     @Named(com.booksync.data.remote.DEFAULT_SERVER_URL_QUALIFIER)
     fun provideDefaultServerUrl(): String = com.booksync.BuildConfig.DEFAULT_SERVER_URL
 
+    /**
+     * The public demo login this build carries, or null (issue #147).
+     *
+     * Null in a clean clone — all three build settings default to empty — and
+     * the first-run screen then offers no demo button. Assembled here rather
+     * than read from `BuildConfig` in the ViewModel so "there is no demo" is an
+     * ordinary injectable state a unit test can set.
+     */
+    @Provides
+    @Singleton
+    fun provideDemoAccount(): com.booksync.data.remote.DemoAccount? =
+        com.booksync.data.remote.demoAccountOrNull(
+            url = com.booksync.BuildConfig.DEMO_URL,
+            username = com.booksync.BuildConfig.DEMO_USER,
+            password = com.booksync.BuildConfig.DEMO_PASSWORD,
+        )
+
     @Provides
     @Singleton
     fun provideRetryInterceptor(): com.booksync.data.remote.RetryInterceptor {

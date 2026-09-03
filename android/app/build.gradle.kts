@@ -137,6 +137,39 @@ android {
             "DEFAULT_SERVER_URL",
             "\"${tandemSetting("tandem.defaultServerUrl")}\"",
         )
+
+        // Public demo login offered by the first-run screen's "Try the demo"
+        // button (issue #147). Play's reviewer has no Tandem server and no
+        // account, so without this the app is "not functional" to them.
+        //
+        // All three empty by default, same rule as tandem.defaultServerUrl
+        // (#58): a clean clone ships no host and — this being a password —
+        // nothing that could be published by pushing. Set them for a Play build
+        // in android/local.properties, or with -P for a one-off:
+        //   tandem.demoUrl=https://demo.example.com
+        //   tandem.demoUser=playreview
+        //   tandem.demoPassword=...
+        //
+        // Blank any one of them and the button does not appear at all; see
+        // `demoAccountOrNull` in ServerUrlPolicy.kt. The demo account must be
+        // role `user` on a server that holds nothing but public-domain books —
+        // these credentials go into the Play Console, and anyone who installs
+        // the build has them. docs/demo-server.md is the whole setup.
+        buildConfigField(
+            "String",
+            "DEMO_URL",
+            "\"${tandemSetting("tandem.demoUrl")}\"",
+        )
+        buildConfigField(
+            "String",
+            "DEMO_USER",
+            "\"${tandemSetting("tandem.demoUser")}\"",
+        )
+        buildConfigField(
+            "String",
+            "DEMO_PASSWORD",
+            "\"${tandemSetting("tandem.demoPassword")}\"",
+        )
     }
 
     // Room schema export (issue #168): with exportSchema = true on
