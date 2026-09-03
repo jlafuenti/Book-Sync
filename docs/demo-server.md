@@ -319,8 +319,11 @@ server it cannot use.
 The sign-in runs in an application-scoped coroutine rather than on the login
 screen's, because storing the server URL re-creates that screen: the first
 version was cancelled mid-flight by its own success and stopped dead after the
-login response. If you change this flow, keep it off the ViewModel — `DemoSignIn`
-carries the full account.
+login response. The success is then published *before* the welcome screen is
+dismissed, and the navigation is watched from `LoginScreen` rather than from the
+welcome screen itself — dismissing swaps that screen out, so an observer living
+inside it was torn down by the very event it was waiting for. If you change this
+flow, read `DemoSignIn`: it carries the full account of both failures.
 
 **These credentials are in the APK.** Anyone can extract them; that is accepted,
 which is why the account is `role=user` on a server holding nothing private.

@@ -439,11 +439,23 @@ fun LoginScreen(
     // scoped to it) with it. See FirstRunGate.
     val showFirstRun by viewModel.showFirstRun.collectAsState()
 
+    // Watched **here**, not inside FirstRunScreen, and that placement is the whole
+    // fix for a bug seen on a device (issue #147): the demo sign-in ends by
+    // dismissing the welcome screen, which swaps FirstRunScreen for SignInScreen
+    // below — taking any LaunchedEffect inside FirstRunScreen with it. The
+    // success arrived at a composable that no longer existed, so the app sat on
+    // the sign-in form holding a perfectly good session. This composable is alive
+    // in both branches, so it cannot be torn down by the thing it is waiting for.
+    val demoState by viewModel.demoState.collectAsState()
+    LaunchedEffect(demoState) {
+        if (demoState is DemoSignInState.Succeeded) {
+            viewModel.consumeDemoResult()
+            onLoginSuccess()
+        }
+    }
+
     if (showFirstRun) {
-        // onLoginSuccess reaches this screen too: "Try the demo" signs in from
-        // here, so the welcome screen can be the last one a reviewer sees before
-        // the library (issue #147).
-        FirstRunScreen(viewModel = viewModel, onLoginSuccess = onLoginSuccess)
+        FirstRunScreen(viewModel = viewModel)
     } else {
         SignInScreen(
             onLoginSuccess = onLoginSuccess,
@@ -464,23 +476,14 @@ fun LoginScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FirstRunScreen(viewModel: LoginViewModel, onLoginSuccess: () -> Unit) {
+private fun FirstRunScreen(viewModel: LoginViewModel) {
     val connection by viewModel.connectionState.collectAsState()
     val error by viewModel.error.collectAsState()
+    // Rendering only. Acting on DemoSignInState.Succeeded belongs to LoginScreen,
+    // which outlives this composable — see the note there.
     val demoState by viewModel.demoState.collectAsState()
     var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
-
-    // The demo sign-in runs in an application-scoped singleton, so the result can
-    // land on a composition that did not start it — that is the point of putting
-    // it there. Navigating from a LaunchedEffect on the state, rather than from a
-    // callback held by the coroutine, is what makes that survivable.
-    LaunchedEffect(demoState) {
-        if (demoState is DemoSignInState.Succeeded) {
-            viewModel.consumeDemoResult()
-            onLoginSuccess()
-        }
-    }
 
     val demoRunning = demoState is DemoSignInState.Running
     val demoFailure = (demoState as? DemoSignInState.Failed)?.message

@@ -20,6 +20,9 @@ import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -329,6 +332,66 @@ class LoginViewModelDemoTest {
         vm.consumeDemoResult()
 
         assertEquals(DemoSignInState.Idle, vm.demoState.value)
+    }
+
+    // -- Ordering, because the screen is torn down by its own success ------
+
+    @Test
+    fun `success is published before the welcome screen is dismissed`() {
+        // The device bug: dismissing first flips showFirstRun, which swaps
+        // FirstRunScreen for the sign-in form. Announcing the success after that
+        // told a composable that no longer existed, and the app sat on a username
+        // box with a valid session behind it. The screen now watches from
+        // LoginScreen, which survives the swap, and this keeps the order that
+        // stops the sign-in form flashing up before the navigation lands.
+        val gate = FirstRunGate()
+        val order = mutableListOf<String>()
+        val vm = newViewModel(gate = gate)
+
+        val watcher = CoroutineScope(UnconfinedTestDispatcher())
+        watcher.launch { vm.demoState.collect { if (it is DemoSignInState.Succeeded) order += "succeeded" } }
+        watcher.launch { gate.dismissed.collect { if (it) order += "dismissed" } }
+
+        vm.signInToDemo()
+        watcher.cancel()
+
+        assertEquals(listOf("succeeded", "dismissed"), order)
+    }
+
+    @Test
+    fun `the server url write completes before the session is saved`() {
+        // Not just "is called before" — completes. The session is keyed on
+        // (server, user), so a token saved while the URL write is still in flight
+        // would be scoped to whatever the server used to be.
+        val order = mutableListOf<String>()
+        coEvery { serverUrlManager.setServerUrl(any()) } coAnswers {
+            order += "setServerUrl:start"
+            yield()
+            order += "setServerUrl:done"
+            true
+        }
+        coEvery { tokenManager.saveTokens(any(), any()) } coAnswers { order += "saveTokens" }
+        coEvery { userScopeProvider.onAuthenticated() } coAnswers { order += "onAuthenticated" }
+
+        newViewModel().signInToDemo()
+
+        assertEquals(
+            listOf("setServerUrl:start", "setServerUrl:done", "saveTokens", "onAuthenticated"),
+            order,
+        )
+    }
+
+    @Test
+    fun `the demo flow touches local storage exactly once, to store the server`() {
+        // There is no cache reset to race — nothing in the app deletes or clears
+        // the database on a server change (DatabaseResetGuardTest pins that), and
+        // this pins that the demo flow does not invent one.
+        val vm = newViewModel()
+
+        vm.signInToDemo()
+
+        coVerify(exactly = 1) { serverUrlManager.setServerUrl(any()) }
+        coVerify(exactly = 1) { userScopeProvider.onAuthenticated() }
     }
 
     // -- The demo server is down -------------------------------------------

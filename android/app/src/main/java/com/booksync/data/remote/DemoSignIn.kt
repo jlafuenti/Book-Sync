@@ -81,7 +81,18 @@ class DemoSignIn @Inject constructor(
         if (_state.value is DemoSignInState.Running) return
         _state.value = DemoSignInState.Running
         scope.launch {
-            _state.value = attempt(demo)
+            val result = attempt(demo)
+            // Publish the result *before* dismissing the welcome screen, and
+            // never the other way round. Dismissing first flips
+            // `LoginViewModel.showFirstRun`, which swaps FirstRunScreen for the
+            // sign-in form; on a device that happened first, so the success was
+            // announced to a screen that had already been torn down and the app
+            // sat on a username box with a valid session behind it. The screen
+            // now watches this from `LoginScreen`, which survives that swap —
+            // but the order still matters, because it is what stops the sign-in
+            // form from flashing up before the navigation lands.
+            _state.value = result
+            if (result is DemoSignInState.Succeeded) firstRunGate.dismiss()
         }
     }
 
@@ -113,9 +124,14 @@ class DemoSignIn @Inject constructor(
             return DemoSignInState.Failed(e.message ?: "Demo sign-in failed")
         }
 
-        // 3. Only now is there something worth storing the address for. This is
-        //    the write that re-creates the login destination; everything below it
-        //    survives that only because this coroutine is not owned by the screen.
+        // 3. Only now is there something worth storing the address for, and this
+        //    suspends until the write has actually committed — the session below
+        //    is keyed on (server, user), so a token saved against a URL that is
+        //    still being written would be scoped to the wrong thing. Nothing else
+        //    in the app reacts to a server change: there is no cache reset, no
+        //    `deleteDatabase`, no `clearAllTables` (pinned by
+        //    `DatabaseResetGuardTest`), and the only collectors of
+        //    `serverUrlFlow` are three pieces of UI that display it.
         if (!serverUrlManager.setServerUrl(demo.url)) {
             // Close to unreachable — demoAccountOrNull normalized the URL when
             // the build settings were read — but a session with no server to
@@ -131,7 +147,6 @@ class DemoSignIn @Inject constructor(
             // and an unknown role is treated as no permissions.
             userScopeProvider.onAuthenticated()
             runCatching { tokenManager.saveRole(api.getMeAt("${demo.url}/api/auth/me").role) }
-            firstRunGate.dismiss()
             DemoSignInState.Succeeded
         } catch (e: Exception) {
             DemoSignInState.Failed(e.message ?: "Demo sign-in failed")
