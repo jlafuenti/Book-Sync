@@ -71,7 +71,10 @@ export default function MobileDrawer({ open, onClose, user, onLogout }) {
                 onTouchEnd={handleTouchEnd}
             >
                 <div className="mobile-drawer-header">
-                    <div className="drawer-user">
+                    {/* The user block is the way into Account (issue #146) — the
+                        same affordance as the desktop sidebar footer, and on
+                        mobile it is the only one, since the bottom nav is full. */}
+                    <Link to="/account" className="drawer-user">
                         <div className="drawer-avatar">
                             {user?.username?.[0]?.toUpperCase() || '?'}
                         </div>
@@ -79,7 +82,7 @@ export default function MobileDrawer({ open, onClose, user, onLogout }) {
                             <div className="drawer-name">{user?.username || 'User'}</div>
                             <div className="drawer-role">{roleLabel}</div>
                         </div>
-                    </div>
+                    </Link>
                 </div>
 
                 <nav>

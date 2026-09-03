@@ -346,6 +346,38 @@ because the count comes from the admin user list. Approve or reject in System �
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.
 
+### Account deletion
+
+Users delete their own accounts: **Account → Delete account**, in the Android app and in the web
+app. It asks for the current password and for the word `DELETE` to be typed, then calls
+`DELETE /api/auth/me`. Admins can still delete someone else's account from System → User
+Management (`DELETE /api/users/{id}`).
+
+Google Play requires this of any app that can create an account, and it requires a publicly
+reachable page describing it as well — that page is **`/account-deletion`** on your server, served
+by the web app without a login. It is the URL that goes in the Play Console's Data safety →
+Data deletion field; see [play-listing.md](play-listing.md).
+
+What a deletion removes: the user row, their bookmarks, each bookmark's change log and per-device
+position hints, their progress rows, and every one of their `refresh_tokens` sessions — so no
+other device is left holding a 30-day refresh token for an account that is gone. Nothing is
+soft-deleted and nothing is recoverable without a backup restore.
+
+What it keeps: the `audit_logs` row recording the deletion. `audit_logs.user_id` is
+`ON DELETE SET NULL`, so the row survives with the actor redacted; `target_user_id` carries no
+foreign key and keeps the number, which is what lets you answer "was this account deleted, or did
+it never exist" afterwards. The action name is `account_self_deleted`.
+
+Two refusals are deliberate:
+
+* **The last active superadmin cannot delete themselves** (409). A server with no active
+  superadmin cannot approve a registration, promote anyone or open the admin console, and nothing
+  in the app can undo it — recovery would mean editing the database by hand. Promote someone else
+  first.
+* **A wrong password is refused** (403) and counted against the same per-user lockout as
+  `POST /api/auth/change-password` (`password_change_failure_limit`). Both endpoints verify the
+  current password, so they are one bcrypt oracle; a lockout on either locks both.
+
 ### Audit log retention
 
 Security-relevant events (logins, failed logins, lockouts, role and password changes) go to the

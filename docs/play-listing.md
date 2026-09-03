@@ -46,3 +46,35 @@ that sign-in is impossible without them. Do not paste credentials into this file
 The app talks only to the server the user configures. No analytics SDK, no ads,
 no third-party data sharing. The one outbound call to anything else is the
 dictionary lookup in the reader; declare it if the form asks.
+
+### Data deletion (issue #146)
+
+Play requires two things of any app that offers account creation — which this
+one does, on the login screen — and the Data safety form's answers have to match
+what the app actually ships:
+
+| Console field | Answer |
+|---|---|
+| Users can request that their data be deleted | **Yes** |
+| Users can request that their account be deleted | **Yes** |
+| Web link to request account deletion | `https://<your-server>/account-deletion` |
+
+**The URL is per deployment.** Tandem is self-hosted, so there is no single
+address to publish: the link submitted to the Console has to be a server the
+reviewer can actually reach — the same one supplied under App access. The page
+is served by the web app with no login required and no API calls, so it works
+for someone who has already uninstalled.
+
+What that page says, and what the app does, must stay in step:
+
+* In-app path: **Account → Delete account**, then the current password and the
+  typed word `DELETE`. Removes the account, bookmarks, reading positions and
+  per-device position hints immediately.
+* Fallback for someone who can no longer sign in: contact the operator of their
+  server, who can delete the account from the admin console.
+* Retained: one audit-log row recording that an account was deleted, with the
+  user id removed from it. Declare this if the form asks what survives deletion.
+
+Operator-facing detail — including the two refusals (last active superadmin, and
+the shared password lockout) — is in
+[operations.md](operations.md), "Account deletion".

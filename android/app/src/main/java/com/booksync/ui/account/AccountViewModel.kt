@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
+import com.booksync.data.remote.AccountDeleteRequest
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.DeviceIdManager
@@ -15,6 +16,7 @@ import com.booksync.data.remote.PasswordResetGate
 import com.booksync.data.remote.PasswordChangeRequest
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
+import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.UpdateMeRequest
 import com.booksync.data.remote.UserResponse
 import com.booksync.data.util.NetworkMonitor
@@ -44,6 +46,17 @@ sealed class ChangePasswordState {
     object Submitting : ChangePasswordState()
     object Success : ChangePasswordState()
     data class Error(val message: String) : ChangePasswordState()
+}
+
+/**
+ * Lifecycle of an in-flight account deletion (issue #146). Same shape as
+ * [ChangePasswordState] — one `when` in the dialog, one button-enabled check.
+ */
+sealed class DeleteAccountState {
+    object Idle : DeleteAccountState()
+    object Submitting : DeleteAccountState()
+    object Success : DeleteAccountState()
+    data class Error(val message: String) : DeleteAccountState()
 }
 
 /**
@@ -222,6 +235,54 @@ class AccountViewModel @Inject constructor(
     }
 
     fun resetChangePasswordState() { _changePasswordState.value = ChangePasswordState.Idle }
+
+    // ---- Account deletion --------------------------------------------------
+
+    private val _deleteAccountState = MutableStateFlow<DeleteAccountState>(DeleteAccountState.Idle)
+    val deleteAccountState = _deleteAccountState.asStateFlow()
+
+    /**
+     * Delete this account on the server, then end the session locally (#146).
+     *
+     * Play requires an in-app deletion path for any app that offers account
+     * creation, and the login screen offers one. The server takes the password
+     * in the body and answers 204; the tokens held here then describe an account
+     * that no longer exists, so they are cleared exactly as [changePassword]
+     * does — leaving them is the #143 deadlock, where the next request 401s and
+     * the refresh 401s too. BookSyncNavigation observes the clear and routes to
+     * Login.
+     *
+     * A refusal keeps the session and shows the server's own sentence: 403 and
+     * 409 here mean "wrong password" and "you are the last active superadmin",
+     * two different problems with two different fixes, and the status code
+     * describes neither (issue #221).
+     */
+    fun deleteAccount(password: String) {
+        if (_deleteAccountState.value is DeleteAccountState.Submitting) return
+        _deleteAccountState.value = DeleteAccountState.Submitting
+        viewModelScope.launch {
+            try {
+                val response = api.deleteAccount(AccountDeleteRequest(password = password))
+                if (response.isSuccessful) {
+                    _deleteAccountState.value = DeleteAccountState.Success
+                    tokenManager.clearTokens()
+                } else {
+                    _deleteAccountState.value = DeleteAccountState.Error(
+                        HttpException(response).serverDetail()
+                            ?: "Couldn't delete the account (HTTP ${response.code()}).",
+                    )
+                }
+            } catch (e: HttpException) {
+                _deleteAccountState.value = DeleteAccountState.Error(
+                    e.serverDetail() ?: "Couldn't delete the account (HTTP ${e.code()}).",
+                )
+            } catch (e: Exception) {
+                _deleteAccountState.value = DeleteAccountState.Error(e.message ?: "Network error")
+            }
+        }
+    }
+
+    fun resetDeleteAccountState() { _deleteAccountState.value = DeleteAccountState.Idle }
 
     // ---- Logout ------------------------------------------------------------
 
