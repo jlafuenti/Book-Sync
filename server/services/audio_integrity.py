@@ -50,6 +50,22 @@ _MAX_DECODE_ERRORS = 5
 _PROBE_TIMEOUT_SEC = 120
 _DECODE_TIMEOUT_SEC = 1800
 
+# Prefix of the detail returned when the file was actually decoded end to end.
+# Every other passing detail means "we could not check", not "this file is
+# fine" — see `is_unverified`.
+_VERIFIED_DETAIL_PREFIX = "ok"
+
+
+def is_unverified(detail: str) -> bool:
+    """Whether a passing result came from a real decode or from a skipped one.
+
+    `check_audio_integrity` returns ok=True both when it decoded the whole
+    file and when it could not check at all (no ffmpeg/ffprobe, decode
+    timeout). The caller must not silently treat the second as a clean bill of
+    health: it logs and surfaces the detail instead (issue #245).
+    """
+    return not detail.startswith(_VERIFIED_DETAIL_PREFIX)
+
 
 def stderr_indicates_corruption(stderr: str) -> bool:
     low = stderr.lower()
@@ -110,7 +126,23 @@ def check_audio_integrity(path: str) -> Tuple[bool, str]:
             decode_cmd, capture_output=True, text=True, timeout=_DECODE_TIMEOUT_SEC
         )
     except subprocess.TimeoutExpired:
-        return False, f"full decode exceeded {_DECODE_TIMEOUT_SEC}s (likely corrupt)"
+        # All this proves is that the host was slow or contended: the decode
+        # normally runs at ~1000x realtime, and a truly corrupt file still
+        # fails at the worker's own decode. Pass with a warning rather than
+        # sending the operator off to re-import a good file (issue #245).
+        logger.warning(
+            "Full decode of %s did not finish within %ss; passing the integrity "
+            "gate unverified", path, _DECODE_TIMEOUT_SEC,
+        )
+        return True, (
+            f"full decode did not finish within {_DECODE_TIMEOUT_SEC}s "
+            f"— could not verify"
+        )
+    except FileNotFoundError:
+        # ffmpeg missing from the environment — a tooling problem, not a
+        # corrupt file. Symmetrical with the ffprobe branch in stage 1.
+        logger.warning("ffmpeg not found; skipping full-decode check for %s", path)
+        return True, "integrity check skipped (ffmpeg unavailable)"
 
     stderr = decode.stderr or ""
     error_lines = [ln for ln in stderr.splitlines() if ln.strip()]

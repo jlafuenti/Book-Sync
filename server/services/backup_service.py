@@ -37,6 +37,7 @@ from sqlalchemy import select
 from config import settings
 from database import async_session
 from models.settings import SystemSetting
+from services import audit_retention
 from utils import utcnow
 
 logger = logging.getLogger("backup-service")
@@ -409,6 +410,16 @@ async def _safe_create_and_prune(config: BackupConfig) -> None:
 async def _tick() -> None:
     async with async_session() as db:
         config = await get_backup_config(db)
+        # Audit-log retention (issue #261) rides this tick — it is the only
+        # nightly loop. Deliberately before the backup decision and its early
+        # returns: pruning must happen every tick, not only on the days a
+        # backup is due, and a broken prune must not stop the backup.
+        try:
+            removed = await audit_retention.run(db)
+            if removed:
+                logger.info(f"[audit] pruned {removed} audit log row(s) past retention")
+        except Exception as e:
+            logger.exception(f"[audit] retention prune failed: {e}")
 
     # Fresh deployment: take an immediate baseline so there's something to restore.
     if not _list_ids():

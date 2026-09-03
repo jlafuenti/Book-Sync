@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import BookDetailPage from './BookDetailPage'
+import { formatDateTime } from '../lib/datetime'
 
 // Isolate BookDetailPage from its heavier children/deps so this test only
 // exercises the enrich-from-ABS toast logic.
@@ -111,6 +112,32 @@ beforeEach(() => {
     resetPositionMock.mockReset().mockResolvedValue({ status: 'ok' })
     getDeviceIdMock.mockReset().mockReturnValue('device-abc')
     getDeviceNameMock.mockReset().mockReturnValue('Web · Chrome')
+})
+
+// Issue #216: `uploaded_at` arrives as naive UTC (no `Z`), so the page must
+// parse it as UTC — not as local time, which shifted "Added" by the browser's
+// offset and, west of UTC, onto the wrong calendar day for part of the day.
+describe('BookDetailPage renders server timestamps as UTC (issue #216)', () => {
+    it('shows "Added" at the UTC instant the server meant', async () => {
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr', cover_path: null,
+            uploaded_at: '2026-08-22T14:03:00',
+        })
+        renderPage()
+
+        const label = await screen.findByText('Added')
+        const value = label.nextSibling.textContent
+        expect(value).toBe(formatDateTime('2026-08-22T14:03:00', {
+            year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+        }))
+        // i.e. the UTC instant, not the one `new Date()` would read locally
+        // (identical, and so not worth asserting, when the runner is on UTC).
+        if (new Date(2026, 7, 22).getTimezoneOffset() !== 0) {
+            expect(value).not.toBe(new Date('2026-08-22T14:03:00').toLocaleString(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            }))
+        }
+    })
 })
 
 describe('BookDetailPage enrich from ABS', () => {

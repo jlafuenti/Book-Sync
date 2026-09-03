@@ -540,10 +540,14 @@ async def apply_position(
         bookmark.anchor_revision = (bookmark.anchor_revision or 0) + 1
 
     if update.hint is not None:
+        # Keyed on the device that made *this* write, not `bookmark.device_id`
+        # — that is the last writer to identify itself and survives an
+        # anonymous write, so an unattributed hint used to land on (and
+        # destroy) a real device's row (issue #251).
         await _upsert_hint(
             db, bookmark, update.hint.kind, update.hint.value,
             update.hint.audio_position_ms,
-            bookmark.device_id or UNATTRIBUTED_DEVICE_ID, stamped,
+            update.device_id or UNATTRIBUTED_DEVICE_ID, stamped,
         )
 
     position_changed = prev != (bookmark.epub_chapter, bookmark.epub_sentence_index,

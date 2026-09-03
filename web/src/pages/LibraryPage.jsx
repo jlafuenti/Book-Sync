@@ -11,6 +11,8 @@ import {
 import { pairTargetPath } from '../utils/pairRouting'
 import useLibraryBrowse from '../hooks/useLibraryBrowse'
 import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from '../lib/libraryItems'
+// Server timestamps are naive UTC — parse via the shared helper (issue #216).
+import { formatDate } from '../lib/datetime'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
 import FilterPill from '../components/FilterPill'
@@ -209,7 +211,7 @@ export function BookRow({ book, selectMode, isSelected, onSelect, onEdit, onDele
                 {book.mediaType !== 'pair' && <span className="badge badge-auto_matched">{book.format}</span>}
             </div>
             <div className="lib-book-row-cell muted">{formatSize(book.file_size)}</div>
-            <div className="lib-book-row-cell muted">{new Date(book.uploaded_at).toLocaleDateString()}</div>
+            <div className="lib-book-row-cell muted">{formatDate(book.uploaded_at)}</div>
             <div className="lib-book-row-actions" onClick={e => e.stopPropagation()}>
                 {canEdit && !selectMode && book.mediaType !== 'pair' && (
                     <>
@@ -244,7 +246,6 @@ function LibraryPage({ tab }) {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
     const isMobile = useIsMobile()
-    const [mobileSearch, setMobileSearch] = useState('')
     const [mobileUploadOpen, setMobileUploadOpen] = useState(false)
     const mobileUploadRef = useRef(null)
     const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
@@ -276,9 +277,10 @@ function LibraryPage({ tab }) {
     // ---- URL-backed browse state (issue #120) ----
     // Tab, sub-filter, sort, search and the author/series pills all live in
     // the query string: a reload or a shared link lands on the same view, and
-    // the server query is derived from one place. `search` is owned by the
-    // global search bar (it sets/clears it); the mobile box is local and
-    // debounced. The route prop (`/library/ebooks`) is the default tab.
+    // the server query is derived from one place. `search` has exactly one
+    // source of truth — the URL: the desktop global bar and the mobile box
+    // (issue #213) both read and write it, and the query is debounced off it.
+    // The route prop (`/library/ebooks`) is the default tab.
     const defaultTab = tab === 'audiobooks' ? 'audiobooks' : tab === 'ebooks' ? 'ebooks' : 'all'
     const activeFilter = searchParams.get('tab') || defaultTab
     const kindParam = searchParams.get('kind') || ''
@@ -307,6 +309,7 @@ function LibraryPage({ tab }) {
     const setSortDir = (v) => setParams({ dir: v })
     const setAuthorFilter = (v) => setParams({ author: v })
     const setSeriesFilter = (v) => setParams({ series: v })
+    const setSearchTerm = (v) => setParams({ search: v })
 
     // Edit state
     const [editingBook, setEditingBook] = useState(null)
@@ -346,8 +349,7 @@ function LibraryPage({ tab }) {
     const audiobookFileRef = useRef(null)
 
     // ---- Server-driven list (issue #120) ----
-    const effectiveSearch = searchTerm || mobileSearch
-    const q = useDebouncedValue(effectiveSearch, SEARCH_DEBOUNCE_MS)
+    const q = useDebouncedValue(searchTerm, SEARCH_DEBOUNCE_MS)
     const browseQuery = useMemo(() => ({
         tab: activeFilter, kind: kindParam, q, author: authorFilter, series: seriesFilter,
         sort: sortField, dir: sortDir,
@@ -958,16 +960,29 @@ function LibraryPage({ tab }) {
                 </div>
             )}
 
-            {/* Mobile search input */}
+            {/* Mobile search input — URL-backed, and the only way to clear
+                `?search=` on a phone (the desktop bar and toolbar chip are
+                both hidden below 768px). See issue #213. */}
             {isMobile && (
                 <div className="library-mobile-search">
                     <span className="search-icon material-symbols-outlined" style={{ fontSize: 20 }}>search</span>
                     <input
                         type="text"
                         placeholder="Search books..."
-                        value={mobileSearch}
-                        onChange={e => setMobileSearch(e.target.value)}
+                        aria-label="Search books"
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
                     />
+                    {searchTerm && (
+                        <button
+                            type="button"
+                            className="library-mobile-search-clear"
+                            aria-label="Clear search"
+                            onClick={() => setSearchTerm('')}
+                        >
+                            ✕
+                        </button>
+                    )}
                 </div>
             )}
 

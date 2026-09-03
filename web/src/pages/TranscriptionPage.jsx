@@ -10,29 +10,9 @@ import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
 import './TranscriptionPage.css'
-
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
-
-function formatDate(dateStr) {
-    if (!dateStr) return '—'
-    const s = dateStr.endsWith('Z') ? dateStr : `${dateStr}Z`
-    return new Date(s).toLocaleString()
-}
-
-function formatDuration(startStr, endStr) {
-    if (!startStr || !endStr) return '—'
-    const start = new Date(startStr.endsWith('Z') ? startStr : `${startStr}Z`)
-    const end   = new Date(endStr.endsWith('Z')   ? endStr   : `${endStr}Z`)
-    const diffMs = end - start
-    if (diffMs < 0) return '—'
-    const totalSec = Math.floor(diffMs / 1000)
-    const hours = Math.floor(totalSec / 3600)
-    const mins  = Math.floor((totalSec % 3600) / 60)
-    const secs  = totalSec % 60
-    if (hours > 0) return `${hours}h ${mins}m ${secs}s`
-    if (mins  > 0) return `${mins}m ${secs}s`
-    return `${secs}s`
-}
+// Server timestamps are naive UTC — one parser for the whole app (issue #216).
+// `formatDate` here has always meant date + time; `formatDay` is date-only.
+import { formatDateTime as formatDate, formatDate as formatDay, formatDuration } from '../lib/datetime'
 
 /* ── Icons ───────────────────────────────────────────────────────────────── */
 const GridIcon = () => (
@@ -708,7 +688,7 @@ function TranscriptionPage({ tab }) {
             <div className="transcription-card-author">{pair.ebook?.author || ''}</div>
             {pair.synced_at && (
                 <div className="transcription-card-meta">
-                    {new Date(pair.synced_at).toLocaleDateString()}
+                    {formatDay(pair.synced_at)}
                 </div>
             )}
         </div>
@@ -729,7 +709,7 @@ function TranscriptionPage({ tab }) {
             </div>
             {pair.synced_at && (
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                    {new Date(pair.synced_at).toLocaleDateString()}
+                    {formatDay(pair.synced_at)}
                 </div>
             )}
             <Link
