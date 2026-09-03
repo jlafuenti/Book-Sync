@@ -604,7 +604,7 @@
 
     .library-mobile-search input {
         width: 100%;
-        padding: 14px 16px 14px 48px;
+        padding: 14px 44px 14px 48px;
         border-radius: 16px;
         border: none;
         background: rgba(36, 36, 52, 0.4);
@@ -623,6 +623,32 @@
     .library-mobile-search input::placeholder {
         color: var(--text-muted);
         opacity: 0.6;
+    }
+
+    /* Clear (✕) — on mobile this is the only control that can drop
+       `?search=` from the URL (issue #213). */
+    .library-mobile-search-clear {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .library-mobile-search-clear:active {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text-primary);
     }
 
     /* ---- Hide desktop toolbar on mobile — replaced by dropdown filter button ---- */

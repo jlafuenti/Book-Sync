@@ -4,6 +4,8 @@ import {
     resetUserPassword, deleteUser, getAuditLog
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+// Audit-log and user timestamps are naive UTC (issue #216).
+import { formatDate, formatDateTime } from '../lib/datetime'
 import './UserManagementPage.css'
 
 const ROLES = ['user', 'editor', 'admin']
@@ -282,7 +284,7 @@ function AuditLogTab() {
                             ) : entries.map(e => (
                                 <tr key={e.id}>
                                     <td style={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
-                                        {new Date(e.created_at).toLocaleString()}
+                                        {formatDateTime(e.created_at)}
                                     </td>
                                     <td>{e.username || <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                                     <td>
@@ -479,7 +481,7 @@ export function UserManagementSection() {
                                                 </td>
                                                 <td><StatusBadge user={u} /></td>
                                                 <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                                    {new Date(u.created_at).toLocaleDateString()}
+                                                    {formatDate(u.created_at)}
                                                 </td>
                                                 <td>
                                                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
