@@ -37,4 +37,27 @@ describe('CoverImg', () => {
         expect(img).not.toHaveAttribute('src')
         expect(coverSrcMock).not.toHaveBeenCalled()
     })
+
+    // Issue #269: useCoverSrc chained .then() with no .catch(). A token mint
+    // that fails — offline, or the server refusing — became one unhandled
+    // promise rejection per cover on the page, which is 50 on a library grid.
+    it('renders without a src when the token mint fails, and handles the rejection', async () => {
+        const onUnhandled = vi.fn()
+        process.on('unhandledRejection', onUnhandled)
+        try {
+            coverSrcMock.mockRejectedValue(new Error('Failed to get media token'))
+
+            render(<CoverImg path="/api/files/covers/book.jpg" alt="cover" />)
+
+            const img = await screen.findByAltText('cover')
+            await waitFor(() => expect(coverSrcMock).toHaveBeenCalled())
+            // Let any unhandled rejection surface before asserting it did not.
+            await new Promise((r) => setTimeout(r, 0))
+
+            expect(img).not.toHaveAttribute('src')
+            expect(onUnhandled).not.toHaveBeenCalled()
+        } finally {
+            process.off('unhandledRejection', onUnhandled)
+        }
+    })
 })

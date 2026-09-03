@@ -145,18 +145,29 @@ async def ensure_users(db, *user_ids):
     await db.commit()
 
 
-async def make_ebook(db, *, title="E", filename="e.epub"):
-    """Create a standalone (unpaired) EBook and return it."""
-    eb = EBook(title=title, filename=filename, file_path=_unique_path(filename))
+async def make_ebook(db, *, title="E", filename="e.epub", **fields):
+    """Create a standalone (unpaired) EBook and return it.
+
+    `**fields` sets any other column directly (`author`, `series`,
+    `series_index`, `file_hash`, `auto_pair_excluded_hashes`, …) — the
+    auto-pairing tests in `test_auto_match.py` need the metadata the matcher
+    reads, and enumerating it as keywords here would just duplicate the model.
+    """
+    eb = EBook(title=title, filename=filename, file_path=_unique_path(filename),
+               **fields)
     db.add(eb)
     await db.commit()
     await db.refresh(eb)
     return eb
 
 
-async def make_audiobook(db, *, title="A", filename="a.m4b"):
-    """Create a standalone (unpaired) AudioBook and return it."""
-    ab = AudioBook(title=title, filename=filename, file_path=_unique_path(filename))
+async def make_audiobook(db, *, title="A", filename="a.m4b", **fields):
+    """Create a standalone (unpaired) AudioBook and return it.
+
+    `**fields` sets any other column directly — see `make_ebook`.
+    """
+    ab = AudioBook(title=title, filename=filename, file_path=_unique_path(filename),
+                   **fields)
     db.add(ab)
     await db.commit()
     await db.refresh(ab)

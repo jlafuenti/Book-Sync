@@ -324,3 +324,291 @@ class TestRepairChapterEncoding:
 
         assert ok is False
         assert "chpl" in error
+
+
+class TestRepairLeavesNoDamageOnFailure:
+    """Issue #243 — repair_chapter_encoding mutates a purchased media file
+    before it knows the repair will work. Every failure path must undo its
+    own writes, and say so."""
+
+    def test_a_failed_repair_leaves_the_file_byte_identical(self, monkeypatch, tmp_path):
+        """The first failure path (mutagen still rejects the file after the
+        fourcc patch) must undo the 4-byte write."""
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(
+            chapter_repair, "check_chapter_encoding",
+            lambda p: (False, "chapter 0 title: still broken"),
+        )
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert filepath.read_bytes() == original
+        assert "left unmodified" in error
+        assert list(tmp_path.iterdir()) == [filepath]
+
+    def test_failed_rebuild_restores_the_original(self, monkeypatch, tmp_path):
+        """ffprobe sees chapters, then none — so a rebuild is attempted, and
+        fails. The file must come back byte-identical."""
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+        probe_calls = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            # The ffmetadata export fails, so _rebuild_chapters bails early.
+            return _FakeCompletedProcess(returncode=1, stderr=b"Permission denied")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", lambda p: (True, None))
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "Failed to export metadata" in error
+        assert "unmodified" in error
+        assert filepath.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [filepath]
+
+    def test_failure_after_a_successful_remux_restores_the_original(
+        self, monkeypatch, tmp_path
+    ):
+        """The nastiest path: the remux already replaced the whole file and
+        mutagen still cannot read it. A 4-byte undo cannot help here — only a
+        real backup can."""
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+        probe_calls = []
+        checks = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            if "-f" in cmd and "ffmetadata" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(b";FFMETADATA1\ntitle=Book Title\n")
+                return _FakeCompletedProcess(returncode=0)
+            if "-map_metadata" in cmd:
+                # A structurally valid remux result that the stub below still
+                # reports as unreadable.
+                with open(cmd[-1], "wb") as f:
+                    f.write(_synthetic_m4b(with_chpl=True))
+                return _FakeCompletedProcess(returncode=0)
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def fake_check(p):
+            checks.append(p)
+            # The check right after the fourcc patch passes; every check after
+            # the remux fails.
+            return (True, None) if len(checks) == 1 else (False, "chapter 0 title: broken")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", fake_check)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "unmodified" in error
+        assert filepath.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [filepath]
+
+    def test_successful_repair_removes_the_backup(self, monkeypatch, tmp_path):
+        """A rebuild ran, so a backup was taken — it must not survive."""
+        filepath = tmp_path / "book.m4b"
+        filepath.write_bytes(_synthetic_m4b(with_chpl=True))
+        probe_calls = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            if "-f" in cmd and "ffmetadata" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(b";FFMETADATA1\n")
+                return _FakeCompletedProcess(returncode=0)
+            if "-map_metadata" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"rebuilt m4b bytes")
+                return _FakeCompletedProcess(returncode=0)
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", lambda p: (True, None))
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is True and error is None
+        assert filepath.read_bytes() == b"rebuilt m4b bytes"
+        assert list(tmp_path.iterdir()) == [filepath]
+
+    def test_restore_failure_is_reported_as_a_modified_file(self, monkeypatch, tmp_path):
+        """If the undo itself fails the operator must be told the file was
+        touched — reporting "unmodified" would be a lie."""
+        filepath = tmp_path / "book.m4b"
+        filepath.write_bytes(_synthetic_m4b(with_chpl=True))
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def boom(*a, **kw):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(
+            chapter_repair, "check_chapter_encoding",
+            lambda p: (False, "chapter 0 title: still broken"),
+        )
+        monkeypatch.setattr(chapter_repair, "_restore_fourcc", boom)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "was modified" in error
+
+    def test_a_failure_to_locate_the_atom_writes_nothing(self, monkeypatch, tmp_path):
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+
+        def boom(path):
+            raise ValueError("truncated atom header")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "_patch_chpl_fourcc", boom)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "Failed to patch the chpl atom" in error
+        assert filepath.read_bytes() == original
+
+    def test_a_backup_that_cannot_be_taken_aborts_before_the_remux(
+        self, monkeypatch, tmp_path
+    ):
+        """No backup means no safety net for a whole-file rewrite — don't do
+        the rewrite."""
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+        probe_calls = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            raise AssertionError(f"no ffmpeg should run without a backup: {cmd}")
+
+        def boom(path):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", lambda p: (True, None))
+        monkeypatch.setattr(chapter_repair, "_make_backup", boom)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "Could not back up the file" in error
+        assert "left unmodified" in error
+        assert filepath.read_bytes() == original
+
+    def test_an_unwalkable_remux_result_does_not_abort_the_restore(
+        self, monkeypatch, tmp_path
+    ):
+        """ffmpeg's output may not even be walkable by mutagen's Atoms parser.
+        That must not escape as an exception and skip the restore."""
+        filepath = tmp_path / "book.m4b"
+        original = _synthetic_m4b(with_chpl=True)
+        filepath.write_bytes(original)
+        probe_calls = []
+        checks = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            if "-f" in cmd and "ffmetadata" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(b";FFMETADATA1\n")
+                return _FakeCompletedProcess(returncode=0)
+            if "-map_metadata" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(b"not an atom tree")
+                return _FakeCompletedProcess(returncode=0)
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        def fake_check(p):
+            checks.append(p)
+            return (True, None) if len(checks) == 1 else (False, "chapter 0 title: broken")
+
+        def boom(path):
+            raise ValueError("cannot parse atom tree")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", fake_check)
+        monkeypatch.setattr(chapter_repair, "neutralize_chpl", boom)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "unmodified" in error
+        assert filepath.read_bytes() == original
+
+    def test_a_failed_restore_from_backup_tells_the_operator_where_it_is(
+        self, monkeypatch, tmp_path
+    ):
+        filepath = tmp_path / "book.m4b"
+        filepath.write_bytes(_synthetic_m4b(with_chpl=True))
+        probe_calls = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            if cmd[0] == "ffprobe":
+                probe_calls.append(cmd)
+                if len(probe_calls) == 1:
+                    return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
+                return _FakeCompletedProcess(stdout=_ffprobe_json([]))
+            # The ffmetadata export fails, so _rebuild_chapters never reaches
+            # its own shutil.move and the one patched below is only _fail's.
+            return _FakeCompletedProcess(returncode=1, stderr=b"Permission denied")
+
+        def boom(*a, **kw):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(subprocess_module, "run", fake_run)
+        monkeypatch.setattr(chapter_repair, "check_chapter_encoding", lambda p: (True, None))
+        monkeypatch.setattr(chapter_repair.shutil, "move", boom)
+
+        ok, error = chapter_repair.repair_chapter_encoding(str(filepath))
+
+        assert ok is False
+        assert "was modified" in error
+        assert chapter_repair.BACKUP_SUFFIX in error
