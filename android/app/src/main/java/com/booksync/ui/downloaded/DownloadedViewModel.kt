@@ -15,7 +15,9 @@ import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.ui.library.LibraryItem
 import com.booksync.ui.library.LibrarySort
+import com.booksync.ui.library.lastOpenedFor
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -40,6 +42,8 @@ data class DownloadedItem(
     val pair: BookPairEntity? = null,
     val ebook: EBookEntity? = null,
     val audiobook: AudioBookEntity? = null,
+    /** See [com.booksync.ui.library.LibraryItem.lastOpenedAt] (issue #223). */
+    val lastOpenedAt: Long? = null,
 ) {
     val key: String get() = pair?.let { "pair_${it.id}" } ?: ebook?.let { "ebook_${it.id}" } ?: audiobook?.let { "audio_${it.id}" } ?: ""
     val title: String get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: ""
@@ -47,6 +51,33 @@ data class DownloadedItem(
     val series: String? get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
     val seriesIndex: Float? get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
     val sortId: Int get() = pair?.id ?: ebook?.id ?: audiobook?.id ?: 0
+
+    /** Adapter so this screen can reuse [lastOpenedFor] rather than repeat it. */
+    internal fun asLibraryItem() = LibraryItem(key, pair, ebook, audiobook)
+}
+
+/**
+ * The Downloaded tab's orders. Same [LibrarySort] and the same "Recently opened"
+ * contract as the library's [com.booksync.ui.library.comparatorFor] — it showed
+ * the same books with the same menu and the same id-descending stand-in for
+ * "recently opened" (issue #223) — but its title order strips a leading article,
+ * which the library deliberately does not, so the two cannot simply share one
+ * comparator.
+ */
+internal fun downloadedComparatorFor(
+    sort: LibrarySort,
+    articleRegex: Regex,
+): Comparator<DownloadedItem> {
+    fun sortTitle(item: DownloadedItem) = item.title.replace(articleRegex, "").lowercase()
+    return when (sort) {
+        LibrarySort.RecentlyAdded  -> compareByDescending { it.sortId }
+        LibrarySort.RecentlyOpened -> compareByDescending<DownloadedItem> { it.lastOpenedAt ?: Long.MIN_VALUE }
+            .thenBy { sortTitle(it) }
+        LibrarySort.TitleAsc       -> compareBy { sortTitle(it) }
+        LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
+        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+        LibrarySort.SeriesCount    -> compareBy { sortTitle(it) }
+    }
 }
 
 @HiltViewModel
@@ -92,7 +123,12 @@ class DownloadedViewModel @Inject constructor(
 
     // --- Unified filtered + sorted item list ---------------------------------
 
-    val items = combine(downloadedPairs, downloadedEbooks, downloadedAudiobooks, _uiState) { pairs, ebooks, audiobooks, ui ->
+    /** When each book was last opened, for [LibrarySort.RecentlyOpened] (issue #223). */
+    private val lastOpened = repository.lastOpenedTimesFlow()
+
+    val items = combine(
+        downloadedPairs, downloadedEbooks, downloadedAudiobooks, _uiState, lastOpened,
+    ) { pairs, ebooks, audiobooks, ui, opened ->
         val articleRegex = "^(the|a|an)\\s+".toRegex(RegexOption.IGNORE_CASE)
 
         val allItems = buildList {
@@ -113,17 +149,10 @@ class DownloadedViewModel @Inject constructor(
             }
         }
 
-        searched.sortedWith(comparatorFor(ui.sort, articleRegex))
+        searched
+            .map { it.copy(lastOpenedAt = lastOpenedFor(it.asLibraryItem(), opened)) }
+            .sortedWith(downloadedComparatorFor(ui.sort, articleRegex))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptyList())
-
-    private fun comparatorFor(sort: LibrarySort, articleRegex: Regex): Comparator<DownloadedItem> = when (sort) {
-        LibrarySort.RecentlyAdded  -> compareByDescending { it.sortId }
-        LibrarySort.RecentlyOpened -> compareByDescending { it.sortId }
-        LibrarySort.TitleAsc       -> compareBy { it.title.replace(articleRegex, "").lowercase() }
-        LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
-        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
-        LibrarySort.SeriesCount    -> compareBy { it.title.replace(articleRegex, "").lowercase() }
-    }
 
     // --- Download progress (pair id → percent 0..100) -----------------------
 

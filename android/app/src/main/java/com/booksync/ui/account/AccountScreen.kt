@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,6 +61,7 @@ import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.BuildConfig
+import com.booksync.R
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.theme.TandemTheme
@@ -318,6 +320,20 @@ fun AccountScreen(
                         title = "Tandem app logs",
                         description = "Capture in-app events for support.",
                         onClick = onDiagnosticsApp,
+                    )
+                    Divider()
+                    // Issue #230. The only route by which a stack trace reaches
+                    // the person who can fix it: there is no crash SDK, and Play
+                    // Vitals only reports users who share usage data.
+                    val reportContext = LocalContext.current
+                    ActionRow(
+                        title = stringResource(R.string.account_report_problem),
+                        description = stringResource(R.string.account_report_problem_desc),
+                        onClick = {
+                            viewModel.shareProblemReport { intent ->
+                                reportContext.startActivity(intent)
+                            }
+                        },
                     )
                 }
             }

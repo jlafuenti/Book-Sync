@@ -95,6 +95,11 @@ class AccountViewModelLogoutTest {
             deviceIdManager = deviceIdManager,
             passwordResetGate = PasswordResetGate(),
             networkMonitor = networkMonitor,
+            // Not exercised here — "Report a problem" (issue #230) is Android
+            // plumbing (FileProvider, Intent); its payload is covered by
+            // CrashReportFormatterTest.
+            diagnosticLogger = mockk(relaxed = true),
+            appContext = mockk(relaxed = true),
         )
     }
 

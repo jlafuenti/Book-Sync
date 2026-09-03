@@ -58,4 +58,24 @@
     <string name="version_server_newer">Your Tandem server is newer than this app — update it from Play</string>
     <string name="version_server_older">This app needs server API v%1$d — ask your server admin to upgrade</string>
 
+    <!-- ============ Library sort menu (issue #223) ============ -->
+    <!-- The same library opens in a browser too, and the two menus used to name
+         the same orders differently ("Recently added" here, "Date added" there).
+         These labels match `LIBRARY_SORT_LABELS` in web/src/pages/LibraryPage.jsx.
+         "Series order" and "Most books" have no web equivalent because the web
+         has no series mode; they are only offered inside one. -->
+    <string name="library_sort_date_added">Date added</string>
+    <string name="library_sort_recently_opened">Recently opened</string>
+    <string name="library_sort_title_asc">Title A–Z</string>
+    <string name="library_sort_author_asc">Author A–Z</string>
+    <string name="library_sort_series_order">Series order</string>
+    <string name="library_sort_series_count">Most books</string>
+
+    <!-- ============ Report a problem (issue #230) ============ -->
+    <!-- There is no crash SDK. This is the path by which a stack trace actually
+         reaches the person who can fix it. -->
+    <string name="account_report_problem">Report a problem</string>
+    <string name="account_report_problem_desc">Send the app log, version and device details.</string>
+    <string name="report_problem_chooser">Report a problem</string>
+
 </resources>

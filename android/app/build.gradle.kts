@@ -379,15 +379,16 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 48.40% line coverage on 2026-09-03 (1980/4091 lines);
+                    // Measured 49.45% line coverage on 2026-09-03 (2105/4257 lines);
                     // floor set a few points under, same as the server's --cov-fail-under.
                     // Ratchet: after any PR that raises the total, bump this to
                     // (new total − 3), whole percent.
                     //
-                    // The previous baseline (43.86%, 1722/3926) was measured earlier the
-                    // same day, before the first-run screen of issue #175 landed — which
-                    // is where most of the jump comes from, not from issue #174.
-                    minValue = 45
+                    // Earlier baselines the same day: 43.86% (1722/3926) before the
+                    // first-run screen of issue #175, then 48.40% (1980/4091) after it.
+                    // Issues #223 and #230 added the library sort orders and the crash
+                    // report formatter, both pure and both directly tested.
+                    minValue = 46
                     coverageUnits = CoverageUnit.LINE
                 }
             }

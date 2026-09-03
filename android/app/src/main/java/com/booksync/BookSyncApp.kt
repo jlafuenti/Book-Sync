@@ -11,6 +11,8 @@ import coil.Coil
 import coil.ImageLoader
 import com.booksync.data.sync.SyncWorker
 import com.booksync.data.util.NetworkMonitor
+import com.booksync.diagnostics.CrashContext
+import com.booksync.diagnostics.CrashLogHandler
 import com.booksync.diagnostics.DiagnosticLogger
 import com.google.android.gms.cast.framework.CastContext
 import dagger.hilt.android.HiltAndroidApp
@@ -21,6 +23,23 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import javax.inject.Inject
+
+/**
+ * The version / device / OS facts a crash report or a problem report needs
+ * (issue #230).
+ *
+ * Lives here, not in `com.booksync.diagnostics`, so that package stays free of
+ * Android types and unit-testable: this is the one function that reads
+ * [Build] and [BuildConfig], and it has nothing to assert on the JVM.
+ */
+internal fun deviceCrashContext(): CrashContext = CrashContext(
+    versionName = BuildConfig.VERSION_NAME,
+    versionCode = BuildConfig.VERSION_CODE,
+    deviceManufacturer = Build.MANUFACTURER ?: "unknown",
+    deviceModel = Build.MODEL ?: "unknown",
+    androidRelease = Build.VERSION.RELEASE ?: "unknown",
+    androidSdkInt = Build.VERSION.SDK_INT,
+)
 
 /**
  * BookSync Application class.
@@ -59,6 +78,17 @@ class BookSyncApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Catch what nothing else catches (issue #230). Installed first: an
+        // exception thrown by anything below this line is exactly the kind of
+        // startup crash the owner would otherwise only learn about from a Play
+        // Vitals aggregate days later, if the user shares usage data at all.
+        // Delegates to the platform handler, so the process still dies normally.
+        CrashLogHandler.install(
+            context = deviceCrashContext(),
+            appendToLog = diagnosticLogger::appendCrashReport,
+        )
+
         // Clear any leftover "until app closed" diagnostic session from a previous run.
         diagnosticLogger.clearAppCloseMode()
 
