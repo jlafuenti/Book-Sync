@@ -45,6 +45,7 @@ import com.booksync.data.remote.TANDEM_REPO_URL
 import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.shouldExpandAdvanced
+import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.RegisterRequest
 import com.booksync.data.remote.ServerUrlManager
@@ -99,6 +100,7 @@ class LoginViewModel @Inject constructor(
     private val userScopeProvider: UserScopeProvider,
     private val firstRunGate: FirstRunGate,
     private val serverVersionGate: ServerVersionGate,
+    private val deviceIdManager: DeviceIdManager,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -211,7 +213,13 @@ class LoginViewModel @Inject constructor(
             _error.value = null
             _message.value = null
             try {
-                val tokens = api.login(LoginRequest(username, password))
+                // The device id names the session this login opens, so a
+                // later sign-out ends this phone's session and not the
+                // browser's (issue #250). It is the same id that attributes
+                // reading positions, so the two agree about what a device is.
+                val tokens = api.login(
+                    LoginRequest(username, password, device_id = deviceIdManager.deviceId),
+                )
                 tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
                 // Claim any rows written before the cache was scoped, so an
                 // upgrading install keeps its reading positions (issue #314).

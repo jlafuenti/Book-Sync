@@ -489,3 +489,16 @@ next push the startup reconcile (`syncAllBookmarksAndProgress`) and the 15-minut
 WorkManager sweep (`processPendingSync`, which now also pushes unsynced bookmark
 rows) still deliver it. The 30-minute `append_to_log` history cadence is
 orthogonal and unchanged; a log tick is itself a boundary and pushes.
+
+**Signing out elsewhere no longer stops those deliveries** (issue #250). Logout
+used to bump `users.token_version`, which invalidated every token the account
+held on every device: signing out of the browser made the phone's next push
+401, its refresh fail, and `AuthInterceptor` clear the tokens — so unsynced Room
+rows sat undelivered until somebody noticed and signed in again. Nothing was
+lost, but cross-device resume silently stopped. `POST /api/auth/logout` now
+revokes only the calling device's session, so the phone keeps sweeping. The
+account-wide revoke still exists and still has this effect — it is just asked
+for explicitly now: `POST /api/auth/logout-all`, a password change, or an admin
+password reset. **Before any of those, let a device flush**: Android's startup
+reconcile and the 15-minute sweep will re-deliver on the next successful
+sign-in, but not before it.
