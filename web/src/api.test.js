@@ -83,6 +83,72 @@ describe('logout()', () => {
     })
 })
 
+describe('per-device sessions (issue #250)', () => {
+    // Signing out of the browser used to sign out the phone: logout bumped
+    // `token_version` server-side, which killed every token the account held.
+    // The server now scopes a logout to the session the caller names, and the
+    // client's job is to say which session that is.
+
+    it('login sends the device id, so the session it opens can be named', async () => {
+        localStorage.setItem('tandem_device_id', 'device-web-1')
+
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ access_token: 'a', refresh_token: 'r' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { login } = await import('./api')
+        await login('jesse', 'pw')
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+        expect(body.device_id).toBe('device-web-1')
+    })
+
+    it('logout names the session by sending the refresh token', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ message: 'Logged out', scope: 'device' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { logout } = await import('./api')
+        await logout()
+
+        const [url, options] = fetchMock.mock.calls[0]
+        expect(String(url)).toContain('/auth/logout')
+        expect(JSON.parse(options.body).refresh_token).toBe('refresh-1')
+    })
+
+    it('a refresh carries the device id, so a pre-upgrade token lands on a named session', async () => {
+        localStorage.setItem('tandem_device_id', 'device-web-1')
+        localStorage.setItem('tandem_token', 'stale-access')
+        localStorage.setItem('tandem_refresh', 'legacy-refresh')
+
+        const fetchMock = vi.fn().mockImplementation(async (url, options = {}) => {
+            if (String(url).includes('/auth/refresh')) {
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ access_token: 'fresh', refresh_token: 'fresh-r' }),
+                }
+            }
+            if (options.headers?.['Authorization'] !== 'Bearer fresh') {
+                return { ok: false, status: 401, json: async () => ({}) }
+            }
+            return { ok: true, status: 200, json: async () => ({ ok: true }) }
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getMe } = await import('./api')
+        await getMe()
+
+        const refreshCall = fetchMock.mock.calls.find(([u]) => String(u).includes('/auth/refresh'))
+        expect(JSON.parse(refreshCall[1].body).device_id).toBe('device-web-1')
+    })
+})
+
 describe('testHardcoverConnection()', () => {
     it('sends the token in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({

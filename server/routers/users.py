@@ -12,7 +12,9 @@ from database import get_db
 from models.user import User, VALID_ROLES
 from models.audit_log import AuditLog
 from schemas import UserResponse, UserCreateAdmin, UserUpdateAdmin, UserPasswordReset
-from routers.auth import get_admin_user, hash_password, log_audit, get_client_ip
+from routers.auth import (
+    get_admin_user, hash_password, log_audit, get_client_ip, revoke_all_sessions,
+)
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -261,7 +263,11 @@ async def reset_password(
 
     user.hashed_password = hash_password(data.new_password)
     user.must_reset_password = True
+    # Global, like a self-service password change: an admin reset must reach
+    # every device, so it bumps `token_version` and revokes the sessions behind
+    # the tokens too (issue #250).
     user.token_version += 1
+    await revoke_all_sessions(db, user.id)
     await db.flush()
 
     await log_audit(

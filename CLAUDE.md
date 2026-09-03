@@ -149,7 +149,31 @@ and the failure mode (reopening at the wrong page) is silent.
 ### Authentication
 - JWT (HS256), access token 24h, refresh token 30 days
 - Stored in `localStorage` on the frontend
-- `server/routers/auth.py` handles login, registration, token refresh
+- `server/routers/auth.py` handles login, registration, token refresh, logout
+
+**Sign-out is per device** (issue #250). Every login opens a session — a
+`refresh_tokens` row holding the refresh token's `jti` plus the client's
+`device_id`. The access and media tokens minted from it carry the same value as
+`sid`, and both `get_current_user` and the media resolver in `routers/files.py`
+refuse a token whose session has been revoked. `POST /api/auth/logout` revokes
+one row, so the browser signing out leaves the phone signed in — which matters
+because the phone is usually the device holding unsynced reading positions
+(`docs/position-sync-contract.md`).
+
+`users.token_version` is still the account-wide kill switch and still bumped by
+password change, admin reset, and the explicit `POST /api/auth/logout-all`.
+Do not reintroduce that bump into `logout`.
+
+Two rules that keep the deploy safe, both pinned by tests in
+`server/tests/test_auth.py`:
+
+- **A token with no `jti`/`sid` predates sessions and must keep working** on its
+  `ver` alone, and a `logout` that can name no session at all must keep falling
+  back to the global bump. That is what lets a client that has not been updated
+  carry on across the deploy.
+- **`/auth/refresh` re-issues for the same session rather than replacing it.**
+  The presented refresh token stays valid until its own expiry; revocation, not
+  use, is what ends a session. This is deliberately *not* rotation — see below.
 
 **The localStorage choice depends on the web having zero HTML-injection sinks**
 (issue #286). A 30-day refresh token in `localStorage` is readable by any script
@@ -170,9 +194,12 @@ filtering are load-bearing, not incidental — `BookDetailPage.test.jsx` pins bo
 protection first, in the same change that relaxes the rule.
 
 Related: refresh is single-flighted client-side (`web/src/api.js`,
-`refreshSession`) and the server does not rotate refresh tokens. If rotation is
-ever added, the single-flight is what stops concurrent 401s from logging users
-out at random — do not remove it without replacing that guarantee.
+`refreshSession`; Android's `TokenAuthenticator`) and the server does not rotate
+refresh tokens — issue #250 added sessions but deliberately kept the presented
+token valid, because a refresh whose response is lost would otherwise strand the
+device with a dead token and no way to renew it. If rotation is ever added, the
+single-flight is what stops concurrent 401s from logging users out at random —
+do not remove it without replacing that guarantee.
 
 ### Frontend Structure (`web/src/`)
 - `api.js` — Centralized API client with automatic token refresh

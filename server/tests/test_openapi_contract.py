@@ -50,7 +50,6 @@ ROUTER_MODULES = [
 UNTYPED_ALLOWLIST = {
     # --- auth -------------------------------------------------------------
     "POST /api/auth/change-password",
-    "POST /api/auth/logout",
     "POST /api/auth/register",
     # --- files (permanent: raw file/stream responses) ----------------------
     "GET /api/files/audiobook/{audiobook_id}",

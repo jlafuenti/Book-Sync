@@ -80,6 +80,7 @@ from models.settings import SystemSetting  # noqa: E402,F401
 from models.transcription_queue import TranscriptionQueueItem  # noqa: E402,F401
 from models.transcript import AudioTranscript  # noqa: E402,F401
 from models.audit_log import AuditLog  # noqa: E402,F401
+from models.refresh_token import RefreshToken  # noqa: E402,F401
 from models.import_source import ImportSource, ImportSourceCredential, ImportJob  # noqa: E402,F401
 from models.library_issue import LibraryCheckResult  # noqa: E402,F401
 
