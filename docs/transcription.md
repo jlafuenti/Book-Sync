@@ -19,6 +19,10 @@ Deploying the remote worker itself is a separate walkthrough:
 
 The transcript is editable afterwards (Transcription → editor) if the alignment came out poor.
 
+Both the server and Jetson images bake NLTK's `punkt_tab` sentence tokenizer in at build time
+(into `/usr/local/share/nltk_data`, named by `NLTK_DATA`), so a running container needs no
+outbound network for step 3 or for the EPUB side of step 4 — only the build host does.
+
 ## Provider modes
 
 `TRANSCRIPTION_PROVIDER` — env var for the first boot, then **System → Transcription Settings**

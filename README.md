@@ -8,7 +8,10 @@ and keeps a single position in sync across devices.
 > that are expensive to rename: the Android package `com.booksync`, the Postgres role/database
 > `booksync`, the `booksync_db`/`booksync_data` docker volumes, `booksync-db-*.dump` backup files,
 > and the repo slug `Book-Sync`. Those are identifiers, not branding — leave them alone. Everything
-> a user reads says Tandem.
+> a user reads says Tandem. The Android one is not merely expensive but *permanent*: Play binds an
+> app's identity to the `applicationId` of its first uploaded bundle, so once Tandem ships,
+> `com.booksync` can never be tidied to `com.tandem` — doing so would publish a second, unrelated
+> app that no existing install can update to.
 
 ## Architecture
 
@@ -175,6 +178,7 @@ can't be decrypted. Full details, monitoring, and the restore/test-drill procedu
 | [docs/import-sources.md](docs/import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
 | [docs/transcription.md](docs/transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
 | [docs/android.md](docs/android.md) | Building the app, pointing it at your server, downloads/offline, Android Auto |
+| [docs/play-listing.md](docs/play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
 | [docs/operations.md](docs/operations.md) | Logs, upgrades, reverse-proxy setup, password rotation, restart policies |
 | [docs/backup-restore.md](docs/backup-restore.md) | Backup schedule, restore procedure, test drills |
 | [docs/position-sync-contract.md](docs/position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |

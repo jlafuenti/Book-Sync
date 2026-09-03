@@ -214,6 +214,11 @@ fun HomeScreen(
                     SectionHeader(
                         title = "New Pairs",
                         onSeeAll = { onSeeAll(HomeSeeAll.NEW) },
+                        // Issue #222: clears the pairs only. The Library NEW
+                        // filter's "Acknowledge all" also clears every new
+                        // ebook and audiobook, which is why this section needed
+                        // a dismiss of its own.
+                        onDismiss = { viewModel.dismissNewPairs() },
                     )
                     PairRow(
                         pairs = newPairs,
@@ -270,8 +275,12 @@ enum class HomeSeeAll { CONTINUE, RECENTLY_ADDED, NEW, QUEUE }
 // Subcomponents
 // --------------------------------------------------------------------------
 
+/**
+ * [onDismiss], when given, renders a per-section "Dismiss" next to "See all"
+ * (issue #222). Only "New Pairs" uses it today.
+ */
 @Composable
-private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
+private fun SectionHeader(title: String, onSeeAll: () -> Unit, onDismiss: (() -> Unit)? = null) {
     val colors = Tandem.colors
     Row(
         modifier = Modifier
@@ -286,6 +295,11 @@ private fun SectionHeader(title: String, onSeeAll: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
         )
+        if (onDismiss != null) {
+            TextButton(onClick = onDismiss) {
+                Text("Dismiss", color = colors.textSecondary, fontSize = 13.sp)
+            }
+        }
         TextButton(onClick = onSeeAll) {
             Text("See all", color = colors.accent, fontSize = 13.sp)
             Icon(

@@ -43,9 +43,42 @@ fun retrofitBaseUrl(stored: String): String =
  */
 fun shouldExpandAdvanced(serverUrl: String): Boolean = serverUrl.isBlank()
 
+/**
+ * Whether to show the first-run screen instead of the sign-in form (issue #175).
+ *
+ * Someone who installs from Play without already running a server used to land on
+ * a username box and an "Advanced" section, with nothing saying that Tandem is a
+ * client for a server they have to run. Asking a stranger for credentials to a
+ * thing they have never heard of is the uninstall.
+ *
+ * Same input as [shouldExpandAdvanced] and the same answer today, deliberately
+ * kept separate: that one decides whether a *returning* user's Advanced section
+ * starts open, this one decides whether to explain the product at all.
+ */
+fun shouldShowFirstRun(serverUrl: String): Boolean = serverUrl.isBlank()
+
+/**
+ * Where the first-run screen sends someone who does not have a server yet.
+ *
+ * The repo, not a running instance: there is no public Tandem to point at, and
+ * linking anybody's personal host from a Play build is exactly what issue #58
+ * took out of the sources.
+ */
+const val TANDEM_REPO_URL = "https://github.com/jlafuenti/Book-Sync"
+
 /** Shown when the user types something that is not a usable server address. */
 const val INVALID_SERVER_URL_MESSAGE =
     "Enter a server address like https://tandem.example.com"
+
+/**
+ * Shown after a successful "Request access" (issue #221).
+ *
+ * `POST /api/auth/register` creates a *pending* account — the server will not
+ * issue tokens for it until an admin approves. Without this sentence the flow
+ * looks like it worked and the next sign-in looks like a wrong password.
+ */
+const val REGISTRATION_PENDING_MESSAGE =
+    "Request submitted — an admin must approve it before you can sign in"
 
 /**
  * Anything that looks like it was *trying* to name a scheme but isn't `http://`

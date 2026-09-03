@@ -92,3 +92,76 @@ def test_the_image_provisions_the_corpus_at_build_time():
         "nltk.data.path, unlike a home-directory default that changes with the "
         "container user."
     )
+
+
+# ---------------------------------------------------------------------------
+# The fallback's failure path (issue #249)
+# ---------------------------------------------------------------------------
+#
+# The fallback stays, for a bare dev checkout. What it must not do is fail
+# quietly: `nltk.download(quiet=True)` returns False on a host with no egress,
+# and the caller then dies at EPUB extraction -- after a multi-hour
+# transcription -- with a LookupError that names nothing useful. The log line is
+# the only place the real cause can appear.
+
+def _force_download(monkeypatch, result):
+    """Pretend the corpus is missing and the download returns `result`."""
+    from services import nltk_data
+
+    monkeypatch.setattr(nltk_data, "_ensured", False)
+    monkeypatch.setattr(nltk.data, "find", lambda *a, **k: (_ for _ in ()).throw(
+        LookupError("punkt_tab")))
+    if isinstance(result, Exception):
+        def _download(*a, **k):
+            raise result
+    else:
+        def _download(*a, **k):
+            return result
+    monkeypatch.setattr(nltk, "download", _download)
+    return nltk_data
+
+
+def test_a_failed_download_logs_a_warning(monkeypatch, caplog):
+    """`quiet=True` returning False must not be the only trace of the failure."""
+    nltk_data = _force_download(monkeypatch, False)
+
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        nltk_data.ensure_punkt()
+
+    failures = [
+        r for r in caplog.records
+        if r.levelname == "WARNING"
+        and "punkt_tab" in r.getMessage()
+        and any(w in r.getMessage().lower() for w in ("fail", "could not"))
+    ]
+    assert failures, (
+        "a failed punkt_tab download logged no WARNING naming the failure. An "
+        "offline container must say why extraction is about to die, not only "
+        f"that it was about to try. Records: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_a_download_that_raises_also_logs_a_warning(monkeypatch, caplog):
+    """A refused connection is the same operational story as a False return."""
+    nltk_data = _force_download(monkeypatch, OSError("network unreachable"))
+
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        nltk_data.ensure_punkt()
+
+    assert any(
+        r.levelname == "WARNING" and "network unreachable" in r.getMessage()
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+def test_a_successful_download_logs_no_failure(monkeypatch, caplog):
+    """The warning has to distinguish the two outcomes to be worth reading."""
+    nltk_data = _force_download(monkeypatch, True)
+
+    with caplog.at_level("WARNING"):
+        nltk_data.ensure_punkt()
+
+    assert not [
+        r for r in caplog.records
+        if any(w in r.getMessage().lower() for w in ("fail", "could not"))
+    ]
