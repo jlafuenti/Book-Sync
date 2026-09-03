@@ -1,7 +1,7 @@
 [
   {
     "name": "exact_title_no_authors",
-    "why": "Both sides bare: an identical title is a match on the title score alone.",
+    "why": "Both sides bare: an identical title clears even the raised no-author bar of 90.",
     "ebook": {
       "title": "Mistborn"
     },
@@ -80,6 +80,56 @@
     "expected_score": 100
   },
   {
+    "name": "series_index_string_forms_compare_equal",
+    "why": "Indexes reach the matcher as whatever the metadata held - '01' and '1.0' are the same book, so parsing stays tolerant even though the comparison is now numeric.",
+    "ebook": {
+      "title": "The Final Empire",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": "01"
+    },
+    "audiobook": {
+      "title": "The Final Empire",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": "1.0"
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "unparseable_series_index_is_missing_metadata",
+    "why": "An index that is not a number ('II') is absent metadata, not evidence of a different book - it must not reject an otherwise perfect match.",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": "II"
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 2
+    },
+    "expected_score": 100
+  },
+  {
+    "name": "same_series_but_only_one_side_has_an_index",
+    "why": "A series name on both sides with an index on only one is still missing metadata - the numeric comparison only rejects when both sides give a number.",
+    "ebook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn",
+      "series_index": 2
+    },
+    "audiobook": {
+      "title": "The Well of Ascension",
+      "author": "Brandon Sanderson",
+      "series": "Mistborn"
+    },
+    "expected_score": 100
+  },
+  {
     "name": "series_name_with_leading_article",
     "why": "'The Dresden Files' vs 'Dresden Files' compare equal after article strip.",
     "ebook": {
@@ -112,8 +162,8 @@
     "expected_score": 100
   },
   {
-    "name": "series_index_1_and_1_5_truncate_equal",
-    "why": "PINS A QUESTIONABLE RULE (issue #253): int() truncation makes the novella 1.5 the same book as 1, so a #1.5 audiobook can be paired with the #1 ebook.",
+    "name": "series_index_1_and_1_5_are_different_books",
+    "why": "A #1.5 novella is not book 1. Indexes are compared as floats now, so 1 and 1.5 reject each other instead of truncating equal (issue #253).",
     "ebook": {
       "title": "The Emperor's Soul",
       "author": "Brandon Sanderson",
@@ -126,11 +176,11 @@
       "series": "Elantris",
       "series_index": 1.5
     },
-    "expected_score": 100
+    "expected_score": null
   },
   {
-    "name": "title_near_miss_matches_when_one_side_has_no_author",
-    "why": "PINS A QUESTIONABLE RULE (issue #253): with no author on the audiobook the author gate is skipped entirely and a title score alone pairs two different books.",
+    "name": "title_near_miss_rejected_when_one_side_has_no_author",
+    "why": "'The Way of Kings' vs 'The Way of Kings Prime' scores 80. With no author to gate on the bar is 90, so these two different books no longer pair (issue #253).",
     "ebook": {
       "title": "The Way of Kings",
       "author": "Brandon Sanderson"
@@ -138,7 +188,43 @@
     "audiobook": {
       "title": "The Way of Kings Prime"
     },
-    "expected_score": 80.0
+    "expected_score": null
+  },
+  {
+    "name": "missing_author_needs_a_high_title_score_to_pair",
+    "why": "A missing author raises the bar to 90, it does not close the door: a 97 title score ('Assassins Apprentice' vs 'Assassin Apprentice') still pairs, with no author boost.",
+    "ebook": {
+      "title": "Assassins Apprentice",
+      "author": "Robin Hobb"
+    },
+    "audiobook": {
+      "title": "Assassin Apprentice"
+    },
+    "expected_score": 97.43589743589743
+  },
+  {
+    "name": "missing_author_rejects_a_mid_title_score",
+    "why": "85.7 clears the normal 75 threshold but not the 90 required when an author is missing - the case the raised bar exists for.",
+    "ebook": {
+      "title": "The Fifth Season",
+      "author": "N.K. Jemisin"
+    },
+    "audiobook": {
+      "title": "Fifth Season Two"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "missing_author_on_the_ebook_side_raises_the_bar_too",
+    "why": "The rule is symmetric: an author missing on either side raises the title bar to 90.",
+    "ebook": {
+      "title": "Fifth Season Two"
+    },
+    "audiobook": {
+      "title": "The Fifth Season",
+      "author": "N.K. Jemisin"
+    },
+    "expected_score": null
   },
   {
     "name": "hash_exclusion_blocks_the_pair",
@@ -173,21 +259,41 @@
     "expected_score": null
   },
   {
-    "name": "exclusion_is_not_honoured_without_a_file_hash",
-    "why": "PINS A QUESTIONABLE RULE (issue #253): the exclusion is keyed by file hash, so a hash-less row (legacy) is re-paired on the next scan despite the unpair.",
+    "name": "id_exclusion_blocks_a_hashless_pair",
+    "why": "The exclusion is keyed by row id as well as file hash now, so a hash-less row (legacy) keeps its memory of the unpair instead of re-pairing on the next scan (issue #253).",
     "ebook": {
+      "id": 11,
       "title": "Mistborn",
       "file_hash": null,
-      "auto_pair_excluded_hashes": [
-        "aaaa"
+      "auto_pair_excluded_ids": [
+        22
       ]
     },
     "audiobook": {
+      "id": 22,
       "title": "Mistborn",
       "file_hash": null,
-      "auto_pair_excluded_hashes": [
-        "eeee"
+      "auto_pair_excluded_ids": [
+        11
       ]
+    },
+    "expected_score": null
+  },
+  {
+    "name": "id_exclusion_names_a_different_book",
+    "why": "The id list is matched against this candidate's id, not treated as a blanket block: an unpair from audiobook 22 must not stop audiobook 33 pairing.",
+    "ebook": {
+      "id": 11,
+      "title": "Mistborn",
+      "file_hash": null,
+      "auto_pair_excluded_ids": [
+        22
+      ]
+    },
+    "audiobook": {
+      "id": 33,
+      "title": "Mistborn",
+      "file_hash": null
     },
     "expected_score": 100.0
   },
@@ -253,7 +359,7 @@
   },
   {
     "name": "empty_titles_on_both_sides",
-    "why": "Degenerate metadata must not become a 100-scoring pair.",
+    "why": "Two empty titles are a perfect fuzzy match on nothing at all. Degenerate metadata is rejected outright now instead of scoring 100 (issue #253).",
     "ebook": {
       "title": "",
       "author": "Brandon Sanderson"
@@ -262,6 +368,32 @@
       "title": "",
       "author": "Brandon Sanderson"
     },
-    "expected_score": 100
+    "expected_score": null
+  },
+  {
+    "name": "empty_title_on_one_side_only",
+    "why": "An untitled row must not be paired with a real book on its author alone.",
+    "ebook": {
+      "title": "Mistborn",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": null
+  },
+  {
+    "name": "whitespace_only_title_is_empty_after_normalization",
+    "why": "The empty-title rule is applied to the normalized title, so a title of blanks counts as empty too.",
+    "ebook": {
+      "title": "   ",
+      "author": "Brandon Sanderson"
+    },
+    "audiobook": {
+      "title": "Mistborn",
+      "author": "Brandon Sanderson"
+    },
+    "expected_score": null
   }
 ]
