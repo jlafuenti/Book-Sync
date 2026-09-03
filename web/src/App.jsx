@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { isLoggedIn, getMe, logout, getUsers } from './api'
 import { useTheme } from './ThemeContext'
@@ -10,19 +10,11 @@ import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
-import TranscriptionPage from './pages/TranscriptionPage'
-import TranscriptionEditorPage from './pages/TranscriptionEditorPage'
-import TranscriptionQueuePage from './pages/TranscriptionQueuePage'
-import SystemPage from './pages/SystemPage'
 import SeriesPage from './pages/SeriesPage'
-import BookDetailPage from './pages/BookDetailPage'
 import UnpairedPage from './pages/UnpairedPage'
-import UserManagementPage from './pages/UserManagementPage'
 import HomePage from './pages/HomePage'
 import NewItemsPage from './pages/NewItemsPage'
 import NewPairsPage from './pages/NewPairsPage'
-import ImportSourcesPage from './pages/ImportSourcesPage'
-import TroubleshootPage from './pages/TroubleshootPage'
 import { AudioPlayerProvider, useAudioPlayer } from './contexts/AudioPlayerContext'
 import { MiniPlayer } from './components/AudioPlayer'
 import { AudioPlayerView } from './components/AudioPlayer'
@@ -31,6 +23,40 @@ import BottomNavBar from './components/BottomNavBar'
 import MobileTopBar from './components/MobileTopBar'
 import MobileDrawer from './components/MobileDrawer'
 import { switchToEbook } from './lib/handoff'
+
+// Route-level code splitting (issue #281).
+//
+// The service worker precaches every built .js file and re-downloads it on
+// every deploy (docs/web-pwa.md), so a single entry chunk charges every user —
+// including one who only ever opens Home on a phone — for react-markdown, the
+// transcription editor and the whole admin console. These are the routes that
+// are both heavy and rarely the first thing anyone opens; each dynamic import()
+// is what makes Rollup emit them as separate chunks, so hoisting one back up to
+// a static import silently switches the split off. App.codeSplit.test.jsx pins
+// that, and pins which pages deliberately stay eager: HomePage, LibraryPage and
+// LoginPage are the first paint and must not cost a second request.
+//
+// epub.js is the one big dependency this cannot move: HomePage opens the reader
+// too, so it is reachable from the eager tree. It gets a manual vendor chunk
+// instead (src/build/manualChunks.js) — still downloaded up front, but no longer
+// re-downloaded every time an eager page changes.
+const TranscriptionPage = lazy(() => import('./pages/TranscriptionPage'))
+const TranscriptionEditorPage = lazy(() => import('./pages/TranscriptionEditorPage'))
+const SystemPage = lazy(() => import('./pages/SystemPage'))
+const BookDetailPage = lazy(() => import('./pages/BookDetailPage'))
+const ImportSourcesPage = lazy(() => import('./pages/ImportSourcesPage'))
+const TroubleshootPage = lazy(() => import('./pages/TroubleshootPage'))
+
+// Shown while a route chunk is in flight. Same markup as App's boot spinner;
+// on a warm cache it is on screen for a frame or two.
+function RouteFallback() {
+    return (
+        <div className="loading-page" data-testid="route-loading">
+            <div className="spinner"></div>
+            <span>Loading...</span>
+        </div>
+    )
+}
 
 // The player every route other than Home and BookDetail gets: it is mounted
 // once in the shell, outside <Routes>. Until issue #267 it passed the full
@@ -312,59 +338,61 @@ export function AppShell({ user, setUser }) {
             </aside>
             <main className="main-content">
                 <GlobalSearchBar />
-                <Routes>
-                    {/* Home */}
-                    <Route path="/continue" element={<HomePage />} />
+                <Suspense fallback={<RouteFallback />}>
+                    <Routes>
+                        {/* Home */}
+                        <Route path="/continue" element={<HomePage />} />
 
-                    {/* Library routes */}
-                    <Route path="/library" element={<LibraryPage />} />
-                    <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
-                    <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
-                    <Route path="/library/new-items" element={<NewItemsPage />} />
-                    <Route path="/pairs/new-pairs" element={<NewPairsPage />} />
+                        {/* Library routes */}
+                        <Route path="/library" element={<LibraryPage />} />
+                        <Route path="/library/ebooks" element={<LibraryPage tab="ebooks" />} />
+                        <Route path="/library/audiobooks" element={<LibraryPage tab="audiobooks" />} />
+                        <Route path="/library/new-items" element={<NewItemsPage />} />
+                        <Route path="/pairs/new-pairs" element={<NewPairsPage />} />
 
-                    {/* Series routes */}
-                    <Route path="/series" element={<SeriesPage />} />
+                        {/* Series routes */}
+                        <Route path="/series" element={<SeriesPage />} />
 
-                    {/* Book Pairs routes */}
-                    <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />
-                    <Route path="/pairs/unpaired" element={<UnpairedPage />} />
-                    <Route path="/pairs/unpaired-books" element={<Navigate to="/pairs/unpaired" replace />} />
-                    <Route path="/pairs/unpaired-audiobooks" element={<Navigate to="/pairs/unpaired" replace />} />
+                        {/* Book Pairs routes */}
+                        <Route path="/pairs/paired" element={<PairsPage tab="paired" />} />
+                        <Route path="/pairs/unpaired" element={<UnpairedPage />} />
+                        <Route path="/pairs/unpaired-books" element={<Navigate to="/pairs/unpaired" replace />} />
+                        <Route path="/pairs/unpaired-audiobooks" element={<Navigate to="/pairs/unpaired" replace />} />
 
-                    {/* Transcription routes */}
-                    <Route path="/transcription" element={<TranscriptionPage tab="not-transcribed" />} />
-                    <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />
-                    <Route path="/transcription/in-progress" element={<TranscriptionPage tab="in-progress" />} />
-                    <Route path="/transcription/transcribed" element={<TranscriptionPage tab="transcribed" />} />
-                    <Route path="/transcription/queue" element={<TranscriptionPage tab="queue" />} />
-                    <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
+                        {/* Transcription routes */}
+                        <Route path="/transcription" element={<TranscriptionPage tab="not-transcribed" />} />
+                        <Route path="/transcription/not-transcribed" element={<TranscriptionPage tab="not-transcribed" />} />
+                        <Route path="/transcription/in-progress" element={<TranscriptionPage tab="in-progress" />} />
+                        <Route path="/transcription/transcribed" element={<TranscriptionPage tab="transcribed" />} />
+                        <Route path="/transcription/queue" element={<TranscriptionPage tab="queue" />} />
+                        <Route path="/transcription/edit/:pairId" element={<TranscriptionEditorPage />} />
 
-                    {/* System — role-gated (issue #283). Admin for the
-                        infrastructure views; editor for the two library-
-                        maintenance ones, whose fix controls are already
-                        editor-level. The server enforces the same split; this
-                        only stops the console being presented to someone who
-                        cannot use it. */}
-                    <Route path="/system" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
-                    <Route path="/system/status" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
-                    <Route path="/system/unsupported" element={<RequireRole min="editor"><SystemPage tab="unsupported" /></RequireRole>} />
-                    <Route path="/system/import-sources" element={<RequireRole min="admin"><ImportSourcesPage /></RequireRole>} />
-                    <Route path="/system/troubleshoot" element={<RequireRole min="editor"><TroubleshootPage /></RequireRole>} />
+                        {/* System — role-gated (issue #283). Admin for the
+                            infrastructure views; editor for the two library-
+                            maintenance ones, whose fix controls are already
+                            editor-level. The server enforces the same split; this
+                            only stops the console being presented to someone who
+                            cannot use it. */}
+                        <Route path="/system" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
+                        <Route path="/system/status" element={<RequireRole min="admin"><SystemPage tab="status" /></RequireRole>} />
+                        <Route path="/system/unsupported" element={<RequireRole min="editor"><SystemPage tab="unsupported" /></RequireRole>} />
+                        <Route path="/system/import-sources" element={<RequireRole min="admin"><ImportSourcesPage /></RequireRole>} />
+                        <Route path="/system/troubleshoot" element={<RequireRole min="editor"><TroubleshootPage /></RequireRole>} />
 
-                    {/* Book Detail */}
-                    <Route path="/book/:type/:id" element={<BookDetailPage />} />
+                        {/* Book Detail */}
+                        <Route path="/book/:type/:id" element={<BookDetailPage />} />
 
-                    {/* Admin redirect — user management is now embedded in System */}
-                    <Route path="/admin/users" element={<Navigate to="/system" replace />} />
-                    <Route path="/admin/*" element={<Navigate to="/system" replace />} />
+                        {/* Admin redirect — user management is now embedded in System */}
+                        <Route path="/admin/users" element={<Navigate to="/system" replace />} />
+                        <Route path="/admin/*" element={<Navigate to="/system" replace />} />
 
-                    {/* Redirects */}
-                    <Route path="/" element={<Navigate to="/continue" replace />} />
-                    {/* /library is now a direct route, no redirect needed */}
-                    <Route path="/pairs" element={<Navigate to="/pairs/paired" replace />} />
-                    <Route path="*" element={<Navigate to="/continue" replace />} />
-                </Routes>
+                        {/* Redirects */}
+                        <Route path="/" element={<Navigate to="/continue" replace />} />
+                        {/* /library is now a direct route, no redirect needed */}
+                        <Route path="/pairs" element={<Navigate to="/pairs/paired" replace />} />
+                        <Route path="*" element={<Navigate to="/continue" replace />} />
+                    </Routes>
+                </Suspense>
             </main>
             <AppMiniPlayer />
         </div>

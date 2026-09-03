@@ -553,9 +553,3 @@ export function UserManagementSection() {
         </div>
     )
 }
-
-function UserManagementPage() {
-    return <UserManagementSection />
-}
-
-export default UserManagementPage
