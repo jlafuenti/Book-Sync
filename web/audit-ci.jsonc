@@ -20,7 +20,8 @@
     "GHSA-2v35-w6hq-6mfw", // uncontrolled recursion in XML serialization (DoS)
     "GHSA-f6ww-3ggp-fr8h", // XML injection via DocumentType serialization
     "GHSA-x6wf-f3px-wcqx", // node injection via processing-instruction serialization
-    "GHSA-j759-j44w-7fr8" // node injection via comment serialization
+    "GHSA-j759-j44w-7fr8", // node injection via comment serialization
+    "GHSA-6gmq-8vp8-gcm6" // fragment injection via EntityReference.nodeName serialization (2026-09-03, same class)
     // react-router was upgraded 6 -> 7 (issue #297), clearing GHSA-337j-9hxr-rhxg
     // and GHSA-wrjc-x8rr-h8h6 — no longer allow-listed.
   ]
