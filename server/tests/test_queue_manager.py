@@ -13,6 +13,7 @@ Two layers of test live here. The claiming/retry/off-hours tests replace
 cache, the sync map, the pair status and the bookmark re-map run for real.
 """
 
+import asyncio
 import datetime
 import logging
 
@@ -971,6 +972,37 @@ def _epub_sentences(rows):
             for text, ch, si, _ in rows]
 
 
+async def _settle_progress_updates(before):
+    """Let the progress writes this callback scheduled finish before returning.
+
+    `on_whisper_progress` hands `_update_queue_item` to
+    `call_soon_threadsafe(create_task, ...)`, so the task does not exist until
+    the loop turns once and then does its own DB round trip. A real provider
+    calls the callback seconds to minutes before `transcribe()` returns, so
+    that write has long landed by the time the pipeline reaches its next
+    cancellation checkpoint. A double that returns the instant it fires the
+    callback does not give it that room, and the late write then lands on top
+    of the `message="Cancelled by user"` the checkpoint just wrote — a race in
+    the double, not in the code under test, and one that showed up only under
+    CI's scheduling.
+
+    Only tasks that appeared *since* `before` are awaited, so a long-lived task
+    belonging to the harness can never be waited on. Finding nothing to await
+    is a valid outcome: a throttle (issue #244) may legitimately drop the
+    update instead of scheduling it.
+    """
+    me = asyncio.current_task()
+    for _ in range(10):
+        await asyncio.sleep(0)
+        pending = {t for t in asyncio.all_tasks()
+                   if t is not me and t not in before and not t.done()}
+        pending |= {t for t in getattr(queue_manager, "_inflight_updates", ())
+                    if not t.done()}
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 class _PipelineProvider:
     """A transcription provider that returns a canned transcript.
 
@@ -991,7 +1023,9 @@ class _PipelineProvider:
         self.transcribe_calls += 1
         self.paths.append(audio_path)
         if progress_callback:
+            before = asyncio.all_tasks()
             progress_callback(0.5, 100.0, None)
+            await _settle_progress_updates(before)
         if self.on_transcribe:
             self.on_transcribe()
         return _transcribed(self.rows)
