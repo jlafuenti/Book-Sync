@@ -38,11 +38,19 @@ COPY requirements.txt requirements-local.txt ./
 RUN pip install --no-cache-dir --upgrade pip "setuptools<71" wheel poetry-core && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
-# Sentence tokenizer data, at build time (issue #322). Without this, every fresh
-# container fetches it from GitHub the first time a module imports it — unguarded
-# and untimed — which took production down for five minutes on 2026-08-31. It
-# sits here rather than after `COPY . .` so the layer is keyed to requirements
-# and not invalidated by every source edit.
+# Sentence tokenizer data, at build time (issues #322, #249). Without this, every
+# fresh container fetches it from GitHub the first time a module imports it —
+# unguarded and untimed — which took production down for five minutes on
+# 2026-08-31, and fails outright on a host with no egress. It sits here rather
+# than after `COPY . .` so the layer is keyed to requirements and not
+# invalidated by every source edit.
+#
+# The explicit -d keeps the corpus out of the *build* user's home, which the
+# runtime user need not share; NLTK_DATA then states the search path in the
+# image rather than relying on this happening to be an nltk default (it is,
+# which is why this directory and not /usr/share/nltk_data). The Jetson image
+# provisions the identical path — tests/test_dockerfile_contract.py pins both.
+ENV NLTK_DATA=/usr/local/share/nltk_data
 RUN python -m nltk.downloader -d /usr/local/share/nltk_data punkt_tab
 
 # Local (server-side) Whisper — torch + openai-whisper — is opt-in because torch
