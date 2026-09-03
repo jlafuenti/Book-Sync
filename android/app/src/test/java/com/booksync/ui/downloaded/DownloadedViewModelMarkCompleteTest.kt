@@ -56,6 +56,7 @@ class DownloadedViewModelMarkCompleteTest {
         return DownloadedViewModel(
             repository = repository,
             serverUrlManager = serverUrlManager,
+            tokenManager = mockk(relaxed = true),
             context = mockk(relaxed = true),
         )
     }

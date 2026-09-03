@@ -47,6 +47,13 @@ class BookSyncApp : Application(), Configuration.Provider {
     @Inject
     lateinit var networkMonitor: NetworkMonitor
 
+    /** For refreshing the signed-in user's role at startup (issue #170). */
+    @Inject
+    lateinit var tokenManager: com.booksync.data.remote.TokenManager
+
+    @Inject
+    lateinit var api: com.booksync.data.remote.BookSyncApi
+
     /** Lives as long as the process — this observer must outlive every screen. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -97,6 +104,20 @@ class BookSyncApp : Application(), Configuration.Provider {
         // overlap, which is why `processPendingSync` holds a mutex. Enqueuing
         // both unconditionally at startup without that guard made the two
         // workers replay the same 366-row queue twice over.
+        // Refresh the role for an already-signed-in user (issue #170). The login
+        // path fetches it, but an install that upgraded into this build has a
+        // stored token and may never log in again — without this its role stays
+        // unknown, and unknown means no permission, so an editor would see the
+        // library actions disappear. Best-effort and off the main thread; the
+        // gate simply stays closed if the server is unreachable.
+        appScope.launch {
+            runCatching {
+                if (!tokenManager.cachedAccessToken().isNullOrEmpty()) {
+                    tokenManager.saveRole(api.getMe().role)
+                }
+            }
+        }
+
         appScope.launch {
             // StateFlow already conflates duplicates, so this yields the
             // current value (if online) and then each offline -> online edge.

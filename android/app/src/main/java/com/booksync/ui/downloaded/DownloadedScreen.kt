@@ -83,6 +83,7 @@ fun DownloadedScreen(
 
     // Overflow sheet state — one active target at a time.
     var overflow by remember { mutableStateOf<OverflowSelection?>(null) }
+    val canEdit by viewModel.canEdit.collectAsState()
     overflow?.let { sel ->
         val target = when (sel) {
             is OverflowSelection.Pair     -> sel.toOverflowTarget()
@@ -90,7 +91,7 @@ fun DownloadedScreen(
             is OverflowSelection.Audio    -> sel.toOverflowTarget()
         }
         val actions = when (sel) {
-            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect, onOpenPairDetails)
+            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect, onOpenPairDetails, canEdit)
             is OverflowSelection.Ebook -> sel.buildActions(viewModel, onEbookSelect, onOpenEbookDetails)
             is OverflowSelection.Audio -> sel.buildActions(viewModel, onAudiobookSelect, onOpenAudiobookDetails)
         }
@@ -281,18 +282,22 @@ private sealed class OverflowSelection {
             onReadClick: (Int) -> Unit,
             onListenClick: (Int) -> Unit,
             onOpenDetails: (Int) -> Unit,
+            canEdit: Boolean,
         ) = OverflowActions(
             onViewDetails      = { onOpenDetails(pair.id) },
             onRead             = if (pair.ebookDownloaded)     ({ onReadClick(pair.id) })   else null,
             onListen           = if (pair.audiobookDownloaded) ({ onListenClick(pair.id) }) else null,
             onDownloadPair     = if (!pair.ebookDownloaded || !pair.audiobookDownloaded)
                                      ({ vm.downloadAll(pair) }) else null,
-            onDeleteEbook      = if (pair.ebookDownloaded)     ({ vm.deleteEbook(pair) })      else null,
-            onDeleteAudiobook  = if (pair.audiobookDownloaded) ({ vm.deleteAudiobook(pair) })  else null,
+            // One delete for a pair (issue #333); the per-format rows live on
+            // the Book Details screen.
+            onDeletePair       = if (pair.ebookDownloaded || pair.audiobookDownloaded)
+                                     ({ vm.deletePair(pair) }) else null,
             onRefreshSyncData  = if (pair.syncMapDownloaded)   ({ vm.refreshSyncData(pair) })  else null,
             onMarkComplete     = { vm.markComplete(pair) },
             onResetProgress    = { vm.resetProgress(pair) },
-            onUnlinkPair       = { vm.unlinkPair(pair) },
+            // Editor-gated on the server; null hides the row entirely (issue #170).
+            onUnlinkPair       = if (canEdit) ({ vm.unlinkPair(pair) }) else null,
         )
     }
 

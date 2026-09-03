@@ -218,6 +218,11 @@ class LoginViewModel @Inject constructor(
                 // After saveTokens — the scope is derived from the stored token —
                 // and before onSuccess() renders anything from the cache.
                 userScopeProvider.onAuthenticated()
+                // Learn what this user may do before any screen renders (issue
+                // #170). Best-effort: a failure here must not block a sign-in
+                // that already succeeded, and the role simply stays unknown,
+                // which hasMinRole treats as no permission.
+                runCatching { tokenManager.saveRole(api.getMe().role) }
                 onSuccess()
             } catch (e: Exception) {
                 _error.value = e.message ?: "Login failed"

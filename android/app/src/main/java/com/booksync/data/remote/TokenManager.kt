@@ -15,6 +15,16 @@ import javax.inject.Singleton
 private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
 private val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
 
+/**
+ * The signed-in user's role (issue #170).
+ *
+ * Deliberately kept here rather than in a store of its own: it lives and dies
+ * with the session, so hanging it off the tokens means [clearTokens] disposes of
+ * it automatically and there is no second lifecycle to keep in step. #176
+ * excluded this DataStore from backup, so it never leaves the device either.
+ */
+private val KEY_ROLE = stringPreferencesKey("user_role")
+
 @Singleton
 class TokenManager @Inject constructor(
     private val dataStore: DataStore<Preferences>,
@@ -55,6 +65,21 @@ class TokenManager @Inject constructor(
     fun getRefreshToken(): Flow<String?> =
         dataStore.data.map { it[KEY_REFRESH_TOKEN] }
 
+    /**
+     * The signed-in user's role, or null before `/auth/me` has answered.
+     *
+     * Null means "not known yet", and callers must treat that as no permission
+     * — see [com.booksync.data.auth.hasMinRole]. Not cached the way the tokens
+     * are: this is read by ViewModels to decide what to draw, not by an OkHttp
+     * interceptor on every request.
+     */
+    fun getRole(): Flow<String?> =
+        dataStore.data.map { it[KEY_ROLE] }
+
+    suspend fun saveRole(role: String) {
+        dataStore.edit { prefs -> prefs[KEY_ROLE] = role }
+    }
+
     suspend fun saveTokens(accessToken: String, refreshToken: String) {
         written = accessToken to refreshToken
         dataStore.edit { prefs ->
@@ -68,6 +93,9 @@ class TokenManager @Inject constructor(
         dataStore.edit { prefs ->
             prefs.remove(KEY_ACCESS_TOKEN)
             prefs.remove(KEY_REFRESH_TOKEN)
+            // The role is session state; leaving it behind would let the next
+            // sign-in briefly inherit the previous user's permissions.
+            prefs.remove(KEY_ROLE)
         }
     }
 
