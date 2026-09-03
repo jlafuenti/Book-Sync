@@ -309,10 +309,18 @@ or `-Ptandem.demoUrl=… -Ptandem.demoUser=… -Ptandem.demoPassword=…` for a 
 build. Blank any one of the three and the button does not appear. Details in
 [android.md](android.md), "Machine-local build settings".
 
-The button probes `/api/health` before storing anything, stores the demo URL,
-signs in, and only then leaves the welcome screen — so a demo server that is down
-leaves the user exactly where they were, with an error, rather than stranded on a
-password prompt.
+The button probes `/api/health`, signs in — both at the demo address itself,
+storing nothing — and only once the credentials have been accepted does it store
+the server and leave the welcome screen. A demo server that is down, or a demo
+password that has been rotated, therefore leaves the user exactly where they
+were, with an error, and leaves the install unconfigured rather than pointed at a
+server it cannot use.
+
+The sign-in runs in an application-scoped coroutine rather than on the login
+screen's, because storing the server URL re-creates that screen: the first
+version was cancelled mid-flight by its own success and stopped dead after the
+login response. If you change this flow, keep it off the ViewModel — `DemoSignIn`
+carries the full account.
 
 **These credentials are in the APK.** Anyone can extract them; that is accepted,
 which is why the account is `role=user` on a server holding nothing private.
