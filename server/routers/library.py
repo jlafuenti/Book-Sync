@@ -1304,55 +1304,146 @@ async def rescan_book_file(
     return book
 
 
+# ---------------------------------------------------------------------------
+# Auto-pairing rules (issue #253)
+#
+# These four helpers are the whole decision an automatic pairing makes. They
+# live at module level, take plain objects and touch no session, so the rules
+# can be pinned by golden vectors (`tests/fixtures/auto_match_cases.json`)
+# without a database — `auto_match_books` below is only the DB-driving shell
+# that walks the unpaired rows and applies `_score_candidate`.
+#
+# Behaviour here is deliberately unchanged from the pre-extraction version.
+# The known-questionable rules (a title-only 75% match decides when either
+# side has no author; `series_index` 1 and 1.5 truncate equal) are pinned as
+# they stand — see issue #253 for the tightening proposals.
+# ---------------------------------------------------------------------------
+
+# A title similarity at or above this wins the pairing when nothing rejects it.
+AUTO_MATCH_TITLE_THRESHOLD = 75
+# Below this the authors are "different people" and no title score can rescue it.
+AUTO_MATCH_AUTHOR_GATE = 70
+# At or above this the authors agree well enough to boost the title score.
+AUTO_MATCH_AUTHOR_BOOST = 80
+AUTO_MATCH_AUTHOR_BOOST_POINTS = 10
+# Below this the two series names are different series.
+AUTO_MATCH_SERIES_THRESHOLD = 85
+
+
+def _normalize_for_comparison(text: str) -> str:
+    """Normalize text for fuzzy comparison: strip articles, lowercase."""
+    if not text:
+        return ""
+    t = text.lower().strip()
+    # Strip leading articles for comparison
+    for article in ['the ', 'a ', 'an ']:
+        if t.startswith(article):
+            t = t[len(article):]
+            break
+    return t
+
+
+def _normalize_author(text: str) -> str:
+    """Normalize author name for comparison.
+    Strips punctuation used in initials/suffixes (L.E. → le, Jr. → jr)
+    so that 'L.E. Modesitt Jr.' and 'L. E. Modesitt, Jr.' compare as equal.
+    """
+    if not text:
+        return ""
+    t = text.lower()
+    t = re.sub(r'[.,]', '', t)       # remove periods and commas
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def _series_compatible(eb_series, eb_idx, ab_series, ab_idx) -> bool:
+    """Return False if series metadata indicates these are different books."""
+    if not eb_series and not ab_series:
+        return True
+    if not eb_series or not ab_series:
+        return True  # Only one has series — missing metadata is fine
+    series_score = fuzz.token_sort_ratio(
+        _normalize_for_comparison(eb_series),
+        _normalize_for_comparison(ab_series),
+    )
+    if series_score < AUTO_MATCH_SERIES_THRESHOLD:
+        return False  # Clearly different series
+    # Same series — if both have an index they must share the same whole number
+    if eb_idx is not None and ab_idx is not None:
+        if int(eb_idx) != int(ab_idx):
+            return False
+    return True
+
+
+def _auto_pair_excluded(ebook, audiobook) -> bool:
+    """True if a manual unpair recorded these two as "never re-pair".
+
+    The record is a *file hash* on each side, so a row without a hash — only
+    legacy rows, every ingest and upload path computes one — is not protected
+    and will be re-paired by the next scan (issue #253).
+    """
+    eb_excluded = ebook.auto_pair_excluded_hashes or []
+    ab_excluded = audiobook.auto_pair_excluded_hashes or []
+    return bool(
+        (audiobook.file_hash and audiobook.file_hash in eb_excluded)
+        or (ebook.file_hash and ebook.file_hash in ab_excluded)
+    )
+
+
+def _score_candidate(ebook, audiobook) -> Optional[float]:
+    """Score this ebook/audiobook as a pairing, or None if it is not viable.
+
+    None means "rejected": an unpair exclusion, incompatible series metadata,
+    authors too far apart, or a title score under the threshold. Otherwise the
+    number returned is the title score plus the author-agreement boost, and the
+    highest score across an ebook's candidates wins.
+    """
+    if _auto_pair_excluded(ebook, audiobook):
+        return None
+
+    # Reject if series metadata indicates these are different books
+    if not _series_compatible(ebook.series, ebook.series_index,
+                              audiobook.series, audiobook.series_index):
+        return None
+
+    eb_title = _normalize_for_comparison(ebook.title)
+    ab_title = _normalize_for_comparison(audiobook.title)
+    eb_author_norm = _normalize_author(ebook.author)
+
+    # Author gate: if both books have authors they must be similar.
+    # token_set_ratio handles initials/punctuation variants well
+    # (e.g. "L.E. Modesitt Jr." matches "L. E. Modesitt, Jr.").
+    if eb_author_norm and audiobook.author:
+        ab_author_norm = _normalize_author(audiobook.author)
+        author_score = fuzz.token_set_ratio(eb_author_norm, ab_author_norm)
+        if author_score < AUTO_MATCH_AUTHOR_GATE:
+            return None  # Authors too different — don't pair regardless of title
+    else:
+        # No author on one side: the title threshold decides alone.
+        author_score = 0
+
+    # Compare titles using fuzzy matching (token sort handles word order)
+    score = fuzz.token_sort_ratio(eb_title, ab_title)
+
+    # Boost score if authors also match well
+    if author_score >= AUTO_MATCH_AUTHOR_BOOST:
+        score = min(100, score + AUTO_MATCH_AUTHOR_BOOST_POINTS)
+
+    if score < AUTO_MATCH_TITLE_THRESHOLD:
+        return None
+    return score
+
+
 async def auto_match_books(db: AsyncSession) -> int:
     """
     Attempt to auto-match unmatched ebooks and audiobooks by title similarity.
-    Uses fuzzy string matching on the extracted titles.
+    Uses fuzzy string matching on the extracted titles (`_score_candidate`).
     Returns the number of new pairs created.
+
+    Assignment is greedy in scan order: the first ebook to claim an audiobook
+    keeps it, and `matched_audiobook_ids` stops a second ebook taking it in the
+    same run.
     """
-    def _normalize_for_comparison(text: str) -> str:
-        """Normalize text for fuzzy comparison: strip articles, lowercase."""
-        if not text:
-            return ""
-        t = text.lower().strip()
-        # Strip leading articles for comparison
-        for article in ['the ', 'a ', 'an ']:
-            if t.startswith(article):
-                t = t[len(article):]
-                break
-        return t
-
-    def _normalize_author(text: str) -> str:
-        """Normalize author name for comparison.
-        Strips punctuation used in initials/suffixes (L.E. → le, Jr. → jr)
-        so that 'L.E. Modesitt Jr.' and 'L. E. Modesitt, Jr.' compare as equal.
-        """
-        if not text:
-            return ""
-        import re
-        t = text.lower()
-        t = re.sub(r'[.,]', '', t)       # remove periods and commas
-        t = re.sub(r'\s+', ' ', t).strip()
-        return t
-
-    def _series_compatible(eb_series, eb_idx, ab_series, ab_idx) -> bool:
-        """Return False if series metadata indicates these are different books."""
-        if not eb_series and not ab_series:
-            return True
-        if not eb_series or not ab_series:
-            return True  # Only one has series — missing metadata is fine
-        series_score = fuzz.token_sort_ratio(
-            _normalize_for_comparison(eb_series),
-            _normalize_for_comparison(ab_series),
-        )
-        if series_score < 85:
-            return False  # Clearly different series
-        # Same series — if both have an index they must share the same whole number
-        if eb_idx is not None and ab_idx is not None:
-            if int(eb_idx) != int(ab_idx):
-                return False
-        return True
-
     # Check if auto-transcribe is enabled
     result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
     setting = result.scalar_one_or_none()
@@ -1381,46 +1472,16 @@ async def auto_match_books(db: AsyncSession) -> int:
     for ebook in unpaired_ebooks:
         best_match = None
         best_score = 0
-        eb_title = _normalize_for_comparison(ebook.title)
-        eb_author_norm = _normalize_author(ebook.author)
 
         for audiobook in unpaired_audiobooks:
             if audiobook.id in matched_audiobook_ids:
                 continue
 
-            # Skip if either book has explicitly excluded the other (set on manual unpair)
-            eb_excluded = ebook.auto_pair_excluded_hashes or []
-            ab_excluded = audiobook.auto_pair_excluded_hashes or []
-            if (audiobook.file_hash and audiobook.file_hash in eb_excluded) or \
-               (ebook.file_hash and ebook.file_hash in ab_excluded):
+            score = _score_candidate(ebook, audiobook)
+            if score is None:
                 continue
 
-            # Reject if series metadata indicates these are different books
-            if not _series_compatible(ebook.series, ebook.series_index,
-                                      audiobook.series, audiobook.series_index):
-                continue
-
-            ab_title = _normalize_for_comparison(audiobook.title)
-
-            # Author gate: if both books have authors they must be similar.
-            # token_set_ratio handles initials/punctuation variants well
-            # (e.g. "L.E. Modesitt Jr." matches "L. E. Modesitt, Jr.").
-            if eb_author_norm and audiobook.author:
-                ab_author_norm = _normalize_author(audiobook.author)
-                author_score = fuzz.token_set_ratio(eb_author_norm, ab_author_norm)
-                if author_score < 70:
-                    continue  # Authors too different — don't pair regardless of title
-            else:
-                author_score = 0
-
-            # Compare titles using fuzzy matching (token sort handles word order)
-            score = fuzz.token_sort_ratio(eb_title, ab_title)
-
-            # Boost score if authors also match well
-            if author_score >= 80:
-                score = min(100, score + 10)
-
-            if score > best_score and score >= 75:  # 75% similarity threshold
+            if score > best_score:
                 best_score = score
                 best_match = audiobook
 
