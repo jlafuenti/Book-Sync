@@ -73,6 +73,17 @@ def ensure_punkt() -> None:
     try:
         ok = nltk.download("punkt_tab", quiet=True)
     except Exception as exc:
+        # Logged as well as raised (issue #249): the RuntimeError surfaces
+        # wherever the caller happens to handle it, and on the pipeline that is
+        # a job-failure message read hours later. The log line is what puts the
+        # cause in the container's own output at the moment it happened.
+        logger.warning(
+            "Could not download the NLTK punkt_tab corpus (%s: %s). Sentence "
+            "extraction will fail until it is provisioned. A container should "
+            "never reach here -- the image bakes it in (server/Dockerfile); a "
+            "host with no egress cannot fetch it at all.",
+            type(exc).__name__, exc,
+        )
         raise RuntimeError(
             "Could not download the NLTK punkt_tab corpus "
             f"({type(exc).__name__}: {exc}). Provision it in the image "
@@ -83,6 +94,14 @@ def ensure_punkt() -> None:
         socket.setdefaulttimeout(previous)
 
     if not ok:
+        # `quiet=True` swallows nltk's own diagnostics, so False is all the
+        # signal there is; say so rather than letting it pass as silence.
+        logger.warning(
+            "NLTK reported failure downloading punkt_tab. Sentence extraction "
+            "will fail until it is provisioned. A container should never reach "
+            "here -- the image bakes it in (server/Dockerfile); a host with no "
+            "egress cannot fetch it at all."
+        )
         raise RuntimeError(
             "NLTK reported failure downloading punkt_tab. Provision it in the "
             "image (see server/Dockerfile) or run: "
