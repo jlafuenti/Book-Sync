@@ -255,9 +255,13 @@ def write_metadata_to_file(filepath: str, file_meta: dict) -> tuple[bool, Option
         return _write_tags(filepath, file_meta)
     except Exception as e:
         if _CHAPTER_TITLE_ERROR_RE.search(str(e)):
-            logger.info(
+            # WARNING, not INFO: nobody clicked "repair" — this is a metadata
+            # sync deciding on its own to write to a purchased media file
+            # (issue #243). The repair restores the original on failure, but
+            # the operator should still be able to find this in the log.
+            logger.warning(
                 f"[abs_metadata] Non-UTF-8 chapter title detected in {filepath}, "
-                "attempting repair"
+                "attempting an automatic chapter-atom repair"
             )
             repaired, repair_error = chapter_repair.repair_chapter_encoding(filepath)
             if repaired:

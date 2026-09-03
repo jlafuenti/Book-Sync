@@ -55,8 +55,22 @@ the same value into the worker's `TRANSCRIPTION_API_KEY`.
 - **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled;
   cancelling an in-progress job also tells the worker to drop its partial work. An in-progress
   item can't be *deleted* — cancel it first.
-- **Retries with a ceiling.** A provider-unavailable failure re-pends the item after 30s and burns
-  a retry; after 5 the item is marked permanently failed with the error attached.
+- **Retries with a ceiling, on a backoff ladder.** A provider-unavailable failure re-pends the item
+  and burns a retry; after the ceiling is reached the item is marked permanently failed with the
+  error attached. The wait doubles each time — 30s, 60s, 120s, 240s, 480s — capped at 15 minutes,
+  so the five default retries span roughly 15 minutes rather than 2.5. That is deliberately longer
+  than a worker reboot plus a `medium` model load, which the old flat 30s ladder outran (#242).
+  Both knobs are settings, for a worker that is flakier than that:
+
+  | Setting | Default | Meaning |
+  |---|---|---|
+  | `transcription_retry_max` | `5` | Retries before the item fails permanently. |
+  | `transcription_retry_base_seconds` | `30` | First delay; doubles per retry, capped at 900s. |
+
+  Only *provider unavailable* (connection refused, read timeout, worker OOM) retries. A genuine
+  transcription error is not retried — a corrupt file does not get better on the seventh try.
+  The wait happens inline in the queue loop, so nothing else dispatches during it; that is fine,
+  because the provider everything would dispatch to is the thing that is down.
 - **Checkpointed.** The remote worker checkpoints between chunks, so a paused or resumed job picks
   up where it left off rather than restarting.
 
