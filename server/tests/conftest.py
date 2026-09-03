@@ -58,6 +58,21 @@ import pytest_asyncio  # noqa: E402
 import database  # noqa: E402  (binds engine to SQLite via DATABASE_URL above)
 from database import Base, engine, async_session  # noqa: E402
 
+# SQLite ships with foreign-key enforcement OFF, and it is per-connection, so it
+# has to be re-armed on every connect. Without this the suite could not see a
+# single cascade or FK decision in the schema: deleting a user left orphan
+# `user_progress` rows and the test passed, while production (Postgres, which
+# always enforces) returned a 500 (issue #198). Pinned by
+# `test_harness_db_isolation.py::test_sqlite_harness_enforces_foreign_keys`.
+if not _PG_MODE:
+    from sqlalchemy import event  # noqa: E402
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_enforce_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 # Import every model module so Base.metadata knows the full schema. Mirrors the
 # import list in alembic/env.py.
 from models import user, book, sync_map, bookmark, progress  # noqa: E402,F401

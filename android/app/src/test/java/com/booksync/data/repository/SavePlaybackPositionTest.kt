@@ -1,9 +1,11 @@
 package com.booksync.data.repository
 
 import com.booksync.data.local.dao.BookmarkDao
+import com.booksync.data.local.dao.BookmarkLogDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.local.entity.BookmarkEntity
+import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DeviceIdManager
@@ -52,6 +54,7 @@ class SavePlaybackPositionTest {
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
+    private val bookmarkLogDao = mockk<BookmarkLogDao>(relaxed = true)
 
     private fun repository() = BookSyncRepository(
         api = api,
@@ -63,7 +66,7 @@ class SavePlaybackPositionTest {
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
         acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
+        bookmarkLogDao = bookmarkLogDao,
         context = mockk(relaxed = true),
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
@@ -160,6 +163,160 @@ class SavePlaybackPositionTest {
         repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = false)
 
         assertEquals("ebook", savedBookmark.captured.source)
+    }
+
+    // ============ one boundary save == one server write (issue #226) ============
+    //
+    // AudioPlayerService is now the sole owner of the pause write; the player
+    // screen's poll loop and stopAndSave no longer save at all. That only helps
+    // if a single call here really is a single write, so pin it: one PUT
+    // carrying source=audiobook and append_to_log=true, and — when the push
+    // lands — no local bookmark_log row (the server owns the history entry; the
+    // local mirror is the offline path only).
+
+    @Test
+    fun `one boundary save is exactly one server write with source and append_to_log`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
+            Response.success(positionResponse())
+
+        repository().savePlaybackPosition(
+            pairId = 42, audioPositionMs = 5_000, appendToLog = true, claimFormat = true)
+
+        coVerify(exactly = 1) { api.updatePosition("pair", 42, any()) }
+        assertEquals("audiobook", sentRequest.captured.source)
+        assertTrue(
+            "a pause is a session boundary — the server writes the history row",
+            sentRequest.captured.append_to_log,
+        )
+        assertEquals(5_000, sentRequest.captured.audio_position_ms)
+        coVerify(exactly = 0) { bookmarkLogDao.insertLocal(any()) }
+    }
+
+    @Test
+    fun `only a failed boundary push mirrors the history entry locally`() = runTest {
+        // The counterpart to the test above: offline, the local mirror is the
+        // only record, so it must still be written exactly once per save.
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
+        coEvery { api.updatePosition("pair", 42, any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+
+        repository().savePlaybackPosition(
+            pairId = 42, audioPositionMs = 5_000, appendToLog = true, claimFormat = true)
+
+        coVerify(exactly = 1) { bookmarkLogDao.insertLocal(any()) }
+    }
+
+    // ============ the merge with the existing row (issue #217) ============
+    //
+    // savePlaybackPosition passes updateBookmark nothing but an audio position,
+    // so every other column of the written row has to come from the stored one.
+    // These stubs used to be `relaxed`, which returns null for getBookmark, so
+    // the merge branch was never entered by any assertion here — a save that
+    // blanked the ebook anchors would have passed the whole file.
+
+    @Test
+    fun `an audio save keeps the ebook anchors of the row it merges onto`() = runTest {
+        // A heartbeat from the player must not cost the reader its place. The
+        // chapter/sentence pair is the portable anchor the whole position-sync
+        // contract restores from (docs/position-sync-contract.md); losing it to
+        // a five-second timer is the silent reopen-at-the-wrong-page failure.
+        val existing = BookmarkEntity(
+            scopeKey = TEST_SCOPE,
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            syncMapVersion = 4,
+            audioPositionMs = 1_000,
+            epubLocator = """{"href":"ch39.xhtml"}""",
+            locatorAudioMs = 54_000,
+            updatedAt = "1000",
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
+        coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = false)
+
+        assertEquals(39, savedBookmark.captured.epubChapter)
+        assertEquals(12, savedBookmark.captured.epubSentenceIndex)
+        // Issue #116: the version belongs to the sentence index, and the index
+        // is being kept, so the version must be kept with it.
+        assertEquals(4, savedBookmark.captured.syncMapVersion)
+        assertEquals("""{"href":"ch39.xhtml"}""", savedBookmark.captured.epubLocator)
+        // The locator's audio anchor stays where it was. Dragging it forward to
+        // 5_000 would tell the reader "audio has barely moved since this
+        // locator", which is how a stale locator gets reused as if exact.
+        assertEquals(54_000, savedBookmark.captured.locatorAudioMs)
+        // Only the audio position actually moves.
+        assertEquals(5_000, savedBookmark.captured.audioPositionMs)
+    }
+
+    @Test
+    fun `a claiming audio save changes only the source, not the anchors`() = runTest {
+        // claimFormat=true is the one field this save is entitled to overwrite.
+        val existing = BookmarkEntity(
+            scopeKey = TEST_SCOPE,
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            syncMapVersion = 4,
+            audioPositionMs = 1_000,
+            updatedAt = "1000",
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
+        coEvery { api.updatePosition("pair", 42, any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = true)
+
+        assertEquals("audiobook", savedBookmark.captured.source)
+        assertEquals(39, savedBookmark.captured.epubChapter)
+        assertEquals(12, savedBookmark.captured.epubSentenceIndex)
+        assertEquals(4, savedBookmark.captured.syncMapVersion)
+    }
+
+    @Test
+    fun `an offline audio save queues the merged row, not a bare audio position`() = runTest {
+        // The queued row is what the WorkManager sweep eventually replays. If
+        // it carried only the audio position, coming back online would push a
+        // write that nulls the chapter/sentence on the server — the same data
+        // loss as above, just deferred and harder to trace.
+        val existing = BookmarkEntity(
+            scopeKey = TEST_SCOPE,
+            bookPairId = 42,
+            source = "ebook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            syncMapVersion = 4,
+            audioPositionMs = 1_000,
+            epubLocator = """{"href":"ch39.xhtml"}""",
+            locatorAudioMs = 54_000,
+            updatedAt = "1000",
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
+        coEvery { api.updatePosition("pair", 42, any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+        val queued = slot<PendingSyncEntity>()
+        coEvery { pendingSyncDao.insert(capture(queued)) } returns Unit
+
+        repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = false)
+
+        // Scoped to the signed-in account, so the drain cannot replay it into
+        // someone else's library (issue #314).
+        assertEquals(TEST_SCOPE, queued.captured.scopeKey)
+        assertEquals("ebook", queued.captured.source)
+        assertEquals(39, queued.captured.epubChapter)
+        assertEquals(12, queued.captured.epubSentenceIndex)
+        assertEquals(4, queued.captured.syncMapVersion)
+        assertEquals("""{"href":"ch39.xhtml"}""", queued.captured.epubLocator)
+        assertEquals(54_000, queued.captured.locatorAudioMs)
+        assertEquals(5_000, queued.captured.audioPositionMs)
     }
 
     // ============ savePlaybackPositionStandalone ============

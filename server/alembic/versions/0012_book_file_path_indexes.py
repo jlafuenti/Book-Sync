@@ -40,8 +40,8 @@ schema the tests build, and it silently converts a duplicate-path bug into a
 hash-collision bug. If a deployment ever hits the limit, that is the fix; until
 then the plain column index is the one both databases can agree on.
 
-Revision ID: 0011_book_path_indexes
-Revises: 0010_syncmap_epub_hash
+Revision ID: 0012_book_path_indexes
+Revises: 0011_user_delete_cascade
 Create Date: 2026-09-02
 
 """
@@ -53,8 +53,8 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 # NOTE: keep this at or under 32 chars — see the note in
 # 0002_conflict_resolution.py (alembic_version is a VARCHAR(32)).
-revision: str = "0011_book_path_indexes"
-down_revision: Union[str, None] = "0010_syncmap_epub_hash"
+revision: str = "0012_book_path_indexes"
+down_revision: Union[str, None] = "0011_user_delete_cascade"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -204,7 +204,7 @@ def dedupe_file_paths(conn) -> None:
 
     MUST run before the unique indexes are created. Separated from
     :func:`upgrade` so it can be exercised without Postgres (see
-    tests/test_migration_0011_data.py); the SQL is plain and portable.
+    tests/test_migration_0012_data.py); the SQL is plain and portable.
     """
     for table, col, item_type, media_type in _MEDIA:
         rows = _exec(conn,

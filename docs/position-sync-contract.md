@@ -119,6 +119,11 @@ Every save produces one of two verdicts — there is no "suppress everything":
   application-scoped, non-cancellable coroutine with the local write *before*
   the server call. Running it in the activity's lifecycle scope meant a
   back-press cancelled it mid-request and both writes were lost.
+- **Client wall-clock is trusted only up to the skew bound.** A `captured_at`
+  more than `MAX_CLOCK_SKEW` (120 s, `services/position_service.py`) ahead of
+  the server is stamped with the server's own time instead — never rejected —
+  so one device with a wrong clock cannot park a future timestamp that 409s
+  every honest write until the wall clock catches up (issue #197).
 - **Resume paths refresh first.** The reader, the player and Android Auto all
   pull the server position (bounded, then fall back to cache) *before* seeking.
   Refreshing afterwards meant a position set elsewhere always arrived too late.

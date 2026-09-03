@@ -325,3 +325,149 @@ async def test_write_omitting_device_fields_preserves_prior_values(client, db, m
     assert len(logs) == 1
     assert logs[0]["device_id"] == "device-a"
     assert logs[0]["device_name"] == "Pixel 8"
+
+
+# ---------------------------------------------------------------------------
+# Clock skew (issue #197)
+#
+# `captured_at` is client wall-clock. One device with a wrong clock used to
+# park a far-future timestamp on the record, and every honest write from every
+# device then compared older and was rejected with 409 — silently, because the
+# client contract reads 409 as "keep your local row". Position sync for that
+# book stopped for as long as the skew lasted.
+#
+# The server now trusts the client clock only up to `MAX_CLOCK_SKEW`; beyond
+# that it stamps its own time. The write is never rejected — rejecting loses
+# the position, which is the thing being protected.
+#
+# `services.position_service.utcnow` is frozen so "now" is a fixed value on
+# both sides of the comparison.
+# ---------------------------------------------------------------------------
+
+FROZEN_NOW = datetime(2026, 6, 1, 12, 0, 0)
+
+
+def _freeze(monkeypatch, moment):
+    """Pin `position_service.utcnow` to [moment]."""
+    import services.position_service as ps
+
+    monkeypatch.setattr(ps, "utcnow", lambda: moment)
+
+
+async def test_future_captured_at_is_clamped_to_server_now(
+    client, db, make_user, auth_header, monkeypatch
+):
+    from services.position_service import MAX_CLOCK_SKEW
+
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+    _freeze(monkeypatch, FROZEN_NOW)
+
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=3, epub_sentence_index=5,
+        captured_at=(FROZEN_NOW + timedelta(days=365)).isoformat(),
+        device_id="bad-clock", device_name="Wrong Year",
+    )
+    assert resp.status_code == 200, resp.text
+
+    stored = datetime.fromisoformat(resp.json()["captured_at"])
+    assert stored <= FROZEN_NOW + MAX_CLOCK_SKEW
+    assert stored == FROZEN_NOW
+
+    # And the same value is what a later read sees — the clamp is applied to
+    # the stored column, not just to the comparison.
+    resp = await _get(client, headers, "pair", pair.id)
+    assert datetime.fromisoformat(resp.json()["captured_at"]) == FROZEN_NOW
+
+
+async def test_a_later_honest_write_is_not_rejected_after_a_clamped_one(
+    client, db, make_user, auth_header, monkeypatch
+):
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+    _freeze(monkeypatch, FROZEN_NOW)
+
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=3, epub_sentence_index=5,
+        captured_at=(FROZEN_NOW + timedelta(days=365)).isoformat(),
+        device_id="bad-clock", device_name="Wrong Year",
+    )
+    assert resp.status_code == 200, resp.text
+
+    # A few seconds later, a second device writes its (correct) wall clock.
+    later = FROZEN_NOW + timedelta(seconds=5)
+    _freeze(monkeypatch, later)
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=9, epub_sentence_index=1,
+        captured_at=later.isoformat(),
+        device_id="good-clock", device_name="Pixel 8",
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await _get(client, headers, "pair", pair.id)
+    body = resp.json()
+    assert body["epub_chapter"] == 9
+    assert body["epub_sentence_index"] == 1
+    assert body["device_id"] == "good-clock"
+
+
+async def test_captured_at_inside_the_skew_bound_is_stored_verbatim(
+    client, db, make_user, auth_header, monkeypatch
+):
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+    _freeze(monkeypatch, FROZEN_NOW)
+
+    # 30s ahead is ordinary NTP-grade drift, not a broken clock.
+    slightly_ahead = FROZEN_NOW + timedelta(seconds=30)
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=2, epub_sentence_index=2,
+        captured_at=slightly_ahead.isoformat(), device_id="ntp-drift",
+    )
+    assert resp.status_code == 200, resp.text
+    assert datetime.fromisoformat(resp.json()["captured_at"]) == slightly_ahead
+
+
+async def test_clamped_write_still_loses_to_a_newer_stored_position(
+    client, db, make_user, auth_header, monkeypatch
+):
+    """The clamp must not turn a skewed device into a permanent winner.
+
+    A future `captured_at` is worth exactly "now" — so a position already
+    stored with a *later* honest timestamp still wins, and the skewed write
+    gets the ordinary 409.
+    """
+    user = await make_user()
+    pair = await make_book_pair(db)
+    headers = auth_header(user)
+
+    # Stored state is stamped an hour ahead of the moment the skewed write
+    # arrives, by a device whose clock was right at the time.
+    _freeze(monkeypatch, FROZEN_NOW + timedelta(hours=1))
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=7, epub_sentence_index=7,
+        captured_at=(FROZEN_NOW + timedelta(hours=1)).isoformat(),
+        device_id="good-clock",
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Server clock rolls back to FROZEN_NOW (this is the skewed device's
+    # request being served); its year-ahead stamp clamps to FROZEN_NOW, which
+    # is older than what is stored.
+    _freeze(monkeypatch, FROZEN_NOW)
+    resp = await _put(
+        client, headers, "pair", pair.id,
+        source="ebook", epub_chapter=0, epub_sentence_index=0,
+        captured_at=(FROZEN_NOW + timedelta(days=365)).isoformat(),
+        device_id="bad-clock",
+    )
+    assert resp.status_code == 409
+    assert resp.json()["epub_chapter"] == 7

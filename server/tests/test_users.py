@@ -211,3 +211,72 @@ async def test_cannot_delete_self(make_client, make_user, auth_header):
     async with make_client(users.router) as c:
         r = await c.delete(f"/api/users/{admin.id}", headers=auth_header(admin))
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Deleting a user who has read something (issue #198)
+#
+# `test_delete_user_ok` above deletes a user with no child rows, which is the
+# only case that ever worked in production: `user_progress.user_id` had no
+# `ON DELETE` action and no ORM cascade, so Postgres raised a
+# ForeignKeyViolation for anyone who had opened a book and the admin got an
+# unexplained 500. The SQLite harness ran with FK enforcement off, so nothing
+# in CI could see it — `test_harness_db_isolation.py` now pins the PRAGMA.
+# ---------------------------------------------------------------------------
+
+async def test_deleting_a_user_removes_their_positions(
+    db, make_client, make_user, auth_header
+):
+    from models.bookmark import Bookmark, BookmarkLog, PositionHint
+    from models.progress import UserProgress
+    from routers import sync
+    from tests.factories import make_book_pair
+
+    admin = await make_user(username="admin1", role="admin")
+    reader = await make_user(username="reader", role="user")
+    pair = await make_book_pair(db)
+
+    async with make_client(sync.router, users.router) as c:
+        r = await c.put(
+            f"/api/sync/position/pair/{pair.id}",
+            json={
+                "source": "ebook",
+                "epub_chapter": 2,
+                "epub_sentence_index": 4,
+                "epub_progress_percent": 12.5,
+                "device_id": "pixel-8",
+                "device_name": "Pixel 8",
+                "append_to_log": True,
+                "hint": {"kind": "epubjs_cfi", "value": "epubcfi(/6/8!/4/2)"},
+            },
+            headers=auth_header(reader),
+        )
+        assert r.status_code == 200, r.text
+
+        r = await c.delete(f"/api/users/{reader.id}", headers=auth_header(admin))
+        assert r.status_code == 200, r.text
+
+    async with async_session() as s:
+        assert (await s.execute(
+            select(User).where(User.id == reader.id)
+        )).scalar_one_or_none() is None
+
+        bookmark_ids = (await s.execute(
+            select(Bookmark.id).where(Bookmark.user_id == reader.id)
+        )).scalars().all()
+        assert bookmark_ids == []
+
+        assert (await s.execute(
+            select(UserProgress.id).where(UserProgress.user_id == reader.id)
+        )).scalars().all() == []
+
+        # The bookmark's own children go with it, so nothing is left pointing
+        # at a bookmark that no longer exists either.
+        assert (await s.execute(select(BookmarkLog.id))).scalars().all() == []
+        assert (await s.execute(select(PositionHint.id))).scalars().all() == []
+
+        # History outlives the account: audit_logs.user_id is SET NULL.
+        actions = (await s.execute(
+            select(AuditLog.action).where(AuditLog.target_user_id == reader.id)
+        )).scalars().all()
+        assert "user_deleted" in actions
