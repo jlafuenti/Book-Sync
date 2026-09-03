@@ -1,0 +1,44 @@
+name: Secret scan
+
+# Secret scanning in CI (issue #189). The repo is going public, and a pushed
+# credential is permanent: deleting it in the next commit leaves it in the
+# history, so the only useful place to catch one is before it is merged.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Read-only token: this job reads the tree and reports through the run summary,
+# so it never needs write access. (Deliberately no `pull-requests: write` — PR
+# comments are disabled below rather than trading a write token for them.)
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # gitleaks scans commits, not just the working tree. The default
+          # shallow clone would give it exactly one commit to look at.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A finding fails the job and is written to the run summary. The
+          # action's PR-comment feature would need `pull-requests: write`;
+          # a red check is enough signal and keeps the token read-only.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          # NOTE: gitleaks-action v2 is free for personal accounts and public
+          # repositories; only GitHub *organisations* need GITLEAKS_LICENSE.
+          #
+          # There is no .gitleaks.toml in this repo: the default ruleset has not
+          # been run against this tree yet (no gitleaks binary was available to
+          # the change that added this workflow, and CI is disabled while the
+          # billing issue is open). If the first real run reports findings that
+          # are template placeholders or test fixtures rather than live secrets,
+          # add a .gitleaks.toml that extends the default config and allow-lists
+          # them *by path, with a written reason* — never by loosening a rule.

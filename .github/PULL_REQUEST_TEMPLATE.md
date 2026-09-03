@@ -1,3 +1,8 @@
+<!-- First PR here? Read CONTRIBUTING.md — the CI gates (patch coverage, alembic
+     drift, sync parity) fail rather than being raised at review:
+     https://github.com/jlafuenti/Book-Sync/blob/main/CONTRIBUTING.md
+     Security problems go through SECURITY.md, never a public PR or issue. -->
+
 ## What & why
 
 <!-- Briefly: what does this change do, and why? Link the issue (e.g. Closes #46). -->

@@ -206,6 +206,9 @@ Sync-matching logic exists on both server and Android and is pinned by shared go
 `server/tests/fixtures/sync_parity/` — a change to one platform must update both.
 
 Contributions should include tests for new/changed behavior — the PR template has the checklist.
+Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening a PR (setup, the CI gates, and the
+changes that must touch more than one place); vulnerabilities go through
+**[SECURITY.md](SECURITY.md)**, never a public issue.
 
 ## License
 
