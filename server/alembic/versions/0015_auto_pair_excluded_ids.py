@@ -22,8 +22,8 @@ server default so the constraint is satisfiable on a populated table without a
 separate UPDATE pass. No batch mode needed (Postgres-only, like every migration
 here — see tests/test_migrations_postgres.py).
 
-Revision ID: 0014_auto_pair_excl_ids
-Revises: 0013_refresh_tokens
+Revision ID: 0015_auto_pair_excl_ids
+Revises: 0014_bookmark_log_cascade
 Create Date: 2026-09-03
 
 """
@@ -36,8 +36,8 @@ from sqlalchemy.dialects import postgresql
 # revision identifiers, used by Alembic.
 # NOTE: keep this at or under 32 chars — see the note in
 # 0002_conflict_resolution.py (alembic_version is a VARCHAR(32)).
-revision: str = "0014_auto_pair_excl_ids"
-down_revision: Union[str, None] = "0013_refresh_tokens"
+revision: str = "0015_auto_pair_excl_ids"
+down_revision: Union[str, None] = "0014_bookmark_log_cascade"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
