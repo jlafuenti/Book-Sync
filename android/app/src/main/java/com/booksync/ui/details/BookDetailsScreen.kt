@@ -90,6 +90,7 @@ fun BookDetailsScreen(
     viewModel: BookDetailsViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val canEdit by viewModel.canEdit.collectAsStateWithLifecycle()
     val colors = Tandem.colors
     val snackHost = remember { SnackbarHostState() }
 
@@ -284,7 +285,10 @@ fun BookDetailsScreen(
                         trailingIcon = Icons.Default.Check,
                         onClick = { viewModel.markComplete() },
                     )
-                    if (pair != null) {
+                    // Editor-gated on the server; hidden rather than disabled,
+                    // because a disabled row still advertises a capability this
+                    // user does not have (issue #170).
+                    if (pair != null && canEdit) {
                         ActionRow(
                             title = "Unlink pair",
                             description = "Separate the ebook and audiobook. The files stay on the server.",

@@ -759,6 +759,7 @@ private fun buildOverflowActions(
     // Resolve the live pair from the VM so per-action state is accurate.
     val items by vm.items.collectAsState()
     val isOnline by vm.isOnline.collectAsState()
+    val canEdit by vm.canEdit.collectAsState()
     val pair = (target as? OverflowTarget.Pair)?.pairId?.let { pid ->
         items.firstOrNull { it.pair?.id == pid }?.pair
     }
@@ -773,8 +774,10 @@ private fun buildOverflowActions(
             // audiobook, and sync-map in one worker. Per-media downloads now
             // live on the Book Details screen (see TODO #15).
             onDownloadPair    = pair?.let { { vm.downloadAll(it) } },
-            onDeleteEbook     = pair?.let { { vm.deleteEbookOf(it) } },
-            onDeleteAudiobook = pair?.let { { vm.deleteAudiobookOf(it) } },
+            // One delete for a pair (issue #333); the per-format rows live on
+            // the Book Details screen.
+            onDeletePair      = pair?.takeIf { it.ebookDownloaded || it.audiobookDownloaded }
+                                    ?.let { { vm.deletePair(it) } },
             // Transcription: only offer "Transcribe" if not yet transcribed and not queued.
             // The OverflowTarget.Pair already carries `isTranscribed` and `isQueuedOrTranscribing`
             // so the sheet itself decides which action to render — just wire all three.
@@ -785,7 +788,8 @@ private fun buildOverflowActions(
             onRefreshSyncData = pair?.let { { vm.refreshSyncData(it) } },
             onMarkComplete    = pair?.let { { vm.markComplete(it) } },
             onResetProgress   = pair?.let { { vm.resetProgress(it) } },
-            onUnlinkPair      = pair?.let { { vm.unlinkPair(it) } },
+            // Editor-gated on the server; null hides the row entirely (issue #170).
+            onUnlinkPair      = pair?.takeIf { canEdit }?.let { { vm.unlinkPair(it) } },
         )
         is OverflowTarget.Ebook -> {
             val ebook = items.firstOrNull { it.ebook?.id == target.ebookId }?.ebook

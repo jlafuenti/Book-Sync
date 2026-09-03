@@ -3,6 +3,7 @@ package com.booksync.ui.details
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.flow.map
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -98,6 +99,7 @@ class BookDetailsViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val api: BookSyncApi,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
@@ -105,6 +107,16 @@ class BookDetailsViewModel @Inject constructor(
     private val workManager = WorkManager.getInstance(context)
 
     val serverUrl: String = serverUrlManager.currentUrl
+
+    /**
+     * Whether this user may change the library (issue #170). False while the
+     * role is unknown, so the failure mode is a missing action rather than one
+     * that answers 403.
+     */
+    val canEdit: kotlinx.coroutines.flow.StateFlow<Boolean> =
+        tokenManager.getRole()
+            .map { com.booksync.data.auth.hasMinRole(it, "editor") }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
 
     // ------------------------------------------------------------------
     // Resolve the target from SavedStateHandle. Exactly one of the three
@@ -348,7 +360,9 @@ class BookDetailsViewModel @Inject constructor(
 
     private inline fun runSafely(crossinline block: suspend () -> Unit) {
         viewModelScope.launch {
-            try { block() } catch (e: Exception) { _snack.value = e.message ?: "Action failed" }
+            // userFacingError, not e.message: a permission failure used to
+            // surface as Retrofit's raw "HTTP 403 " (issue #170).
+            try { block() } catch (e: Exception) { _snack.value = com.booksync.data.auth.userFacingError(e) }
         }
     }
 }
