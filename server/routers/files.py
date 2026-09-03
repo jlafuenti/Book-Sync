@@ -22,7 +22,7 @@ from models.user import User
 from models.book import EBook, AudioBook, BookPair
 from models.sync_map import SyncMap
 from schemas import SyncMapResponse
-from routers.auth import get_current_user
+from routers.auth import get_current_user, session_is_live
 from utils import safe_join
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -83,6 +83,14 @@ async def _resolve_media_user(
     # nowhere else in the API, because every other route goes through
     # `get_current_user`, which has always compared it.
     if payload.get("ver", 0) != user.token_version:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    # And the same for the session the token names (issue #250): a per-device
+    # logout does not bump `token_version`, so `ver` alone would let a
+    # signed-out device go on streaming covers and audio here — the identical
+    # hole issue #206 closed on these two endpoints, reopened from the other
+    # side. A token with no `sid` predates sessions and is judged on `ver` only.
+    session_jti = payload.get("sid")
+    if session_jti is not None and not await session_is_live(db, session_jti, user.id):
         raise HTTPException(status_code=401, detail="Invalid token")
     # This resolver bypasses `get_current_user` entirely, so the forced-reset gate
     # has to be repeated here or a temporary credential could still stream the

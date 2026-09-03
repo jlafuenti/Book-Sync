@@ -83,6 +83,7 @@ class ServerUrlSaveGateTest {
             mockk(relaxed = true),
             com.booksync.data.remote.FirstRunGate(),
             com.booksync.data.remote.ServerVersionGate(mockk(relaxed = true), serverUrlManager),
+            mockk(relaxed = true),
         )
 
     private fun accountViewModel(): AccountViewModel {

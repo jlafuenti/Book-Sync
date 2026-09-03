@@ -160,6 +160,52 @@ Both `login_failed` and `login_locked` rows land in the audit log, so a sustaine
 account is visible in the web UI's user-management **Audit Log** tab, filterable by action (and it
 grows that table; the per-IP limit is what bounds how fast).
 
+## Sessions and signing out
+
+Each sign-in opens a **session** — one row in `refresh_tokens`, holding the
+refresh token's `jti`, the client's `device_id`, and when it was issued, last
+used and revoked. The refresh token carries that `jti`; the access and media
+tokens minted from it carry the same value as `sid`. Sessions are what make
+sign-out per-device (issue #250).
+
+| Action | Scope | Mechanism |
+|---|---|---|
+| `POST /api/auth/logout` | this device | revokes one `refresh_tokens` row |
+| `POST /api/auth/logout-all` | every device | `token_version + 1`, and revokes every row |
+| `POST /api/auth/change-password` | every device | same |
+| Admin password reset (`POST /api/users/{id}/reset-password`) | every device | same |
+
+`logout` ends the session named by the refresh token in the request body, or —
+if the client sends no body — the one named by the access token that
+authenticated the call. Only when neither names a session (a token issued before
+sessions existed) does it fall back to the account-wide bump. It is idempotent:
+signing out of a session that is already revoked answers 200 and does *not*
+escalate to the global revoke, so a retried logout cannot sign the account out
+everywhere.
+
+`users.token_version` is unchanged and is still the account-wide kill switch. It
+is checked on every route, including the media/download endpoints in
+`routers/files.py`, which check the session too.
+
+Operationally:
+
+- **Nothing to run on deploy.** Migration `0013_refresh_tokens` only creates the
+  table. Tokens already in the wild carry no `jti`/`sid`, are still accepted on
+  their `ver` exactly as before, and are upgraded onto a session on the client's
+  first refresh — so nobody is signed out by the upgrade. Until that first
+  refresh, an old client's logout still signs out every device (it has no
+  session to name), which is what it was built to do.
+- **The table prunes itself.** Every login deletes that user's sessions unused
+  for longer than `JWT_REFRESH_TOKEN_EXPIRE_DAYS` (they can no longer
+  authenticate — the JWT's own `exp` refuses them) and revokes any earlier live
+  session with the same `device_id`, so one device holds one session.
+- **Lost device?** `POST /api/auth/logout-all` (or a password change) is the
+  answer; a per-device logout from another device cannot revoke the lost one,
+  because the caller does not hold its refresh token. There is no client UI for
+  `logout-all` yet — call it with the account's own access token.
+- **Auditing**: a device logout writes a `logout` row whose details say
+  `(device)` or `(all)`; `logout-all` writes `logout_all`.
+
 ## Single process only
 
 **Run exactly one `server` process.** Not `uvicorn --workers 2`, not `WEB_CONCURRENCY=2`, not a

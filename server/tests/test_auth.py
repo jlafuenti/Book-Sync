@@ -6,6 +6,8 @@ and the must_reset_password change-password flow. These pin current behavior so
 future refactors of the auth surface can't silently regress.
 """
 
+from datetime import timedelta
+
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -14,16 +16,19 @@ from sqlalchemy import select
 
 from config import settings
 from models.audit_log import AuditLog
+from models.refresh_token import RefreshToken
 from models.user import ROLE_HIERARCHY, User
 from routers.auth import (
     create_access_token,
     create_media_token,
     create_refresh_token,
+    create_token,
     get_admin_user,
     get_editor_user,
     require_role,
     verify_password,
 )
+from utils import utcnow
 
 
 # ---------------------------------------------------------------------------
@@ -353,11 +358,19 @@ async def test_change_password_invalidates_previous_tokens(client, make_user, au
     assert r.status_code == 401
 
 
-async def test_logout_invalidates_existing_token(client, make_user, auth_header):
-    user = await make_user(username="peggy", password="pw")
-    header = auth_header(user)
+async def test_logout_invalidates_this_token(client, make_user):
+    """Logout is per-device since issue #250, so what it invalidates is the
+    session it was called with — not, as it once did, every session the account
+    has. `test_logout_with_device_a_refresh_leaves_device_b_access_token_valid`
+    is the other half of that contract."""
+    await make_user(username="peggy", password="pw")
+    r = await client.post("/api/auth/login",
+                          json={"username": "peggy", "password": "pw"})
+    tokens = r.json()
+    header = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    r = await client.post("/api/auth/logout", headers=header)
+    r = await client.post("/api/auth/logout", headers=header,
+                          json={"refresh_token": tokens["refresh_token"]})
     assert r.status_code == 200
 
     r = await client.get("/api/auth/me", headers=header)
@@ -1146,3 +1159,445 @@ async def test_a_valid_refresh_is_unaffected_by_another_tokens_failures(client, 
         "/api/auth/refresh", json={"refresh_token": create_refresh_token(stored)}
     )
     assert r.status_code == 200
+
+# ---------------------------------------------------------------------------
+# Per-device sessions (issue #250)
+#
+# Logging out used to bump `token_version`, which invalidated every token the
+# account held everywhere — signing out of the browser signed out the phone,
+# and the phone's unsynced reading positions then sat undelivered until someone
+# noticed and signed in again. Refresh tokens now name a session row
+# (`refresh_tokens.jti`), the access tokens minted from one carry the same value
+# as `sid`, and `logout` revokes just that row.
+#
+# `token_version` is still the account-wide kill switch, and it must stay that
+# way: password change, admin reset, and the new explicit `/logout-all` all use
+# it.
+# ---------------------------------------------------------------------------
+
+async def _sign_in(client, username, password="pw", device_id=None):
+    """Log in the way a client does, optionally naming the device."""
+    body = {"username": username, "password": password}
+    if device_id is not None:
+        body["device_id"] = device_id
+    r = await client.post("/api/auth/login", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _bearer(tokens):
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+
+def _claims(token):
+    return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+
+
+async def _sessions(db, user_id):
+    return (await db.execute(
+        select(RefreshToken).where(RefreshToken.user_id == user_id)
+    )).scalars().all()
+
+
+async def test_login_opens_a_session_both_tokens_name(client, make_user, db):
+    user = await make_user(username="opener", password="pw")
+    tokens = await _sign_in(client, "opener", device_id="device-a")
+
+    rows = await _sessions(db, user.id)
+    assert len(rows) == 1
+    assert rows[0].device_id == "device-a"
+    assert rows[0].revoked_at is None
+    # The refresh token names the session, and the access token minted beside it
+    # names the same one — that is what lets a per-device logout kill both.
+    assert _claims(tokens["refresh_token"])["jti"] == rows[0].jti
+    assert _claims(tokens["access_token"])["sid"] == rows[0].jti
+
+
+async def test_logout_with_device_a_refresh_leaves_device_b_access_token_valid(
+    client, make_user,
+):
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    r = await client.post(
+        "/api/auth/logout",
+        headers=_bearer(a),
+        json={"refresh_token": a["refresh_token"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["scope"] == "device"
+
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 200
+
+
+async def test_device_b_can_still_refresh_after_device_a_logs_out(client, make_user):
+    """The phone's 15-minute position sweep has to survive a browser logout."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    await client.post("/api/auth/logout", headers=_bearer(a),
+                      json={"refresh_token": a["refresh_token"]})
+
+    r = await client.post("/api/auth/refresh",
+                          json={"refresh_token": b["refresh_token"]})
+    assert r.status_code == 200
+    assert r.json()["access_token"]
+
+
+async def test_revoked_refresh_token_cannot_be_used_again(client, make_user):
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+
+    await client.post("/api/auth/logout", headers=_bearer(a),
+                      json={"refresh_token": a["refresh_token"]})
+
+    r = await client.post("/api/auth/refresh",
+                          json={"refresh_token": a["refresh_token"]})
+    assert r.status_code == 401
+
+
+async def test_logout_invalidates_the_calling_devices_access_token(client, make_user):
+    """The old global bump did this as a side effect. It has to keep happening
+    for the device that logged out, or per-device logout would be *weaker* than
+    what it replaced: a 24h access token would go on working after sign-out."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+
+    await client.post("/api/auth/logout", headers=_bearer(a),
+                      json={"refresh_token": a["refresh_token"]})
+
+    assert (await client.get("/api/auth/me", headers=_bearer(a))).status_code == 401
+
+
+async def test_logout_leaves_token_version_alone(client, make_user, db):
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+
+    await client.post("/api/auth/logout", headers=_bearer(a),
+                      json={"refresh_token": a["refresh_token"]})
+
+    stored = (await db.execute(select(User).where(User.username == "reader"))).scalar_one()
+    assert stored.token_version == 0
+
+
+async def test_password_change_still_invalidates_every_device(client, make_user):
+    """The global path must not have been lost on the way to per-device logout:
+    a password change is exactly the case where every device has to go."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    r = await client.post(
+        "/api/auth/change-password",
+        headers=_bearer(a),
+        json={"old_password": "pw", "new_password": "a-new-password"},
+    )
+    assert r.status_code == 200
+
+    assert (await client.get("/api/auth/me", headers=_bearer(a))).status_code == 401
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 401
+    for tokens in (a, b):
+        r = await client.post("/api/auth/refresh",
+                              json={"refresh_token": tokens["refresh_token"]})
+        assert r.status_code == 401
+
+
+async def test_logout_all_invalidates_every_device(client, make_user, db):
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    r = await client.post("/api/auth/logout-all", headers=_bearer(a))
+    assert r.status_code == 200
+    assert r.json()["scope"] == "all"
+
+    assert (await client.get("/api/auth/me", headers=_bearer(a))).status_code == 401
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 401
+    for tokens in (a, b):
+        r = await client.post("/api/auth/refresh",
+                              json={"refresh_token": tokens["refresh_token"]})
+        assert r.status_code == 401
+
+    stored = (await db.execute(select(User).where(User.username == "reader"))).scalar_one()
+    assert stored.token_version == 1
+    assert all(row.revoked_at is not None for row in await _sessions(db, stored.id))
+
+
+async def test_logout_all_is_audited_separately_from_a_device_logout(client, make_user, db):
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+
+    await client.post("/api/auth/logout-all", headers=_bearer(a))
+
+    actions = (await db.execute(select(AuditLog.action))).scalars().all()
+    assert "logout_all" in actions
+
+
+async def test_refreshing_keeps_the_session_and_its_other_tokens_alive(client, make_user, db):
+    """Refresh deliberately does *not* invalidate the token it was given.
+
+    Both clients single-flight their refresh (web `refreshSession`, Android
+    `TokenAuthenticator`), but neither survives a refresh whose response is lost
+    on the way back — with strict rotation that would strand the device with a
+    dead token and no way to renew it. So the session keeps its `jti` and the
+    new refresh token simply carries a later expiry; revocation is what ends a
+    session, not use. See the note in `routers/auth.py`.
+    """
+    user = await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    first = _claims(a["refresh_token"])["jti"]
+
+    r = await client.post("/api/auth/refresh",
+                          json={"refresh_token": a["refresh_token"]})
+    assert r.status_code == 200
+    assert _claims(r.json()["refresh_token"])["jti"] == first
+    assert len(await _sessions(db, user.id)) == 1
+
+    # The token that was presented still works: a lost response must not cost
+    # the device its session.
+    again = await client.post("/api/auth/refresh",
+                              json={"refresh_token": a["refresh_token"]})
+    assert again.status_code == 200
+
+
+async def test_a_second_login_from_the_same_device_replaces_its_session(
+    client, make_user, db,
+):
+    """Signing in again on a device supersedes the session that device had,
+    rather than stacking another one that nothing will ever revoke."""
+    user = await make_user(username="reader", password="pw")
+    first = await _sign_in(client, "reader", device_id="device-a")
+    second = await _sign_in(client, "reader", device_id="device-a")
+
+    live = [row for row in await _sessions(db, user.id) if row.revoked_at is None]
+    assert len(live) == 1
+    assert live[0].jti == _claims(second["refresh_token"])["jti"]
+
+    assert (await client.post(
+        "/api/auth/refresh", json={"refresh_token": first["refresh_token"]}
+    )).status_code == 401
+    assert (await client.post(
+        "/api/auth/refresh", json={"refresh_token": second["refresh_token"]}
+    )).status_code == 200
+
+
+async def test_logins_without_a_device_id_get_independent_sessions(client, make_user, db):
+    """A client that sends no device id (or an old one) is not thereby merged
+    with every other anonymous session on the account."""
+    user = await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader")
+    b = await _sign_in(client, "reader")
+
+    assert len({_claims(a["refresh_token"])["jti"],
+                _claims(b["refresh_token"])["jti"]}) == 2
+    assert len([r for r in await _sessions(db, user.id) if r.revoked_at is None]) == 2
+
+
+async def test_expired_sessions_are_pruned_when_the_user_signs_in(client, make_user, db):
+    """The table must not grow forever. A session whose refresh token has
+    outlived `JWT_REFRESH_TOKEN_EXPIRE_DAYS` can never authenticate again — the
+    JWT's own `exp` sees to that — so the row is dead weight."""
+    user = await make_user(username="reader", password="pw")
+    stale_at = utcnow() - timedelta(days=settings.jwt_refresh_token_expire_days + 1)
+    db.add(RefreshToken(
+        user_id=user.id, jti="long-dead", device_id="old-phone",
+        issued_at=stale_at, last_used_at=stale_at,
+    ))
+    await db.commit()
+
+    await _sign_in(client, "reader", device_id="device-a")
+
+    jtis = {row.jti for row in await _sessions(db, user.id)}
+    assert "long-dead" not in jtis
+
+
+async def test_refresh_rejects_a_session_that_does_not_exist(client, make_user):
+    """A signature-valid token naming an unknown session is not a session."""
+    user = await make_user(username="reader", password="pw")
+    forged = create_token(
+        {"sub": str(user.id), "type": "refresh", "ver": user.token_version,
+         "jti": "never-issued"},
+        timedelta(days=1),
+    )
+    assert (await client.post(
+        "/api/auth/refresh", json={"refresh_token": forged}
+    )).status_code == 401
+
+
+async def test_a_session_cannot_be_revoked_by_another_account(client, make_user):
+    """`logout` revokes by `jti`, so it has to check the session belongs to the
+    caller — otherwise anyone holding a stray token could sign out a stranger's
+    device."""
+    await make_user(username="victim", password="pw")
+    await make_user(username="attacker", password="pw")
+    victim = await _sign_in(client, "victim", device_id="device-a")
+    attacker = await _sign_in(client, "attacker", device_id="device-b")
+
+    r = await client.post(
+        "/api/auth/logout",
+        headers=_bearer(attacker),
+        json={"refresh_token": victim["refresh_token"]},
+    )
+    assert r.status_code == 200
+    # The victim's session survived; the attacker signed only themselves out.
+    assert (await client.get("/api/auth/me", headers=_bearer(victim))).status_code == 200
+    assert (await client.get("/api/auth/me", headers=_bearer(attacker))).status_code == 401
+
+
+async def test_logging_out_a_dead_session_does_not_sign_out_the_other_devices(
+    client, make_user,
+):
+    """Idempotence matters more than it looks: falling back to the global bump
+    whenever the named session is already gone would turn a retried logout — a
+    flaky network, a double tap — into the very "signed out everywhere" this
+    issue is about."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    body = {"refresh_token": a["refresh_token"]}
+    assert (await client.post("/api/auth/logout", headers=_bearer(a),
+                              json=body)).status_code == 200
+    # Same call again, this time authenticated by the device that is still live.
+    r = await client.post("/api/auth/logout", headers=_bearer(b), json=body)
+    assert r.status_code == 200
+    # ...which signed out B's own session, and left token_version alone.
+    assert r.json()["scope"] == "device"
+
+
+# --- Backwards compatibility with clients that have not been updated --------
+#
+# `create_access_token(user)` / `create_refresh_token(user)` with no session are
+# exactly the tokens this deployment had already handed out before the upgrade,
+# so these tests are the deploy rehearsal.
+
+
+async def test_an_access_token_minted_before_the_upgrade_still_authenticates(
+    client, make_user, auth_header,
+):
+    user = await make_user(username="early", password="pw")
+    assert (await client.get("/api/auth/me",
+                             headers=auth_header(user))).status_code == 200
+
+
+async def test_a_refresh_token_minted_before_the_upgrade_still_works(
+    client, make_user, db,
+):
+    """No client is signed out by the deploy. A token with no `jti` predates
+    sessions, so it is accepted on its `ver` alone — as it always was — and the
+    tokens handed back name a real session from then on."""
+    user = await make_user(username="early", password="pw")
+    legacy = create_refresh_token(user)
+    assert "jti" not in _claims(legacy)
+
+    r = await client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": legacy, "device_id": "device-a"},
+    )
+    assert r.status_code == 200
+
+    upgraded = _claims(r.json()["refresh_token"])
+    rows = await _sessions(db, user.id)
+    assert len(rows) == 1
+    assert rows[0].jti == upgraded["jti"]
+    assert rows[0].device_id == "device-a"
+
+
+async def test_logout_from_a_client_with_no_session_signs_out_every_device(
+    client, make_user, auth_header,
+):
+    """An old client presents an old access token and no body, so there is no
+    session to name. The conservative answer is the behaviour it was built
+    against: revoke everything."""
+    user = await make_user(username="early", password="pw")
+    b = await _sign_in(client, "early", device_id="device-b")
+
+    r = await client.post("/api/auth/logout", headers=auth_header(user))
+    assert r.status_code == 200
+    assert r.json()["scope"] == "all"
+
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 401
+
+
+async def test_logout_is_per_device_even_when_the_client_sends_no_body(
+    client, make_user,
+):
+    """An updated server in front of a client that has not learned to send its
+    refresh token still gets per-device logout: the access token authenticating
+    the call already names the session."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    r = await client.post("/api/auth/logout", headers=_bearer(a))
+    assert r.status_code == 200
+    assert r.json()["scope"] == "device"
+
+    assert (await client.get("/api/auth/me", headers=_bearer(a))).status_code == 401
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 200
+
+
+async def test_a_refresh_names_the_device_a_session_did_not_know_about(
+    client, make_user, db,
+):
+    """A client that learns to send its device id names the session it already
+    has, rather than having to sign in again to be nameable."""
+    user = await make_user(username="reader", password="pw")
+    tokens = await _sign_in(client, "reader")
+    assert (await _sessions(db, user.id))[0].device_id is None
+
+    r = await client.post("/api/auth/refresh", json={
+        "refresh_token": tokens["refresh_token"], "device_id": "device-a",
+    })
+    assert r.status_code == 200
+
+    rows = await _sessions(db, user.id)
+    assert len(rows) == 1
+    assert rows[0].device_id == "device-a"
+
+
+async def test_logout_ignores_a_refresh_token_it_cannot_read(client, make_user):
+    """Garbage in the body must not cost the caller anything: `logout` falls
+    back to the session its access token names, and still signs out only this
+    device."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+    b = await _sign_in(client, "reader", device_id="device-b")
+
+    r = await client.post("/api/auth/logout", headers=_bearer(a),
+                          json={"refresh_token": "not-a-jwt"})
+    assert r.status_code == 200
+    assert r.json()["scope"] == "device"
+
+    assert (await client.get("/api/auth/me", headers=_bearer(a))).status_code == 401
+    assert (await client.get("/api/auth/me", headers=_bearer(b))).status_code == 200
+
+
+async def test_a_device_id_longer_than_the_column_is_refused(client, make_user):
+    """The column is String(100) and the value is client-supplied; a 422 is
+    better than a truncated id or a Postgres error mid-login."""
+    await make_user(username="reader", password="pw")
+    r = await client.post("/api/auth/login", json={
+        "username": "reader", "password": "pw", "device_id": "x" * 200,
+    })
+    assert r.status_code == 422
+
+
+async def test_media_tokens_name_the_session_that_minted_them(
+    client, make_user,
+):
+    """Logout used to kill cached media tokens through the `token_version`
+    bump. They have to keep dying with their session, or a signed-out browser
+    could still stream covers and audio for the token's remaining lifetime."""
+    await make_user(username="reader", password="pw")
+    a = await _sign_in(client, "reader", device_id="device-a")
+
+    r = await client.get(
+        "/api/auth/media-token",
+        params={"resource_type": "cover", "resource_id": "x.jpg"},
+        headers=_bearer(a),
+    )
+    assert r.status_code == 200
+    assert _claims(r.json()["token"])["sid"] == _claims(a["access_token"])["sid"]

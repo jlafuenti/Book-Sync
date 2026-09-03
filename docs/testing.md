@@ -308,6 +308,12 @@ through the public `match` entry point (short needle, over-long needle, sub-thre
 the ±3 window of the interpolation nudge). It mirrors the corresponding assertions in
 `server/tests/test_sync_matching.py` — keep the two in step.
 
+Since issue #250 that server revoke is **per device**: the phone signing out no
+longer signs out the browser (and vice versa), so a device's unsynced positions
+keep being pushed. The wiring below is unchanged — the call still goes out
+before the local clear — because the session the server ends is named by the
+access token the call carries.
+
 `AccountViewModelLogoutTest` pins the logout wiring added in #39: revoke on the server
 *before* clearing local tokens (AuthInterceptor needs the still-stored bearer token to
 authenticate that call), and clear the local tokens unconditionally so an offline or

@@ -3,11 +3,12 @@ Authentication router: register, login, refresh tokens, get current user.
 Includes role-based access control dependencies.
 """
 
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import jwt
 from jwt import PyJWTError as JWTError
@@ -16,10 +17,12 @@ from fastapi.security import OAuth2PasswordBearer
 
 from database import get_db
 from config import settings
+from models.refresh_token import RefreshToken
 from models.user import User, ROLE_HIERARCHY
 from schemas import (
     UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
-    PasswordChange, MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
+    PasswordChange, LogoutRequest, LogoutResponse,
+    MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
 from rate_limit import (
     failed_logins,
@@ -53,35 +56,165 @@ def create_token(data: dict, expires_delta: timedelta) -> str:
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_access_token(user: User) -> str:
-    """Create an access token for a user, bound to their current token_version."""
+def create_access_token(user: User, session_jti: Optional[str] = None) -> str:
+    """Create an access token, bound to the user's current token_version and —
+    when the caller has one — to their session (issue #250).
+
+    `session_jti` is optional on purpose. A token minted without it is exactly
+    the shape of every access token this deployment had already handed out
+    before per-device sessions existed, and `get_current_user` goes on
+    accepting those on `ver` alone until they expire.
+    """
+    claims = {"sub": str(user.id), "type": "access", "ver": user.token_version}
+    if session_jti:
+        claims["sid"] = session_jti
     return create_token(
-        {"sub": str(user.id), "type": "access", "ver": user.token_version},
-        timedelta(minutes=settings.jwt_access_token_expire_minutes),
+        claims, timedelta(minutes=settings.jwt_access_token_expire_minutes)
     )
 
 
-def create_refresh_token(user: User) -> str:
-    """Create a refresh token for a user, bound to their current token_version."""
+def create_refresh_token(user: User, session_jti: Optional[str] = None) -> str:
+    """Create a refresh token, bound to the user's current token_version and,
+    when given, to the session it renews (issue #250)."""
+    claims = {"sub": str(user.id), "type": "refresh", "ver": user.token_version}
+    if session_jti:
+        claims["jti"] = session_jti
     return create_token(
-        {"sub": str(user.id), "type": "refresh", "ver": user.token_version},
-        timedelta(days=settings.jwt_refresh_token_expire_days),
+        claims, timedelta(days=settings.jwt_refresh_token_expire_days)
     )
 
 
-def create_media_token(user: User, resource_type: str, resource_id: str) -> str:
+def create_media_token(
+    user: User,
+    resource_type: str,
+    resource_id: str,
+    session_jti: Optional[str] = None,
+) -> str:
     """Create a short-lived, resource-scoped token for cover/audio URLs that
-    can't carry an Authorization header (img tags, Cast SDK media URLs)."""
+    can't carry an Authorization header (img tags, Cast SDK media URLs).
+
+    Carries the minting session so it dies with it. Before issue #250 the
+    `token_version` bump on logout killed these; a per-device logout does not
+    bump it, so without `sid` a signed-out browser would go on streaming covers
+    and audio for the rest of the token's lifetime — the shape of issue #206.
+    """
+    claims = {
+        "sub": str(user.id),
+        "type": "media",
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "ver": user.token_version,
+    }
+    if session_jti:
+        claims["sid"] = session_jti
     return create_token(
-        {
-            "sub": str(user.id),
-            "type": "media",
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "ver": user.token_version,
-        },
-        timedelta(minutes=settings.jwt_media_token_expire_minutes),
+        claims, timedelta(minutes=settings.jwt_media_token_expire_minutes)
     )
+
+
+# ---------------------------------------------------------------------------
+# Refresh sessions (issue #250)
+#
+# One `refresh_tokens` row per signed-in device. The refresh token carries its
+# `jti`; the access and media tokens minted from it carry the same value as
+# `sid`. Logging out revokes one row, so it signs out one device — which is the
+# whole point: this app's other device is usually mid-book with unsynced
+# positions, and the old global revoke stopped its background pushes until
+# somebody noticed and signed in again.
+#
+# `token_version` keeps its old job as the account-wide kill switch, used by
+# password change, admin reset, and the explicit `/logout-all`.
+# ---------------------------------------------------------------------------
+
+
+def _new_session_jti() -> str:
+    """A session's name: 32 url-safe random characters, derived from nothing."""
+    return secrets.token_urlsafe(24)
+
+
+async def session_is_live(db: AsyncSession, jti: str, user_id: int) -> bool:
+    """True if `jti` names a session of `user_id` that has not been revoked.
+
+    Public because `routers/files.py` resolves its tokens without going through
+    `get_current_user` and has to make the same check there (issue #206).
+    """
+    result = await db.execute(
+        select(RefreshToken.id).where(
+            RefreshToken.jti == jti,
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def open_session(
+    db: AsyncSession, user: User, device_id: Optional[str] = None
+) -> RefreshToken:
+    """Start a session for one device and return its row."""
+    now = utcnow()
+    # Sessions whose refresh token has outlived JWT_REFRESH_TOKEN_EXPIRE_DAYS can
+    # never authenticate again — the JWT's own `exp` refuses them — so the rows
+    # are dead weight. Pruning on the route that creates them keeps the table
+    # bounded with no scheduled job to forget about.
+    cutoff = now - timedelta(days=settings.jwt_refresh_token_expire_days)
+    await db.execute(
+        delete(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.last_used_at < cutoff)
+        .execution_options(synchronize_session=False)
+    )
+    if device_id:
+        # One live session per device: signing in again on a device supersedes
+        # the session that device already had, rather than stacking a second one
+        # that nothing will ever revoke. Sessions with no device id cannot be
+        # matched up this way and are simply left alone.
+        await db.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.device_id == device_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+            .execution_options(synchronize_session=False)
+        )
+    session = RefreshToken(
+        user_id=user.id,
+        jti=_new_session_jti(),
+        device_id=device_id,
+        issued_at=now,
+        last_used_at=now,
+    )
+    db.add(session)
+    await db.flush()
+    return session
+
+
+async def revoke_all_sessions(db: AsyncSession, user_id: int) -> None:
+    """Revoke every live session of a user. Always paired with a
+    `token_version` bump — the bump is what invalidates the tokens already in
+    flight; this is what stops the sessions behind them being reusable."""
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=utcnow())
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _session_named_by(token: str, user: User) -> Optional[str]:
+    """The session a client-supplied refresh token names, or None if the token
+    cannot name one: undecodable, expired, not a refresh token, not this user's,
+    or old enough to predate sessions."""
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
+        )
+    except JWTError:
+        return None
+    if payload.get("type") != "refresh" or payload.get("sub") != str(user.id):
+        return None
+    return payload.get("jti")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +235,7 @@ PASSWORD_RESET_ALLOWED_ROUTES = frozenset({
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/change-password"),
     ("POST", "/api/auth/logout"),
+    ("POST", "/api/auth/logout-all"),
 })
 
 
@@ -132,6 +266,20 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None or not user.is_active or token_version != user.token_version:
         raise credentials_exception
+
+    # Session binding (issue #250). A token carrying no `sid` predates
+    # per-device sessions and is accepted on `ver` alone, exactly as it was when
+    # it was issued; one that names a session is only as alive as that session,
+    # which is what makes "sign out this device" mean it — including for the
+    # access token the device is holding, which the old global bump killed as a
+    # side effect and which must not quietly outlive logout now.
+    session_jti = payload.get("sid")
+    if session_jti is not None and not await session_is_live(db, session_jti, user.id):
+        raise credentials_exception
+    # Read by the media-token routes so the tokens they mint belong to the same
+    # session, and by `logout` so a client that sends no body still signs out
+    # only itself.
+    request.state.session_id = session_jti
 
     # Issue #209: the flag existed but nothing server-side honoured it, so an
     # admin-issued temporary password stayed a fully working credential for any
@@ -338,9 +486,11 @@ async def login(credentials: UserLogin, request: Request, db: AsyncSession = Dep
         ip_address=get_client_ip(request),
     )
 
+    session = await open_session(db, user, credentials.device_id)
+
     return TokenResponse(
-        access_token=create_access_token(user),
-        refresh_token=create_refresh_token(user),
+        access_token=create_access_token(user, session.jti),
+        refresh_token=create_refresh_token(user, session.jti),
     )
 
 
@@ -387,9 +537,43 @@ async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
     if not user or not user.is_active or token_version != user.token_version:
         raise _reject()
 
+    # Per-device sessions (issue #250).
+    session_jti = payload.get("jti")
+    if session_jti is None:
+        # A refresh token minted before sessions existed. It was valid when it
+        # was issued and its `ver` still checks out, so honour it — no client is
+        # signed out by the deploy — and hand back a session-backed pair, which
+        # upgrades that device on its first refresh.
+        session = await open_session(db, user, body.device_id)
+    else:
+        session = (await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.jti == session_jti,
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+        )).scalar_one_or_none()
+        if session is None:
+            raise _reject()
+        session.last_used_at = utcnow()
+        if body.device_id and not session.device_id:
+            # An upgraded client naming itself for the first time.
+            session.device_id = body.device_id
+
+    # The session keeps its `jti`: the new refresh token renews the expiry
+    # without killing the one that was presented.
+    #
+    # Invalidating it here — true rotation — would make a refresh whose response
+    # never arrives terminal, because the client would still hold the old token
+    # and the server would have already retired it. Both clients single-flight
+    # their refresh (web `refreshSession`, Android `TokenAuthenticator`), which
+    # handles concurrent 401s but not a lost reply, a killed process, or a
+    # restore from backup. Revocation, not use, is what ends a session, so a
+    # copy of the refresh token is worth no more than it was before this change
+    # — and `logout` now kills it on the device it was taken from.
     return TokenResponse(
-        access_token=create_access_token(user),
-        refresh_token=create_refresh_token(user),
+        access_token=create_access_token(user, session.jti),
+        refresh_token=create_refresh_token(user, session.jti),
     )
 
 
@@ -398,6 +582,7 @@ VALID_MEDIA_RESOURCE_TYPES = {"cover", "audiobook"}
 
 @router.get("/media-token", response_model=MediaTokenResponse)
 async def get_media_token(
+    request: Request,
     resource_type: str,
     resource_id: str,
     current_user: User = Depends(get_current_user),
@@ -406,7 +591,10 @@ async def get_media_token(
     use in URLs that can't carry an Authorization header (img tags, Cast)."""
     if resource_type not in VALID_MEDIA_RESOURCE_TYPES:
         raise HTTPException(status_code=400, detail="Invalid resource_type")
-    token = create_media_token(current_user, resource_type, resource_id)
+    token = create_media_token(
+        current_user, resource_type, resource_id,
+        session_jti=getattr(request.state, "session_id", None),
+    )
     return MediaTokenResponse(
         token=token,
         expires_in=settings.jwt_media_token_expire_minutes * 60,
@@ -415,17 +603,21 @@ async def get_media_token(
 
 @router.post("/media-token/batch", response_model=MediaTokenBatchResponse)
 async def get_media_tokens_batch(
+    request: Request,
     body: MediaTokenBatchRequest,
     current_user: User = Depends(get_current_user),
 ):
     """Mint scoped media tokens for multiple resources in one round-trip
     (e.g. all covers visible on a library grid page)."""
+    session_jti = getattr(request.state, "session_id", None)
     tokens = {}
     for r in body.resources[:200]:
         if r.resource_type not in VALID_MEDIA_RESOURCE_TYPES or not r.resource_id:
             continue
         key = f"{r.resource_type}:{r.resource_id}"
-        tokens[key] = create_media_token(current_user, r.resource_type, r.resource_id)
+        tokens[key] = create_media_token(
+            current_user, r.resource_type, r.resource_id, session_jti=session_jti,
+        )
     return MediaTokenBatchResponse(
         tokens=tokens,
         expires_in=settings.jwt_media_token_expire_minutes * 60,
@@ -507,7 +699,10 @@ async def change_password(
 
     current_user.hashed_password = hash_password(body.new_password)
     current_user.must_reset_password = False
+    # Global, and deliberately so: a password change is the case where every
+    # device has to go, whatever session asked for it (issue #250).
     current_user.token_version += 1
+    await revoke_all_sessions(db, current_user.id)
     await db.flush()
 
     await log_audit(
@@ -519,21 +714,78 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
-@router.post("/logout")
+@router.post("/logout", response_model=LogoutResponse)
 async def logout(
     request: Request,
+    body: Optional[LogoutRequest] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Log out. Bumps token_version, invalidating all outstanding tokens for
-    this user (all devices — there is no per-session token store)."""
-    current_user.token_version += 1
+    """Sign this device out, leaving the account's other devices signed in
+    (issue #250).
+
+    The session to end is named by the refresh token in the body if the client
+    sends one, and otherwise by the access token that authenticated the call —
+    so a client that has not been updated still gets a per-device logout.
+
+    The fallback is the old behaviour, `token_version + 1`, and it fires only
+    when there is no session to name at all: a token issued before this existed.
+    That is the conservative answer, not a leftover — an old client cannot tell
+    the user "only this device", so it must not silently mean less than the
+    sign-out it was built to perform. `POST /logout-all` is the explicit way to
+    ask for it.
+
+    Deliberately idempotent: when the named session is already revoked this
+    still answers 200 without touching `token_version`. Falling back to the
+    global revoke there would turn a retried logout — a flaky network, a double
+    tap — into exactly the "signed out everywhere" this endpoint stopped doing.
+    """
+    session_jti = _session_named_by(body.refresh_token, current_user) if body else None
+    if session_jti is None:
+        session_jti = getattr(request.state, "session_id", None)
+
+    if session_jti is not None:
+        session = (await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.jti == session_jti,
+                RefreshToken.user_id == current_user.id,
+            )
+        )).scalar_one_or_none()
+        if session is not None and session.revoked_at is None:
+            session.revoked_at = utcnow()
+        scope = "device"
+    else:
+        current_user.token_version += 1
+        await revoke_all_sessions(db, current_user.id)
+        scope = "all"
     await db.flush()
 
     await log_audit(
         db, "logout", user_id=current_user.id,
-        details="User logged out",
+        details=f"User logged out ({scope})",
         ip_address=get_client_ip(request),
     )
 
-    return {"message": "Logged out"}
+    return LogoutResponse(message="Logged out", scope=scope)
+
+
+@router.post("/logout-all", response_model=LogoutResponse)
+async def logout_all(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sign out on every device — the behaviour `logout` had before issue #250,
+    kept as something the user asks for rather than something that happens to
+    them. This is the button to reach for when a device has been lost."""
+    current_user.token_version += 1
+    await revoke_all_sessions(db, current_user.id)
+    await db.flush()
+
+    await log_audit(
+        db, "logout_all", user_id=current_user.id,
+        details="User signed out on all devices",
+        ip_address=get_client_ip(request),
+    )
+
+    return LogoutResponse(message="Signed out on all devices", scope="all")
