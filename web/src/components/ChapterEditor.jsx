@@ -181,7 +181,7 @@ export default function ChapterEditor({ bookId }) {
                 }
                 .chapter-table th, .chapter-table td {
                     padding: 0.75rem;
-                    border-bottom: 1px solid var(--border-color);
+                    border-bottom: 1px solid var(--border);
                     text-align: left;
                 }
                 .chapter-table th {
@@ -192,8 +192,8 @@ export default function ChapterEditor({ bookId }) {
                 }
                 .chapter-table input {
                     width: 100%;
-                    background: var(--bg-color);
-                    border: 1px solid var(--border-color);
+                    background: var(--bg-input);
+                    border: 1px solid var(--border);
                     color: white;
                     padding: 0.5rem;
                     border-radius: 4px;

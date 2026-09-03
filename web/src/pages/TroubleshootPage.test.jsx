@@ -206,3 +206,22 @@ describe('TroubleshootPage multi-file audiobook folders', () => {
         expect(await screen.findByText(/Removed 12 imported track/)).toBeInTheDocument()
     })
 })
+
+// Issue #271: the issue table's last column holds the repair/convert/delete
+// buttons. On a phone that column sits past the right edge, and every ancestor
+// clips overflow (`.main-content { overflow-x: hidden }`, `.system-card
+// { overflow: hidden }`), so nothing scrolls and the actions are unreachable —
+// on the page you open precisely when something is broken. `.table-wrapper`
+// already carries the mobile `overflow-x: auto` rules the other pages use.
+describe('TroubleshootPage mobile layout', () => {
+    it('renders the issue table inside a horizontal-scroll wrapper', async () => {
+        const row = { item_type: 'audiobook', item_id: 1538, title: 'Antiagon Fire', detail: 'bad', file_size: 100 }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([row]))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Audiobooks with corrupt chapter titles/))
+
+        const table = await screen.findByRole('table')
+        expect(table.closest('.table-wrapper')).not.toBeNull()
+    })
+})

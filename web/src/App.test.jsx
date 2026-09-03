@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { readFileSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { AppShell } from './App'
 import { ThemeProvider } from './ThemeContext'
 import { AudioPlayerProvider } from './contexts/AudioPlayerContext'
@@ -31,6 +34,12 @@ vi.mock('./api', async (importOriginal) => {
 // default, which returns false for every role, and every gated route would
 // redirect no matter who is signed in. This file used to render without it and
 // passed only because AppShell never called hasMinRole (issue #283).
+// Reports where the router actually ended up, so a test can tell "rendered at
+// this path" apart from "was redirected somewhere that happens to look right".
+function LocationProbe() {
+    return <div data-testid="pathname">{useLocation().pathname}</div>
+}
+
 function renderShell(user, initialEntry = '/continue') {
     const setUser = vi.fn()
     render(
@@ -39,6 +48,7 @@ function renderShell(user, initialEntry = '/continue') {
                 <AuthProvider user={user}>
                     <AudioPlayerProvider>
                         <AppShell user={user} setUser={setUser} />
+                        <LocationProbe />
                     </AudioPlayerProvider>
                 </AuthProvider>
             </ThemeProvider>
@@ -46,6 +56,25 @@ function renderShell(user, initialEntry = '/continue') {
     )
     return { setUser }
 }
+
+// Issue #266: every installed PWA launches at the manifest's start_url. The
+// page that once owned that path (ContinuePage) was deleted in PR #140, and
+// the only assertion on the string compares the manifest to itself — so if
+// HomePage's route were renamed, /continue would fall through to the catch-all
+// and installed apps would open somewhere unexpected with CI still green.
+// This is the one test that reads the manifest and drives the real router.
+describe('PWA start_url', () => {
+    const manifest = JSON.parse(readFileSync(
+        resolve(dirname(fileURLToPath(import.meta.url)), '../public/manifest.webmanifest'), 'utf-8',
+    ))
+
+    it('renders Home at the manifest start_url without redirecting', () => {
+        renderShell({ username: 'alice', role: 'user' }, manifest.start_url)
+
+        expect(screen.getByText('home-stub')).toBeInTheDocument()
+        expect(screen.getByTestId('pathname')).toHaveTextContent(manifest.start_url)
+    })
+})
 
 describe('AppShell — logout', () => {
     it('calls the server logout endpoint, then clears the signed-in user', async () => {
