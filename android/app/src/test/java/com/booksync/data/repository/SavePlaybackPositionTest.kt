@@ -1,6 +1,7 @@
 package com.booksync.data.repository
 
 import com.booksync.data.local.dao.BookmarkDao
+import com.booksync.data.local.dao.BookmarkLogDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.local.entity.BookmarkEntity
@@ -52,6 +53,7 @@ class SavePlaybackPositionTest {
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
+    private val bookmarkLogDao = mockk<BookmarkLogDao>(relaxed = true)
 
     private fun repository() = BookSyncRepository(
         api = api,
@@ -63,7 +65,7 @@ class SavePlaybackPositionTest {
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
         acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
+        bookmarkLogDao = bookmarkLogDao,
         context = mockk(relaxed = true),
         diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
@@ -160,6 +162,49 @@ class SavePlaybackPositionTest {
         repository().savePlaybackPosition(pairId = 42, audioPositionMs = 5_000, claimFormat = false)
 
         assertEquals("ebook", savedBookmark.captured.source)
+    }
+
+    // ============ one boundary save == one server write (issue #226) ============
+    //
+    // AudioPlayerService is now the sole owner of the pause write; the player
+    // screen's poll loop and stopAndSave no longer save at all. That only helps
+    // if a single call here really is a single write, so pin it: one PUT
+    // carrying source=audiobook and append_to_log=true, and — when the push
+    // lands — no local bookmark_log row (the server owns the history entry; the
+    // local mirror is the offline path only).
+
+    @Test
+    fun `one boundary save is exactly one server write with source and append_to_log`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns
+            Response.success(positionResponse())
+
+        repository().savePlaybackPosition(
+            pairId = 42, audioPositionMs = 5_000, appendToLog = true, claimFormat = true)
+
+        coVerify(exactly = 1) { api.updatePosition("pair", 42, any()) }
+        assertEquals("audiobook", sentRequest.captured.source)
+        assertTrue(
+            "a pause is a session boundary — the server writes the history row",
+            sentRequest.captured.append_to_log,
+        )
+        assertEquals(5_000, sentRequest.captured.audio_position_ms)
+        coVerify(exactly = 0) { bookmarkLogDao.insertLocal(any()) }
+    }
+
+    @Test
+    fun `only a failed boundary push mirrors the history entry locally`() = runTest {
+        // The counterpart to the test above: offline, the local mirror is the
+        // only record, so it must still be written exactly once per save.
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
+        coEvery { api.updatePosition("pair", 42, any()) } returns
+            Response.error(500, "boom".toResponseBody("text/plain".toMediaType()))
+
+        repository().savePlaybackPosition(
+            pairId = 42, audioPositionMs = 5_000, appendToLog = true, claimFormat = true)
+
+        coVerify(exactly = 1) { bookmarkLogDao.insertLocal(any()) }
     }
 
     // ============ savePlaybackPositionStandalone ============
