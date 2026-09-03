@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+import version
 from config import settings
 
 
@@ -51,7 +52,37 @@ async def test_health_returns_healthy_when_db_answers():
     import main
 
     body = await main.health()
-    assert body == {"status": "healthy"}
+    assert body["status"] == "healthy"
+
+
+async def test_health_reports_the_api_and_app_version(monkeypatch):
+    """The healthy payload carries the handshake fields (issue #174).
+
+    An Android client installed from Play updates on the user's schedule and the
+    server on the operator's, so the two drift. `/api/health` is unauthenticated,
+    which is what makes it the thing a client can ask before it has credentials —
+    but only if it answers with a version.
+    """
+    pytest.importorskip("audible")
+    import main
+
+    body = await main.health()
+
+    assert body["api_version"] == version.API_VERSION
+    assert isinstance(body["api_version"], int)
+    assert body["app_version"] == version.APP_VERSION
+
+
+async def test_root_reports_the_app_version():
+    """`GET /` used to hard-code the version string next to a second copy in
+    `FastAPI(version=...)`. One source, so they cannot drift (issue #174)."""
+    pytest.importorskip("audible")
+    import main
+
+    body = await main.root()
+
+    assert body["version"] == version.APP_VERSION
+    assert main.app.version == version.APP_VERSION
 
 
 async def test_health_returns_503_when_db_is_down(monkeypatch):
@@ -63,6 +94,8 @@ async def test_health_returns_503_when_db_is_down(monkeypatch):
 
     resp = await main.health()
     assert resp.status_code == 503
+    # Shape deliberately unchanged by issue #174: uptime monitors match on it,
+    # and a client that cannot reach the database cannot use any API version.
     assert json.loads(resp.body) == {"status": "unhealthy", "db": "down"}
 
 

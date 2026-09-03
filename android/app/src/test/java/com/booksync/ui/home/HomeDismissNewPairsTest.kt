@@ -73,6 +73,10 @@ class HomeDismissNewPairsTest {
             transcriptionRepository = transcriptionRepository,
             networkMonitor = networkMonitor,
             serverUrlManager = serverUrlManager,
+            serverVersionGate = com.booksync.data.remote.ServerVersionGate(
+                mockk(relaxed = true),
+                serverUrlManager,
+            ),
             context = mockk(relaxed = true),
         )
     }

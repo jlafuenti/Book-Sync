@@ -228,7 +228,7 @@ export default function NewItemsPage() {
                                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     background: 'none', border: 'none', cursor: 'pointer',
                                     padding: '0.25rem 0', marginBottom: '0.5rem',
-                                    color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600,
+                                    color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600,
                                 }}
                             >
                                 <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>{ebooksCollapsed ? '▶' : '▼'}</span>
@@ -253,7 +253,7 @@ export default function NewItemsPage() {
                                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     background: 'none', border: 'none', cursor: 'pointer',
                                     padding: '0.25rem 0', marginBottom: '0.5rem',
-                                    color: 'var(--text)', fontSize: '1.05rem', fontWeight: 600,
+                                    color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600,
                                 }}
                             >
                                 <span style={{ fontSize: '0.75em', color: 'var(--text-muted)' }}>{audiobooksCollapsed ? '▶' : '▼'}</span>
