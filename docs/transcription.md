@@ -5,7 +5,7 @@ transcript aligned to the ebook text. This page covers how that work is dispatch
 governs how long it takes.
 
 Deploying the remote worker itself is a separate walkthrough:
-[jetson/README.md](../jetson/README.md) and [docs/jetson-orin-nano-setup.md](jetson-orin-nano-setup.md).
+[jetson/README.md](../jetson/README.md).
 
 ## What happens to a job
 
