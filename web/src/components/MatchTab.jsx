@@ -180,8 +180,8 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                         gap: 1rem;
                     }
                     .match-card {
-                        background: var(--bg-hover);
-                        border: 1px solid var(--border-color);
+                        background: var(--bg-card-hover);
+                        border: 1px solid var(--border);
                         border-radius: 8px;
                         padding: 1rem;
                         display: flex;
@@ -327,7 +327,7 @@ export default function MatchTab({ currentData, onApply, bookType }) {
                     .compare-table th, .compare-table td {
                         padding: 12px;
                         text-align: left;
-                        border-bottom: 1px solid var(--border-color);
+                        border-bottom: 1px solid var(--border);
                     }
                     .compare-table th {
                         background: rgba(255,255,255,0.05);
