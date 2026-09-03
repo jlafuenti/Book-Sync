@@ -2,6 +2,9 @@ package com.booksync.ui.downloaded
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.StateFlow
+import com.booksync.data.auth.hasMinRole
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -50,8 +53,23 @@ data class DownloadedItem(
 class DownloadedViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    /**
+     * Whether this user may change the library (issue #170).
+     *
+     * Editor-gated actions — Unlink pair, Pair — used to render for everyone;
+     * a plain user tapped one and got Retrofit's raw "HTTP 403 " in a snackbar.
+     * Starts false and stays false while the role is unknown, so the failure
+     * mode is a missing button rather than a broken one.
+     */
+    val canEdit: StateFlow<Boolean> =
+        tokenManager.getRole()
+            .map { hasMinRole(it, "editor") }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
 
     private val workManager = WorkManager.getInstance(context)
 
@@ -151,6 +169,16 @@ class DownloadedViewModel @Inject constructor(
 
     fun deleteEbook(pair: BookPairEntity)                    = runSafely { repository.deleteEbook(pair) }
     fun deleteAudiobook(pair: BookPairEntity)                = runSafely { repository.deleteAudiobook(pair) }
+
+    /**
+     * Remove whichever of a pair's files are downloaded, in one action
+     * (issue #333). Only deletes what exists, so a half-downloaded pair does
+     * not fail on the missing half.
+     */
+    fun deletePair(pair: BookPairEntity) = runSafely {
+        if (pair.ebookDownloaded) repository.deleteEbook(pair)
+        if (pair.audiobookDownloaded) repository.deleteAudiobook(pair)
+    }
     fun deleteStandaloneEbook(ebook: EBookEntity)            = runSafely { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity)    = runSafely { repository.deleteStandaloneAudiobook(audio) }
 

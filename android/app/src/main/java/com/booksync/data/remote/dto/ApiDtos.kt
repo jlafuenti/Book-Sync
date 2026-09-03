@@ -59,6 +59,19 @@ data class UserResponse(
     val id: Int,
     val username: String,
     val email: String,
+    /**
+     * "superadmin" | "admin" | "editor" | "user" — see
+     * [com.booksync.data.auth.hasMinRole] and `server/models/user.py`.
+     *
+     * The server has always sent this (`schemas.py` UserResponse.role) but this
+     * class had no field for it, and the shared Json uses
+     * `ignoreUnknownKeys = true`, so it was dropped silently — which is why the
+     * app showed editor-only actions to everyone (issue #170).
+     *
+     * Defaults to "user", the least privileged value, so an older server that
+     * omits it fails closed rather than being assumed to grant edit rights.
+     */
+    val role: String = "user",
     val is_admin: Boolean,
     val is_active: Boolean,
     val theme: String = "blueprint",

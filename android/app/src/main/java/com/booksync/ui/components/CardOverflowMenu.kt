@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -111,6 +112,66 @@ sealed class OverflowTarget {
  * The [onTranscribeDisabled] message is surfaced as a disabled-button tooltip /
  * snackbar when offline or already queued.
  */
+
+/** One row of a pair's overflow menu. See [pairMenuActions]. */
+enum class PairAction {
+    DownloadPair,
+    Read,
+    Listen,
+    DeletePair,
+    RefreshSyncData,
+    CancelTranscription,
+    Transcribe,
+    MarkComplete,
+    ResetProgress,
+    UnlinkPair,
+}
+
+/**
+ * Which rows a pair's overflow menu shows, in order (issues #333 and #170).
+ *
+ * Pure, and deliberately separate from the Composable that renders it: Compose
+ * is excluded from Kover, so a decision left inside the `@Composable` cannot
+ * carry a test. Same reasoning as `primaryAction` in BookDetailsScreen.
+ *
+ * Two behaviours worth stating because they are the point of the change:
+ *
+ * - **One delete, not two** (#333). The menu used to offer "Delete ebook" and
+ *   "Delete audiobook" separately, so clearing one book took two taps through
+ *   two confirmations. The per-format rows still exist on the Book Details
+ *   screen, where the user has navigated into the book and the per-format state
+ *   is visible.
+ * - **[canUnlink] gates the unlink** (#170). It was shown to every role; a plain
+ *   user tapped it and got a raw `"HTTP 403 "` back from the editor-gated
+ *   endpoint.
+ *
+ * [PairAction.UnlinkPair] is also kept away from [PairAction.DeletePair] in the
+ * ordering. One removes local files and is undone by re-downloading; the other
+ * unpairs on the server for every device. They should not be neighbours.
+ */
+fun pairMenuActions(
+    target: OverflowTarget.Pair,
+    canUnlink: Boolean,
+    isOnline: Boolean,
+): List<PairAction> = buildList {
+    if (!target.hasEbookDownloaded || !target.hasAudiobookDownloaded) add(PairAction.DownloadPair)
+    if (target.hasEbookDownloaded) add(PairAction.Read)
+    if (target.hasAudiobookDownloaded) add(PairAction.Listen)
+    if (target.hasEbookDownloaded || target.hasAudiobookDownloaded) add(PairAction.DeletePair)
+
+    when {
+        target.isTranscribed -> add(PairAction.RefreshSyncData)
+        target.isQueuedOrTranscribing -> add(PairAction.CancelTranscription)
+        else -> add(PairAction.Transcribe)
+    }
+
+    if (!target.isComplete) add(PairAction.MarkComplete)
+    add(PairAction.ResetProgress)
+
+    // Last, and separated from the delete by the rows above.
+    if (canUnlink) add(PairAction.UnlinkPair)
+}
+
 data class OverflowActions(
     val isOnline: Boolean = true,
     // Landing page for this book (Book Details screen)
@@ -124,6 +185,12 @@ data class OverflowActions(
     val onDownloadAudiobook: (() -> Unit)? = null,
     val onDeleteEbook: (() -> Unit)? = null,
     val onDeleteAudiobook: (() -> Unit)? = null,
+    /**
+     * Removes whichever of a pair's files are downloaded, in one action
+     * (issue #333). The per-format callbacks above stay for the standalone
+     * menus and the Book Details screen.
+     */
+    val onDeletePair: (() -> Unit)? = null,
     // Transcription
     val onTranscribe: (() -> Unit)? = null,
     val onCancelTranscription: (() -> Unit)? = null,
@@ -160,6 +227,7 @@ fun CardOverflowMenu(
     var confirmUnlink by remember { mutableStateOf(false) }
     var confirmDeleteEbook by remember { mutableStateOf(false) }
     var confirmDeleteAudiobook by remember { mutableStateOf(false) }
+    var confirmDeletePair by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
     var confirmCancelTranscription by remember { mutableStateOf(false) }
     var showMismatch by remember { mutableStateOf(false) }
@@ -220,10 +288,9 @@ fun CardOverflowMenu(
             // Action list
             when (target) {
                 is OverflowTarget.Pair      -> PairActions(target, actions,
-                    onConfirmUnlink    = { confirmUnlink = true },
-                    onConfirmDeleteEb  = { confirmDeleteEbook = true },
-                    onConfirmDeleteAud = { confirmDeleteAudiobook = true },
-                    onConfirmReset     = { confirmReset = true },
+                    onConfirmUnlink     = { confirmUnlink = true },
+                    onConfirmDeletePair = { confirmDeletePair = true },
+                    onConfirmReset      = { confirmReset = true },
                     onConfirmCancelTx  = { confirmCancelTranscription = true },
                 )
                 is OverflowTarget.Ebook     -> EbookActions(target, actions,
@@ -255,6 +322,21 @@ fun CardOverflowMenu(
                 onDismiss()
             },
             onCancel = { confirmUnlink = false },
+        )
+    }
+    if (confirmDeletePair) {
+        ConfirmDialog(
+            title = "Delete downloaded files?",
+            message = "The ebook and audiobook will be removed from this device. " +
+                "They stay on the server, and your progress is kept.",
+            confirmLabel = "Delete",
+            destructive = true,
+            onConfirm = {
+                confirmDeletePair = false
+                actions.onDeletePair?.invoke()
+                onDismiss()
+            },
+            onCancel = { confirmDeletePair = false },
         )
     }
     if (confirmDeleteEbook) {
@@ -371,8 +453,7 @@ private fun PairActions(
     target: OverflowTarget.Pair,
     actions: OverflowActions,
     onConfirmUnlink: () -> Unit,
-    onConfirmDeleteEb: () -> Unit,
-    onConfirmDeleteAud: () -> Unit,
+    onConfirmDeletePair: () -> Unit,
     onConfirmReset: () -> Unit,
     onConfirmCancelTx: () -> Unit,
 ) {
@@ -382,42 +463,34 @@ private fun PairActions(
     // "Download pair" is the primary download affordance on a pair overflow.
     // Per-media downloads live on the Book Details page (TODO #15); listing three
     // download rows here bloats the sheet. Show only when at least one side is
-    // still missing locally.
-    val needsAnyDownload = !target.hasEbookDownloaded || !target.hasAudiobookDownloaded
-    if (needsAnyDownload) {
-        actions.onDownloadPair?.let {
-            ActionRow(Icons.Default.CloudDownload, "Download pair", onClick = it)
-        }
-    }
-    // Open shortcuts — only when action wired AND media present
-    actions.onRead?.takeIf { target.hasEbookDownloaded }?.let {
-        ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
-    }
-    actions.onListen?.takeIf { target.hasAudiobookDownloaded }?.let {
-        ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
-    }
-    // Per-media delete is still useful on the pair overflow — hiding it would
-    // mean the only way to free space is the Book Details page.
-    if (target.hasEbookDownloaded) {
-        ActionRow(Icons.Default.Delete, "Delete ebook", destructive = true, onClick = onConfirmDeleteEb)
-    }
-    if (target.hasAudiobookDownloaded) {
-        ActionRow(Icons.Default.Delete, "Delete audiobook", destructive = true, onClick = onConfirmDeleteAud)
-    }
-    // Transcription
-    when {
-        target.isTranscribed -> {
-            actions.onRefreshSyncData?.let {
+    // Rendered from pairMenuActions so the decision is testable — Compose is
+    // excluded from Kover, so anything decided inline here cannot be covered.
+    val rows = pairMenuActions(
+        target = target,
+        canUnlink = actions.onUnlinkPair != null,
+        isOnline = actions.isOnline,
+    )
+    rows.forEach { row ->
+        when (row) {
+            PairAction.DownloadPair -> actions.onDownloadPair?.let {
+                ActionRow(Icons.Default.CloudDownload, "Download pair", onClick = it)
+            }
+            PairAction.Read -> actions.onRead?.let {
+                ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
+            }
+            PairAction.Listen -> actions.onListen?.let {
+                ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
+            }
+            PairAction.DeletePair -> actions.onDeletePair?.let {
+                ActionRow(Icons.Default.Delete, "Delete pair", destructive = true, onClick = onConfirmDeletePair)
+            }
+            PairAction.RefreshSyncData -> actions.onRefreshSyncData?.let {
                 ActionRow(Icons.Default.Sync, "Refresh sync data", onClick = it)
             }
-        }
-        target.isQueuedOrTranscribing -> {
-            actions.onCancelTranscription?.let {
+            PairAction.CancelTranscription -> actions.onCancelTranscription?.let {
                 ActionRow(Icons.Default.Stop, "Cancel transcription", destructive = true, onClick = onConfirmCancelTx)
             }
-        }
-        else -> {
-            actions.onTranscribe?.let {
+            PairAction.Transcribe -> actions.onTranscribe?.let {
                 val disabled = !actions.isOnline
                 ActionRow(
                     icon = Icons.Default.GraphicEq,
@@ -426,20 +499,17 @@ private fun PairActions(
                     onClick = it,
                 )
             }
+            PairAction.MarkComplete -> actions.onMarkComplete?.let {
+                ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
+            }
+            PairAction.ResetProgress -> actions.onResetProgress?.let {
+                ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
+            }
+            PairAction.UnlinkPair -> actions.onUnlinkPair?.let {
+                HorizontalDivider(color = Tandem.colors.border)
+                ActionRow(Icons.Default.LinkOff, "Unlink pair", destructive = true, onClick = onConfirmUnlink)
+            }
         }
-    }
-    // Progress
-    if (!target.isComplete) {
-        actions.onMarkComplete?.let {
-            ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
-        }
-    }
-    actions.onResetProgress?.let {
-        ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
-    }
-    // Pairing
-    actions.onUnlinkPair?.let {
-        ActionRow(Icons.Default.LinkOff, "Unlink pair", destructive = true, onClick = onConfirmUnlink)
     }
 }
 

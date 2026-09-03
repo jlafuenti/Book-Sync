@@ -2,6 +2,7 @@ package com.booksync.ui.library
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import com.booksync.data.auth.hasMinRole
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -110,8 +111,23 @@ class LibraryViewModel @Inject constructor(
     private val transcriptionRepository: TranscriptionRepository,
     private val networkMonitor: NetworkMonitor,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
+    tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    /**
+     * Whether this user may change the library (issue #170).
+     *
+     * Editor-gated actions — Unlink pair, Pair — used to render for everyone;
+     * a plain user tapped one and got Retrofit's raw "HTTP 403 " in a snackbar.
+     * Starts false and stays false while the role is unknown, so the failure
+     * mode is a missing button rather than a broken one.
+     */
+    val canEdit: StateFlow<Boolean> =
+        tokenManager.getRole()
+            .map { hasMinRole(it, "editor") }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
 
     private val workManager = WorkManager.getInstance(context)
 
@@ -390,6 +406,12 @@ class LibraryViewModel @Inject constructor(
 
     fun deleteEbookOf(pair: BookPairEntity)           = runSafely { repository.deleteEbook(pair) }
     fun deleteAudiobookOf(pair: BookPairEntity)       = runSafely { repository.deleteAudiobook(pair) }
+
+    /** See DownloadedViewModel.deletePair — one action for a pair (issue #333). */
+    fun deletePair(pair: BookPairEntity) = runSafely {
+        if (pair.ebookDownloaded) repository.deleteEbook(pair)
+        if (pair.audiobookDownloaded) repository.deleteAudiobook(pair)
+    }
     fun deleteStandaloneEbook(ebook: EBookEntity)     = runSafely { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity) = runSafely { repository.deleteStandaloneAudiobook(audio) }
     fun unlinkPair(pair: BookPairEntity)              = runSafely { repository.deletePair(pair.id); refresh() }

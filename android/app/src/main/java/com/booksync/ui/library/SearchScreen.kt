@@ -84,6 +84,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -115,8 +117,18 @@ data class SearchResultItem(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    /**
+     * Pairing is editor-gated on the server (issue #170). Without this the
+     * pairing sheet opened for anyone, and creating the pair answered 403.
+     */
+    val canEdit: kotlinx.coroutines.flow.StateFlow<Boolean> =
+        tokenManager.getRole()
+            .map { com.booksync.data.auth.hasMinRole(it, "editor") }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
 
     private val workManager = WorkManager.getInstance(context)
 
@@ -380,6 +392,7 @@ fun SearchScreen(
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
+    val canEdit by viewModel.canEdit.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Resolve which format the user last consumed before routing (issue #220).
@@ -532,7 +545,9 @@ fun SearchScreen(
                 else -> SearchResultsList(
                     results = results,
                     onResultSelect = selectResult,
-                    onRequestPair = { pairingItem = it },
+                    // Hidden for a user who cannot pair (issue #170) — the
+                    // sheet's own Pair button hits an editor-gated endpoint.
+                    onRequestPair = if (canEdit) ({ pairingItem = it }) else null,
                     onDownload = { viewModel.downloadFromResult(it) },
                 )
             }
@@ -574,7 +589,8 @@ private fun OfflineSearchChip() {
 private fun SearchResultsList(
     results: List<SearchResultItem>,
     onResultSelect: (SearchResultItem) -> Unit,
-    onRequestPair: (SearchResultItem) -> Unit,
+    /** Null when this user may not pair (issue #170) — the affordance is hidden. */
+    onRequestPair: ((SearchResultItem) -> Unit)?,
     onDownload: (SearchResultItem) -> Unit,
 ) {
     val pairs     = results.filter { it.isPair }
@@ -592,7 +608,7 @@ private fun SearchResultsList(
                 ResultRow(
                     item = item,
                     onClick = { onResultSelect(item) },
-                    onRequestPair = { /* pairs aren't pairable */ },
+                    onRequestPair = null, // pairs aren't pairable
                     onDownload = onDownload,
                 )
             }
@@ -654,7 +670,8 @@ private fun SectionHeader(label: String, count: Int) {
 private fun ResultRow(
     item: SearchResultItem,
     onClick: () -> Unit,
-    onRequestPair: (SearchResultItem) -> Unit,
+    /** Null when this user may not pair (issue #170) — the affordance is hidden. */
+    onRequestPair: ((SearchResultItem) -> Unit)?,
     onDownload: (SearchResultItem) -> Unit,
 ) {
     val colors = Tandem.colors
@@ -710,8 +727,8 @@ private fun ResultRow(
             TypeChipRow(item)
         }
 
-        // Pair button for unpaired results
-        if (!item.isPair) {
+        // Pair button for unpaired results, and only for a user who may pair.
+        if (!item.isPair && onRequestPair != null) {
             Spacer(Modifier.width(4.dp))
             IconButton(onClick = { onRequestPair(item) }) {
                 Icon(
