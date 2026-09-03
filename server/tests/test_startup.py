@@ -15,6 +15,7 @@ from config import (
     check_db_credentials,
     check_cors_origins,
     check_forwarded_allow_ips,
+    check_single_process,
 )
 from database import bootstrap_superadmin
 from models.user import User
@@ -104,6 +105,71 @@ def test_dev_is_silent_when_forwarded_allow_ips_is_unset(monkeypatch, caplog):
     assert not caplog.records
 
 
+# --- the server must run as exactly one process (issue #252) -----------------
+#
+# The transcription pipeline is single-process by construction: the queue claim
+# is a SELECT-then-UPDATE with no row lock, cancel/pause state lives in
+# module-level Python sets, `reset_stale_items()` re-queues every in_progress
+# row at every boot, and the import/backup schedulers are started per process.
+# Two workers means the same audiobook transcribed twice, cancels that reach
+# only one of them, and each process re-queueing the other's live job. Catch the
+# misconfiguration at boot rather than by a double transcription.
+
+
+@pytest.mark.parametrize("var", ["WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"])
+def test_check_single_process_raises_when_more_than_one_worker_is_configured(
+    monkeypatch, var
+):
+    monkeypatch.setenv(var, "2")
+    with pytest.raises(RuntimeError, match=var):
+        check_single_process(settings)
+
+
+@pytest.mark.parametrize("value", ["1", "01", " 1 "])
+def test_check_single_process_allows_an_explicit_single_worker(monkeypatch, value):
+    monkeypatch.setenv("WEB_CONCURRENCY", value)
+    check_single_process(settings)  # should not raise
+
+
+def test_check_single_process_is_silent_when_nothing_is_set(monkeypatch):
+    for var in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        monkeypatch.delenv(var, raising=False)
+    check_single_process(settings)  # should not raise
+
+
+def test_check_single_process_ignores_an_unparseable_value(monkeypatch, caplog):
+    """A junk value is not a reason to refuse to boot — warn and carry on."""
+    monkeypatch.setenv("WEB_CONCURRENCY", "auto")
+    with caplog.at_level(logging.WARNING, logger="config"):
+        check_single_process(settings)
+    assert any("WEB_CONCURRENCY" in r.getMessage() for r in caplog.records)
+
+
+def test_entrypoint_starts_uvicorn_with_a_single_worker():
+    """The shipped container command must never grow `--workers`."""
+    import os
+
+    server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(server_dir, "entrypoint.sh"), encoding="utf-8") as fh:
+        entrypoint = fh.read()
+
+    uvicorn_lines = [
+        line
+        for line in entrypoint.splitlines()
+        if "uvicorn" in line and not line.strip().startswith("#")
+    ]
+    assert uvicorn_lines, "entrypoint.sh no longer starts uvicorn"
+    for line in uvicorn_lines:
+        assert "--workers" not in line, (
+            "entrypoint.sh passes --workers; the queue manager, cancel state and "
+            "schedulers are single-process only (issue #252)"
+        )
+
+    assert "single process" in entrypoint.lower(), (
+        "entrypoint.sh must say why the worker count is pinned at one"
+    )
+
+
 async def test_bootstrap_superadmin_password_is_not_admin(db):
     await bootstrap_superadmin()
     result = await db.execute(select(User).where(User.username == "admin"))
@@ -174,6 +240,21 @@ async def test_lifespan_raises_when_cors_is_wildcard(monkeypatch):
 
     app = FastAPI(lifespan=main.lifespan)
     with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
+        async with main.lifespan(app):
+            pass
+
+
+async def test_lifespan_refuses_multi_worker_env(monkeypatch):
+    """The guard is wired into the lifespan, not just importable (issue #252)."""
+    pytest.importorskip("audible")
+    monkeypatch.setattr(settings, "app_env", "dev")
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+
+    import main
+    from fastapi import FastAPI
+
+    app = FastAPI(lifespan=main.lifespan)
+    with pytest.raises(RuntimeError, match="WEB_CONCURRENCY"):
         async with main.lifespan(app):
             pass
 

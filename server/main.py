@@ -24,6 +24,7 @@ from config import (
     check_db_credentials,
     check_cors_origins,
     check_forwarded_allow_ips,
+    check_single_process,
 )
 from log_filters import AccessLogSecretFilter
 from version import API_VERSION, APP_VERSION
@@ -96,6 +97,14 @@ async def lifespan(app: FastAPI):
     check_db_credentials(settings)
     check_cors_origins(settings)
     check_forwarded_allow_ips(settings)  # warns only — bare deployments are fine
+    # The queue manager, its cancel state and the schedulers below are
+    # single-process only (issue #252) — refuse a multi-worker environment
+    # rather than let it show up as a duplicated transcription.
+    check_single_process(settings)
+    logger.info(
+        "Single-process mode: one queue manager, one import scheduler, one "
+        "backup scheduler (issue #252)."
+    )
     validate_credential_keys()
 
     # Schema is owned by Alembic now (issue #53): `alembic upgrade head` runs in

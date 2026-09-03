@@ -248,3 +248,100 @@ async def test_two_devices_hints_coexist_rather_than_overwriting_each_other(
     assert _hint(got, "readium_locator")["device_id"] == PHONE
     assert _hint(got, "epubjs_cfi")["value"] == CFI
     assert _hint(got, "epubjs_cfi")["device_id"] == LAPTOP
+
+
+# ---------------------------------------------------------------------------
+# The wire shape of GET /position (issue #258)
+#
+# The GET now declares `response_model=PositionResponse`, so FastAPI — not the
+# handler — decides which keys leave the server. Both Android and the web parse
+# this body by key, and a field dropped or renamed here is a silent client
+# break that no other test would catch. These two pin the exact key sets, and
+# the 204 pass-through that a response_model must not swallow.
+# ---------------------------------------------------------------------------
+
+# Every key `to_response_dict` produces, i.e. every key a client may read.
+_POSITION_KEYS = {
+    "scope",
+    "book_pair_id",
+    "ebook_id",
+    "audiobook_id",
+    "source",
+    "anchor_revision",
+    "epub_chapter",
+    "epub_sentence_index",
+    "sync_map_version",
+    "epub_text_preview",
+    "epub_progress_percent",
+    "audio_position_ms",
+    "is_completed",
+    "captured_at",
+    "updated_at",
+    "device_id",
+    "device_name",
+    "hints",
+}
+
+_HINT_KEYS = {
+    "kind",
+    "device_id",
+    "value",
+    "anchor_revision",
+    "audio_position_ms",
+    "current",
+}
+
+
+async def test_get_position_returns_exactly_the_documented_fields(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="shape-reader")
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="ebook", epub_chapter=2, epub_sentence_index=7,
+        epub_progress_percent=12.5, audio_position_ms=91000,
+        epub_text_preview="a preview", sync_map_version=3,
+        device_id=PHONE, device_name="Pixel 8",
+        hint={"kind": "readium_locator", "value": LOCATOR},
+    )
+    assert put.status_code == 200, put.text
+
+    got = await _get(client, user, auth_header, "pair", pair.id)
+    assert got.status_code == 200, got.text
+    body = got.json()
+
+    assert set(body) == _POSITION_KEYS
+    assert set(body["hints"][0]) == _HINT_KEYS
+
+    # Values survive the model round-trip unchanged.
+    assert body["scope"] == "pair"
+    assert body["book_pair_id"] == pair.id
+    assert body["source"] == "ebook"
+    assert body["epub_chapter"] == 2
+    assert body["epub_sentence_index"] == 7
+    assert body["epub_progress_percent"] == 12.5
+    assert body["audio_position_ms"] == 91000
+    assert body["epub_text_preview"] == "a preview"
+    assert body["sync_map_version"] == 3
+    assert body["device_id"] == PHONE
+    assert body["device_name"] == "Pixel 8"
+    assert body["is_completed"] is False
+    assert isinstance(body["anchor_revision"], int)
+    assert body["updated_at"]
+    assert body["hints"][0]["value"] == LOCATOR
+
+
+async def test_get_position_still_204s_when_there_is_nothing_stored(
+    client, make_user, auth_header, db
+):
+    """A declared response_model must not turn the empty case into a `null` 200:
+    clients tell "no position" from "a position at chapter 0" by the status code.
+    """
+    pair = await make_book_pair(db)
+    user = await make_user(username="fresh-reader")
+
+    got = await _get(client, user, auth_header, "pair", pair.id)
+    assert got.status_code == 204
+    assert got.content == b""

@@ -377,7 +377,14 @@ async def audio_position_to_epub(
 # here, and the reset routes delete the same record these write.
 # ====================================================================
 
-@router.get("/position/{scope}/{ident}")
+@router.get(
+    "/position/{scope}/{ident}",
+    response_model=PositionResponse,
+    # The empty case returns a bare 204 (see below). FastAPI passes a `Response`
+    # through untouched, so the model applies only to the 200 — but OpenAPI has
+    # to be told the 204 exists or generated clients treat it as an error.
+    responses={204: {"description": "The user has no position for this book"}},
+)
 async def get_position(
     scope: PositionScope,
     ident: int,

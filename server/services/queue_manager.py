@@ -6,6 +6,30 @@ one at a time, using the configured transcription provider.
 
 Started at application lifespan and runs as an asyncio background task.
 
+Single process only (issue #252)
+--------------------------------
+"Singleton" here means one per *deployment*, not one per process, and nothing
+in this module enforces that — it is a precondition:
+
+* ``_process_next_item`` claims work with ``SELECT ... WHERE status='pending'
+  LIMIT 1`` and then sets ``status='in_progress'`` in the same session. There is
+  no ``FOR UPDATE SKIP LOCKED`` and no conditional ``UPDATE ... WHERE
+  status='pending'``, so two processes claim the same row and transcribe the
+  same audiobook twice.
+* ``_cancel_requested``, ``_pause_requested``, ``_resuming_items``,
+  ``_active_provider`` and ``_active_item_id`` are module-level globals. A
+  cancel only reaches the process that happens to own the job.
+* ``reset_stale_items()`` runs at every startup and flips *every* ``in_progress``
+  row back to ``pending``, so a process starting up re-queues another process's
+  running job.
+
+Making this multi-process safe is a redesign (atomic claim, a
+``cancel_requested`` column on the queue row, a ``worker_id``/heartbeat so
+recovery only touches dead workers), tracked separately. Until then
+``config.check_single_process()`` refuses to boot when ``WEB_CONCURRENCY`` and
+friends ask for more than one worker, and ``server/entrypoint.sh`` runs one
+uvicorn process with no ``--workers``.
+
 Off-hours window (issue #106)
 -----------------------------
 Work is accepted around the clock but only *dispatched* while the configured
