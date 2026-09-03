@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
 import { getAudiobookChapters, getBookmarkLog } from '../api'
 import useCoverSrc from '../hooks/useCoverSrc'
+import { formatDate as formatServerDate, formatTime as formatServerTime } from '../lib/datetime'
 import './AudioPlayer.css'
 
 function formatTime(seconds) {
@@ -16,13 +17,11 @@ function formatTime(seconds) {
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const SLEEP_OPTIONS = [15, 30, 45, 60]
 
+// Bookmark timestamps are naive UTC; the shared parser adds the Z (issue #216).
 function formatDate(iso) {
     if (!iso) return ''
-    // Append Z if no timezone info present so browser treats it as UTC
-    const utcIso = iso.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z'
-    const d = new Date(utcIso)
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
-        d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return formatServerDate(iso, { month: 'short', day: 'numeric' }) + ' ' +
+        formatServerTime(iso, { hour: 'numeric', minute: '2-digit' })
 }
 
 // ---- Full Player View ----

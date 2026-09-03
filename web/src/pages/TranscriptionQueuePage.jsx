@@ -4,6 +4,10 @@ import {
     updateQueuePriority, runQueueItemNow, getOffHoursStatus,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+// Queue timestamps are naive UTC (the DB columns are tz-less); the off-hours
+// window's opens_at/closes_at already carry an offset. One parser handles
+// both (issue #216). `formatDate` here has always meant date + time.
+import { formatDateTime as formatDate, formatDuration } from '../lib/datetime'
 
 function TranscriptionQueuePage() {
     const { hasMinRole } = useAuth()
@@ -114,30 +118,6 @@ function TranscriptionQueuePage() {
         } catch (err) {
             setError(err.message)
         }
-    }
-
-    const formatDuration = (startStr, endStr) => {
-        if (!startStr || !endStr) return '—'
-        const start = new Date(startStr.endsWith('Z') ? startStr : `${startStr}Z`)
-        const end = new Date(endStr.endsWith('Z') ? endStr : `${endStr}Z`)
-        const diffMs = end - start
-        if (diffMs < 0) return '—'
-        const totalSec = Math.floor(diffMs / 1000)
-        const hours = Math.floor(totalSec / 3600)
-        const mins = Math.floor((totalSec % 3600) / 60)
-        const secs = totalSec % 60
-        if (hours > 0) return `${hours}h ${mins}m ${secs}s`
-        if (mins > 0) return `${mins}m ${secs}s`
-        return `${secs}s`
-    }
-
-    const formatDate = (dateStr) => {
-        if (!dateStr) return '—'
-        // Queue timestamps are naive UTC (the DB columns are tz-less), so they
-        // need a Z. The off-hours window's opens_at/closes_at already carry an
-        // offset — stamping a Z on those would produce an Invalid Date.
-        const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(dateStr)
-        return new Date(hasZone ? dateStr : `${dateStr}Z`).toLocaleString()
     }
 
     const getStatusBadge = (status) => {
