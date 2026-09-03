@@ -240,7 +240,7 @@ export default function UnpairedPage() {
                         style={{
                             display: 'flex', flexDirection: 'column', alignItems: 'center',
                             justifyContent: 'center', padding: '24px 12px',
-                            background: 'var(--surface)', border: '1px dashed var(--border)',
+                            background: 'var(--bg-card)', border: '1px dashed var(--border)',
                             borderRadius: '8px', cursor: 'pointer', minWidth: '80px'
                         }}
                         onClick={() => setEbookSideOpen(true)}
@@ -304,7 +304,7 @@ export default function UnpairedPage() {
                         style={{
                             display: 'flex', flexDirection: 'column', alignItems: 'center',
                             justifyContent: 'center', padding: '24px 12px',
-                            background: 'var(--surface)', border: '1px dashed var(--border)',
+                            background: 'var(--bg-card)', border: '1px dashed var(--border)',
                             borderRadius: '8px', cursor: 'pointer', minWidth: '80px'
                         }}
                         onClick={() => setAudiobookSideOpen(true)}

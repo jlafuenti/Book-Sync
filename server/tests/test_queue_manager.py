@@ -9,6 +9,7 @@ real provider or audio.
 """
 
 import datetime
+import logging
 
 import pytest
 import pytest_asyncio
@@ -876,3 +877,30 @@ async def test_integrity_gate_rejects_an_unreadable_ebook(db, monkeypatch):
         await queue_manager._run_integrity_gates(
             item.id, "/audio.m4b", "/book.epub", resuming=False
         )
+
+
+async def test_unverified_integrity_result_does_not_fail_the_item(db, monkeypatch, caplog):
+    """A gate that could not check the file is not a verdict of corruption.
+
+    Missing ffmpeg and a decode that outran the timeout both pass with an
+    unverified detail (issue #245). The job proceeds — a genuinely corrupt
+    file still fails at the worker's own decode — but the reason is logged at
+    WARNING and left on the queue item so it is visible in the UI.
+    """
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending")
+    monkeypatch.setattr(
+        "services.audio_integrity.check_audio_integrity",
+        lambda p: (True, "full decode did not finish within 1800s — could not verify"),
+    )
+    monkeypatch.setattr(
+        "services.ebook_integrity.check_ebook_integrity", lambda p: (True, "ok")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.queue_manager"):
+        await queue_manager._run_integrity_gates(
+            item.id, "/audio.m4b", "/book.epub", resuming=False
+        )
+
+    assert "could not verify" in caplog.text
+    assert "could not verify" in (await _get(TranscriptionQueueItem, item.id)).message

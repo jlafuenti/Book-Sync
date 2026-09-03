@@ -170,3 +170,27 @@ wrong page) is silent.
 Sync-matching logic is duplicated on server and Android on purpose and pinned by shared golden
 vectors in `server/tests/fixtures/sync_parity/`. Never change matcher behavior on one platform
 alone.
+
+## API version handshake
+
+`SUPPORTED_API_VERSION` in `app/src/main/java/com/booksync/data/remote/VersionCompat.kt` is the
+app's claim about what it needs from a server. It is compared against the `api_version` the server
+reports from `GET /api/health`, once per process — on Home (the first screen with both a server and
+a session) and on the first-run "Check connection", whichever happens first. A mismatch raises a
+non-blocking banner naming the side that is behind; a server that reports no version at all raises
+nothing.
+
+**Bump `SUPPORTED_API_VERSION` only in the same change that starts requiring server behaviour an
+older server does not have** — a field, an endpoint, or a parameter added on the server side that
+this app now depends on. Bumping it without such a requirement tells every operator running a
+perfectly good server to go upgrade it, and the banner stops being read.
+
+When you do bump it:
+
+1. Bump `API_VERSION` in `server/version.py` to the same number, in the same PR — the client's
+   constant is meaningless unless a server actually advertises it.
+2. Update the support window in [operations.md](operations.md) if the guidance there changes.
+3. Expect operators to see the "upgrade the server" banner until they deploy. That is the point.
+
+Neither number is a release counter: `versionName`/`versionCode` in `app/build.gradle.kts` and
+`APP_VERSION` in `server/version.py` move every release, `API_VERSION` moves almost never.

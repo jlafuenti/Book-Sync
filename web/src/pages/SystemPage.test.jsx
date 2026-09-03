@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { TranscriptionSettingsSection, ABSSettingsSection, HardcoverSettingsSection, BackupSection } from './SystemPage'
+import { TranscriptionSettingsSection, ABSSettingsSection, HardcoverSettingsSection, BackupSection, DetailedBreakdown } from './SystemPage'
 
 // TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
 // (no props), so mock the module they import from rather than mounting the
@@ -60,7 +60,7 @@ function baseSettings(overrides = {}) {
         transcription_provider: 'remote_with_fallback',
         transcription_remote_url: 'http://192.168.1.50:9000',
         transcription_remote_key: '',
-        transcription_remote_timeout: 7200,
+        transcription_remote_timeout: 86400,
         auto_transcribe_enabled: false,
         whisper_model: 'medium',
         abs_enabled: false,
@@ -96,6 +96,30 @@ describe('TranscriptionSettingsSection', () => {
         await waitFor(() => expect(keyInput).toHaveValue('********'))
         expect(keyInput).toHaveAttribute('type', 'password')
         expect(screen.getByText(/Required by the Jetson server/)).toBeInTheDocument()
+    })
+
+    // Issue #248: the server honours this value now (it used to be clamped up
+    // to 24 h), so the UI must state the real default and must not quietly
+    // substitute a different one when the field is emptied.
+    it('shows the 24h default for the remote timeout, not the old 7200s', async () => {
+        render(<TranscriptionSettingsSection />)
+
+        expect(await screen.findByText(/Default: 86400s \(24 h\)/)).toBeInTheDocument()
+        expect(screen.getByText(/blocks for the whole job/)).toBeInTheDocument()
+        expect(screen.queryByText(/7200/)).not.toBeInTheDocument()
+    })
+
+    it('falls back to 86400 when the timeout field is cleared', async () => {
+        render(<TranscriptionSettingsSection />)
+        const timeoutInput = await screen.findByRole('spinbutton')
+        await waitFor(() => expect(timeoutInput).toHaveValue(86400))
+
+        fireEvent.change(timeoutInput, { target: { value: '' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({ transcription_remote_timeout: 86400 })
+        ))
     })
 
     it('saves settings including whatever key is currently in the field', async () => {
@@ -583,5 +607,24 @@ describe('BackupSection', () => {
         expect(screen.queryByRole('button', { name: /^Download / })).not.toBeInTheDocument()
         // Admins can still edit retention/schedule.
         expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+})
+
+// Issue #271: five columns of disk figures do not fit a 375px phone, and the
+// card around them clips overflow, so the last columns were unreachable.
+describe('DetailedBreakdown mobile layout', () => {
+    const STATS = {
+        ebook_used_human: '120 GB', ebook_total_human: '500 GB', ebook_free_human: '380 GB',
+        ebook_used_bytes: 120, ebook_total_bytes: 500,
+        audiobook_used_human: '40 GB', audiobook_total_human: '500 GB', audiobook_free_human: '460 GB',
+        audiobook_used_bytes: 40, audiobook_total_bytes: 500,
+        app_data_used_human: '2 GB', app_data_total_human: '50 GB', app_data_free_human: '48 GB',
+        app_data_used_bytes: 2, app_data_total_bytes: 50,
+    }
+
+    it('renders the storage table inside a horizontal-scroll wrapper', () => {
+        render(<DetailedBreakdown stats={STATS} />)
+
+        expect(screen.getByRole('table').closest('.table-wrapper')).not.toBeNull()
     })
 })

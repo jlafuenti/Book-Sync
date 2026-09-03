@@ -281,7 +281,7 @@ export function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
     const [remoteUrl, setRemoteUrl] = useState('')
     const [remoteKey, setRemoteKey] = useState('')
-    const [remoteTimeout, setRemoteTimeout] = useState(7200)
+    const [remoteTimeout, setRemoteTimeout] = useState(86400)
     const [autoTranscribe, setAutoTranscribe] = useState(false)
     const [whisperModel, setWhisperModel] = useState('medium')
     const [offhoursEnabled, setOffhoursEnabled] = useState(false)
@@ -328,7 +328,7 @@ export function TranscriptionSettingsSection() {
                 transcription_provider: provider,
                 transcription_remote_url: remoteUrl,
                 transcription_remote_key: remoteKey,
-                transcription_remote_timeout: parseInt(remoteTimeout) || 7200,
+                transcription_remote_timeout: parseInt(remoteTimeout) || 86400,
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
                 transcription_offhours_enabled: offhoursEnabled,
@@ -434,7 +434,9 @@ export function TranscriptionSettingsSection() {
                         <label className="system-form-label">Remote Timeout (s)</label>
                         <input type="number" className="input" value={remoteTimeout}
                             onChange={e => setRemoteTimeout(e.target.value)} style={{ width: 120 }} />
-                        <p className="system-form-hint">Default: 7200s (2 hours)</p>
+                        <p className="system-form-hint">Default: 86400s (24 h) — must exceed the longest
+                            transcription you expect, because the worker call blocks for the
+                            whole job</p>
                     </div>
                 </div>
             )}
@@ -681,7 +683,7 @@ export function HardcoverSettingsSection() {
 }
 
 /* ── DetailedBreakdown ─────────────────────────────────────────────── */
-function DetailedBreakdown({ stats }) {
+export function DetailedBreakdown({ stats }) {
     if (!stats) return null
     const rows = [
         { label: 'Ebooks', used: stats.ebook_used_human, total: stats.ebook_total_human, free: stats.ebook_free_human,
@@ -692,38 +694,42 @@ function DetailedBreakdown({ stats }) {
           percent: stats.app_data_total_bytes > 0 ? stats.app_data_used_bytes / stats.app_data_total_bytes * 100 : 0 },
     ]
     return (
-        <table className="data-table">
-            <thead>
-                <tr>
-                    <th>Category</th>
-                    <th>Used</th>
-                    <th>Capacity</th>
-                    <th>Free</th>
-                    <th>% Used</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rows.map(row => (
-                    <tr key={row.label}>
-                        <td>{row.label}</td>
-                        <td style={{ fontWeight: 600 }}>{row.used}</td>
-                        <td style={{ color: 'var(--text-secondary)' }}>{row.total}</td>
-                        <td style={{ color: 'var(--success)' }}>{row.free} free</td>
-                        <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <div className="progress-bar" style={{ width: 60, height: 4 }}>
-                                    <div className="progress-fill" style={{
-                                        width: `${Math.min(100, row.percent)}%`,
-                                        background: row.percent > 90 ? 'var(--error)' : row.percent > 75 ? 'var(--warning)' : 'var(--accent)'
-                                    }} />
-                                </div>
-                                <span style={{ fontSize: '0.8rem' }}>{row.percent.toFixed(1)}%</span>
-                            </div>
-                        </td>
+        // Five columns of disk figures do not fit a phone; .table-wrapper
+        // scrolls them instead of letting the card clip them (issue #271).
+        <div className="table-wrapper table-wrapper--flush">
+            <table className="data-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Used</th>
+                        <th>Capacity</th>
+                        <th>Free</th>
+                        <th>% Used</th>
                     </tr>
-                ))}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {rows.map(row => (
+                        <tr key={row.label}>
+                            <td>{row.label}</td>
+                            <td style={{ fontWeight: 600 }}>{row.used}</td>
+                            <td style={{ color: 'var(--text-secondary)' }}>{row.total}</td>
+                            <td style={{ color: 'var(--success)' }}>{row.free} free</td>
+                            <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <div className="progress-bar" style={{ width: 60, height: 4 }}>
+                                        <div className="progress-fill" style={{
+                                            width: `${Math.min(100, row.percent)}%`,
+                                            background: row.percent > 90 ? 'var(--error)' : row.percent > 75 ? 'var(--warning)' : 'var(--accent)'
+                                        }} />
+                                    </div>
+                                    <span style={{ fontSize: '0.8rem' }}>{row.percent.toFixed(1)}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
     )
 }
 
@@ -880,63 +886,68 @@ export function UnsupportedFilesTab({ canAdmin }) {
                 ) : files.length === 0 ? (
                     <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>No unsupported files found.</div>
                 ) : (
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th>File</th><th>Format</th><th>Size</th><th>Status</th>
-                                {canAdmin && <th>Actions</th>}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {files.map(file => (
-                                <tr key={file.id}>
-                                    <td>
-                                        <div style={{ fontWeight: 500 }}>{file.title || file.filename}</div>
-                                        {file.author && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>}
-                                        {fileMessages[file.id] && (
-                                            <div className={`system-file-msg ${fileMessages[file.id].type}`}>{fileMessages[file.id].text}</div>
-                                        )}
-                                    </td>
-                                    <td><span className="system-file-format-badge">{file.format}</span></td>
-                                    <td style={{ color: 'var(--text-secondary)' }}>{formatBytes(file.file_size)}</td>
-                                    <td>
-                                        {file.already_converted
-                                            ? <span className="system-file-converted">Converted</span>
-                                            : <span className="system-file-pending">Not converted</span>}
-                                    </td>
-                                    {canAdmin && (
-                                        <td>
-                                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                                {!file.already_converted && (
-                                                    <>
-                                                        <button className="btn btn-sm btn-primary" onClick={() => handleConvert(file, false)} disabled={busyIds.has(file.id)}>
-                                                            {busyIds.has(file.id) ? '…' : 'Convert'}
-                                                        </button>
-                                                        <button className="btn btn-sm btn-secondary" onClick={() => handleConvert(file, true)} disabled={busyIds.has(file.id)}>
-                                                            {busyIds.has(file.id) ? '…' : 'Convert & Delete'}
-                                                        </button>
-                                                    </>
-                                                )}
-                                                {file.already_converted && (
-                                                    <>
-                                                        {file.epub_ebook_id && (
-                                                            <button className="btn btn-sm btn-secondary" onClick={() => setPreviewFile(file)} disabled={busyIds.has(file.id)}>Preview</button>
-                                                        )}
-                                                        <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSource(file)} disabled={busyIds.has(file.id)}>
-                                                            {busyIds.has(file.id) ? '…' : 'Delete Original'}
-                                                        </button>
-                                                    </>
-                                                )}
-                                                <button className="btn btn-sm btn-danger" onClick={() => setForceDeleteConfirm({ file })} disabled={busyIds.has(file.id)}>
-                                                    {busyIds.has(file.id) ? '…' : 'Force Delete'}
-                                                </button>
-                                            </div>
-                                        </td>
-                                    )}
+                    // Convert/Delete live in the last column, off the right
+                    // edge of a phone; the card clips, so this scrolls
+                    // instead of hiding them (issue #271).
+                    <div className="table-wrapper table-wrapper--flush">
+                        <table className="data-table">
+                            <thead>
+                                <tr>
+                                    <th>File</th><th>Format</th><th>Size</th><th>Status</th>
+                                    {canAdmin && <th>Actions</th>}
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {files.map(file => (
+                                    <tr key={file.id}>
+                                        <td>
+                                            <div style={{ fontWeight: 500 }}>{file.title || file.filename}</div>
+                                            {file.author && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{file.author}</div>}
+                                            {fileMessages[file.id] && (
+                                                <div className={`system-file-msg ${fileMessages[file.id].type}`}>{fileMessages[file.id].text}</div>
+                                            )}
+                                        </td>
+                                        <td><span className="system-file-format-badge">{file.format}</span></td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>{formatBytes(file.file_size)}</td>
+                                        <td>
+                                            {file.already_converted
+                                                ? <span className="system-file-converted">Converted</span>
+                                                : <span className="system-file-pending">Not converted</span>}
+                                        </td>
+                                        {canAdmin && (
+                                            <td>
+                                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                                    {!file.already_converted && (
+                                                        <>
+                                                            <button className="btn btn-sm btn-primary" onClick={() => handleConvert(file, false)} disabled={busyIds.has(file.id)}>
+                                                                {busyIds.has(file.id) ? '…' : 'Convert'}
+                                                            </button>
+                                                            <button className="btn btn-sm btn-secondary" onClick={() => handleConvert(file, true)} disabled={busyIds.has(file.id)}>
+                                                                {busyIds.has(file.id) ? '…' : 'Convert & Delete'}
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                    {file.already_converted && (
+                                                        <>
+                                                            {file.epub_ebook_id && (
+                                                                <button className="btn btn-sm btn-secondary" onClick={() => setPreviewFile(file)} disabled={busyIds.has(file.id)}>Preview</button>
+                                                            )}
+                                                            <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSource(file)} disabled={busyIds.has(file.id)}>
+                                                                {busyIds.has(file.id) ? '…' : 'Delete Original'}
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                    <button className="btn btn-sm btn-danger" onClick={() => setForceDeleteConfirm({ file })} disabled={busyIds.has(file.id)}>
+                                                        {busyIds.has(file.id) ? '…' : 'Force Delete'}
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
             </div>
 

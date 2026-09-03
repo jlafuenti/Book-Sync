@@ -49,6 +49,43 @@ the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` �
 ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
 them. See [import-sources.md](import-sources.md).
 
+## Client support window
+
+The Android app is distributed through Play, so it updates on each user's schedule while this
+server updates on yours. The two drift, and the handshake that keeps that drift legible is a
+single integer:
+
+- `server/version.py` — `API_VERSION`, what this server speaks. `GET /api/health` reports it
+  (unauthenticated, so a client can ask before it has credentials) alongside `app_version`, the
+  human-facing release string.
+- `android/.../data/remote/VersionCompat.kt` — `SUPPORTED_API_VERSION`, what an installed app was
+  built against.
+
+```bash
+curl -s https://tandem.example.com/api/health
+# {"status":"healthy","app_version":"0.1.0","api_version":1}
+```
+
+**The support window is one API version: a server supports every client on the same
+`API_VERSION`.** The app does not refuse to run outside it — a mismatch is a banner, not a wall,
+and most of the API keeps working — but nothing is guaranteed, and the banner names whichever side
+is behind ("update the app from Play", or "ask your server admin to upgrade").
+
+Practical consequences when you upgrade a server across an `API_VERSION` bump:
+
+- Users still on the older app see "update it from Play" — the server is ahead of them — until
+  Play delivers the new build. That is expected, and it is what the alternative, a bare 404, could
+  not explain.
+- Rolling the server back past a bump flips it: apps that already updated then say "ask your
+  server admin to upgrade". Both directions are visible, neither is fatal.
+- A server that predates the handshake entirely (no `api_version` in `/api/health`) shows no
+  banner at all: unknown is not a mismatch.
+
+`API_VERSION` is bumped only for a change a current client cannot survive — a removed or renamed
+response field, a changed type, a removed endpoint, a newly required request field. Additions are
+not breaks. The rule and the release checklist live in `server/version.py` and
+[android.md](android.md).
+
 ## Reverse proxy
 
 If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is
@@ -195,6 +232,27 @@ otherwise one layer rejects uploads another would have accepted.
 | `/data/app` | covers, working files | Extracted cover art accumulates; Troubleshoot can delete orphaned covers |
 | `/data/imports` | ACSM import staging | Inbox / processed / failed subfolders |
 | `/backups` | nightly dumps | Retention is configurable in System → Backups. **Put this on a different disk than the DB** |
+
+### Exactly one mount per container path
+
+`docker-compose.example.yml` binds `./data:/data/app`, and that must stay the *only* mount
+targeting `/data/app`. Compose accepts a second source on the same container path — a named volume
+plus the bind, say — but only one can be in effect. The other becomes an invisible copy: covers and
+`logs/server.log` written to whichever is live, backups restored into whichever is not, and
+removing the "wrong" line later silently swaps the whole directory.
+
+To check an existing deployment:
+
+```bash
+docker inspect -f '{{json .Mounts}}' book-sync-server-1 | python3 -m json.tool
+```
+
+If two entries share `"Destination": "/data/app"`, copy anything unique out of the inactive source,
+delete that line from `docker-compose.yml`, and `docker compose up -d`.
+
+`./data` is a bind mount **inside the git checkout** (`data/` is gitignored, so nothing leaks, but
+it is still there). Never run `git clean -xfd` in the checkout during an upgrade — it deletes the
+covers, working files and logs along with the untracked build junk you meant to remove.
 
 ## Users
 

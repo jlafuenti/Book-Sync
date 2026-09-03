@@ -549,7 +549,7 @@ async def _run_integrity_gates(
     """
     import asyncio as _asyncio
 
-    from services.audio_integrity import check_audio_integrity
+    from services.audio_integrity import check_audio_integrity, is_unverified
     from services.ebook_integrity import check_ebook_integrity
     from services.transcription_providers.base import TranscriptionError
 
@@ -573,6 +573,20 @@ async def _run_integrity_gates(
     if not ok_e:
         raise TranscriptionError(
             f"Ebook failed integrity check — {detail_e}. {ebook_path}"
+        )
+
+    # The audio gate can pass without having checked anything (no ffmpeg, or a
+    # decode that outran its timeout — issue #245). That is not a verdict of
+    # health, so say so rather than letting it read as a clean gate. Written
+    # last so the note survives both gate steps; a truly corrupt file still
+    # fails at the worker's own decode.
+    if is_unverified(detail):
+        logger.warning(
+            f"Queue item {item_id}: audio integrity unverified — {detail} "
+            f"({audiobook_path})"
+        )
+        await _update_queue_item(
+            item_id, message=f"Audio integrity unverified: {detail}"
         )
 
 
