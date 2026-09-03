@@ -11,21 +11,14 @@ import {
     acsmAuthorize,
     acsmDeauthorize,
 } from '../api'
+import { formatRelativeTime as relativeTime } from '../lib/datetime'
 import './ImportSourcesPage.css'
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
-function formatRelativeTime(iso) {
-    if (!iso) return 'Never synced'
-    const then = new Date(iso)
-    const diffSec = Math.floor((Date.now() - then.getTime()) / 1000)
-    if (diffSec < 30) return 'Just now'
-    if (diffSec < 60) return `${diffSec}s ago`
-    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
-    if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`
-    return then.toLocaleDateString()
-}
+// `last_sync` is naive UTC: parsed as local it lands in the future west of
+// UTC, which is why this said "Just now" for hours (issue #216).
+const formatRelativeTime = (iso) => relativeTime(iso, 'Never synced')
 
 function pillFor(source) {
     const { last_status: status, connected, progress } = source
