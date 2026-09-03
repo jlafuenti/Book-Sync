@@ -320,7 +320,7 @@ async def test_test_remote_allows_private_lan_url(make_client, make_user, auth_h
 
     async with make_client(settings_router.router) as c:
         r = await c.post(
-            "/api/settings/test-remote", json={"url": "http://192.168.1.50:9000", "key": "correct-key"},
+            "/api/settings/test-remote", json={"url": "http://192.0.2.50:9000", "key": "correct-key"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -354,7 +354,7 @@ async def test_test_abs_allows_private_lan_url(make_client, make_user, auth_head
 
     async with make_client(settings_router.router) as c:
         r = await c.post(
-            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378", "token": "tok"},
+            "/api/settings/test-abs", json={"url": "http://192.0.2.60:13378", "token": "tok"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -383,7 +383,7 @@ async def test_test_abs_falls_back_to_saved_token_when_placeholder_sent(
 
     async with make_client(settings_router.router) as c:
         r = await c.post(
-            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378", "token": _SECRET_PLACEHOLDER},
+            "/api/settings/test-abs", json={"url": "http://192.0.2.60:13378", "token": _SECRET_PLACEHOLDER},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -402,7 +402,7 @@ async def test_test_abs_falls_back_to_saved_token_when_no_token_passed(
 
     async with make_client(settings_router.router) as c:
         r = await c.post(
-            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378"},
+            "/api/settings/test-abs", json={"url": "http://192.0.2.60:13378"},
             headers=auth_header(admin),
         )
     assert r.status_code == 200
@@ -526,7 +526,7 @@ async def test_test_abs_requires_a_token(make_client, make_user, auth_header, en
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:
         r = await c.post(
-            "/api/settings/test-abs", json={"url": "http://192.168.1.60:13378"},
+            "/api/settings/test-abs", json={"url": "http://192.0.2.60:13378"},
             headers=auth_header(admin),
         )
     assert r.status_code == 400

@@ -45,9 +45,8 @@ class ServerUrlManager @Inject constructor(
      */
     private val seeded = SeededValue(scope) {
         val stored = dataStore.data.first()[KEY_SERVER_URL]
-        when {
-            stored == null -> repair(defaultUrl)
-            stored == LEGACY_SERVER_URL -> repair(defaultUrl).also { persist(it) }
+        when (stored) {
+            null -> repair(defaultUrl)
             else -> repair(stored).also { if (it != stored) persist(it) }
         }
     }

@@ -4,8 +4,10 @@ Repo hygiene tests (issues #152, #153, #154 — pre-publication review).
 The repo is about to go public. These tests pin the invariants that make that
 safe: no tracked databases/keys/build outputs (#153), no oversized blobs
 sneaking into the pack (#153), a LICENSE that matches the dependency tree
-(#154), and no DRM-circumvention binaries in the tree with the Dockerfile's
-DRM plugin install strictly opt-in (#152).
+(#154), no DRM-circumvention binaries in the tree with the Dockerfile's
+DRM plugin install strictly opt-in (#152), and no personal identifiers —
+private domain, personal email, phone serial, host paths, private MCP/SSH
+server names — in any tracked file (#188, #184, #183).
 
 They run `git ls-files` via subprocess and skip cleanly when git or the .git
 directory is unavailable (e.g. a tarball checkout).
@@ -13,6 +15,7 @@ directory is unavailable (e.g. a tarball checkout).
 
 import fnmatch
 import os
+import re
 import subprocess
 
 import pytest
@@ -59,6 +62,8 @@ _FORBIDDEN_FILE_PATTERNS = [
 # Directory prefixes that are build/cache output and must never be tracked.
 _FORBIDDEN_PREFIXES = [
     "android/.gradle/",
+    # Kotlin's incremental-compilation session dir, created by any local build.
+    "android/.kotlin/",
     "android/build/",
     "android/app/build/",
 ]
@@ -305,3 +310,134 @@ def test_env_example_templates_stay_committable(path):
         "they are what a fresh clone copies from. Keep the `!.env.example` "
         "exception after the `.env.*` rule in .gitignore."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issues #188, #184, #183: no personal identifiers anywhere in the tree.
+#
+# The repo is published as a portfolio piece. None of the following grants
+# access to anything (the hosts are LAN-only), but none of it has any value to
+# a reader either: the owner's private domain, his personal email address, the
+# adb serial of his phone (a persistent device identifier), the filesystem
+# layout of his docker host, and the names of MCP/SSH servers nobody else has.
+#
+# Machine-local notes belong in `CLAUDE.local.md`, which is gitignored and
+# therefore never reaches `git ls-files` at all.
+#
+# Every needle below is assembled from fragments at import time, so this guard
+# does not itself publish the strings it exists to keep out: `git grep` for any
+# of them must come back empty across the whole tree, this file included. The
+# phone serial is matched by shape rather than by value (`adb -s <serial>`, which
+# is the only way it ever appeared) for the same reason — a guard that spelled it
+# out would be publishing the identifier it exists to remove.
+# ---------------------------------------------------------------------------
+
+# The owner's LAN-only domain. Also imported by
+# `test_android_no_personal_hosts.py` so the two guards cannot disagree.
+PERSONAL_DOMAIN = "lafuenti" + ".com"
+
+_PERSONAL_PATTERNS = {
+    "the owner's private domain": re.compile(
+        r"\b[\w-]+(?:\.[\w-]+)*\.?" + re.escape(PERSONAL_DOMAIN) + r"\b"
+    ),
+    "a personal email address": re.compile(r"\b[\w.+-]+@" + r"gmail" + r"\.com\b"),
+    "an adb device serial": re.compile(r"adb\s+(?:-s|--serial)\s+[0-9A-Za-z]{6,}"),
+    "the docker host's filesystem layout": re.compile(
+        r"/usr/share/docker-" + r"containers"
+    ),
+    "a private MCP or SSH server name": re.compile(
+        r"\bssh-(?:docker|orin)\b|\bdocker" + r"server\b"
+    ),
+}
+
+# Tracked paths exempt from the scan. `CLAUDE.local.md` is gitignored and cannot
+# appear here anyway; naming it documents where this content is allowed to live.
+_PERSONAL_SCAN_EXEMPT = {"CLAUDE.local.md"}
+
+
+def scan_for_personal_identifiers(text: str) -> list[tuple[int, str, str]]:
+    """(line number, what it is, matched text) for every personal identifier.
+
+    Split out from the tree walk so the detectors can be exercised against a
+    string: walking the real tree only shows the tree is clean today, not that
+    the scanner would notice if it were not.
+    """
+    found = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for label, pattern in _PERSONAL_PATTERNS.items():
+            for match in pattern.finditer(line):
+                found.append((lineno, label, match.group(0)))
+    return found
+
+
+def _tracked_text_files() -> list[str]:
+    """Tracked paths that decode as UTF-8 text (binaries are skipped)."""
+    paths = []
+    for path in _git_ls_files():
+        if path in _PERSONAL_SCAN_EXEMPT:
+            continue
+        abs_path = os.path.join(_REPO_ROOT, *path.split("/"))
+        try:
+            with open(abs_path, encoding="utf-8") as fh:
+                fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        paths.append(path)
+    return paths
+
+
+def test_no_personal_identifiers_in_tracked_files():
+    offenders = []
+    for path in _tracked_text_files():
+        abs_path = os.path.join(_REPO_ROOT, *path.split("/"))
+        with open(abs_path, encoding="utf-8") as fh:
+            text = fh.read()
+        for lineno, label, literal in scan_for_personal_identifiers(text):
+            offenders.append(f"  {path}:{lineno} -> {label} ({literal!r})")
+    assert not offenders, (
+        "Personal identifiers in tracked files. None of this helps a reader, and "
+        "a push to a public repo is permanent — keep machine-local detail in "
+        "CLAUDE.local.md (gitignored) instead:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_personal_identifier_scanner_reads_the_tree():
+    """A silently-empty walk would make the test above pass for the wrong reason."""
+    paths = _tracked_text_files()
+    assert len(paths) > 100, f"only found {len(paths)} tracked text files"
+    assert "CLAUDE.md" in paths
+
+
+# Assembled from fragments for the same reason the patterns are: a sample that
+# matches is, by definition, the thing this guard keeps out of the tree.
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "https://tandem." + PERSONAL_DOMAIN,
+        "someone@" + "gmail.com",
+        "adb -s " + "R5CT20ABCDE logcat",
+        "cd /usr/share/docker-" + "containers/Book-Sync",
+        "use the ssh-" + "docker MCP server",
+        "the ssh-" + "orin host",
+        "ssh docker" + "server",
+    ],
+)
+def test_personal_identifier_detectors_match_what_they_are_meant_to_catch(sample):
+    assert scan_for_personal_identifiers(sample), f"missed: {sample!r}"
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        # The project's own address keeps the owner's GitHub handle: that is
+        # public by definition, not a private identifier.
+        "https://github.com/jlafuenti/Book-Sync",
+        # Placeholders in documentation must stay writable.
+        "adb -s <device-serial> logcat",
+        "git config user.email <old-email>",
+        "https://tandem.example.com",
+        "docker compose logs server",
+    ],
+)
+def test_personal_identifier_detectors_leave_legitimate_text_alone(sample):
+    assert scan_for_personal_identifiers(sample) == [], f"false positive: {sample!r}"

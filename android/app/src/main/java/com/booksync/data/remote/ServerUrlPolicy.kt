@@ -10,9 +10,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 /** Hilt qualifier for the build-time default server URL (`BuildConfig.DEFAULT_SERVER_URL`). */
 const val DEFAULT_SERVER_URL_QUALIFIER = "defaultServerUrl"
 
-/** Old production hostname; its DNS record no longer exists. Stored values are migrated. */
-const val LEGACY_SERVER_URL = "https://booksync.lafuenti.com"
-
 /**
  * Base URL Retrofit is built with while no server is configured. Retrofit rejects
  * a blank base URL at construction time, which would crash the app on first launch

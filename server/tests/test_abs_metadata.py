@@ -32,7 +32,7 @@ def test_fetch_abs_index_allows_private_url(monkeypatch):
         return httpx.Response(200, json={"results": []})
     monkeypatch.setattr(httpx, "get", fake_get)
 
-    result = abs_metadata.fetch_abs_index("http://192.168.1.60:13378", "token", "")
+    result = abs_metadata.fetch_abs_index("http://192.0.2.60:13378", "token", "")
 
     assert result == {}  # no items in the fake response, but no exception either
 
