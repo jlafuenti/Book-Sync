@@ -90,7 +90,10 @@ class Settings(BaseSettings):
         description="Options: 'local', 'remote', 'remote_with_fallback'"
     )
     transcription_remote_url: str = Field(default="", alias="TRANSCRIPTION_REMOTE_URL")
-    transcription_remote_timeout: int = Field(default=7200, alias="TRANSCRIPTION_REMOTE_TIMEOUT")
+    # No `transcription_remote_timeout` here on purpose (issue #248): the queue
+    # path reads the timeout from `system_settings` only, so an env field was a
+    # second, silently-ignored source of truth advertising a default (7200)
+    # that nothing used. The knob is System → Transcription → Remote Timeout.
 
     # Auto-transcribe
     auto_transcribe_enabled: bool = Field(default=False, alias="AUTO_TRANSCRIBE_ENABLED")
