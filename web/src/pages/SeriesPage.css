@@ -625,7 +625,7 @@
     }
 
     .series-mobile-search input:focus {
-        box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 189, 157, 255), 0.4);
+        box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.4);
     }
 
     .series-mobile-search input::placeholder {

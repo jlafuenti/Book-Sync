@@ -275,7 +275,7 @@ function TranscriptionQueuePage() {
                             <h3 style={{ marginBottom: '12px', fontSize: '1rem', color: 'var(--text-secondary)' }}>
                                 🔄 Currently Processing
                             </h3>
-                            <div className="card" style={{ borderLeft: '4px solid var(--primary)' }}>
+                            <div className="card" style={{ borderLeft: '4px solid var(--accent)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                     <div>
                                         <div style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: '4px' }}>

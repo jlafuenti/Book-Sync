@@ -95,6 +95,51 @@ class HealthProbeWiringTest {
     }
 
     @Test
+    fun `the version handshake fields are read off a current server`() {
+        // Issue #174: this is the whole wire contract between the two versions.
+        // The field names are the server's Python dict keys, so a rename on
+        // either side has to fail here rather than silently reading as null —
+        // which is the one value that means "say nothing to the user".
+        typedServer.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"status":"healthy","app_version":"0.1.0","api_version":1}"""),
+        )
+
+        val health = runBlocking {
+            api.getHealth(typedServer.url("/api/health").toString())
+        }
+
+        assertEquals(1, health.api_version)
+        assertEquals("0.1.0", health.app_version)
+    }
+
+    @Test
+    fun `a server too old to send the version fields decodes to nulls`() {
+        // What every deployment currently answers. A missing field must decode,
+        // not throw: a server that predates the handshake is still a server the
+        // user can sign in to, and `null` is what [VersionCompat] reads as
+        // "unknown, warn nobody".
+        typedServer.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"status":"healthy"}"""),
+        )
+
+        val health = runBlocking {
+            api.getHealth(typedServer.url("/api/health").toString())
+        }
+
+        assertEquals("healthy", health.status)
+        assertNull(health.api_version)
+        assertNull(health.app_version)
+        assertEquals(
+            VersionCompat.Verdict.Unknown,
+            VersionCompat.compare(health.api_version),
+        )
+    }
+
+    @Test
     fun `a server that sends only unknown fields still parses`() {
         // Every field on HealthResponse is optional so that a server older or
         // newer than this build reads as reachable rather than broken.

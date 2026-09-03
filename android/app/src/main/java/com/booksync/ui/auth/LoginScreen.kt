@@ -48,6 +48,9 @@ import com.booksync.data.remote.shouldExpandAdvanced
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.RegisterRequest
 import com.booksync.data.remote.ServerUrlManager
+import com.booksync.data.remote.ServerVersionGate
+import com.booksync.data.remote.VersionBanner
+import com.booksync.data.remote.VersionCompat
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +66,7 @@ import android.content.Intent
 import android.net.Uri
 
 import com.booksync.data.remote.TokenManager
+import com.booksync.ui.components.VersionMismatchBanner
 
 /**
  * Result of the first-run "Check connection" probe (issue #175).
@@ -94,6 +98,7 @@ class LoginViewModel @Inject constructor(
     private val serverUrlManager: ServerUrlManager,
     private val userScopeProvider: UserScopeProvider,
     private val firstRunGate: FirstRunGate,
+    private val serverVersionGate: ServerVersionGate,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -111,6 +116,23 @@ class LoginViewModel @Inject constructor(
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState = _connectionState.asStateFlow()
+
+    /**
+     * Version mismatch warning, or null (issue #174).
+     *
+     * The probe already holds the answer — `/api/health` carries the server's
+     * `api_version` — and this is the one screen where someone points the app at
+     * a server it has never contacted. Reading it here means a stranger who
+     * types the address of a server two releases behind is told so now, instead
+     * of discovering it later as a sync that 404s with no explanation.
+     */
+    val versionBanner: StateFlow<VersionBanner?> = serverVersionGate.verdict
+        .map { VersionCompat.bannerFor(it) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            VersionCompat.bannerFor(serverVersionGate.verdict.value),
+        )
 
     val currentServerUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
@@ -304,7 +326,10 @@ class LoginViewModel @Inject constructor(
             }
 
             val failure = try {
-                api.getHealth("$normalized/api/health")
+                // The body, not just the fact that it answered: it carries the
+                // server's API version, and this is the only place a fresh
+                // install talks to a server before it has credentials (#174).
+                serverVersionGate.record(api.getHealth("$normalized/api/health"))
                 null
             } catch (e: HttpException) {
                 // 404 means something answered but it is not Tandem — a router
@@ -533,6 +558,13 @@ private fun FirstRunScreen(viewModel: LoginViewModel) {
                     }
                 }
             }
+
+            // Issue #174. The probe has just been told which API this server
+            // speaks, and this is the moment the person choosing the server is
+            // still standing in front of it. Below the "Continue" button on
+            // purpose: a mismatch is a warning, not a reason to stop.
+            val versionBanner by viewModel.versionBanner.collectAsState()
+            VersionMismatchBanner(versionBanner)
 
             // The escape hatch. Someone re-installing already knows all of this,
             // and a probe can fail for reasons that do not stop a sign-in (a VPN
