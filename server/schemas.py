@@ -46,6 +46,11 @@ class UserLogin(BaseModel):
     # are registrable.
     username: str = Field(..., max_length=50)
     password: str
+    # The client's own install id, stored on the session this login opens so a
+    # later logout can end just this device (issue #250). Optional: a client
+    # that predates it still gets a session, only an unnamed one. Bounded by the
+    # column width — a 422 beats a truncated id or a Postgres error mid-login.
+    device_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class UserResponse(BaseModel):
@@ -75,6 +80,24 @@ class TokenResponse(BaseModel):
 
 class TokenRefresh(BaseModel):
     refresh_token: str
+    # Only used when the presented token predates sessions (issue #250): the
+    # session it is upgraded to gets named after this device.
+    device_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class LogoutRequest(BaseModel):
+    """Body of `POST /api/auth/logout`. Optional in every sense: the endpoint
+    accepts no body at all, and then falls back to the session named by the
+    access token that authenticated the call (issue #250)."""
+    refresh_token: Optional[str] = None
+
+
+class LogoutResponse(BaseModel):
+    message: str
+    # "device" if one session ended, "all" if every token the account holds was
+    # invalidated. Clients clear their local tokens either way; this is what
+    # lets them say which happened.
+    scope: str
 
 
 class MediaTokenResponse(BaseModel):

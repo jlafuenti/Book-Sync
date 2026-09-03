@@ -30,11 +30,13 @@ function clearTokens() {
     refreshToken = null;
     localStorage.removeItem('tandem_token');
     localStorage.removeItem('tandem_refresh');
-    // Media tokens carry the session's `ver`, and logout bumps token_version
-    // server-side -- so every cached one is already dead. Logout followed by
-    // login is an SPA transition with no page reload, so without this the next
-    // session keeps serving them and every cover and audio request 401s for up
-    // to 14 minutes (issue #284).
+    // Media tokens are minted against the session that asked for them, and
+    // logout ends that session server-side -- so every cached one is already
+    // dead. Logout followed by login is an SPA transition with no page reload,
+    // so without this the next session keeps serving them and every cover and
+    // audio request 401s for up to 14 minutes (issue #284). Before issue #250
+    // it was the `token_version` bump that killed them; now it is the session's
+    // `sid`, but the cache is just as stale either way.
     mediaTokenCache.clear();
 }
 
@@ -223,9 +225,15 @@ export async function coverSrc(path) {
 // fetchWithAuth, and the pages fire several at once — the Home page opens with
 // five. When the 24h access token expires they all 401 together, and without
 // this each one POSTed its own /auth/refresh and raced the others into
-// localStorage. That is safe only while the server declines to rotate refresh
-// tokens; adding rotation later would have turned it into an intermittent
-// logout loop, with nothing to catch it.
+// localStorage.
+//
+// Since issue #250 a refresh token names a session (`jti`) and /auth/refresh
+// re-issues *for that session* rather than replacing it, so a second refresh
+// with the token this one is about to supersede still succeeds — the session,
+// not the token, is what a logout ends. Keep the single-flight anyway: it is
+// what stops five racing writes to localStorage, and it is the guarantee that
+// would have to be replaced first if the server ever did start retiring the
+// presented token.
 //
 // This is the same single-flight the Android TokenAuthenticator does (#143).
 let refreshInFlight = null;
@@ -245,7 +253,13 @@ function refreshSession() {
             const resp = await fetch(`${API_BASE}/auth/refresh`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refresh_token: refreshToken }),
+                // device_id matters only for a refresh token minted before
+                // per-device sessions existed: the server upgrades it onto a
+                // session, and this is what names that session (issue #250).
+                body: JSON.stringify({
+                    refresh_token: refreshToken,
+                    device_id: getDeviceId(),
+                }),
             });
             if (!resp.ok) {
                 endSession();
@@ -367,7 +381,9 @@ export async function login(username, password) {
     const resp = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        // The session this opens is named after the browser, so signing out
+        // here signs out only here (issue #250).
+        body: JSON.stringify({ username, password, device_id: getDeviceId() }),
     });
     if (!resp.ok) throw new Error(await errorMessage(resp, 'Login failed'));
     const data = await resp.json();
@@ -394,8 +410,19 @@ export async function getMe() {
 export async function logout() {
     // Best-effort: invalidate server-side tokens, but always clear local
     // tokens even if the request fails (e.g. offline, token already expired).
+    //
+    // The refresh token goes in the body to name the session to end (issue
+    // #250) — this browser's, not the phone's, which is usually mid-book with
+    // positions it has not pushed yet. The server falls back to the session
+    // named by the access token, so an old client is not signed out everywhere
+    // by accident either; sending it explicitly just means the call still names
+    // the right session when the access token is the thing that has expired.
+    const presented = refreshToken;
     try {
-        await fetchWithAuth(`${API_BASE}/auth/logout`, { method: 'POST' });
+        await fetchWithAuth(`${API_BASE}/auth/logout`, {
+            method: 'POST',
+            body: JSON.stringify({ refresh_token: presented }),
+        });
     } catch {
         // ignore — local logout must still succeed
     }
