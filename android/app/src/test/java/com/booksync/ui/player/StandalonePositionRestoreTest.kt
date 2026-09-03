@@ -4,6 +4,7 @@ import com.booksync.data.repository.TEST_SCOPE
 
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
 import androidx.work.WorkManager
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.UserProgressEntity
@@ -121,12 +122,16 @@ class StandalonePositionRestoreTest {
     fun `does not save a standalone position before the restore has been attempted`() = runTest(dispatcher.scheduler) {
         // The write gate: a save issued before the restore landed would write
         // ~0 with a fresh captured_at and destroy the real position.
+        //
+        // Driven through teardown rather than stopAndSave since issue #226:
+        // stopAndSave no longer writes anything (AudioPlayerService owns the
+        // pause write), so onCleared is the ViewModel's only remaining save
+        // and therefore the only place the gate still has to hold.
         coEvery { repository.refreshProgress("audiobook", 17) } coAnswers { awaitCancellation() }
 
-        val vm = viewModel()
+        val gated = viewModel()
         dispatcher.scheduler.runCurrent() // entity loaded; restore still parked in the refresh
-
-        vm.stopAndSave()
+        clearViewModel(gated)
         dispatcher.scheduler.runCurrent()
 
         verify(exactly = 0) {
@@ -134,12 +139,20 @@ class StandalonePositionRestoreTest {
         }
 
         // Once the restore completes (bounded timeout elapses), the gate opens.
+        val restored = viewModel()
         advanceUntilIdle()
-        vm.stopAndSave()
+        clearViewModel(restored)
         advanceUntilIdle()
 
         verify(exactly = 1) {
             repository.savePlaybackPositionStandaloneDetached(any(), any(), any())
         }
+    }
+
+    /** The real teardown path: ViewModelStore.clear() → ViewModel.clear() → onCleared(). */
+    private fun clearViewModel(vm: PlayerViewModel) {
+        val store = ViewModelStore()
+        store.put("player", vm)
+        store.clear()
     }
 }
