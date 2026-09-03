@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -268,5 +268,99 @@ describe('AppShell — pending-registration badge (issue #282)', () => {
         await waitFor(() => expect(getUsersMock).toHaveBeenCalled())
         expect(screen.queryByTestId('pending-users-badge')).toBeNull()
         expect(screen.getByTitle('System')).toBeInTheDocument()
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Issue #211: the boot sequence and the auth guard.
+//
+// App's mount-time isLoggedIn() -> getMe() decides which of three screens every
+// user sees, and none of it was covered. Two of the branches are the ones that
+// matter most on an internet-facing deployment: must_reset_password (letting a
+// bootstrap-password account past it is a real security hole) and the rejected
+// getMe(), which used to swallow the failure and drop a signed-in user on the
+// login form with no explanation — indistinguishable from "your session ended".
+// ---------------------------------------------------------------------------
+
+describe('App — boot and the auth guard', () => {
+    async function bootApp({ loggedIn = true, me } = {}) {
+        const api = await import('./api')
+        vi.spyOn(api, 'isLoggedIn').mockReturnValue(loggedIn)
+        const getMe = vi.spyOn(api, 'getMe')
+        if (me instanceof Error) getMe.mockRejectedValue(me)
+        else getMe.mockResolvedValue(me ?? null)
+
+        const AppDefault = (await import('./App')).default
+        // act() around the render so the bootstrap promise settles inside it —
+        // otherwise every one of these tests prints an act() warning.
+        await act(async () => {
+            render(
+                <MemoryRouter initialEntries={['/continue']}>
+                    <ThemeProvider>
+                        <AppDefault />
+                    </ThemeProvider>
+                </MemoryRouter>,
+            )
+        })
+    }
+
+    it('renders the login form when there is no token, without calling getMe', async () => {
+        const api = await import('./api')
+        await bootApp({ loggedIn: false })
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+        expect(api.getMe).not.toHaveBeenCalled()
+    })
+
+    it('renders the app for a normal signed-in user', async () => {
+        await bootApp({ me: { username: 'alice', role: 'admin', must_reset_password: false } })
+
+        expect(await screen.findByText('home-stub')).toBeTruthy()
+    })
+
+    it('applies the profile theme at boot', async () => {
+        localStorage.setItem('tandem_theme', 'blueprint')
+        await bootApp({ me: { username: 'alice', role: 'admin', theme: 'ember' } })
+
+        await screen.findByText('home-stub')
+        expect(localStorage.getItem('tandem_theme')).toBe('ember')
+    })
+
+    it('gates a must_reset_password account on the change-password screen', async () => {
+        await bootApp({ me: { username: 'alice', role: 'admin', must_reset_password: true } })
+
+        expect(await screen.findByText('change-password-stub')).toBeTruthy()
+        // The shell must not be behind it: no nav, no routed page.
+        expect(screen.queryByText('home-stub')).toBeNull()
+        expect(screen.queryByTitle('Logout')).toBeNull()
+    })
+
+    it('drops to the login form when the session is rejected (401 -> getMe null)', async () => {
+        await bootApp({ me: null })
+
+        expect(await screen.findByText('login-stub')).toBeTruthy()
+    })
+
+    it('offers a retry instead of the login form when the server is unreachable', async () => {
+        // A rejected getMe() is a network/proxy failure, not an expired session.
+        // Showing the bare login form here tells the user they were signed out
+        // and invites them to retype a password that will not get through either.
+        await bootApp({ me: new TypeError('Failed to fetch') })
+
+        expect(await screen.findByText(/Couldn't reach the server/i)).toBeTruthy()
+        expect(screen.queryByText('login-stub')).toBeNull()
+    })
+
+    it('retries the bootstrap when the retry control is clicked', async () => {
+        const api = await import('./api')
+        await bootApp({ me: new TypeError('Failed to fetch') })
+        await screen.findByText(/Couldn't reach the server/i)
+
+        api.getMe.mockResolvedValue({ username: 'alice', role: 'admin' })
+        fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+        expect(await screen.findByText('home-stub')).toBeTruthy()
+        expect(api.getMe).toHaveBeenCalledTimes(2)
     })
 })

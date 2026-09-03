@@ -92,40 +92,108 @@ export function getDeviceName() {
 const mediaTokenCache = new Map(); // "cover:filename" -> { token, expiresAt }
 const MEDIA_TOKEN_BUFFER_MS = 60_000;
 
-async function getMediaToken(resourceType, resourceId) {
-    const key = `${resourceType}:${resourceId}`;
-    const cached = mediaTokenCache.get(key);
-    if (cached && cached.expiresAt - Date.now() > MEDIA_TOKEN_BUFFER_MS) {
-        return cached.token;
-    }
+// Coalescing (issue #269). A library page commits 50 covers at once and every
+// one of them used to await its own GET — 50 round-trips through a ~6-
+// connection-per-host queue, and another 50 on each infinite-scroll append.
+// Requests raised in the same tick are collected here and flushed together
+// against /auth/media-token/batch, so N covers cost one round-trip. The pending
+// map doubles as the in-flight map: two callers for the same resource share one
+// promise instead of racing two mints for the same token.
+const mediaTokenQueue = new Map();     // key -> { resourceType, resourceId, resolve, reject }
+const mediaTokenInFlight = new Map();  // key -> Promise<string>
+let mediaTokenFlushHandle = null;
+
+async function mintMediaToken(resourceType, resourceId) {
     const resp = await fetchWithAuth(
         `${API_BASE}/auth/media-token?resource_type=${resourceType}&resource_id=${encodeURIComponent(resourceId)}`
     );
     if (!resp.ok) throw new Error('Failed to get media token');
     const { token, expires_in } = await resp.json();
-    mediaTokenCache.set(key, { token, expiresAt: Date.now() + expires_in * 1000 });
+    mediaTokenCache.set(`${resourceType}:${resourceId}`, {
+        token, expiresAt: Date.now() + expires_in * 1000,
+    });
     return token;
+}
+
+async function flushMediaTokenQueue() {
+    mediaTokenFlushHandle = null;
+    const batch = [...mediaTokenQueue.entries()];
+    mediaTokenQueue.clear();
+    if (!batch.length) return;
+
+    // One resource is not a batch: the GET is a smaller request and keeps a
+    // lone cover (a detail page, the player) on the cheaper path.
+    let tokens = {};
+    if (batch.length > 1) {
+        try {
+            const resp = await fetchWithAuth(`${API_BASE}/auth/media-token/batch`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    resources: batch.map(([, e]) => ({
+                        resource_type: e.resourceType, resource_id: e.resourceId,
+                    })),
+                }),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                tokens = data.tokens || {};
+                const expiresAt = Date.now() + data.expires_in * 1000;
+                for (const [k, t] of Object.entries(tokens)) {
+                    mediaTokenCache.set(k, { token: t, expiresAt });
+                }
+            }
+        } catch {
+            // Batch unavailable (offline, an old server without the endpoint):
+            // every waiter falls through to its own GET below.
+        }
+    }
+
+    // Anything the batch did not answer for — a failed call, an older server,
+    // or a key the server declined — still gets its own mint, in parallel.
+    await Promise.all(batch.map(async ([key, entry]) => {
+        try {
+            const token = tokens[key] ?? await mintMediaToken(entry.resourceType, entry.resourceId);
+            mediaTokenInFlight.delete(key);
+            entry.resolve(token);
+        } catch (err) {
+            mediaTokenInFlight.delete(key);
+            entry.reject(err);
+        }
+    }));
+}
+
+function getMediaToken(resourceType, resourceId) {
+    const key = `${resourceType}:${resourceId}`;
+    const cached = mediaTokenCache.get(key);
+    if (cached && cached.expiresAt - Date.now() > MEDIA_TOKEN_BUFFER_MS) {
+        return Promise.resolve(cached.token);
+    }
+    const inFlight = mediaTokenInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    let resolve, reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    mediaTokenInFlight.set(key, promise);
+    mediaTokenQueue.set(key, { resourceType, resourceId, resolve, reject });
+    if (!mediaTokenFlushHandle) mediaTokenFlushHandle = setTimeout(flushMediaTokenQueue, 0);
+    return promise;
 }
 
 /**
  * Mint media tokens for multiple resources in one round-trip (e.g. all covers
  * visible on a library grid page) so individual coverSrc() calls resolve
  * from cache instead of firing N separate requests.
+ *
+ * Since #269 this is a thin wrapper over the same queue getMediaToken uses, so
+ * a prefetch and the covers that render alongside it collapse into one call
+ * rather than two. Callers that only want the cache warmed can ignore the
+ * result: a resource that could not be minted is skipped, not thrown.
  */
 export async function prefetchMediaTokens(resources) {
     if (!resources.length) return;
-    const resp = await fetchWithAuth(`${API_BASE}/auth/media-token/batch`, {
-        method: 'POST',
-        body: JSON.stringify({
-            resources: resources.map((r) => ({ resource_type: r.resourceType, resource_id: r.resourceId })),
-        }),
-    });
-    if (!resp.ok) return;
-    const { tokens, expires_in } = await resp.json();
-    const expiresAt = Date.now() + expires_in * 1000;
-    for (const [key, token] of Object.entries(tokens)) {
-        mediaTokenCache.set(key, { token, expiresAt });
-    }
+    await Promise.all(resources.map(
+        (r) => getMediaToken(r.resourceType, r.resourceId).catch(() => null)
+    ));
 }
 
 /**
@@ -273,13 +341,35 @@ async function fetchWithAuth(url, options = {}) {
 
 // ============ Auth ============
 
+/**
+ * Turn a failed response into a message a user can act on (issue #211).
+ *
+ * `(await resp.json()).detail` is fine while the app answers, but the two
+ * unauthenticated endpoints below are the ones people hit when it doesn't: an
+ * nginx 502/504 page is HTML, `.json()` throws a SyntaxError, and that replaces
+ * the real failure — the login form said "Unexpected token '<'" when the server
+ * was simply down. Read the body as text, parse it only if it parses, and fall
+ * back to the status otherwise. Never surface the body itself: it is untrusted
+ * markup, and the status is what actually tells the user what to do.
+ */
+async function errorMessage(resp, fallback) {
+    let detail;
+    try {
+        detail = JSON.parse(await resp.text())?.detail;
+    } catch {
+        // Not JSON (a proxy error page), or the body could not be read.
+    }
+    if (typeof detail === 'string' && detail) return detail;
+    return `${fallback} (${resp.status})`;
+}
+
 export async function login(username, password) {
     const resp = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Login failed');
+    if (!resp.ok) throw new Error(await errorMessage(resp, 'Login failed'));
     const data = await resp.json();
     setTokens(data.access_token, data.refresh_token);
     return data;
@@ -291,7 +381,7 @@ export async function register(username, email, password) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, email, password }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Registration failed');
+    if (!resp.ok) throw new Error(await errorMessage(resp, 'Registration failed'));
     return resp.json();
 }
 

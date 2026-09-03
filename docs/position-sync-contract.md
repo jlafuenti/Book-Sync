@@ -431,6 +431,13 @@ follow. It applies to any paused→playing transition and, deliberately, to the
 reader's text→audio handoff as well — "switch to listening" and "unpause" should
 land the same distance before where you were.
 
+On the web the handoff rewind is applied at the **call site**, not in `play()`:
+`handoffPositionMs` (`web/src/lib/playbackOffsets.js`) subtracts it in the two
+`onSwitchToAudio` handlers, because `play()` also carries Home/Continue's
+explicit position and must not creep backwards there (issue #212). What gets
+*stored* is unchanged — a saved anchor describes where you were, not where you
+resume.
+
 On Android it lives on the **session player** (`ResumeRewindPlayer`), not in a
 button handler. It used to be inline in the phone player's play/pause handler,
 which meant Android Auto, the notification, headset buttons, Bluetooth, and
