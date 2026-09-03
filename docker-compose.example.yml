@@ -3,6 +3,11 @@
 # docker-compose.yml is gitignored, so your real secrets and volume paths never
 # show up in `git status`/`git diff` and can't drift into a merge conflict when
 # you pull updates to this template.
+#
+# `${POSTGRES_PASSWORD}` below is interpolated by compose from a `.env` file
+# sitting next to docker-compose.yml. Create it too, or the stack never comes
+# up (postgres refuses to initialise with an empty password):
+#   cp .env.example .env    # then fill in POSTGRES_PASSWORD
 services:
   server:
     build: ./server
@@ -11,6 +16,11 @@ services:
     volumes:
       - /path/to/your/ebooks:/data/ebooks # ← REPLACE with your ebook folder
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
+      # Exactly one mount may target /data/app — do not also mount a named
+      # volume here. Two sources on one container path means one of them is an
+      # invisible, possibly stale copy of your covers, working files and logs.
+      # NOTE: ./data lives inside the git checkout, so never `git clean -xfd`
+      # here — see docs/operations.md, "Storage".
       - ./data:/data/app
       - ./data/imports:/data/imports # Import-source staging (ACSM inbox/processed/failed)
       # Backups dir (issue #60): the server writes nightly + manual backups here,
@@ -40,8 +50,14 @@ services:
       # share the proxy's IP and the login rate limit becomes one global
       # bucket. NEVER "*" — that trusts an attacker-chosen header.
       - FORWARDED_ALLOW_IPS=172.16.0.0/12
-      - WHISPER_MODEL=small
+      - WHISPER_MODEL=medium
       - WHISPER_DEVICE=auto
+      # The default image ships no local Whisper stack, so the code default
+      # (`remote_with_fallback`) has nothing to fall back to. Use `remote` and
+      # point System -> Transcription Settings at the Jetson worker. Only switch
+      # to `remote_with_fallback` on an image built with
+      # `--build-arg INSTALL_LOCAL_WHISPER=1`.
+      - TRANSCRIPTION_PROVIDER=remote
       - EBOOK_DIR=/data/ebooks
       - AUDIOBOOK_DIR=/data/audiobooks
       - APP_DATA_DIR=/data/app
@@ -117,12 +133,13 @@ services:
     build: ./web
     ports:
       - "3000:3000"
-    environment:
-      - VITE_API_URL=http://localhost:8000
+    # No API URL is configured here: the web container's nginx proxies /api/ to
+    # the `server` service (see web/Dockerfile) and web/src/api.js hardcodes the
+    # `/api` base. VITE_* vars are build-time only in any case, so a runtime env
+    # on the nginx container could never reach the built bundle.
     depends_on:
       - server
     restart: unless-stopped
 
 volumes:
-  booksync_data:
   booksync_db:

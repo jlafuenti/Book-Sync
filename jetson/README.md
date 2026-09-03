@@ -14,6 +14,52 @@ commands run from inside `jetson/` with no `-f` flag needed.
 - Network reachability between the Jetson and the machine running the main Tandem server (same
   LAN/VPN is typical — port 9000 does **not** need to be reachable from the public internet).
 
+### Host prep (JetPack)
+
+Optional on a healthy stock image, but both of these materially affect long transcriptions on an
+Orin Nano:
+
+- **Max power mode**, for the GPU clocks:
+
+  ```bash
+  sudo nvpmodel -m 0
+  sudo jetson_clocks
+  ```
+
+- **An 8 GB swap file.** The `medium` model plus the Orin Nano's unified memory is tight; without
+  swap, long jobs can OOM mid-transcription:
+
+  ```bash
+  sudo fallocate -l 8G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo "/swapfile swap swap defaults 0 0" | sudo tee -a /etc/fstab   # make it permanent
+  ```
+
+If `docker compose up` fails with an unknown runtime `nvidia`, the NVIDIA container runtime is not
+wired in as expected on your image. Add it to `/etc/docker/daemon.json` and
+`sudo systemctl restart docker`:
+
+```json
+{
+  "default-runtime": "nvidia",
+  "runtimes": {
+    "nvidia": { "path": "nvidia-container-runtime", "runtimeArgs": [] }
+  }
+}
+```
+
+### Monitoring the hardware
+
+`jtop` is the practical way to watch GPU memory and temperature during a multi-hour audiobook:
+
+```bash
+sudo pip3 install -U jetson-stats
+sudo systemctl restart jetson_stats.service
+jtop
+```
+
 ## 1. Sparse clone
 
 The Jetson only needs this directory — not `server/`, `web/`, or `android/`:
