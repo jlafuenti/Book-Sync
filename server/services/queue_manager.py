@@ -24,6 +24,8 @@ latency-sensitive voice pipeline the rest of the day. Two tasks cooperate:
 import asyncio
 import logging
 import datetime
+import re
+import time
 import zipfile
 from typing import Optional
 
@@ -38,6 +40,30 @@ from services import offhours
 from utils import utcnow
 
 logger = logging.getLogger("queue-manager")
+
+# ---------------------------------------------------------------------------
+# Retry ladder for a missing provider (issue #242)
+#
+# This used to be a flat 30 s x 5 — a ~2.5-minute budget spent entirely in the
+# first minutes of the outage. A routine transcription-worker reboot plus a
+# `medium` model load outruns that comfortably, so a book that the worker's
+# checkpoint would have let us resume was instead marked permanently `failed`.
+# Capped exponential backoff turns the same five retries into a ~15-minute
+# window, and both knobs are settings so an operator with a flaky worker can
+# widen it without a deploy. `routers.settings.DEFAULT_SETTINGS` mirrors the
+# defaults and must match.
+#
+# Only ProviderUnavailableError takes this path; TranscriptionError is still a
+# hard failure — a corrupt file does not get better on the seventh try.
+# ---------------------------------------------------------------------------
+RETRY_MAX_KEY = "transcription_retry_max"
+RETRY_BASE_SECONDS_KEY = "transcription_retry_base_seconds"
+DEFAULT_RETRY_MAX = 5
+DEFAULT_RETRY_BASE_SECONDS = 30
+# Ceiling on a single sleep. The backoff blocks the queue loop (see
+# _process_next_item), which is fine while the provider is down but should not
+# grow without bound.
+RETRY_DELAY_CAP_SECONDS = 900
 
 # Cancellation flag — set of queue item IDs that should be cancelled
 _cancel_requested: set = set()
@@ -59,6 +85,12 @@ _active_item_id: Optional[int] = None
 # Reference to the running background tasks
 _queue_task: Optional[asyncio.Task] = None
 _offhours_task: Optional[asyncio.Task] = None
+
+# Strong references to in-flight progress writes (issue #244). asyncio only
+# holds a weak reference to a running task, so a bare `create_task(...)` whose
+# handle is discarded can be collected mid-flight — "Task was destroyed but it
+# is pending" in the log, and a lost update.
+_inflight_updates: set = set()
 
 # Poll cadence when there's nothing to do and the window is open.
 IDLE_POLL_SECONDS = 5
@@ -312,6 +344,177 @@ async def _mark_pending_items_waiting(db, reason: str) -> None:
         await db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Progress-write throttling (issue #244)
+# ---------------------------------------------------------------------------
+
+# Progress must move at least this much to earn a write of its own...
+PROGRESS_MIN_DELTA = 0.005
+# ...and a write happens at least this often regardless, so the row stays
+# visibly alive and any message change lands promptly.
+PROGRESS_MAX_INTERVAL_SEC = 5.0
+
+# Digits are stripped before comparing two progress messages. The remote
+# provider's message is "Transcribing: 1:02:03 / 20:00:00 (5%)", which changes
+# on literally every 2 Hz poll — comparing it verbatim would force a write
+# every time and the throttle would do nothing. What we actually want to catch
+# is a change of *kind*: "Loading model...", "Paused at 1:02:03",
+# "Waiting: 'other.m4b' in progress...". Those survive the substitution.
+_DIGITS_RE = re.compile(r"\d+")
+
+
+def _message_shape(message: Optional[str]) -> Optional[str]:
+    """The part of a progress message that isn't just the numbers moving."""
+    if message is None:
+        return None
+    return _DIGITS_RE.sub("#", message)
+
+
+class ProgressThrottle:
+    """Decides whether a progress update is worth an UPDATE + commit.
+
+    Remote polling calls the progress callback twice a second for the whole
+    run, and each call used to open its own session and commit a row — roughly
+    144 000 writes for a 20-hour book, for a value the UI reads every few
+    seconds at most.
+    """
+
+    def __init__(
+        self,
+        min_delta: float = PROGRESS_MIN_DELTA,
+        max_interval: float = PROGRESS_MAX_INTERVAL_SEC,
+    ):
+        self.min_delta = min_delta
+        self.max_interval = max_interval
+        self._last_progress: Optional[float] = None
+        self._last_shape: Optional[str] = None
+        self._last_write: Optional[float] = None
+
+    def should_write(self, progress: float, message: Optional[str], now: float) -> bool:
+        """True when this update should be persisted. Records the decision, so
+        a True return also counts as "written" — call it once per update."""
+        shape = _message_shape(message)
+        if (
+            self._last_write is None
+            or shape != self._last_shape
+            or abs(progress - self._last_progress) >= self.min_delta
+            or (now - self._last_write) >= self.max_interval
+        ):
+            self._last_progress = progress
+            self._last_shape = shape
+            self._last_write = now
+            return True
+        return False
+
+
+def _spawn_tracked(coro) -> asyncio.Task:
+    """Schedule `coro` on the running loop, holding a strong reference to the
+    task until it finishes. Must be called from the loop thread."""
+    task = asyncio.ensure_future(coro)
+    _inflight_updates.add(task)
+    task.add_done_callback(_inflight_updates.discard)
+    return task
+
+
+def _make_progress_callback(
+    item_id: int,
+    provider_name: str,
+    loop: asyncio.AbstractEventLoop,
+    throttle: Optional[ProgressThrottle] = None,
+    now=None,
+):
+    """Build the `progress_callback` handed to a transcription provider.
+
+    Providers call this from a worker thread, so the DB write is bounced onto
+    the event loop; the throttle decides whether there is a write at all.
+    """
+    from services.transcription import _format_duration
+
+    throttle = throttle or ProgressThrottle()
+    now = now or time.monotonic
+
+    def on_whisper_progress(fraction: float, total_duration_sec: float, message: str = None):
+        """Called by the transcription provider with real-time progress."""
+        mapped_progress = 0.05 + (fraction * 0.45)
+
+        if message:
+            # If the provider (like Jetson) supplies a detailed message, just use it
+            msg = f"{provider_name} - {message}"
+        elif total_duration_sec and total_duration_sec > 0:
+            elapsed_sec = fraction * total_duration_sec
+            elapsed_str = _format_duration(elapsed_sec)
+            total_str = _format_duration(total_duration_sec)
+            pct = int(fraction * 100)
+            msg = f"Transcribing ({provider_name}): {elapsed_str} / {total_str} ({pct}%)"
+        else:
+            pct = int(fraction * 100)
+            msg = f"Transcribing via {provider_name}... ({pct}%)"
+
+        if not throttle.should_write(mapped_progress, msg, now()):
+            return
+
+        # Schedule the DB update on the event loop (thread-safe)
+        loop.call_soon_threadsafe(
+            _spawn_tracked,
+            _update_queue_item(item_id, progress=round(mapped_progress, 3), message=msg),
+        )
+
+    return on_whisper_progress
+
+
+def retry_delay_seconds(
+    retry_count: int,
+    base_seconds: int = DEFAULT_RETRY_BASE_SECONDS,
+    cap_seconds: int = RETRY_DELAY_CAP_SECONDS,
+) -> int:
+    """Seconds to wait before the ``retry_count``-th retry (1-based).
+
+    Capped exponential backoff: base, 2x base, 4x base, ... up to
+    ``cap_seconds``.
+    """
+    exponent = max(retry_count, 1) - 1
+    return min(base_seconds * (2 ** exponent), cap_seconds)
+
+
+async def load_retry_policy() -> tuple:
+    """Read ``(max_retries, base_delay_seconds)`` from ``system_settings``.
+
+    Never raises and never returns a nonsense value: a typo in a settings row
+    degrades to the defaults rather than wedging the queue loop, the same
+    contract :func:`services.offhours.load_config` keeps.
+    """
+    values = {}
+    try:
+        from models.settings import SystemSetting
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(SystemSetting).where(
+                    SystemSetting.key.in_((RETRY_MAX_KEY, RETRY_BASE_SECONDS_KEY))
+                )
+            )
+            values = {s.key: s.value for s in result.scalars().all()}
+    except Exception as e:  # pragma: no cover — DB down; the caller must keep going
+        logger.warning(f"Could not load retry settings ({e}) — using defaults")
+
+    def _positive_int(key: str, default: int) -> int:
+        raw = values.get(key, default)
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"Setting {key}={raw!r} is not a number — using {default}")
+            return default
+        if parsed < 1:
+            logger.warning(f"Setting {key}={raw!r} must be >= 1 — using {default}")
+            return default
+        return parsed
+
+    return (
+        _positive_int(RETRY_MAX_KEY, DEFAULT_RETRY_MAX),
+        _positive_int(RETRY_BASE_SECONDS_KEY, DEFAULT_RETRY_BASE_SECONDS),
+    )
+
+
 async def _process_next_item():
     """
     Pull the next pending item and process it through the transcription pipeline.
@@ -381,6 +584,12 @@ async def _process_next_item():
             # window closed. Re-pend with progress intact and no retry burned.
             await _mark_item_paused(item_id, e, config)
         elif isinstance(e, ProviderUnavailableError):
+            max_retries, base_delay = await load_retry_policy()
+            # Base delay unless we re-pend, in which case it becomes the
+            # backoff for this attempt. A permanently-failed item has nothing
+            # to back off for; the short sleep only stops the loop spinning
+            # straight onto the next item and the same dead provider.
+            delay = base_delay
             async with async_session() as db:
                 result = await db.execute(
                     select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
@@ -388,7 +597,7 @@ async def _process_next_item():
                 item = result.scalar_one_or_none()
                 if item:
                     item.retry_count = (item.retry_count or 0) + 1
-                    MAX_RETRIES = 5
+                    MAX_RETRIES = max_retries
                     if item.retry_count >= MAX_RETRIES:
                         logger.error(
                             f"Queue item {item_id} permanently failed after {item.retry_count} retries: {e}"
@@ -408,17 +617,20 @@ async def _process_next_item():
                             pair.status = PairStatus.ERROR
                             await db.commit()
                     else:
+                        delay = retry_delay_seconds(
+                            item.retry_count, base_seconds=base_delay
+                        )
                         logger.warning(
                             f"Queue item {item_id} paused (retry {item.retry_count}/{MAX_RETRIES}): "
-                            f"Provider unavailable ({e}). Sleeping 30s before retry."
+                            f"Provider unavailable ({e}). Sleeping {delay}s before retry."
                         )
                         item.status = "pending"
                         item.message = f"Provider busy/offline. Retry {item.retry_count}/{MAX_RETRIES}..."
                         item.started_at = None
                         await db.commit()
-            
+
             # Sleep a bit to prevent a tight loop querying a busy/offline server
-            await asyncio.sleep(30)
+            await asyncio.sleep(delay)
         else:
             logger.error(f"Queue item {item_id} failed: {e}", exc_info=True)
             async with async_session() as db:
@@ -651,7 +863,6 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                                       completed_at=utcnow())
             return
 
-        from services.transcription import _format_duration
         from services.transcription_providers import get_transcription_provider
 
         provider = await get_transcription_provider()
@@ -664,28 +875,9 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         # Capture event loop reference for thread-safe progress updates
         _loop = asyncio.get_running_loop()
 
-        def on_whisper_progress(fraction: float, total_duration_sec: float, message: str = None):
-            """Called by transcription provider with real-time progress."""
-            mapped_progress = 0.05 + (fraction * 0.45)
-
-            if message:
-                # If the provider (like Jetson) supplies a detailed message, just use it
-                msg = f"{provider.name()} - {message}"
-            elif total_duration_sec and total_duration_sec > 0:
-                elapsed_sec = fraction * total_duration_sec
-                elapsed_str = _format_duration(elapsed_sec)
-                total_str = _format_duration(total_duration_sec)
-                pct = int(fraction * 100)
-                msg = f"Transcribing ({provider.name()}): {elapsed_str} / {total_str} ({pct}%)"
-            else:
-                pct = int(fraction * 100)
-                msg = f"Transcribing via {provider.name()}... ({pct}%)"
-
-            # Schedule the DB update on the event loop (thread-safe)
-            _loop.call_soon_threadsafe(
-                _loop.create_task,
-                _update_queue_item(item_id, progress=round(mapped_progress, 3), message=msg)
-            )
+        on_whisper_progress = _make_progress_callback(
+            item_id, provider.name(), _loop
+        )
 
         whisper_sentences = await provider.transcribe(
             audiobook_path,
