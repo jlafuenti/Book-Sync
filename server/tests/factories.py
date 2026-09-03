@@ -6,12 +6,26 @@ re-implementing seeding per test file. (User creation lives in the `make_user`
 fixture in conftest.py.)
 """
 
+import itertools
 import zipfile
 
 from sqlalchemy import text
 
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
+
+_path_seq = itertools.count(1)
+
+
+def _unique_path(filename):
+    """A distinct `/x/...` path per call.
+
+    `ebooks.file_path` and `audiobooks.file_path` are unique since issue #256.
+    A factory that always minted `/x/e.epub` would turn "seed two books", which
+    dozens of tests do, into an IntegrityError. The paths point at nothing on
+    disk either way; only their distinctness matters.
+    """
+    return f"/x/{next(_path_seq)}/{filename}"
 
 
 def write_epub(path, spine_docs, *, manifest_order=None):
@@ -63,9 +77,50 @@ async def suspend_user_progress_uniqueness(db):
     await db.execute(text("DROP INDEX ux_user_progress_user_audiobook"))
 
 
+async def suspend_file_path_uniqueness(db):
+    """Drop the `ebooks`/`audiobooks` unique path indexes for this test's schema.
+
+    Lets a test reproduce the pre-#256 state — two rows for the same file, which
+    a restore from an older dump or a manual insert could leave behind — that
+    the indexes now make unrepresentable. The schema is rebuilt per test, so
+    this affects nothing else.
+    """
+    await db.execute(text("DROP INDEX ux_ebooks_file_path"))
+    await db.execute(text("DROP INDEX ux_audiobooks_file_path"))
+
+
+async def suspend_book_pair_uniqueness(db):
+    """Rebuild `book_pairs` without `uq_book_pairs_pair` for this test's schema.
+
+    SQLite has no `ALTER TABLE ... DROP CONSTRAINT`, and a `UniqueConstraint`
+    declared in `CREATE TABLE` becomes an undroppable implicit index — so the
+    table is recreated from the ORM definition with that one constraint removed.
+    Lets a test reproduce a duplicate pairing, which `create_pair` has always
+    rejected with a 409 but which migration 0011 still has to survive.
+
+    Call before seeding: the existing (empty) table is dropped.
+    """
+    from sqlalchemy import MetaData, UniqueConstraint
+    from models.book import BookPair
+
+    # The two referenced tables come along so the copied FKs still resolve;
+    # only `book_pairs` is then created.
+    scratch = MetaData()
+    EBook.__table__.to_metadata(scratch)
+    AudioBook.__table__.to_metadata(scratch)
+    unconstrained = BookPair.__table__.to_metadata(scratch)
+    for constraint in list(unconstrained.constraints):
+        if (isinstance(constraint, UniqueConstraint)
+                and constraint.name == "uq_book_pairs_pair"):
+            unconstrained.constraints.discard(constraint)
+
+    await db.execute(text("DROP TABLE book_pairs"))
+    await db.run_sync(lambda session: unconstrained.create(session.connection()))
+
+
 async def make_ebook(db, *, title="E", filename="e.epub"):
     """Create a standalone (unpaired) EBook and return it."""
-    eb = EBook(title=title, filename=filename, file_path=f"/x/{filename}")
+    eb = EBook(title=title, filename=filename, file_path=_unique_path(filename))
     db.add(eb)
     await db.commit()
     await db.refresh(eb)
@@ -74,7 +129,7 @@ async def make_ebook(db, *, title="E", filename="e.epub"):
 
 async def make_audiobook(db, *, title="A", filename="a.m4b"):
     """Create a standalone (unpaired) AudioBook and return it."""
-    ab = AudioBook(title=title, filename=filename, file_path=f"/x/{filename}")
+    ab = AudioBook(title=title, filename=filename, file_path=_unique_path(filename))
     db.add(ab)
     await db.commit()
     await db.refresh(ab)
@@ -88,8 +143,9 @@ async def make_book_pair(db, status=PairStatus.SYNCED, *,
 
     `duration_seconds` lands on the AudioBook (None = unknown length, which
     is what a freshly scanned file has until ffprobe runs)."""
-    eb = EBook(title=ebook_title, filename="e.epub", file_path="/x/e.epub")
-    ab = AudioBook(title=audiobook_title, filename="a.m4b", file_path="/x/a.m4b",
+    eb = EBook(title=ebook_title, filename="e.epub", file_path=_unique_path("e.epub"))
+    ab = AudioBook(title=audiobook_title, filename="a.m4b",
+                   file_path=_unique_path("a.m4b"),
                    duration_seconds=duration_seconds)
     db.add_all([eb, ab])
     await db.flush()

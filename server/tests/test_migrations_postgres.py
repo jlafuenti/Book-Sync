@@ -332,6 +332,45 @@ def test_duplicate_user_progress_rows_are_deduped_then_constrained():
             ))
 
 
+def test_0011_creates_the_library_indexes_and_enforces_the_path():
+    """0011's DDL, on the database that actually gets it (issue #256).
+
+    The dedupe half is unit-tested on SQLite; this is the half that only a real
+    Postgres can answer — that the indexes are created under the names the models
+    declare, and that the unique one is a *working* unique, not a plain index
+    that happens to be named `ux_`.
+    """
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "head")
+
+    engine = _sync_engine()
+    inspector = inspect(engine)
+    for table, expected in (
+        ("ebooks", {"ux_ebooks_file_path", "ix_ebooks_file_hash"}),
+        ("audiobooks", {"ux_audiobooks_file_path", "ix_audiobooks_file_hash"}),
+        ("book_pairs", {"ix_book_pairs_ebook_id", "ix_book_pairs_audiobook_id"}),
+    ):
+        names = {ix["name"] for ix in inspector.get_indexes(table)}
+        assert expected <= names, f"{table} missing: {expected - names}"
+
+    uniques = {c["name"] for c in inspector.get_unique_constraints("book_pairs")}
+    assert "uq_book_pairs_pair" in uniques, uniques
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+            "VALUES ('E', 'e.epub', '/x/dup.epub', 'epub', now())"
+        ))
+    with pytest.raises(Exception):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO ebooks (title, filename, file_path, format, uploaded_at) "
+                "VALUES ('Other', 'e.epub', '/x/dup.epub', 'epub', now())"
+            ))
+
+
 def test_no_model_migration_drift():
     """The migrations and the ORM models must stay in sync (the drift gate).
 
