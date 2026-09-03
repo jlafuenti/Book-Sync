@@ -10,12 +10,28 @@
   "low": true,
   "skip-dev": true,
   "allowlist": [
-    // ---- @xmldom/xmldom <=0.8.12, via epubjs 0.3.x -------------------------
+    // ---- @xmldom/xmldom <=0.8.14, via epubjs 0.3.x -------------------------
     // The only npm "fix" is epubjs@0.4.2 — an old alpha and a breaking
     // downgrade. xmldom here parses the user's OWN EPUB files client-side in
     // the reader; it is not a server-side surface, and a malicious book could
     // at worst disrupt the reader tab rendering it. Re-evaluate when epubjs
     // ships a release off xmldom 0.8.
+    //
+    // Reachability, re-checked for issue #285 — epub.js only falls back to
+    // xmldom when the browser's own parser is missing:
+    //   epubjs/src/utils/core.js  `typeof DOMParser === "undefined" || forceXMLDom`
+    //   epubjs/src/section.js     `typeof XMLSerializer === "undefined" || isIE`
+    // We ship to browsers, which have both, and nothing in web/src sets
+    // `forceXMLDom`. So none of the six advisories below is reachable in this
+    // app, and taking a semver-major of the library that renders every book to
+    // silence them is the worse trade. The pin is enforced by
+    // web/src/dependency-pins.test.js; if Dependabot is ever enabled here, add
+    // a matching `ignore` rule for epubjs major bumps.
+    //
+    // The rest of the audit is clean as of 2026-09: react-router moved 6 -> 7
+    // (issue #297) and lodash resolves to 4.18.x, so this chain is the only
+    // production advisory left. What `npm audit` still lists beyond it is
+    // dev-only (vitest/esbuild/vite) and excluded here by skip-dev.
     "GHSA-wh4c-j3r5-mjhp", // XML injection via unsafe CDATA serialization
     "GHSA-2v35-w6hq-6mfw", // uncontrolled recursion in XML serialization (DoS)
     "GHSA-f6ww-3ggp-fr8h", // XML injection via DocumentType serialization
