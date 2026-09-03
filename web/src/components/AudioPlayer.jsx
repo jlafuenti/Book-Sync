@@ -56,7 +56,7 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict } = player
+    const { currentAudiobook, pairedEbookId, playing, currentTime, duration, speed, sleepMinutes, staleConflict, playbackError } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     const currentChapter = chapters.length > 0
@@ -114,6 +114,31 @@ export function AudioPlayerView({ onClose, onSwitchToEbook }) {
                         }}
                     >
                         Jump
+                    </button>
+                </div>
+            )}
+
+            {/* Playback-failure banner (issue #214): the stream died and the
+                one-shot token re-mint did not bring it back. Same shape as the
+                stale-conflict banner above. Retry re-mints and resumes at the
+                exact position — a transparent refresh, so no resume rewind. */}
+            {playbackError && (
+                <div className="alert alert-error" role="alert" style={{ margin: '8px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1 }}>{playbackError}</span>
+                    <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => player.retryPlayback()}
+                    >
+                        Retry
+                    </button>
+                    <button
+                        className="btn-icon"
+                        title="Dismiss"
+                        onClick={() => player.clearPlaybackError()}
+                    >
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
                     </button>
                 </div>
             )}
@@ -298,7 +323,7 @@ export function MiniPlayer({ onExpand }) {
 
     if (!player.currentAudiobook) return null
 
-    const { currentAudiobook, playing, currentTime, duration } = player
+    const { currentAudiobook, playing, currentTime, duration, playbackError } = player
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
     return (
@@ -319,6 +344,22 @@ export function MiniPlayer({ onExpand }) {
             </div>
             <span className="mini-player-time">{formatTime(currentTime)}</span>
             <div className="mini-player-controls" onClick={e => e.stopPropagation()}>
+                {/* Compact failure indicator (issue #214). The mini player has
+                    no room for the full banner, but the listener still has to
+                    be able to tell "paused" from "broken" — tapping retries. */}
+                {playbackError && (
+                    <button
+                        className="mini-player-error"
+                        title={playbackError}
+                        aria-label="Playback failed — retry"
+                        onClick={() => player.retryPlayback()}
+                    >
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16" x2="12" y2="16" />
+                        </svg>
+                    </button>
+                )}
                 <button onClick={() => player.skipBackward()} title="Back 30s">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M12.5 8V4l-5 4 5 4V8" /><path d="M19 12a7 7 0 1 1-7-7" />

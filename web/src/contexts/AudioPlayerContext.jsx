@@ -3,6 +3,7 @@ import { getAudiobookStreamUrl, updatePosition, sendPositionKeepalive, getDevice
 import {
     applyMetadata, applyPositionState, setPlaybackState, bindActionHandlers, clearMediaSession,
 } from '../lib/mediaSession'
+import { SKIP_SECONDS, RESUME_REWIND_SECONDS } from '../lib/playbackOffsets'
 
 const AudioPlayerContext = createContext(null)
 
@@ -32,17 +33,18 @@ const NETWORK_SAVE_INTERVAL_MS = 30_000
 // A slider scrub fires many seeks; coalesce them into one write.
 const SEEK_FLUSH_DEBOUNCE_MS = 1000
 
-// Playback offsets (issue #42). These two numbers are the web copy of a value
-// that must be identical on every surface -- Android's PlaybackOffsets and the
-// server's default_rewind_seconds carry the same ones. See
-// docs/position-sync-contract.md § Playback offsets before changing either.
-//
-// SKIP: both transport buttons, same in each direction.
-// RESUME_REWIND: picking up mid-word after a pause is hard to follow, so a
-// resume backs up a few seconds first. Also the size of the text->audio
-// handoff jump on Android.
-const SKIP_SECONDS = 30
-const RESUME_REWIND_SECONDS = 5
+// Playback offsets (issue #42) live in ../lib/playbackOffsets: the two numbers
+// are a cross-platform contract (Android's PlaybackOffsets, the server's
+// default_rewind_seconds), and the reader -> audiobook handoff sites import
+// the rewind from there too (issue #212), so they cannot drift from the
+// player's own copy. See docs/position-sync-contract.md § Playback offsets.
+
+// What the listener is told when the stream dies and the one-shot token
+// re-mint could not bring it back (issue #214). Deliberately names the three
+// plausible causes rather than blaming the network: the file may have been
+// deleted or renamed server-side, which no amount of retrying fixes.
+export const STREAM_ERROR_MESSAGE =
+    'Playback stopped — the audio stream could not be loaded. Check your connection, or the file may have moved.'
 
 // How often the Media Session scrubber is updated from `timeupdate` (issue
 // #62). The OS interpolates between updates, so ~1 s is plenty.
@@ -85,8 +87,16 @@ export function AudioPlayerProvider({ children }) {
     // re-binding on every play/pause.
     const playingRef = useRef(false)
     // Guards the stream-error recovery below against retry loops: only one
-    // re-mint attempt per load, cleared once playback resumes successfully.
+    // re-mint attempt per load. Cleared once playback resumes successfully —
+    // and, since issue #214, also on the error that says the re-minted source
+    // is broken too, so the guard cannot latch for the rest of the session.
     const recoveringStreamRef = useRef(false)
+    // The `canplay` listener a recovery attempt is waiting on, so a failed
+    // attempt can detach it instead of leaving it armed on the element.
+    const pendingCanPlayRef = useRef(null)
+    // Re-mints the stream and resumes; installed by the mount-only effect
+    // below so `retryPlayback` can call it from the provider scope.
+    const restartStreamRef = useRef(async () => {})
     // Network-push throttle (issue #65): when the last push *succeeded*, and
     // whether one is still in flight. A failed push leaves lastPushTimeRef
     // alone so the next tick retries instead of waiting out another 30s.
@@ -112,6 +122,12 @@ export function AudioPlayerProvider({ children }) {
     // never auto-seeked) for a rejection that just echoes this device's own
     // id -- e.g. this device's retried/out-of-order write bouncing off itself.
     const [staleConflict, setStaleConflict] = useState(null)
+    // Playback failure the listener needs to know about (issue #214): the
+    // stream died and the one-shot token re-mint did not bring it back. Null
+    // while playback is healthy; cleared the moment the element can play
+    // again. Without it a network drop, a deleted file or a second failing
+    // source just showed a normal-looking paused player.
+    const [playbackError, setPlaybackError] = useState(null)
 
     // Attach to every updatePosition call as `.then(handleConflict)`.
     // Passes the result through unchanged so it stays chainable.
@@ -126,6 +142,15 @@ export function AudioPlayerProvider({ children }) {
     }, [])
 
     const clearStaleConflict = useCallback(() => setStaleConflict(null), [])
+
+    // Issue #214. Retry re-mints the stream and resumes at the *exact*
+    // position: a transparent refresh, not a user resume, so it is one of the
+    // paths the contract exempts from the resume rewind (§ Playback offsets).
+    const clearPlaybackError = useCallback(() => setPlaybackError(null), [])
+    const retryPlayback = useCallback(() => {
+        setPlaybackError(null)
+        return restartStreamRef.current({ resume: true })
+    }, [])
 
     // The one position write for the player (issue #65). Boundary flushes call
     // it directly; the heartbeat calls it only when the throttle says so.
@@ -188,8 +213,11 @@ export function AudioPlayerProvider({ children }) {
         const positionState = () => applyPositionState({
             duration: audio.duration, position: audio.currentTime, playbackRate: audio.playbackRate,
         })
-        const onPlay = () => { setPlaying(true); setPlaybackState('playing') }
+        // Playback happening at all is the proof the failure is over
+        // (issue #214) — clear the banner on either signal.
+        const onPlay = () => { setPlaying(true); setPlaybackState('playing'); setPlaybackError(null) }
         const onPause = () => { setPlaying(false); setPlaybackState('paused') }
+        const onCanPlay = () => setPlaybackError(null)
         const onTimeUpdate = () => {
             setCurrentTime(audio.currentTime)
             const now = Date.now()
@@ -226,40 +254,80 @@ export function AudioPlayerProvider({ children }) {
             }
         }
 
-        // The media token embedded in audio.src is short-lived (15 min, see
-        // issue #50). A long pause/seek session can outlive it, causing the
-        // browser to fail a byte-range (re)request with a 401. Re-mint a
-        // fresh scoped URL and resume from the same position -- once per
-        // error, to avoid retry loops on genuine playback failures.
-        const onError = async () => {
+        // A recovery attempt waits on one `canplay`. If the attempt fails
+        // instead, that listener has to come off the element — an armed
+        // listener from a dead attempt would fire on the *next* successful
+        // load and yank the position back to where the failure happened.
+        const detachPendingCanPlay = () => {
+            if (pendingCanPlayRef.current) {
+                audio.removeEventListener('canplay', pendingCanPlayRef.current)
+                pendingCanPlayRef.current = null
+            }
+        }
+
+        // Re-mint a fresh scoped stream URL and pick up where we left off.
+        // `resume` forces playback (an explicit Retry tap); by default the
+        // element's own paused state decides, so a recovery does not start
+        // playing a player the user had paused.
+        const restartStream = async ({ resume = null } = {}) => {
             const ab = currentAudiobookRef.current
-            if (!ab || recoveringStreamRef.current) return
-            recoveringStreamRef.current = true
+            if (!ab) return
+            const wasPlaying = resume === null ? !audio.paused : resume
+            const posSeconds = audio.currentTime
+            const rate = audio.playbackRate
+            detachPendingCanPlay()
             try {
-                const wasPlaying = !audio.paused
-                const posSeconds = audio.currentTime
-                const rate = audio.playbackRate
                 const url = await getAudiobookStreamUrl(ab.id)
                 audio.src = url
                 audio.load()
-                const onCanPlay = () => {
+                const onRecovered = () => {
                     // Exact position, no resume rewind: this is a transparent
                     // token refresh, not a user resume (issue #42). Same for
                     // speed — load() may reset playbackRate to default.
                     audio.currentTime = posSeconds
                     audio.playbackRate = rate
                     if (wasPlaying) audio.play()
-                    audio.removeEventListener('canplay', onCanPlay)
+                    detachPendingCanPlay()
                     recoveringStreamRef.current = false
+                    setPlaybackError(null)
                 }
-                audio.addEventListener('canplay', onCanPlay)
+                pendingCanPlayRef.current = onRecovered
+                audio.addEventListener('canplay', onRecovered)
             } catch {
+                // Couldn't even get a URL — offline, or the file is gone.
                 recoveringStreamRef.current = false
+                setPlaybackError(STREAM_ERROR_MESSAGE)
             }
+        }
+        restartStreamRef.current = restartStream
+
+        // The media token embedded in audio.src is short-lived (15 min, see
+        // issue #50). A long pause/seek session can outlive it, causing the
+        // browser to fail a byte-range (re)request with a 401. Re-mint a
+        // fresh scoped URL and resume from the same position -- once per
+        // load, to avoid retry loops on genuine playback failures.
+        //
+        // Issue #214: when the re-minted source errors too, no `canplay` ever
+        // fires, so the guard used to stay `true` and every later error was
+        // silently swallowed for the rest of the session. That second error
+        // now ends the attempt: it releases the guard (a later transient
+        // failure can self-heal) and tells the listener what happened.
+        const onError = () => {
+            const ab = currentAudiobookRef.current
+            if (!ab) return
+            if (recoveringStreamRef.current) {
+                recoveringStreamRef.current = false
+                detachPendingCanPlay()
+                setPlaybackError(STREAM_ERROR_MESSAGE)
+                return
+            }
+            recoveringStreamRef.current = true
+            restartStream()
         }
 
         audio.addEventListener('play', onPlay)
         audio.addEventListener('pause', onPause)
+        audio.addEventListener('canplay', onCanPlay)
         audio.addEventListener('timeupdate', onTimeUpdate)
         audio.addEventListener('durationchange', onDurationChange)
         audio.addEventListener('ended', onEnded)
@@ -268,6 +336,8 @@ export function AudioPlayerProvider({ children }) {
         return () => {
             audio.removeEventListener('play', onPlay)
             audio.removeEventListener('pause', onPause)
+            audio.removeEventListener('canplay', onCanPlay)
+            detachPendingCanPlay()
             audio.removeEventListener('timeupdate', onTimeUpdate)
             audio.removeEventListener('durationchange', onDurationChange)
             audio.removeEventListener('ended', onEnded)
@@ -580,6 +650,9 @@ export function AudioPlayerProvider({ children }) {
         sleepMinutes,
         staleConflict,
         clearStaleConflict,
+        playbackError,
+        clearPlaybackError,
+        retryPlayback,
         play,
         pause,
         togglePlayPause,
