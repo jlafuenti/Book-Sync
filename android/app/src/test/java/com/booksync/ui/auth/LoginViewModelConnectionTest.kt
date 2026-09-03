@@ -90,7 +90,7 @@ class LoginViewModelConnectionTest {
 
         vm.checkConnection(PROBE_SERVER_URL)
 
-        assertEquals(ConnectionState.Connected, vm.connectionState.value)
+        assertEquals(ConnectionState.Connected(PROBE_SERVER_URL), vm.connectionState.value)
     }
 
     @Test
@@ -182,7 +182,7 @@ class LoginViewModelConnectionTest {
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
 
-        assertEquals(ConnectionState.Connected, vm.connectionState.value)
+        assertEquals(ConnectionState.Connected(PROBE_SERVER_URL), vm.connectionState.value)
     }
 
     @Test
@@ -195,15 +195,20 @@ class LoginViewModelConnectionTest {
         coEvery { api.getHealth(any()) } returns HealthResponse(status = "healthy")
         vm.checkConnection(PROBE_SERVER_URL)
 
-        assertEquals(ConnectionState.Connected, vm.connectionState.value)
+        assertEquals(ConnectionState.Connected(PROBE_SERVER_URL), vm.connectionState.value)
     }
 
-    // -- Storing only what was verified ------------------------------------
+    // -- The probe stores nothing at all -----------------------------------
+    //
+    // Not "stores only what it verified" — nothing. Writing the URL is what
+    // re-creates the login destination, and the destination owns this ViewModel:
+    // the first fix stopped a *failed* probe from writing, and a successful one
+    // then wiped the "Connected" message and the typed address the instant they
+    // appeared. The write belongs to the user's next tap, where the re-creation
+    // lands on the screen they were going to anyway.
 
     @Test
     fun `a failed probe does not store the address`() {
-        // The device bug: storing first meant a mistyped host became the
-        // configured server, and every later request went to it.
         coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
 
         val vm = newViewModel()
@@ -225,31 +230,83 @@ class LoginViewModelConnectionTest {
     }
 
     @Test
-    fun `a successful probe stores the normalised address exactly once`() {
+    fun `a successful probe does not store the address either`() {
+        val vm = newViewModel()
+
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+    }
+
+    @Test
+    fun `the verified address is carried on the Connected state, normalised`() {
+        // Carried rather than re-read from the field when the user accepts: what
+        // was verified is what gets stored, even if the text changed underneath.
         val vm = newViewModel()
 
         vm.checkConnection("  TANDEM.example.com  ")
 
+        assertEquals(
+            ConnectionState.Connected("https://tandem.example.com"),
+            vm.connectionState.value,
+        )
+    }
+
+    // -- Accepting the server ----------------------------------------------
+
+    @Test
+    fun `accepting stores the verified address exactly once and dismisses`() {
+        val vm = newViewModel()
+        vm.checkConnection("  TANDEM.example.com  ")
+
+        vm.acceptServer()
+
         coVerify(exactly = 1) { serverUrlManager.setServerUrl("https://tandem.example.com") }
+        assertFalse(vm.showFirstRun.value)
     }
 
     @Test
-    fun `a store the manager refuses is reported rather than claimed as success`() {
-        coEvery { serverUrlManager.setServerUrl(any()) } returns false
+    fun `accepting before a successful check does nothing`() {
+        val vm = newViewModel()
 
+        vm.acceptServer()
+
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+        assertTrue(vm.showFirstRun.value)
+    }
+
+    @Test
+    fun `accepting after a failed check does nothing`() {
+        coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
+        val vm = newViewModel()
+        vm.checkConnection("nope.invalid")
+
+        vm.acceptServer()
+
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+        assertTrue(vm.showFirstRun.value)
+    }
+
+    @Test
+    fun `a store the manager refuses is reported rather than silently dismissed`() {
+        // normalizeServerUrl already passed, so this is close to unreachable —
+        // but dismissing on a refused write would drop the user on a sign-in
+        // form with no server, the exact state this screen exists to prevent.
+        coEvery { serverUrlManager.setServerUrl(any()) } returns false
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
 
+        vm.acceptServer()
+
         assertTrue(vm.connectionState.value is ConnectionState.Failed)
+        assertTrue(vm.showFirstRun.value)
     }
 
     // -- The screen stays put ----------------------------------------------
     //
     // This state lives in an application-scoped gate rather than in the
-    // composable. Storing the URL on success re-creates the login destination,
-    // and a `rememberSaveable` — or a flag on a ViewModel scoped to that
-    // destination — dies with it, which is how the welcome screen vanished
-    // mid-probe on the device.
+    // composable, so it survives the destination being re-created when the URL
+    // is finally stored — by which point the user is on their way out anyway.
 
     @Test
     fun `an unconfigured launch shows the first-run screen`() {
@@ -277,16 +334,25 @@ class LoginViewModelConnectionTest {
     }
 
     @Test
-    fun `a successful probe leaves the first-run screen up until it is dismissed`() {
+    fun `a successful probe leaves the first-run screen up`() {
         val vm = newViewModel()
 
         vm.checkConnection(PROBE_SERVER_URL)
 
-        // The "Connected" confirmation and the Continue button live there.
+        // The "Connected" confirmation and the Continue button live there. On
+        // the device this screen re-rendered blank the moment the probe stored
+        // the URL: no message, no button, an empty address field.
         assertTrue(vm.showFirstRun.value)
+    }
+
+    @Test
+    fun `skipping dismisses without storing anything`() {
+        val vm = newViewModel()
 
         vm.dismissFirstRun()
+
         assertFalse(vm.showFirstRun.value)
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
     }
 
     @Test
@@ -296,7 +362,7 @@ class LoginViewModelConnectionTest {
         val gate = FirstRunGate()
         val vm = newViewModel(gate)
         vm.checkConnection(PROBE_SERVER_URL)
-        vm.dismissFirstRun()
+        vm.acceptServer()
 
         every { serverUrlManager.currentUrl } returns PROBE_SERVER_URL
         assertFalse(newViewModel(gate).showFirstRun.value)
@@ -307,9 +373,8 @@ class LoginViewModelConnectionTest {
         val gate = FirstRunGate()
         newViewModel(gate)
 
-        // Storing the URL is what re-creates the destination, so by the time the
-        // second ViewModel is built the app is already "configured". The latched
-        // launch state is what keeps the screen alive across that.
+        // Nothing stores the URL mid-flow any more, but the latch is what makes
+        // that safe rather than merely true today.
         every { serverUrlManager.currentUrl } returns PROBE_SERVER_URL
         assertTrue(newViewModel(gate).showFirstRun.value)
     }

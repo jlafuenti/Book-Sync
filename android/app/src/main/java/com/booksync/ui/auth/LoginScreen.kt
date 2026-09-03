@@ -77,8 +77,12 @@ sealed interface ConnectionState {
 
     data object Checking : ConnectionState
 
-    /** `GET /api/health` answered. The address is stored by then. */
-    data object Connected : ConnectionState
+    /**
+     * `GET /api/health` answered — at [url], the normalized form of what was
+     * typed. Nothing is stored yet; [url] is what
+     * [LoginViewModel.acceptServer] will store if the user continues.
+     */
+    data class Connected(val url: String) : ConnectionState
 
     data class Failed(val message: String) : ConnectionState
 }
@@ -126,9 +130,39 @@ class LoginViewModel @Inject constructor(
         .map { dismissed -> startedUnconfigured && !dismissed }
         .stateIn(viewModelScope, SharingStarted.Eagerly, startedUnconfigured)
 
-    /** The user tapped "Continue to sign in", or skipped. */
+    /** The user skipped the welcome screen. Stores nothing — they configure it later. */
     fun dismissFirstRun() {
         firstRunGate.dismiss()
+    }
+
+    /**
+     * The user tapped "Continue to sign in" after a successful check: store the
+     * server they just verified, then leave the welcome screen.
+     *
+     * **This is the only place the first-run flow writes the URL**, and that is
+     * the whole point. Writing it re-creates the login destination — twice now,
+     * that re-creation has landed on a screen the user was still using: first
+     * wiping a failure message, then wiping the "Connected" confirmation and the
+     * address they had just typed, leaving an empty welcome screen. Deferring
+     * the write to this tap means the re-creation lands on the sign-in form,
+     * which is exactly where the tap was asking to go.
+     *
+     * A no-op unless a probe has actually succeeded; [ConnectionState.Connected]
+     * carries the verified address, so what gets stored is what answered, not
+     * whatever the text field says now.
+     */
+    fun acceptServer() {
+        val verified = (_connectionState.value as? ConnectionState.Connected) ?: return
+        viewModelScope.launch {
+            if (serverUrlManager.setServerUrl(verified.url)) {
+                firstRunGate.dismiss()
+            } else {
+                // Close to unreachable — normalizeServerUrl already passed — but
+                // dismissing on a refused write would drop the user on a sign-in
+                // form with no server, the state this screen exists to prevent.
+                _connectionState.value = ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
+            }
+        }
     }
 
     /** The error Card is shared with login failures; editing either field clears it. */
@@ -232,19 +266,19 @@ class LoginViewModel @Inject constructor(
      * Probe `{url}/api/health` and say whether there is a Tandem server there
      * (issue #175).
      *
-     * **Probe first, store only what answered.** The first cut had this the other
-     * way round — store, then let `BaseUrlInterceptor` route the probe at the
-     * configured server — and it failed on a device in the worst possible way:
-     * typing a host that does not resolve stored it anyway, storing it re-created
-     * the login destination, and the welcome screen was replaced by a username
-     * and password prompt for a server that does not exist. The failure message
-     * was rendered on a screen nobody could see any more, and every later request
-     * in the app went to the mistyped host.
+     * **Probes, and stores nothing.** The first cut had it the other way round —
+     * store, then let `BaseUrlInterceptor` route the probe at the configured
+     * server — and it failed on a device twice over. Writing the URL re-creates
+     * the login destination, so typing a host that does not resolve replaced the
+     * welcome screen with a password prompt for a server that does not exist;
+     * and once that was fixed by writing only on success, the success case
+     * re-rendered this screen blank, wiping the "Connected" message and the
+     * address the moment they appeared.
      *
      * So the request carries an absolute URL and opts out of the interceptor
-     * ([BYPASS_BASE_URL_HEADER]), and [ServerUrlManager.setServerUrl] is called
-     * only once `GET /api/health` has actually answered. A failed check changes
-     * no state at all beyond the message on screen.
+     * ([BYPASS_BASE_URL_HEADER]), and the write moves to [acceptServer] — the
+     * user's next tap, whose destination is the sign-in form anyway. Checking a
+     * connection changes nothing but the message on screen.
      *
      * Nothing here may throw. Its input is a string a stranger just typed, so a
      * dead host, a wrong port, a captive portal answering HTML and a body the
@@ -283,16 +317,12 @@ class LoginViewModel @Inject constructor(
                 "$normalized did not answer like a Tandem server."
             }
 
-            if (failure != null) {
-                _connectionState.value = ConnectionState.Failed(failure)
-                return@launch
-            }
-
-            // Verified. Now it is worth keeping.
-            _connectionState.value = if (serverUrlManager.setServerUrl(normalized)) {
-                ConnectionState.Connected
+            _connectionState.value = if (failure != null) {
+                ConnectionState.Failed(failure)
             } else {
-                ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
+                // Carry the verified address rather than re-reading the field
+                // later: what gets stored is what actually answered.
+                ConnectionState.Connected(normalized)
             }
         }
     }
@@ -312,7 +342,7 @@ fun LoginScreen(
     val showFirstRun by viewModel.showFirstRun.collectAsState()
 
     if (showFirstRun) {
-        FirstRunScreen(viewModel = viewModel, onDone = viewModel::dismissFirstRun)
+        FirstRunScreen(viewModel = viewModel)
     } else {
         SignInScreen(
             onLoginSuccess = onLoginSuccess,
@@ -333,10 +363,7 @@ fun LoginScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FirstRunScreen(
-    viewModel: LoginViewModel,
-    onDone: () -> Unit,
-) {
+private fun FirstRunScreen(viewModel: LoginViewModel) {
     val connection by viewModel.connectionState.collectAsState()
     var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
@@ -484,7 +511,10 @@ private fun FirstRunScreen(
                         )
                     }
                     Button(
-                        onClick = onDone,
+                        // Stores the verified server, *then* leaves. Doing it
+                        // here rather than in the probe is what stops the write
+                        // from re-creating this screen out from under the user.
+                        onClick = viewModel::acceptServer,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 12.dp)
@@ -502,7 +532,12 @@ private fun FirstRunScreen(
             // and a probe can fail for reasons that do not stop a sign-in (a VPN
             // that only routes some traffic, say) — so the screen must never be
             // a wall.
-            TextButton(onClick = onDone, modifier = Modifier.padding(top = 8.dp)) {
+            TextButton(
+                // Leaves without storing anything — they'll set the server from
+                // "Advanced" on the sign-in form.
+                onClick = viewModel::dismissFirstRun,
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
                 Text(stringResource(R.string.first_run_skip))
             }
         }
