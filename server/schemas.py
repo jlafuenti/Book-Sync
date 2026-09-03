@@ -101,6 +101,17 @@ class PasswordChange(BaseModel):
     new_password: str = Field(..., min_length=6)
 
 
+class AccountDelete(BaseModel):
+    """Body for `DELETE /api/auth/me` — self-service account deletion (#146).
+
+    The password is re-checked even though the caller already holds a valid
+    access token: this is the one authenticated action that cannot be undone,
+    and a token left behind on a borrowed device should not be enough to
+    destroy the account it was signed into.
+    """
+    password: str
+
+
 class UserCreateAdmin(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr

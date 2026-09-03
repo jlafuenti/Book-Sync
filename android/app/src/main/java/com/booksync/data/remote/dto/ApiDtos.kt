@@ -117,6 +117,20 @@ data class PasswordChangeRequest(
     val new_password: String,
 )
 
+/**
+ * Body for `DELETE /api/auth/me` — self-service account deletion (issue #146).
+ *
+ * The password goes with the request even though the caller already holds a
+ * valid token: this is the one action in the app that cannot be undone, and a
+ * session left open on a borrowed device must not be enough to destroy the
+ * account. Field name matches the server's Pydantic `AccountDelete`, which
+ * `server/tests/test_schema_contract.py` pins.
+ */
+@Serializable
+data class AccountDeleteRequest(
+    val password: String,
+)
+
 // ============ Library ============
 
 @Serializable

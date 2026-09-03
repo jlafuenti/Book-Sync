@@ -58,4 +58,28 @@
     <string name="version_server_newer">Your Tandem server is newer than this app — update it from Play</string>
     <string name="version_server_older">This app needs server API v%1$d — ask your server admin to upgrade</string>
 
+    <!-- ============ Delete account (issue #146) ============ -->
+    <!-- Play requires an in-app deletion path for any app that can create an
+         account. Two deliberate properties of this copy:
+
+         1. It names what is destroyed and what is not. Bookmarks, reading
+            positions and the account itself go; the books do not, because they
+            are the operator's files on the operator's server and Tandem has
+            never owned them. Somebody deleting their account to "clear space"
+            has to be able to tell those apart before they tap.
+         2. The confirmation is typed, not tapped. `delete_account_type_to_confirm`
+            is the literal word the field must match — keep it uppercase and keep
+            it in step with the check in AccountScreen. -->
+    <string name="delete_account_title">Delete account</string>
+    <string name="delete_account_row_description">Permanently remove your account and reading positions from this server.</string>
+    <string name="delete_account_dialog_title">Delete your account?</string>
+    <string name="delete_account_warning">This cannot be undone. Your account, bookmarks and reading positions are deleted from the server. The books themselves belong to whoever runs the server and are not affected.</string>
+    <string name="delete_account_password_label">Current password</string>
+    <string name="delete_account_type_to_confirm">DELETE</string>
+    <string name="delete_account_confirm_label">Type %1$s to confirm</string>
+    <string name="delete_account_confirm_button">Delete account</string>
+    <string name="delete_account_cancel">Cancel</string>
+    <string name="delete_account_deleting">Deleting…</string>
+    <string name="delete_account_offline">You need a connection to the server to delete your account.</string>
+
 </resources>
