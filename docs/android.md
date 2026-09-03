@@ -189,6 +189,24 @@ Audio can be cast to a Chromecast. Because a cast receiver fetches media over pl
 Authorization header, the server issues short-lived (15 minute) resource-scoped media tokens for
 those URLs rather than exposing the JWT.
 
+## Privacy
+
+The user-facing statement of what leaves the device is **[privacy.md](privacy.md)**, and it is
+the document Play's listing links to. In short: the app talks to the server the user configured
+and to nothing else, with one exception — the reader's **Define** action sends the selected word
+to `api.dictionaryapi.dev` on demand, unauthenticated, on its own OkHttp client with no Bearer
+interceptor (`AppModule.provideDictionaryOkHttpClient`). No analytics, ads or crash-reporting SDK
+is present in the build.
+
+Two things carry an identity to the user's own server on every position write: the app-generated
+install id from `DeviceIdManager` (a random UUID, not a hardware identifier) and the device name,
+which defaults to `Build.MANUFACTURER + Build.MODEL` and is user-overridable.
+
+`server/tests/test_android_no_personal_hosts.py` pins that `api.dictionaryapi.dev` stays the only
+hard-coded third-party host under `app/src/main/java`. **A new destination fails that test on
+purpose** — adding one means updating the policy and the Data safety answers in
+[play-listing.md](play-listing.md) in the same change.
+
 ## Position sync
 
 The Android app writes position through the same endpoint as the web app and follows the same

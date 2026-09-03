@@ -137,3 +137,99 @@ def test_no_shipped_implementation_plans_under_docs():
         "belong in the issue/PR or an untracked path, not in the published docs "
         "tree where a visitor can't tell them from current documentation."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #150: the privacy policy is a shipped artefact, not a Play Console field.
+#
+# Google Play will not accept a listing without a publicly reachable privacy
+# policy, and the Data safety answers are enforced retroactively. Because Tandem
+# is self-hosted, boilerplate is wrong in the way that gets listings pulled: the
+# app author receives nothing, but the reader's "Define" action does send the
+# selected word to a third party. The policy has to say so, and it has to keep
+# saying so after someone edits it.
+#
+# These tests pin the three claims that would be expensive to get wrong, plus the
+# repo-hygiene rule that a public document must not name anybody's actual server.
+# The matching code-side guard — that `api.dictionaryapi.dev` stays the *only*
+# hard-coded third-party host in the app — lives in
+# test_android_no_personal_hosts.py, so the policy and the code cannot drift
+# apart silently.
+# ---------------------------------------------------------------------------
+
+_PRIVACY_REL = "docs/privacy.md"
+
+# The one third-party destination the app reaches on its own. If this ever
+# changes, the policy, the Data safety form and the Android host guard all change
+# with it.
+_DECLARED_THIRD_PARTY_HOST = "api.dictionaryapi.dev"
+
+
+def _privacy_text() -> str:
+    path = os.path.join(_REPO_ROOT, *_PRIVACY_REL.split("/"))
+    assert os.path.isfile(path), (
+        "docs/privacy.md is missing. Play requires a publicly reachable privacy "
+        "policy URL for every submission (issue #150), and it is published from "
+        "this file via GitHub Pages."
+    )
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_privacy_policy_exists_and_is_linked():
+    """The policy has to be reachable from the front page and the Android guide."""
+    _privacy_text()  # existence
+
+    for rel in ("README.md", "docs/android.md"):
+        with open(os.path.join(_REPO_ROOT, *rel.split("/")), encoding="utf-8") as fh:
+            text = fh.read()
+        assert "privacy.md" in text, (
+            f"{rel} does not link docs/privacy.md. A policy nobody can find from "
+            "the front page is not a published policy."
+        )
+
+
+def test_privacy_policy_names_the_dictionary_lookup():
+    """The one flow a user would not predict must be named, not paraphrased.
+
+    `AppModule.provideDictionaryRetrofit` sends the selected word to
+    api.dictionaryapi.dev as a GET path segment. Play's Data safety form asks who
+    the third party is; the policy is where that answer is written down.
+    """
+    assert _DECLARED_THIRD_PARTY_HOST in _privacy_text(), (
+        f"docs/privacy.md must name {_DECLARED_THIRD_PARTY_HOST} — it is the only "
+        "third party the app sends anything to, and the Data safety form's "
+        "'shared with third parties' answer depends on it."
+    )
+
+
+def test_privacy_policy_states_there_is_no_analytics():
+    """The 'no analytics' claim is graded against the form — say it in words.
+
+    Pinned as a phrase because a policy that merely omits the subject reads, to a
+    reviewer, as an undeclared SDK rather than as an absent one.
+    """
+    assert "no analytics" in _privacy_text().lower(), (
+        "docs/privacy.md must state 'no analytics' explicitly. The absence of an "
+        "analytics/ads/crash SDK is what makes the short Data safety answers "
+        "truthful; leaving it implied wastes the simplification."
+    )
+
+
+def test_privacy_policy_names_no_real_host_or_private_address():
+    """The policy is published to the world — it must not name anyone's server.
+
+    Reuses the Android host guard's detectors (issues #58/#311) rather than
+    keeping a second copy: private-range IPs and `*.example.com` are exactly as
+    wrong in a public document as they are in the app's sources. Write
+    `<your-server>` or an RFC 2606 example host instead.
+    """
+    from tests.test_android_no_personal_hosts import scan_plain_text
+
+    offenders = scan_plain_text(_privacy_text())
+    assert not offenders, (
+        "docs/privacy.md names a private address or a personal hostname: "
+        + ", ".join(f"line {ln} -> {lit}" for ln, lit in offenders)
+        + ". Write `<your-server>` or an example.com host — this file is "
+        "published publicly and outlives any single deployment."
+    )
