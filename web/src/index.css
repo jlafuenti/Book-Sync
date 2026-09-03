@@ -20,6 +20,10 @@
     --text-muted: #6a6a8a;
 
     --accent: #7c3aed;
+    /* The RGB channels of --accent, for the rgba(var(--accent-rgb), α) sites
+       that need a variable alpha. applyTheme() swaps it with the accent
+       (issue #280); themes.test.js pins the two in step. */
+    --accent-rgb: 124, 58, 237;
     --accent-hover: #6d28d9;
     --accent-light: rgba(124, 58, 237, 0.15);
     --accent-glow: rgba(124, 58, 237, 0.4);
@@ -36,6 +40,7 @@
 
     /* Typography */
     --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 
     /* Spacing */
     --radius: 12px;
@@ -596,6 +601,14 @@ select.form-input {
     border-radius: var(--radius);
 }
 
+/* Inside a card that already draws its own border (the System and
+   Troubleshoot cards), the wrapper is there only for the scroll — issue
+   #271. Keep the scrolling, drop the second frame. */
+.table-wrapper--flush {
+    border: 0;
+    border-radius: 0;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
@@ -749,7 +762,7 @@ tr:hover td {
 }
 
 .tab-btn:hover {
-    color: var(--text);
+    color: var(--text-primary);
 }
 
 .tab-btn.active {
