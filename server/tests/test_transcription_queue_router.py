@@ -362,3 +362,33 @@ async def test_requeue_404s_for_an_unknown_item(db, make_client, make_user, auth
     async with make_client(transcription_router.router) as c:
         r = await c.post("/api/transcription/queue/9999/requeue", headers=auth_header(editor))
     assert r.status_code == 404
+
+
+async def test_requeue_409s_when_the_pair_vanished_under_it(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    """Defensive path: `add_to_queue` skips a pair it cannot find, so a pair
+    deleted between the history row and this call must not 200 with nothing
+    queued."""
+    from services import queue_manager
+
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="failed")
+
+    async def _nothing_created(pair_ids, db=None):
+        return []
+
+    async def _no_active_item(pair_id):
+        return None
+
+    monkeypatch.setattr(queue_manager, "add_to_queue", _nothing_created)
+    monkeypatch.setattr(queue_manager, "get_queue_item_for_pair", _no_active_item)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/queue/{item.id}/requeue", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 409
+    assert "no longer exists" in r.json()["detail"]
