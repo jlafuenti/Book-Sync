@@ -28,7 +28,24 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import com.booksync.auto.AUTO_EMPTY_LIBRARY_MESSAGE
+import com.booksync.auto.AUTO_MESSAGE_ID
+import com.booksync.auto.AUTO_NOTHING_STARTED_MESSAGE
+import com.booksync.auto.AUTO_ROOT_ID
+import com.booksync.auto.AUTO_SIGNED_OUT_MESSAGE
+import com.booksync.auto.AUTO_TAB_CONTINUE
+import com.booksync.auto.AUTO_TAB_LIBRARY
+import com.booksync.auto.AUTO_UNAVAILABLE_MESSAGE
+import com.booksync.auto.AutoBook
 import com.booksync.auto.CoverArtHelper
+import com.booksync.auto.asSearchable
+import com.booksync.auto.autoBrowseItems
+import com.booksync.auto.autoMessageItem
+import com.booksync.auto.autoRootTabs
+import com.booksync.auto.autoSearch
+import com.booksync.auto.continueListeningBooks
+import com.booksync.auto.libraryBooks
+import com.booksync.auto.mergedLibrary
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.diagnostics.LogChannel
@@ -47,16 +64,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -124,6 +147,16 @@ class AudioPlayerService : MediaLibraryService() {
         // Write a history-log entry every 30 min of continuous playback
         // (in addition to pause/stop boundaries). Keeps the history tab scannable.
         private const val AUTO_LOG_INTERVAL_MS = 30L * 60L * 1000L
+        // How long a browse node may spend fetching cover art before it gives up
+        // and renders without it (issue #172). The car app quality checklist
+        // requires browse content within ~10 s; the book rows themselves come
+        // from Room and are instant, but the server rung of the cover ladder
+        // (issue #331) is a network call, and an unreachable server would
+        // otherwise hold the whole list behind OkHttp's timeouts.
+        private const val AUTO_COVER_ART_BUDGET_MS = 4_000L
+        // Concurrent cover fetches during one browse. Bounded so a big library
+        // does not open a hundred sockets at once.
+        private const val AUTO_COVER_ART_CONCURRENCY = 4
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -172,6 +205,13 @@ class AudioPlayerService : MediaLibraryService() {
     // One-shot: armed by CMD_SUPPRESS_NEXT_SEEK_FLUSH, consumed by the next
     // REASON_SEEK discontinuity. See the command's doc in the companion.
     private var suppressNextSeekFlush = false
+
+    // Media3's search contract is two calls: onSearch runs the query and reports
+    // how many hits there were, then the browser asks for them with
+    // onGetSearchResult. This holds the result between the two (issue #172).
+    private val autoSearchResults = ConcurrentHashMap<String, ImmutableList<MediaItem>>()
+    // Caps concurrent cover fetches during a browse; see AUTO_COVER_ART_CONCURRENCY.
+    private val coverFetchLimit = Semaphore(AUTO_COVER_ART_CONCURRENCY)
 
     // Local HTTP server that serves downloaded audiobooks to the Cast receiver over the LAN.
     // Started in castSessionListener.onSessionStarted, torn down in onSessionEnded. Avoids
@@ -1319,7 +1359,7 @@ class AudioPlayerService : MediaLibraryService() {
             // Return the same root for all clients, including Android Auto (which always
             // sends isRecent=true). Playback resumption is handled by onPlaybackResumption.
             val root = MediaItem.Builder()
-                .setMediaId("[root]")
+                .setMediaId(AUTO_ROOT_ID)
                 .setMediaMetadata(
                     MediaMetadata.Builder()
                         .setTitle("Tandem")
@@ -1342,15 +1382,66 @@ class AudioPlayerService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onGetChildren parentId=$parentId page=$page pkg=${browser.packageName}")
             return when (parentId) {
-                "[root]" -> Futures.immediateFuture(
+                AUTO_ROOT_ID -> Futures.immediateFuture(
                     LibraryResult.ofItemList(buildRootTabs(), params)
                 )
-                "continue_listening" -> buildContinueListeningItems(params)
-                "library" -> buildLibraryItems(params)
+                AUTO_TAB_CONTINUE -> buildContinueListeningItems(params)
+                AUTO_TAB_LIBRARY -> buildLibraryItems(params)
                 else -> Futures.immediateFuture(
                     LibraryResult.ofItemList(ImmutableList.of(), params)
                 )
             }
+        }
+
+        /**
+         * Voice search, half one (issue #172). Media3 splits it in two: run the
+         * query, report how many hits there were, and let the browser come back
+         * for them in [onGetSearchResult]. Without this override Media3 answers
+         * every Assistant search with "not supported" — which is what the app
+         * did while the manifest advertised voice search.
+         *
+         * Room only, like the browse tree: a query must not wait on the server.
+         */
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?
+        ): ListenableFuture<LibraryResult<Void>> {
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "onSearch query='$query' pkg=${browser.packageName}")
+            val future = SettableFuture.create<LibraryResult<Void>>()
+            serviceScope.launch(Dispatchers.IO) {
+                val items = try {
+                    ImmutableList.copyOf(autoSearchItems(query))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Auto search failed", e)
+                    ImmutableList.of<MediaItem>()
+                }
+                autoSearchResults[query] = items
+                diagnosticLogger.i(LogChannel.AUTO, TAG, "onSearch query='$query' hits=${items.size}")
+                withContext(Dispatchers.Main) {
+                    session.notifySearchResultChanged(browser, query, items.size, params)
+                }
+                future.set(LibraryResult.ofVoid())
+            }
+            return future
+        }
+
+        /** Voice search, half two: hand back the page the browser asked for. */
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            val all = autoSearchResults[query] ?: ImmutableList.of()
+            val from = (page * pageSize).coerceAtMost(all.size)
+            val to = (from + pageSize).coerceAtMost(all.size)
+            return Futures.immediateFuture(
+                LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), params)
+            )
         }
 
         override fun onGetItem(
@@ -1449,6 +1540,38 @@ class AudioPlayerService : MediaLibraryService() {
             }
 
             val future = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+
+            // "Play <something> on Tandem". Assistant, Android Auto's legacy
+            // onPlayFromSearch bridge and MainActivity's MEDIA_PLAY_FROM_SEARCH
+            // handler all arrive here as one item with no media id and a search
+            // query attached (issue #172). Resolve it to a real book before the
+            // normal path, which only understands media ids.
+            val searchQuery = mediaItems.singleOrNull()
+                ?.takeIf { it.mediaId == MediaItem.DEFAULT_MEDIA_ID }
+                ?.requestMetadata?.searchQuery?.toString()
+            if (searchQuery != null) {
+                diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems searchQuery='$searchQuery' pkg=${controller.packageName}")
+                serviceScope.launch(Dispatchers.IO) {
+                    val hit = runCatching { autoSearchBooks(searchQuery).firstOrNull() }
+                        .onFailure { Log.e(TAG, "Play-from-search failed", it) }
+                        .getOrNull()
+                    val item = hit?.let { resolveMediaItem(it.mediaId) }
+                    if (item == null) {
+                        diagnosticLogger.w(LogChannel.AUTO, TAG, "no book matches '$searchQuery'")
+                        future.setException(
+                            UnsupportedOperationException("No book matches \"$searchQuery\"")
+                        )
+                    } else {
+                        val resumeMs = item.mediaMetadata.extras?.getLong("resumePositionMs", 0L) ?: 0L
+                        diagnosticLogger.i(LogChannel.AUTO, TAG, "play-from-search '$searchQuery' -> ${item.mediaId} at ${resumeMs}ms")
+                        future.set(
+                            MediaSession.MediaItemsWithStartPosition(listOf(item), 0, resumeMs)
+                        )
+                    }
+                }
+                return future
+            }
+
             serviceScope.launch(Dispatchers.IO) {
                 // Legacy Android Auto path (onPlayFromMediaId) sends MediaItems with only
                 // mediaId set and no URI. Resolve them to full items with file:// URIs.
@@ -1486,111 +1609,191 @@ class AudioPlayerService : MediaLibraryService() {
     // Browse tree helpers
     // =========================================================
 
-    private fun buildRootTabs(): ImmutableList<MediaItem> {
-        return ImmutableList.of(
-            MediaItem.Builder()
-                .setMediaId("continue_listening")
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle("Continue Listening")
-                        .setIsBrowsable(true)
-                        .setIsPlayable(false)
-                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                        .build()
-                )
-                .build(),
-            MediaItem.Builder()
-                .setMediaId("library")
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle("Library")
-                        .setIsBrowsable(true)
-                        .setIsPlayable(false)
-                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                        .build()
-                )
-                .build()
-        )
+    /**
+     * The tree's shape lives in `com.booksync.auto.AutoBrowseTree` (issue #172).
+     * This class is excluded from Kover as framework glue, so anything decided
+     * here — tab order, node caps, ordering, the empty-state leaf — would be
+     * decided where no test can see it. Everything below is therefore reduced
+     * to "read Room, hand the rows to the pure builder".
+     */
+    private fun buildRootTabs(): ImmutableList<MediaItem> =
+        ImmutableList.copyOf(autoRootTabs())
+
+    /** Pair row → browse row. Room only: no network on the browse path. */
+    private suspend fun autoBookFor(pair: BookPairEntity): AutoBook = AutoBook(
+        mediaId = MediaId.Pair(pair.id).value,
+        title = pair.audiobookTitle,
+        author = pair.audiobookAuthor,
+        series = pair.ebookSeries,
+        audiobookId = pair.audiobookId,
+        pairId = pair.id,
+        resumePositionMs = repository.getBookmark(pair.id)?.audioPositionMs?.toLong() ?: 0L,
+        durationMs = (pair.audiobookDurationSeconds ?: 0) * 1000L,
+        audioFilename = pair.audiobookFilename,
+        serverCoverPath = pair.audiobookCoverPath,
+    )
+
+    /** Standalone audiobook row → browse row. Room only, same as above. */
+    private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook = AutoBook(
+        mediaId = MediaId.Audiobook(audio.id).value,
+        title = audio.title,
+        author = audio.author,
+        series = audio.series,
+        audiobookId = audio.id,
+        resumePositionMs = repository.getProgressOnce("audiobook", audio.id)
+            ?.audioPositionMs?.toLong() ?: 0L,
+        durationMs = (audio.durationSeconds ?: 0) * 1000L,
+        audioFilename = audio.filename,
+        serverCoverPath = audio.coverFilename,
+    )
+
+    /**
+     * The playback source for a browse row: the download, else the stream
+     * (issue #171). Through [mediaUriFor] like every other builder, so a book
+     * that is not downloaded is still listed and still plays; stringified only
+     * because the pure tree builder must not touch `android.net.Uri`.
+     */
+    private fun autoSourceUrlFor(book: AutoBook): String? = mediaUriFor(
+        book.audioFilename?.let { repository.localAudioFile(it) },
+        book.audiobookId,
+    )?.toString()
+
+    /**
+     * Cover art for a whole browse node, fetched in parallel and **bounded**.
+     *
+     * The rows themselves are Room reads and are instant, but the third rung of
+     * the cover ladder (issue #331) is an HTTP GET. Without a budget an
+     * unreachable server would hold the entire list behind one OkHttp timeout
+     * per book, which is exactly the car-checklist failure "browse content did
+     * not load in time". On timeout the node renders without the missing art.
+     */
+    private suspend fun autoCoverUris(books: List<AutoBook>): Map<String, Uri> {
+        val fetched = withTimeoutOrNull(AUTO_COVER_ART_BUDGET_MS) {
+            coroutineScope {
+                books.map { book ->
+                    async(Dispatchers.IO) {
+                        coverFetchLimit.withPermit {
+                            val uri = coverArtHelper.getCoverUri(
+                                book.audiobookId, book.audioFilename, book.serverCoverPath,
+                            )
+                            uri?.let { coverArtHelper.grantAutoReadPermission(it) }
+                            book.mediaId to uri
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+        if (fetched == null) {
+            diagnosticLogger.w(LogChannel.AUTO, TAG, "cover art budget exceeded — browsing without art")
+        }
+        return fetched.orEmpty().mapNotNull { (id, uri) -> uri?.let { id to it } }.toMap()
     }
+
+    /**
+     * One browse node, end to end: read Room, resolve art within budget, hand
+     * both to the pure builder, and never return an empty list — [emptyMessage]
+     * becomes a leaf saying why, because a blank screen in a car tells the
+     * driver nothing.
+     */
+    private fun autoNode(
+        params: LibraryParams?,
+        emptyMessage: suspend () -> String,
+        load: suspend () -> List<AutoBook>,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+        val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+        serviceScope.launch(Dispatchers.IO) {
+            val items = try {
+                val books = load()
+                val covers = autoCoverUris(books)
+                autoBrowseItems(
+                    books = books,
+                    emptyMessage = emptyMessage(),
+                    urlFor = ::autoSourceUrlFor,
+                    artworkFor = { covers[it.mediaId] },
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error building Auto browse node", e)
+                listOf(autoMessageItem(AUTO_UNAVAILABLE_MESSAGE))
+            }
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
+        }
+        return future
+    }
+
+    /**
+     * "Nothing here" and "you are signed out" are different problems with
+     * different fixes, and only one of them is worth telling the driver to pull
+     * over for. The token read is a cached in-memory value, not a request.
+     */
+    private fun autoEmptyMessage(whenSignedIn: String): String =
+        if (tokenManager.cachedAccessToken() == null) AUTO_SIGNED_OUT_MESSAGE else whenSignedIn
 
     private fun buildContinueListeningItems(
         params: LibraryParams?
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-        val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val recentPairs = repository.getRecentlyPlayedPairsFlow().first()
-                val recentStandalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
-
-                val items = mutableListOf<MediaItem>()
-
-                for (pair in recentPairs) {
-                    val bookmark = repository.getBookmark(pair.id)
-                    val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
-                    coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    buildPairMediaItem(pair, resumeMs, coverUri)?.let { items.add(it) }
-                }
-
-                for (audio in recentStandalone) {
-                    val progress = repository.getProgressOnce("audiobook", audio.id)
-                    val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
-                    coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    buildAudiobookMediaItem(audio, resumeMs, coverUri)?.let { items.add(it) }
-                }
-
-                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
-            } catch (e: Exception) {
-                Log.e(TAG, "Error building Continue Listening", e)
-                future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
-            }
-        }
-        return future
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = autoNode(
+        params,
+        emptyMessage = { autoEmptyMessage(AUTO_NOTHING_STARTED_MESSAGE) },
+    ) {
+        continueListeningBooks(
+            pairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) },
+            standalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
+                .map { autoBookFor(it) },
+        )
     }
 
+    /**
+     * Everything in the library, not only what is downloaded: since issue #171
+     * an undownloaded book streams, so hiding it here just made the car show a
+     * shorter library than the phone.
+     */
     private fun buildLibraryItems(
         params: LibraryParams?
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-        val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val downloadedPairs = repository.getDownloadedPairsFlow().first()
-                    .filter { it.audiobookDownloaded }
-                val downloadedStandalone = repository.getDownloadedAudiobooksAlphabeticalFlow().first()
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = autoNode(
+        params,
+        emptyMessage = { autoEmptyMessage(AUTO_EMPTY_LIBRARY_MESSAGE) },
+    ) {
+        libraryBooks(
+            pairs = repository.getPairsFlow().first().map { autoBookFor(it) },
+            standalone = repository.getAudiobooksFlow().first().map { autoBookFor(it) },
+        )
+    }
 
-                // Avoid showing the same audiobook twice if it's already represented by a pair
-                val pairedAudiobookIds = downloadedPairs.map { it.audiobookId }.toSet()
+    /**
+     * The whole local library as one flat search index, Continue Listening
+     * first (issue #172).
+     *
+     * That order is load-bearing: [autoSearch] breaks ties in caller order, so
+     * "play Bartleby" with two Bartlebys picks the one being listened to, and a
+     * blank query — Assistant's "play Tandem" — resumes the most recent book.
+     */
+    private suspend fun autoSearchIndex(): List<AutoBook> {
+        val recentPairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) }
+        val recentStandalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
+            .map { autoBookFor(it) }
+        val recent = continueListeningBooks(recentPairs, recentStandalone)
+        val recentIds = recent.map { it.mediaId }.toSet()
+        // Uncapped on purpose: a node cap is a rendering limit, and applying it
+        // here would make books past it unsayable.
+        val all = mergedLibrary(
+            pairs = repository.getPairsFlow().first().map { autoBookFor(it) },
+            standalone = repository.getAudiobooksFlow().first().map { autoBookFor(it) },
+        )
+        return recent + all.filterNot { it.mediaId in recentIds }
+    }
 
-                val items = mutableListOf<MediaItem>()
+    /** The books [autoSearch] picked, as playable items. Empty means no hits. */
+    private suspend fun autoSearchBooks(query: String): List<AutoBook> {
+        val index = autoSearchIndex()
+        val byId = index.associateBy { it.mediaId }
+        return autoSearch(query, index.map { it.asSearchable() }).mapNotNull { byId[it.mediaId] }
+    }
 
-                for (pair in downloadedPairs) {
-                    val bookmark = repository.getBookmark(pair.id)
-                    val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
-                    coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    buildPairMediaItem(pair, resumeMs, coverUri)?.let { items.add(it) }
-                }
-
-                for (audio in downloadedStandalone) {
-                    if (audio.id in pairedAudiobookIds) continue
-                    val progress = repository.getProgressOnce("audiobook", audio.id)
-                    val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
-                    val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
-                    coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    buildAudiobookMediaItem(audio, resumeMs, coverUri)?.let { items.add(it) }
-                }
-
-                // Final alphabetical sort across pairs and standalone
-                items.sortBy { it.mediaMetadata.title?.toString()?.lowercase() ?: "" }
-
-                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
-            } catch (e: Exception) {
-                Log.e(TAG, "Error building Library", e)
-                future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
-            }
-        }
-        return future
+    private suspend fun autoSearchItems(query: String): List<MediaItem> {
+        val books = autoSearchBooks(query)
+        val covers = autoCoverUris(books)
+        // null: a search browser draws its own "no results" — a message row
+        // among the results would read as a hit.
+        return autoBrowseItems(books, null, ::autoSourceUrlFor) { covers[it.mediaId] }
     }
 
     /**

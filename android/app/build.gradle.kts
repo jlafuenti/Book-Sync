@@ -375,7 +375,14 @@ kover {
                     "com.booksync.player.AudioPlayerService*",
                     "com.booksync.player.LocalCastHttpServer*",
                     "com.booksync.cast.*",
-                    "com.booksync.auto.*",
+                    // com.booksync.auto is NOT excluded as a package any more
+                    // (issue #172): the Android Auto browse tree and the voice
+                    // search matcher moved there precisely so they could be
+                    // tested, and excluding the package would have hidden them
+                    // again. Only the cover-art helper stays out — it needs a
+                    // real FileProvider and MediaMetadataRetriever; its pure
+                    // sampling math is tested via CoverArtHelperTest.
+                    "com.booksync.auto.CoverArtHelper*",
                     "com.booksync.di.*",
                     "com.booksync.data.local.BookSyncDatabase*",
                 )
@@ -384,15 +391,16 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 48.55% line coverage on 2026-09-03 (2020/4161 lines);
+                    // Measured 49.99% line coverage on 2026-09-03 (2128/4257 lines);
                     // floor set a few points under, same as the server's --cov-fail-under.
                     // Ratchet: after any PR that raises the total, bump this to
                     // (new total − 3), whole percent.
                     //
-                    // The previous baseline (43.86%, 1722/3926) was measured earlier the
-                    // same day, before the first-run screen of issue #175 landed — which
-                    // is where most of the jump comes from, not from issue #174.
-                    minValue = 45
+                    // Previous baselines the same day: 48.55% (2020/4161) before issue
+                    // #172 moved the Android Auto browse tree and search matcher into
+                    // testable pure code, and 43.86% (1722/3926) before the first-run
+                    // screen of issue #175.
+                    minValue = 46
                     coverageUnits = CoverageUnit.LINE
                 }
             }

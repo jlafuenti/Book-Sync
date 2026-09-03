@@ -176,12 +176,91 @@ write twice.
 
 ## Android Auto
 
-The app exposes a media browse tree to Android Auto: the browse root is titled **Tandem**, and
-playback resumption is handled so the car picks up whatever you were last listening to.
+The app exposes a media browse tree to Android Auto. The root is titled **Tandem** and has exactly
+two tabs, each holding leaf items — so the tree is two levels deep, and no node returns more than
+`AUTO_MAX_ITEMS_PER_NODE` (100) rows:
+
+```
+[root] "Tandem"
+├── continue_listening  — books with progress, most recently played first
+└── library             — every book, alphabetical, pairs and standalone de-duplicated
+```
+
+Since streaming landed (issue #171) the Library tab lists books that are **not** downloaded too;
+they stream from the server exactly as they do on the phone.
+
+**Connecting to a car never starts playback.** `onPlaybackResumption` deliberately returns a failed
+future for local playback, so Auto falls back to the browse UI and the driver presses play. This is
+both a car app quality rule and a correctness one — the resumption path used to read a
+SharedPreferences position that was only written at service shutdown, so a killed service resumed
+at 0.
+
+**Voice search** is implemented in two places that meet in the same matcher
+(`com.booksync.auto.AutoSearch`): the session's `onSearch` / `onGetSearchResult` (what the car and
+Assistant use), and `MEDIA_PLAY_FROM_SEARCH` on `MainActivity` (what a phone-side Assistant request
+uses). Both end up as a `MediaItem` carrying only a search query, which `onSetMediaItems` resolves
+to a `pair_N` / `audiobook_N` id. An empty query means "play something" and resolves to the most
+recently played book.
+
+**Browse content never waits on the server.** The rows come from Room. Cover art has a network rung
+(issue #331), so the browse path fetches art in parallel under a 4 s budget and renders without it
+if the server is slow or unreachable.
+
+**An empty node always says why** rather than showing a blank list: "Open Tandem on your phone to
+sign in" when there is no token, "No books yet…" when signed in with an empty library, "Nothing
+started yet…" for an untouched Continue Listening tab.
 
 Auto behavior is hard to debug from the car, so the app can record a log: **Account →
 Diagnostics** starts a timed capture on either the *Android Auto* or *Tandem App* channel, shows
 an ongoing notification while it runs, and lets you share the resulting log file.
+
+### Desktop Head Unit walk-through (before every Play submission)
+
+While the app is opted in to Android Auto distribution in Play Console, **every** submission is
+reviewed against the [car app quality guidelines](https://developer.android.com/docs/quality-guidelines/car-app-quality),
+and a failure there blocks the whole release, not just the Auto feature. Neither CI nor the emulator
+can exercise Auto, so this pass is manual and has to be done by hand each time.
+
+The JVM tests in `app/src/test/java/com/booksync/auto/` pin the parts that can be pinned —
+tree shape, node caps, ordering, the empty-state leaf, search ranking, and (as source guards in
+`AutoWiringTest`) the rules the service must keep. They are not a substitute for the walk-through;
+they are what stops it from regressing between walk-throughs.
+
+**Setup, once per machine**
+
+1. Android Studio → **SDK Manager → SDK Tools** → check **Android Auto Desktop Head Unit Emulator**.
+   It installs to `$ANDROID_HOME/extras/google/auto/`.
+2. On the phone, enable Auto's developer mode: **Android Auto** settings → tap *Version* ten times →
+   overflow → **Start head unit server**.
+3. With the phone plugged in:
+
+   ```bash
+   adb forward tcp:5277 tcp:5277
+   "$ANDROID_HOME/extras/google/auto/desktop-head-unit"     # .exe on Windows
+   ```
+
+**Checklist to walk (record the result in the release checklist)**
+
+| # | Check | Pass looks like |
+|---|---|---|
+| 1 | Connect the phone with the app **not** running | The car shows the browse tree. Nothing starts playing on its own. |
+| 2 | Browse root | Two tabs, "Continue Listening" and "Library", and the Tandem icon. |
+| 3 | Open each tab | Content appears in a couple of seconds, well inside the ~10 s budget. |
+| 4 | Open Library with a large library | Alphabetical, no book listed twice, and books that are not downloaded are present. |
+| 5 | Play a downloaded book, then a book that is not downloaded | Both start; the second streams. |
+| 6 | Pause, then resume from the car's transport controls | Resumes where it stopped. |
+| 7 | Disconnect and reconnect mid-book | The book is at the top of Continue Listening at the right position, and **nothing auto-plays**. |
+| 8 | Voice: "Play *&lt;a book title&gt;* on Tandem" | That book starts. |
+| 9 | Voice: search by author or series name in Auto's search UI | Matching books are listed and playable. |
+| 10 | Voice: "Play Tandem" with no title | The most recently played book starts. |
+| 11 | Turn the server off (or airplane-mode the phone) and browse | Downloaded books still browse and play; nothing hangs waiting for the server. |
+| 12 | Sign out on the phone, then browse in the car | A single row reading "Open Tandem on your phone to sign in" — not a blank list. |
+
+Rows 1, 7, 11 and 12 are the ones most likely to fail a review, and rows 8–10 are the voice-actions
+checklist item that used to be advertised in the manifest without being implemented at all.
+
+If Auto ever becomes not worth the review dimension, **opting out is a Play Console listing change,
+not a code change** — the browse tree keeps working for sideloaded users either way.
 
 ## Casting
 
