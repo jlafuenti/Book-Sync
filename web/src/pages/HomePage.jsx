@@ -6,6 +6,9 @@ import {
     getDeviceId, getDeviceName,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
+import { handoffPositionMs } from '../lib/playbackOffsets'
+import { resolvePairOpenTarget } from '../lib/pairOpenTarget'
+import { pairSourceFromProgress } from '../utils/pairRouting'
 import useIsMobile from '../hooks/useIsMobile'
 import useCoverSrc from '../hooks/useCoverSrc'
 import EbookReader from '../components/EbookReader'
@@ -269,10 +272,17 @@ function HomePage() {
                 const pairInfo = pairMediaMap[pairId]
                 const ebookProg = pItems.find(p => p.media_type === 'ebook')
                 const audioProg = pItems.find(p => p.media_type === 'audiobook')
-                const ebookTime = ebookProg ? new Date(ebookProg.updated_at).getTime() : 0
-                const audioTime = audioProg ? new Date(audioProg.updated_at).getTime() : 0
-                const lastFormat = ebookTime >= audioTime ? 'ebook' : 'audiobook'
-                const primary = lastFormat === 'ebook' ? ebookProg : audioProg
+                // Which format this card opens is `bookmarks.source`, carried
+                // on the projection rows (issue #215). This used to compare
+                // the two rows' `updated_at`, but a pair-scoped write stamps
+                // both of them in one loop: the comparison always tied, and
+                // the tie always resolved to the ebook, so a pair last
+                // listened to on the phone still opened the reader here.
+                const lastFormat = resolvePairOpenTarget(pairSourceFromProgress(pItems), {
+                    hasEbook: !!pairInfo.ebookId,
+                    hasAudiobook: !!pairInfo.audiobookId,
+                })
+                const primary = lastFormat === 'audiobook' ? audioProg : ebookProg
                 const book = primary?.book || ebookProg?.book || audioProg?.book
 
                 return {
@@ -467,11 +477,14 @@ function HomePage() {
 
     const handleContinue = (item) => {
         if (item.itemType === 'pair') {
-            if (item.lastFormat === 'ebook' && item.ebookId) {
+            // `lastFormat` is already the resolved open target (issue #215):
+            // 'audiobook' when the pair's `source` claims it and the pair has
+            // one, otherwise the ebook.
+            if (item.lastFormat === 'audiobook' && item.audiobookId) {
+                openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
+            } else if (item.ebookId) {
                 const eb = item.ebookProgress
                 openReader(item.ebookId, item.book_pair_id, eb?.chapter, item.book?.title, item.audiobookId)
-            } else if (item.audiobookId) {
-                openPlayer(item.audiobookId, item.book_pair_id, item.audioProgress?.positionMs, item.ebookId)
             }
         } else if (item.itemType === 'ebook') {
             if (item.book?.format === 'epub') {
@@ -526,7 +539,10 @@ function HomePage() {
                         audioPositionMs = prog?.audio_position_ms || 0
                     }
                     setReaderOpen(null)
-                    openPlayer(readerOpen.pairedAudiobookId, readerOpen.pairId, audioPositionMs, readerOpen.ebookId)
+                    // The handoff is a resume: land 5s before the anchor
+                    // (issue #212, contract § Playback offsets).
+                    openPlayer(readerOpen.pairedAudiobookId, readerOpen.pairId,
+                        handoffPositionMs(audioPositionMs), readerOpen.ebookId)
                 } : null}
             />
         )

@@ -550,6 +550,97 @@ async def test_re_entering_the_end_zone_completes_again(
     assert again.json()["is_completed"] is True
 
 
+# ---------- the projection carries `source` (issue #215) ----------
+#
+# `bookmarks.source` is what decides which format a pair opens next, but the
+# Home/Continue lists read `user_progress`, which has no such column. The web
+# compensated by comparing the two rows' `updated_at` — and since a pair-scoped
+# write stamps both rows inside one loop, that comparison always tied and the
+# pair always opened in the reader. The projection reports the canonical
+# record's `source` instead; no schema change, one extra query.
+
+async def test_progress_rows_report_the_bookmarks_source(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="listener")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        source="audiobook", audio_position_ms=90_000,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+
+    rows = (await client.get("/api/sync/progress", headers=auth_header(user))).json()
+    sources = {r["media_type"]: r["source"] for r in rows}
+    # Both halves of a pair share one canonical record, so both rows report
+    # the same claim -- either one answers "where does this pair open?".
+    assert sources == {"ebook": "audiobook", "audiobook": "audiobook"}
+
+
+async def test_progress_source_follows_a_later_claim(
+    client, make_user, auth_header, db
+):
+    """The claim moves with actual consumption, and a save that omits `source`
+    leaves it alone (contract § Who may claim `source`)."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(client, user, auth_header, "pair", pair.id, source="audiobook",
+               audio_position_ms=90_000, captured_at="2026-07-30T10:00:00Z")
+    await _put(client, user, auth_header, "pair", pair.id, source="ebook",
+               epub_chapter=4, captured_at="2026-07-30T10:05:00Z")
+
+    rows = (await client.get("/api/sync/progress", headers=auth_header(user))).json()
+    assert {r["source"] for r in rows} == {"ebook"}
+
+    # A background save omits `source`; the stored claim survives it.
+    body = {"device_id": "pixel", "audio_position_ms": 95_000,
+            "captured_at": "2026-07-30T10:06:00Z"}
+    await client.put(f"/api/sync/position/pair/{pair.id}",
+                     headers=auth_header(user), json=body)
+
+    rows = (await client.get("/api/sync/progress", headers=auth_header(user))).json()
+    assert {r["source"] for r in rows} == {"ebook"}
+
+
+async def test_progress_source_is_null_when_no_bookmark_backs_the_row(
+    client, make_user, auth_header, db
+):
+    """A row with no canonical record behind it has nothing to claim, and must
+    say so rather than defaulting to a format."""
+    from models.progress import ProgressType, UserProgress
+    from tests.factories import make_ebook
+
+    user = await make_user(username="reader")
+    eb = await make_ebook(db, title="Orphan", filename="orphan.epub")
+    db.add(UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
+                        ebook_id=eb.id, epub_progress_percent=12.0,
+                        is_completed=False))
+    await db.commit()
+
+    rows = (await client.get("/api/sync/progress", headers=auth_header(user))).json()
+    assert len(rows) == 1
+    assert rows[0]["source"] is None
+
+
+async def test_standalone_progress_rows_report_their_own_source(
+    client, make_user, auth_header, db
+):
+    """Standalone media keep their own scope, so the row reads the standalone
+    bookmark rather than a pair's."""
+    from tests.factories import make_audiobook
+
+    user = await make_user(username="listener")
+    ab = await make_audiobook(db, title="Solo", filename="solo.m4b")
+
+    await _put(client, user, auth_header, "audiobook", ab.id, source="audiobook",
+               audio_position_ms=30_000, captured_at="2026-07-30T10:00:00Z")
+
+    rows = (await client.get("/api/sync/progress", headers=auth_header(user))).json()
+    assert [r["source"] for r in rows] == ["audiobook"]
+
+
 async def test_completion_thresholds_are_settings(monkeypatch, client, make_user,
                                                   auth_header, db):
     """One place decides the thresholds (issue #56 asked for exactly that)."""
