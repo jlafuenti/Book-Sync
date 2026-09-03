@@ -8,6 +8,7 @@ matcher that is hand-duplicated between the Python server and the Android client
 | `normalize_cases.json` | `services/sync_matcher.py::normalize_for_search` | `SyncMatcher.normalizeForSearch` |
 | `match_cases.json` | `services/sync_matcher.py::match_text_to_sync_points` | `SyncMatcher.match` |
 | `restore_cases.json` | `services/position_resolver.py::plan_restore` | `PositionResolver.planRestore` |
+| `pair_open_target.json` | — (client-side rule) | `BookSyncRepository.resolvePairOpenTarget` |
 
 Because the two implementations are maintained by hand, they can drift silently (this is
 exactly what issues #46 and #41 call out). Both sides are now enforced: the Python suite
@@ -25,6 +26,16 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   every other empty plan is the bug that opened a book at page one and let the next autosave
   overwrite a real position with chapter 0. `why` states what each case defends; keep it
   filled in.
+- `pair_open_target.json`: `[{ "name", "why", "source": "ebook"|"audiobook"|null,
+  "available": {"ebook": bool, "audiobook": bool}, "expected":
+  "ebook"|"audiobook"|"details" }]`. Which format a tap on a pair opens, keyed on
+  `bookmarks.source` per the contract's § "Who may claim `source`". This one has **no
+  Python half** — the rule is client-side — so the pair is Android's
+  `ResolvePairOpenTargetTest` and the web's `lib/pairOpenTarget.test.js`.
+  `available` means "openable by this client": *downloaded* on Android, *present on the
+  pair* on the web. The web keyed on the two `user_progress` rows' `updated_at` until
+  issue #215; a pair-scoped write stamps both in one loop, so that comparison always tied
+  and every pair opened in the reader.
 - `normalize_cases.json`: `[{ "input": str, "expected": str }]`.
 - `match_cases.json`: `[{ "name", "sync_points": [{chapter, sentence_index, preview,
   confidence?}], "epub_text", "chapter_hint", "expected_chapter": int|null,

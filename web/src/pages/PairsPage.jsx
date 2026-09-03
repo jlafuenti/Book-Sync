@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { getPairs, getUnpairedMedia, createPair, deletePair, getAllProgress } from '../api'
-import { pairTargetPath, lastFormatFromProgress } from '../utils/pairRouting'
+import { pairTargetPath, pairSourceFromProgress } from '../utils/pairRouting'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -40,8 +40,8 @@ function PairsPage({ tab }) {
     // pickers need nothing else, and the whole-library walk is gone.
     const [unpairedEbooks, setUnpairedEbooks] = useState([])
     const [unpairedAudiobooks, setUnpairedAudiobooks] = useState([])
-    // Progress records — used to determine `lastFormat` per pair so a pair-tap
-    // routes to whichever medium the user last used.
+    // Progress records — they carry the pair's `bookmarks.source`, which is
+    // what decides the medium a pair-tap opens (issue #215).
     const [progress, setProgress] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
@@ -80,7 +80,7 @@ function PairsPage({ tab }) {
 
     useEffect(() => { loadData() }, [])
 
-    // Group progress records by pair id so we can compute `lastFormat` per pair
+    // Group progress records by pair id so we can read each pair's `source`
     // for routing (audiobook vs ebook reader). Falls back to id-based lookup
     // if a record predates the `book_pair_id` column.
     const lastFormatByPairId = useMemo(() => {
@@ -103,7 +103,7 @@ function PairsPage({ tab }) {
         })
         const out = {}
         Object.entries(grouped).forEach(([pid, recs]) => {
-            out[pid] = lastFormatFromProgress(recs)
+            out[pid] = pairSourceFromProgress(recs)
         })
         return out
     }, [pairs, progress])
