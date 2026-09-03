@@ -723,7 +723,7 @@ class AudioPlayerService : MediaLibraryService() {
 
         // Verify the file exists locally — Cast streams from the phone, so if the file isn't
         // downloaded the receiver would 404 and idle.
-        if (!File(File(filesDir, "audiobooks"), filename).isFile) {
+        if (repository.localAudioFile(filename)?.isFile != true) {
             Log.w(TAG, "buildCastMediaItem: local file missing for '$filename'")
             return null
         }
@@ -847,11 +847,11 @@ class AudioPlayerService : MediaLibraryService() {
         val audioFile = when (val id = MediaId.parse(mediaId)) {
             is MediaId.Pair -> {
                 val pair = runBlocking { repository.getPairById(id.pairId) } ?: return null
-                File(filesDir, "audiobooks/${pair.audiobookFilename}")
+                repository.localAudioFile(pair.audiobookFilename) ?: return null
             }
             is MediaId.Audiobook -> {
                 val audio = runBlocking { repository.getAudiobookById(id.audiobookId) } ?: return null
-                File(filesDir, "audiobooks/${audio.filename}")
+                repository.localAudioFile(audio.filename) ?: return null
             }
             null -> return null
         }
@@ -1401,7 +1401,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                     val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    items.add(buildPairMediaItem(pair, resumeMs, coverUri))
+                    buildPairMediaItem(pair, resumeMs, coverUri)?.let { items.add(it) }
                 }
 
                 for (audio in recentStandalone) {
@@ -1409,7 +1409,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
                     val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    items.add(buildAudiobookMediaItem(audio, resumeMs, coverUri))
+                    buildAudiobookMediaItem(audio, resumeMs, coverUri)?.let { items.add(it) }
                 }
 
                 future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
@@ -1441,7 +1441,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                     val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    items.add(buildPairMediaItem(pair, resumeMs, coverUri))
+                    buildPairMediaItem(pair, resumeMs, coverUri)?.let { items.add(it) }
                 }
 
                 for (audio in downloadedStandalone) {
@@ -1450,7 +1450,7 @@ class AudioPlayerService : MediaLibraryService() {
                     val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
                     val coverUri = coverArtHelper.getCoverUri(audio.id, audio.filename, audio.coverFilename)
                     coverUri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                    items.add(buildAudiobookMediaItem(audio, resumeMs, coverUri))
+                    buildAudiobookMediaItem(audio, resumeMs, coverUri)?.let { items.add(it) }
                 }
 
                 // Final alphabetical sort across pairs and standalone
@@ -1526,11 +1526,16 @@ class AudioPlayerService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Null when the server's filename is not a plain name (issue #177): the
+     * book simply does not appear rather than the app resolving a path outside
+     * the audiobooks directory.
+     */
     private fun buildPairMediaItem(
         pair: BookPairEntity,
         resumePositionMs: Long,
         coverUri: Uri?
-    ): MediaItem {
+    ): MediaItem? {
         val extras = Bundle().apply {
             putLong("resumePositionMs", resumePositionMs)
             putLong("durationMs", (pair.audiobookDurationSeconds ?: 0) * 1000L)
@@ -1539,7 +1544,7 @@ class AudioPlayerService : MediaLibraryService() {
         }
         return MediaItem.Builder()
             .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(Uri.fromFile(File(filesDir, "audiobooks/${pair.audiobookFilename}")))
+            .setUri(Uri.fromFile(repository.localAudioFile(pair.audiobookFilename) ?: return null))
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(pair.audiobookTitle)
@@ -1554,11 +1559,12 @@ class AudioPlayerService : MediaLibraryService() {
             .build()
     }
 
+    /** Null for the same reason as [buildPairMediaItem] (issue #177). */
     private fun buildAudiobookMediaItem(
         audio: AudioBookEntity,
         resumePositionMs: Long,
         coverUri: Uri?
-    ): MediaItem {
+    ): MediaItem? {
         val extras = Bundle().apply {
             putLong("resumePositionMs", resumePositionMs)
             putLong("durationMs", (audio.durationSeconds ?: 0) * 1000L)
@@ -1567,7 +1573,7 @@ class AudioPlayerService : MediaLibraryService() {
         }
         return MediaItem.Builder()
             .setMediaId(MediaId.Audiobook(audio.id).value)
-            .setUri(Uri.fromFile(File(filesDir, "audiobooks/${audio.filename}")))
+            .setUri(Uri.fromFile(repository.localAudioFile(audio.filename) ?: return null))
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(audio.title)

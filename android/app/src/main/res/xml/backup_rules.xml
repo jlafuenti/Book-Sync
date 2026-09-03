@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The same rule for API 26-30 (issue #176), where Auto Backup reads
+  fullBackupContent rather than dataExtractionRules. minSdk is 26, so both files
+  are needed; keep them in step.
+
+  Include-list for the same reason as data_extraction_rules.xml: what is not
+  named here never leaves the device, including
+  files/datastore/booksync_prefs.preferences_pb, which holds the access and
+  refresh tokens in plaintext.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+</full-backup-content>
