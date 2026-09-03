@@ -22,6 +22,26 @@ data class RegisterRequest(
     val password: String
 )
 
+/**
+ * `POST /api/auth/register` (issue #221).
+ *
+ * A bare message, not a user. The route has no `response_model` and returns
+ * `{"message": "Access request submitted. …"}` — the account is created
+ * *pending*, so there is no session and nothing to describe. The declaration
+ * used to say [UserResponse], which had simply never been exercised: on a
+ * device the 201 decoded into "Fields [id, username, email, …] are required",
+ * and a request that had succeeded was shown to the user as a red error.
+ *
+ * Nullable with a default for the same reason [HealthResponse] is. This runs on
+ * the login screen, against whatever version of the server someone happens to
+ * host, and the 201 is the fact that matters — a body this app does not
+ * recognise must never turn a created account into a failure.
+ */
+@Serializable
+data class RegisterResponse(
+    val message: String? = null,
+)
+
 @Serializable
 data class TokenResponse(
     val access_token: String,
@@ -50,6 +70,23 @@ data class UserResponse(
      * deserializes a response from a server older than that change.
      */
     val must_reset_password: Boolean = false,
+)
+
+/**
+ * `GET /api/health` (issue #175) — the first-run "Check connection" probe.
+ *
+ * Every field is optional on purpose. The probe's job is to tell a stranger
+ * whether there is a Tandem server at the address they typed, and a server old
+ * enough to answer with a payload we don't recognise is still a server they can
+ * sign in to. A missing field must not become "connection failed": today's
+ * server sends `{"status": "healthy"}` and nothing else, so the version fields
+ * are absent from every deployment currently running.
+ */
+@Serializable
+data class HealthResponse(
+    val status: String? = null,
+    val api_version: Int? = null,
+    val app_version: String? = null,
 )
 
 @Serializable

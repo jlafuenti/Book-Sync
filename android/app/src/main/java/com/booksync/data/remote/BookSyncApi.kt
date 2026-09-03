@@ -11,13 +11,42 @@ import retrofit2.http.*
  */
 interface BookSyncApi {
 
+    // ============ Health ============
+
+    /**
+     * Readiness probe, used by the first-run "Check connection" (issue #175).
+     *
+     * Unauthenticated and cheap, which is what makes it the right thing to point
+     * at a URL a stranger just typed: it answers "is there a Tandem server here"
+     * before any credentials exist. Returns 503 when the server is up but its
+     * database is not, which surfaces as an `HttpException` rather than success —
+     * correct, since signing in would fail too.
+     *
+     * Takes an **absolute** URL, and carries [BYPASS_BASE_URL_HEADER] so
+     * `BaseUrlInterceptor` leaves it alone. The address being probed is by
+     * definition not the configured one — that is the question — and it must not
+     * be stored to become reachable: storing an unverified address put a
+     * mistyped host in DataStore and replaced the first-run screen with a login
+     * form for a server that does not exist. Only a verified address is stored,
+     * afterwards.
+     */
+    @Headers("$BYPASS_BASE_URL_HEADER: 1")
+    @GET
+    suspend fun getHealth(@Url url: String): HealthResponse
+
     // ============ Auth ============
 
     @POST("api/auth/login")
     suspend fun login(@Body request: LoginRequest): TokenResponse
 
+    /**
+     * Submit an access request. 201 with a bare `{"message": …}` — the account
+     * is created pending an admin's approval, so there is no user to return and
+     * no session. Was declared as `UserResponse` until issue #221 first called
+     * it from a device; see [RegisterResponse].
+     */
     @POST("api/auth/register")
-    suspend fun register(@Body request: RegisterRequest): UserResponse
+    suspend fun register(@Body request: RegisterRequest): RegisterResponse
 
     // NOTE: /api/auth/refresh is deliberately NOT here. It lives on
     // AuthRefreshApi, which is built on a client carrying no AuthInterceptor and
