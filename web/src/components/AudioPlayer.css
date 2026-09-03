@@ -433,6 +433,17 @@
     background: var(--bg-card);
 }
 
+/* Playback-failure indicator (issue #214): the one control in the mini player
+   that must read as a problem rather than a transport button. */
+.mini-player-controls button.mini-player-error {
+    color: var(--error);
+}
+
+.mini-player-controls button.mini-player-error:hover {
+    color: var(--error);
+    background: var(--error-bg);
+}
+
 .mini-player-time {
     font-size: 12px;
     color: var(--text-muted);

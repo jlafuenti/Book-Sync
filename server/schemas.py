@@ -401,6 +401,13 @@ class ProgressResponse(BaseModel):
     device_id: Optional[str]
     captured_at: Optional[datetime] = None
     device_name: Optional[str] = None
+    # Which format this book opens in next — `bookmarks.source`, read off the
+    # canonical record this row projects (issue #215). Not a `user_progress`
+    # column: the router lives on the bookmark, and the list endpoint joins it
+    # in. None means no canonical record backs this row, which is not the same
+    # as "ebook" — clients fall back deliberately rather than being told a
+    # claim nobody made.
+    source: Optional[BookmarkSource] = None
 
     class Config:
         from_attributes = True

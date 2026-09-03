@@ -67,7 +67,10 @@ function Harness({ audiobook = { title: 'A Book', cover_path: null } }) {
             <button onClick={() => player.skipForward()}>skip-fwd</button>
             <button onClick={() => player.setSpeed(1.25)}>set-speed</button>
             <button onClick={() => player.clearStaleConflict()}>clear-conflict</button>
+            <button onClick={() => player.retryPlayback()}>retry</button>
+            <button onClick={() => player.clearPlaybackError()}>clear-playback-error</button>
             <div data-testid="speed">{player.speed}</div>
+            <div data-testid="playback-error">{player.playbackError || ''}</div>
             <div data-testid="stale-conflict">
                 {player.staleConflict ? `${player.staleConflict.deviceName}|${player.staleConflict.position}` : ''}
             </div>
@@ -259,6 +262,113 @@ describe('AudioPlayerProvider stream-error recovery', () => {
         act(() => audio.dispatchEvent(new Event('error')))
 
         expect(getAudiobookStreamUrlMock).not.toHaveBeenCalled()
+    })
+
+    // Issue #214: the re-minted source failing too used to leave
+    // recoveringStreamRef latched `true` for the rest of the session -- every
+    // later `error` returned early, so nothing recovered and nothing was
+    // shown. Playback just sat there "paused".
+    it('surfaces playbackError when the re-minted source errors too, and un-latches the guard', async () => {
+        getAudiobookStreamUrlMock
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=first-token')
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=refreshed-token')
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=third-token')
+
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        // First error: the one-shot re-mint, as before.
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(2))
+        expect(screen.getByTestId('playback-error')).toHaveTextContent('')
+
+        // Second error, with no canplay in between: the refreshed source is
+        // broken too. That is a real failure and the listener must be told.
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() =>
+            expect(screen.getByTestId('playback-error')).not.toHaveTextContent(''))
+        // No third re-mint from that second error -- still one shot per load.
+        expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(2)
+
+        // ...but the guard is released, so a later transient failure (after
+        // playback got going again) can still self-heal.
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(3))
+    })
+
+    it('clears playbackError once the stream plays again', async () => {
+        getAudiobookStreamUrlMock
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=first-token')
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=refreshed-token')
+
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(2))
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() =>
+            expect(screen.getByTestId('playback-error')).not.toHaveTextContent(''))
+
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        await waitFor(() => expect(screen.getByTestId('playback-error')).toHaveTextContent(''))
+    })
+
+    it('reports the failure when re-minting the URL itself fails', async () => {
+        getAudiobookStreamUrlMock
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=first-token')
+            .mockRejectedValueOnce(new Error('network down'))
+
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        act(() => audio.dispatchEvent(new Event('canplay')))
+
+        act(() => audio.dispatchEvent(new Event('error')))
+
+        await waitFor(() =>
+            expect(screen.getByTestId('playback-error')).not.toHaveTextContent(''))
+    })
+
+    it('retryPlayback re-mints the stream and resumes at the same position', async () => {
+        getAudiobookStreamUrlMock
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=first-token')
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=refreshed-token')
+            .mockResolvedValueOnce('/api/files/audiobook/7?token=retry-token')
+
+        render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        audio.currentTime = 321.5
+
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(2))
+        act(() => audio.dispatchEvent(new Event('error')))
+        await waitFor(() =>
+            expect(screen.getByTestId('playback-error')).not.toHaveTextContent(''))
+        act(() => audio.pause())
+
+        fireEvent.click(screen.getByText('retry'))
+
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(3))
+        await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=retry-token'))
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        // A retry is a transparent refresh, not a user resume: exact position,
+        // no rewind (contract § Playback offsets).
+        expect(audio.currentTime).toBe(321.5)
+        expect(audio.paused).toBe(false)
+        expect(screen.getByTestId('playback-error')).toHaveTextContent('')
     })
 
     it('clears the recovery guard if re-minting the URL itself fails', async () => {

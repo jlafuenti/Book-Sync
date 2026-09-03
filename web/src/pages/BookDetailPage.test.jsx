@@ -244,7 +244,11 @@ describe('BookDetailPage reader/player handoff', () => {
         return await screen.findByTestId('reader')
     }
 
-    it('switching to audio takes the audio anchor from the canonical record', async () => {
+    // Issue #212: the handoff is a resume, so it backs up RESUME_REWIND_SECONDS
+    // (5 s) exactly like unpausing and exactly like Android's `epubToAudioText`.
+    // The *stored* anchor stays the raw matched point -- the rewind is applied
+    // here, at the call site, not to what `doSave` wrote.
+    it('switching to audio rewinds 5s off the canonical anchor', async () => {
         getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
         await openTheReader()
 
@@ -252,7 +256,17 @@ describe('BookDetailPage reader/player handoff', () => {
 
         await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 77))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            1538, expect.anything(), 42000, 900))
+            1538, expect.anything(), 37000, 900))
+    })
+
+    it('clamps the handoff rewind at 0 for an anchor under 5s', async () => {
+        getPositionMock.mockResolvedValue({ audio_position_ms: 2000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            1538, expect.anything(), 0, 900))
     })
 
     it('falls back to the progress projection when the record has no audio position', async () => {
@@ -264,7 +278,7 @@ describe('BookDetailPage reader/player handoff', () => {
 
         await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 1538))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            1538, expect.anything(), 9000, 900))
+            1538, expect.anything(), 4000, 900))
     })
 
     it('issues the reader flush before starting the audiobook (issue #158)', async () => {

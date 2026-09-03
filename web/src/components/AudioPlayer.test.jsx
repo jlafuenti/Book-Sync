@@ -119,6 +119,69 @@ describe('AudioPlayerView stale-conflict banner (issue #54)', () => {
     })
 })
 
+// Issue #214: a dead stream used to flip the play button to "paused" and say
+// nothing at all — the listener could not tell the app, the network and a
+// missing file apart.
+describe('playback-failure banner (issue #214)', () => {
+    const FAILED = 'Playback stopped — the audio stream could not be loaded.'
+
+    it('renders nothing on the full player when playback is healthy', async () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer())
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+        expect(screen.queryByText(/Playback stopped/)).not.toBeInTheDocument()
+    })
+
+    it('shows the failure and a Retry that calls back into the player', async () => {
+        const retryPlayback = vi.fn()
+        const clearPlaybackError = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({
+            playbackError: FAILED, retryPlayback, clearPlaybackError,
+        }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        expect(screen.getByText(FAILED)).toBeInTheDocument()
+
+        fireEvent.click(screen.getByText('Retry'))
+        expect(retryPlayback).toHaveBeenCalledTimes(1)
+    })
+
+    it('can be dismissed without retrying', async () => {
+        const retryPlayback = vi.fn()
+        const clearPlaybackError = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({
+            playbackError: FAILED, retryPlayback, clearPlaybackError,
+        }))
+        render(<AudioPlayerView onClose={vi.fn()} />)
+        await waitFor(() => expect(getAudiobookChaptersMock).toHaveBeenCalled())
+
+        fireEvent.click(screen.getByTitle('Dismiss'))
+        expect(clearPlaybackError).toHaveBeenCalledTimes(1)
+        expect(retryPlayback).not.toHaveBeenCalled()
+    })
+
+    it('the mini player shows a compact indicator that retries', () => {
+        const retryPlayback = vi.fn()
+        useAudioPlayerMock.mockReturnValue(basePlayer({
+            playbackError: FAILED, retryPlayback, stop: vi.fn(),
+        }))
+        render(<MiniPlayer onExpand={vi.fn()} />)
+
+        const indicator = screen.getByTitle(FAILED)
+        expect(indicator).toBeInTheDocument()
+
+        fireEvent.click(indicator)
+        expect(retryPlayback).toHaveBeenCalledTimes(1)
+    })
+
+    it('the mini player shows no indicator when playback is healthy', () => {
+        useAudioPlayerMock.mockReturnValue(basePlayer({ stop: vi.fn() }))
+        render(<MiniPlayer onExpand={vi.fn()} />)
+        expect(screen.queryByText(/Playback failed/)).not.toBeInTheDocument()
+    })
+})
+
 describe('AudioPlayerView Session History device attribution (issue #54)', () => {
     it('shows device_name per entry, falls back to device_id, and omits the label when both are absent', async () => {
         getBookmarkLogMock.mockResolvedValue([
