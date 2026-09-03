@@ -1439,7 +1439,9 @@ async def auto_match_books(db: AsyncSession) -> int:
 
     if auto_transcribe and new_pair_ids:
         from services.queue_manager import add_to_queue
-        await add_to_queue(new_pair_ids)
+        # Share this transaction: the pairs above are flushed, not committed,
+        # so a second session would not see them (issue #199).
+        await add_to_queue(new_pair_ids, db)
 
     return matched
 
@@ -2020,7 +2022,8 @@ async def create_pair(
     setting = setting_result.scalar_one_or_none()
     if setting and setting.value and setting.value.lower() == "true":
         from services.queue_manager import add_to_queue
-        await add_to_queue([pair.id])
+        # Share this transaction — the pair is only flushed here (issue #199).
+        await add_to_queue([pair.id], db)
 
     # Reload with relationships
     result = await db.execute(

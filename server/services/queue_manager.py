@@ -28,6 +28,7 @@ import zipfile
 from typing import Optional
 
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import async_session
@@ -70,49 +71,81 @@ OFFHOURS_TICK_SECONDS = 60
 _resources_released = False
 
 
-async def add_to_queue(pair_ids: list[int]) -> list[TranscriptionQueueItem]:
+async def _add_to_queue_in(
+    db: AsyncSession, pair_ids: list[int]
+) -> list[TranscriptionQueueItem]:
+    """Create the queue rows in [db]. Flushes; never commits."""
+    created = []
+    for pair_id in pair_ids:
+        # Check pair exists
+        result = await db.execute(
+            select(BookPair).where(BookPair.id == pair_id)
+        )
+        pair = result.scalar_one_or_none()
+        if not pair:
+            logger.warning(f"Pair {pair_id} not found, skipping")
+            continue
+
+        # Check not already queued
+        existing = await db.execute(
+            select(TranscriptionQueueItem).where(
+                TranscriptionQueueItem.book_pair_id == pair_id,
+                TranscriptionQueueItem.status.in_(["pending", "in_progress"]),
+            )
+        )
+        if existing.scalar_one_or_none():
+            logger.info(f"Pair {pair_id} already in queue, skipping")
+            continue
+
+        item = TranscriptionQueueItem(
+            book_pair_id=pair_id,
+            status="pending",
+            priority=100,
+            progress=0.0,
+            message="Waiting in queue",
+        )
+        db.add(item)
+        created.append(item)
+
+    # Flush so the new rows have ids, and so the dedup SELECT above sees them
+    # on a later call within the same transaction.
+    await db.flush()
+    return created
+
+
+async def add_to_queue(
+    pair_ids: list[int], db: Optional[AsyncSession] = None
+) -> list[TranscriptionQueueItem]:
     """
     Add one or more book pairs to the transcription queue.
     Skips pairs that are already queued.
     Returns the list of newly created queue items.
+
+    Pass [db] when the pairs are not committed yet (issue #199). The library
+    endpoints create a pair and queue it in the same request: with no session
+    to share, this function opened its own, and on Postgres that session cannot
+    see the caller's uncommitted row — the pair was "not found" and
+    auto-transcribe silently queued nothing. When [db] is given the rows are
+    written into that transaction and only flushed, so the queue item commits —
+    or rolls back — atomically with the pair; the caller's `get_db` decides.
+    Committing early in the router instead would split pair creation from the
+    response into two transactions.
+
+    With no [db], the old behaviour stands: own session, own commit. That is
+    what the background loop and the transcription/troubleshoot routers rely
+    on, and their pairs are already committed.
     """
-    created = []
-    async with async_session() as db:
-        for pair_id in pair_ids:
-            # Check pair exists
-            result = await db.execute(
-                select(BookPair).where(BookPair.id == pair_id)
-            )
-            pair = result.scalar_one_or_none()
-            if not pair:
-                logger.warning(f"Pair {pair_id} not found, skipping")
-                continue
+    if db is not None:
+        created = await _add_to_queue_in(db, pair_ids)
+        logger.info(f"Added {len(created)} item(s) to transcription queue")
+        return created
 
-            # Check not already queued
-            existing = await db.execute(
-                select(TranscriptionQueueItem).where(
-                    TranscriptionQueueItem.book_pair_id == pair_id,
-                    TranscriptionQueueItem.status.in_(["pending", "in_progress"]),
-                )
-            )
-            if existing.scalar_one_or_none():
-                logger.info(f"Pair {pair_id} already in queue, skipping")
-                continue
-
-            item = TranscriptionQueueItem(
-                book_pair_id=pair_id,
-                status="pending",
-                priority=100,
-                progress=0.0,
-                message="Waiting in queue",
-            )
-            db.add(item)
-            created.append(item)
-
-        await db.commit()
+    async with async_session() as own_db:
+        created = await _add_to_queue_in(own_db, pair_ids)
+        await own_db.commit()
         # Refresh to get IDs
         for item in created:
-            await db.refresh(item)
+            await own_db.refresh(item)
 
     logger.info(f"Added {len(created)} item(s) to transcription queue")
     return created

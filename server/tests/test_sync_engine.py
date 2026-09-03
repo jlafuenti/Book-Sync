@@ -15,6 +15,7 @@ from models.book import AudioBook, BookPair, EBook
 from models.sync_map import SyncMap, SyncPoint
 from services.alignment import AlignedPoint
 from services.sync_engine import audio_to_epub, epub_to_audio, save_sync_map
+from tests.factories import make_book_pair
 
 
 @dataclass
@@ -91,8 +92,9 @@ def _aligned(ch, si, ms):
 
 
 async def test_save_sync_map_creates_map_and_points(db):
+    pair = await make_book_pair(db)
     points = [_aligned(0, 0, 0), _aligned(0, 1, 3000), _aligned(1, 0, 6000)]
-    sm = await save_sync_map(db, book_pair_id=1, aligned_points=points)
+    sm = await save_sync_map(db, book_pair_id=pair.id, aligned_points=points)
 
     assert sm.version == 1
     assert sm.total_sentences == 3
@@ -166,13 +168,14 @@ async def test_save_sync_map_leaves_the_hash_null_when_the_file_wont_open(db, tm
 
 
 async def test_save_sync_map_replaces_and_bumps_version(db):
-    await save_sync_map(db, 1, [_aligned(0, 0, 0), _aligned(0, 1, 3000)])
-    sm2 = await save_sync_map(db, 1, [_aligned(0, 0, 0)])
+    pair = await make_book_pair(db)
+    await save_sync_map(db, pair.id, [_aligned(0, 0, 0), _aligned(0, 1, 3000)])
+    sm2 = await save_sync_map(db, pair.id, [_aligned(0, 0, 0)])
 
     assert sm2.version == 2
     assert sm2.total_sentences == 1
 
     maps = (await db.execute(
-        select(SyncMap).where(SyncMap.book_pair_id == 1)
+        select(SyncMap).where(SyncMap.book_pair_id == pair.id)
     )).scalars().all()
     assert len(maps) == 1  # old map replaced, not duplicated
