@@ -101,6 +101,60 @@ class UpdateBookmarkMetadataTest {
     }
 
     @Test
+    fun `keeps the sync-map version the stored sentence index was resolved against`() = runTest {
+        // Issue #116: the version travels with the index it describes, and this
+        // call touches neither. Dropping it would leave a sentence index that
+        // attests to no map at all, so its next push could not be told apart
+        // from one resolved against whatever map happens to be live then.
+        val existing = BookmarkEntity(
+            scopeKey = TEST_SCOPE,
+            bookPairId = 42,
+            source = "audiobook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            syncMapVersion = 4,
+            audioPositionMs = 54_000,
+            updatedAt = "1000",
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
+
+        val saved = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
+
+        repository().updateBookmarkMetadata(42, source = "ebook")
+
+        assertEquals(4, saved.captured.syncMapVersion)
+    }
+
+    @Test
+    fun `keeps the device attribution of the write it is merging onto`() = runTest {
+        // The row still describes the position that other device recorded; this
+        // call only re-labels which format the user was last in. Re-stamping it
+        // with this device would make the conflict resolver treat a foreign
+        // write as local on the next 409.
+        val existing = BookmarkEntity(
+            scopeKey = TEST_SCOPE,
+            bookPairId = 42,
+            source = "audiobook",
+            epubChapter = 39,
+            epubSentenceIndex = 12,
+            audioPositionMs = 54_000,
+            updatedAt = "1000",
+            deviceId = "other-device",
+            deviceName = "Kitchen tablet",
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns existing
+
+        val saved = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(saved)) } returns Unit
+
+        repository().updateBookmarkMetadata(42, source = "ebook")
+
+        assertEquals("other-device", saved.captured.deviceId)
+        assertEquals("Kitchen tablet", saved.captured.deviceName)
+    }
+
+    @Test
     fun `never calls the server or enqueues pending_sync`() = runTest {
         coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns null
 

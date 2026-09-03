@@ -196,15 +196,33 @@ closing first because they are small: `FilterPill.jsx` (1.9%), `MobileTopBar.jsx
 
 Same rule again. After any PR that raises the Android total, bump `minValue` in the `kover`
 block of `android/app/build.gradle.kts` to `new_total − 3`, whole percent. Milestone targets:
-**10 → 20 → 30** and up (a lower ladder than server/web — the module starts further back).
+**10 → 20 → 30 → 40** and up (a lower ladder than server/web — the module started further
+back). Reached 40 on 2026-09-03; next rung is 50.
 
-Highest-leverage backfill targets, by missed lines as of the 2026-07-28 run (all at 0%):
-`BookSyncRepository` (497 lines — by far the biggest single win), `PlayerViewModel` (261),
-`SearchViewModel` (147), `LibraryViewModel` (129), `BookDetailsViewModel` (78),
-`DiagnosticsViewModel` (69), `HomeViewModel` (62), `DiagnosticLogger` (57),
-`DownloadedViewModel` (50), `DownloadWorker` (45), `AuthInterceptor` (23). The ViewModels are
-the cheapest of these — mockk + `Dispatchers.setMain` already work here, see the Android
-section below.
+Highest-leverage backfill targets, by **missed** lines as of the 2026-09-03 run. The list is
+no longer "all at 0%": `BookSyncRepository`, `PlayerViewModel` and `DownloadedViewModel` are
+part-covered, and `AuthInterceptor` has dropped off it entirely (#143/#218). What is left is
+mostly the ViewModels:
+
+| Class (with its lambdas) | Missed | Covered |
+|---|---|---|
+| `BookSyncRepository` | 316 | 605 |
+| `PlayerViewModel` | 291 | 98 |
+| `LibraryViewModel` | 227 | 0 |
+| `SearchViewModel` | 152 | 0 |
+| `HomeViewModel` | 142 | 0 |
+| `BookDetailsViewModel` | 114 | 0 |
+| `DownloadWorker` | 110 | 0 |
+| `DiagnosticsViewModel` | 72 | 0 |
+| `NewItemsViewModel` | 61 | 0 |
+| `DownloadedViewModel` | 57 | 23 |
+| `DiagnosticLogger` | 57 | 0 |
+| `ReaderViewModel` | 46 | 0 |
+
+The ViewModels are the cheapest of these — mockk + `Dispatchers.setMain` already work here,
+see the Android section below. Regenerate the table with
+`./gradlew :app:koverXmlReportDebug` and total the `LINE` counters per class in
+`app/build/reports/kover/reportDebug.xml`.
 
 ## Web (`web/`)
 
@@ -275,6 +293,18 @@ the ±3 window of the interpolation nudge). It mirrors the corresponding asserti
 authenticate that call), and clear the local tokens unconditionally so an offline or
 already-expired session can still log out.
 
+The HTTP stack is pinned with **`okhttp3:mockwebserver`** rather than a mocked
+`Interceptor.Chain`, because both bugs it guards are about *how many requests actually
+leave*: `TokenRefreshTest` asserts that a rejected refresh does not recurse, that five
+concurrent 401s produce exactly one refresh POST, and that a redirect before the 401 does not
+suppress it (#143); `RetryInterceptorTest` asserts that a persistent 5xx is returned rather
+than disguised as an IOException, that a 4xx is not retried at all, and that the backoff
+between attempts doubles (#218). A mocked chain can express none of those.
+
+The Media3 media-id wire format has exactly one owner, `player/MediaId.kt`, so its
+`pair_N` / `audiobook_N` dispatch is a pure function `MediaIdTest` can pin end to end even
+though `AudioPlayerService` itself is excluded below.
+
 The module has **mockk** and **kotlinx-coroutines-test** (`testOptions.unitTests
 .isReturnDefaultValues = true`), so ViewModels are testable off-device: mock the
 collaborators, `Dispatchers.setMain(UnconfinedTestDispatcher())` so `viewModelScope.launch`
@@ -300,8 +330,8 @@ cd android
 ```
 
 The floor lives in the `kover { reports { verify { ... } } }` block of
-`android/app/build.gradle.kts`, currently **7% lines** — measured total was **10.63%** on
-2026-07-28 (the post-#82 baseline), floor set a few points under, exactly like the server's
+`android/app/build.gradle.kts`, currently **40% lines** — measured total was **43.86%**
+(1722/3926 lines) on 2026-09-03, floor set a few points under, exactly like the server's
 `--cov-fail-under`. `.github/workflows/android-tests.yml` runs
 `koverXmlReportDebug` + `koverVerifyDebug` after the test step (Kover reuses the test run; it
 does not re-execute the suite) and uploads `reportDebug.xml` as the `android-coverage`
@@ -321,10 +351,10 @@ number is not a whole-app figure. Three buckets are excluded from the denominato
    the server excluding its ffmpeg/hardware glue.
 
 **ViewModels are deliberately *not* excluded** even though they live under `ui/`. They are
-plain JVM classes, two are already tested, and they are the largest untested logic surface in
-the app — excluding them would make the floor look better while hiding the thing most worth
-fixing. Because they're in the denominator the starting floor is low; that's the point of the
-ratchet.
+plain JVM classes, several are already tested, and they remain the largest untested logic
+surface in the app — excluding them would make the floor look better while hiding the thing
+most worth fixing. Because they're in the denominator the starting floor was low; that's the
+point of the ratchet.
 
 Like the web thresholds, the floor applies to whatever actually ran — a filtered test run
 will fail it spuriously. Only the full `koverVerifyDebug` is the gate.
