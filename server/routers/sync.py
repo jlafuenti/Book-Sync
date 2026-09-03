@@ -76,11 +76,42 @@ async def get_all_progress(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all progress records for the current user."""
-    result = await db.execute(
+    """Get all progress records for the current user, each carrying `source`.
+
+    `source` lives on the canonical `bookmarks` row, not on `user_progress`,
+    but it is what decides which format a pair opens next
+    (`resolvePairOpenTarget`). Without it on this list the web had nothing to
+    route on and compared the two rows' `updated_at` instead — and a
+    pair-scoped write stamps both rows in the same loop, so that comparison
+    always tied and the pair always opened in the reader (issue #215).
+
+    One extra query, keyed the three ways a row can be scoped. A row with no
+    bookmark behind it reports None: no claim, rather than a made-up one.
+    """
+    rows = (await db.execute(
         select(UserProgress).where(UserProgress.user_id == current_user.id)
-    )
-    return result.scalars().all()
+    )).scalars().all()
+
+    bookmarks = (await db.execute(
+        select(Bookmark).where(Bookmark.user_id == current_user.id)
+    )).scalars().all()
+    by_pair = {b.book_pair_id: b.source for b in bookmarks if b.book_pair_id is not None}
+    by_ebook = {b.ebook_id: b.source for b in bookmarks
+                if b.book_pair_id is None and b.ebook_id is not None}
+    by_audiobook = {b.audiobook_id: b.source for b in bookmarks
+                    if b.book_pair_id is None and b.audiobook_id is not None}
+
+    out = []
+    for row in rows:
+        # Pair scope first: a paired medium's routing follows the pair's own
+        # record, which is the one both halves share.
+        source = by_pair.get(row.book_pair_id) if row.book_pair_id is not None else None
+        if source is None:
+            source = (by_ebook.get(row.ebook_id)
+                      if row.media_type == ProgressType.EBOOK
+                      else by_audiobook.get(row.audiobook_id))
+        out.append(ProgressResponse.model_validate(row).model_copy(update={"source": source}))
+    return out
 
 
 @router.get(

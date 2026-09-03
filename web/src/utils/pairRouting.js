@@ -1,40 +1,48 @@
+import { resolvePairOpenTarget } from '../lib/pairOpenTarget'
+
 /**
- * Decide where a click on a paired book should land based on what the user
- * last did with the pair.
+ * Decide where a click on a paired book should land.
  *
- * @param {Object} pair         An object with at least `ebook_id` and/or `audiobook_id`.
- * @param {string|null} lastFormat  'audiobook' | 'ebook' | null/undefined.
- *                                  Typically `bookmark.source`, or computed from
- *                                  per-format progress timestamps.
- * @returns {string|null}       Path to navigate to, or null when neither side exists.
+ * The routing rule itself lives in `lib/pairOpenTarget` — shared with Android
+ * through the golden vectors in
+ * `server/tests/fixtures/sync_parity/pair_open_target.json`. This wrapper only
+ * turns the resolved format into a route.
+ *
+ * @param {Object} pair    An object with at least `ebook_id` and/or `audiobook_id`.
+ * @param {string|null} source  `bookmarks.source`: 'audiobook' | 'ebook' | null.
+ * @returns {string|null}  Path to navigate to, or null when neither side exists.
  */
-export function pairTargetPath(pair, lastFormat) {
+export function pairTargetPath(pair, source) {
     if (!pair) return null
-    if (lastFormat === 'audiobook' && pair.audiobook_id) {
-        return `/book/audiobook/${pair.audiobook_id}`
-    }
-    if (lastFormat === 'ebook' && pair.ebook_id) {
-        return `/book/ebook/${pair.ebook_id}`
-    }
-    // Fallback — matches today's hardcoded behavior (prefer ebook).
-    if (pair.ebook_id)     return `/book/ebook/${pair.ebook_id}`
-    if (pair.audiobook_id) return `/book/audiobook/${pair.audiobook_id}`
+    const target = resolvePairOpenTarget(source, {
+        hasEbook: !!pair.ebook_id,
+        hasAudiobook: !!pair.audiobook_id,
+    })
+    if (target === 'audiobook') return `/book/audiobook/${pair.audiobook_id}`
+    if (target === 'ebook') return `/book/ebook/${pair.ebook_id}`
+    // 'details' with nothing to show: the caller has no pair page to fall back
+    // to here, so there is no route.
     return null
 }
 
 /**
- * Compute the "last used" format for a pair from a list of progress records.
- * Returns 'audiobook' | 'ebook' | null.
+ * The pair's `bookmarks.source` as carried by its progress rows.
  *
- * @param {Array} progressRecords  Records with `media_type` ('ebook' | 'audiobook')
- *                                 and `updated_at` (ISO string).
+ * `GET /api/sync/progress` projects the canonical bookmark's `source` onto
+ * every row it produced (issue #215), so both rows of a pair report the same
+ * value and either one answers.
+ *
+ * This replaced a comparison of the two rows' `updated_at` timestamps. A
+ * pair-scoped write stamps both rows inside one loop, so those timestamps are
+ * equal and the comparison always tied — resolving, every time, to the ebook.
+ *
+ * @param {Array} progressRecords  Records carrying `source` ('ebook' | 'audiobook').
+ * @returns {string|null}
  */
-export function lastFormatFromProgress(progressRecords) {
-    if (!progressRecords || progressRecords.length === 0) return null
-    const ebook = progressRecords.find(p => p.media_type === 'ebook')
-    const audio = progressRecords.find(p => p.media_type === 'audiobook')
-    const ebookT = ebook ? new Date(ebook.updated_at).getTime() : 0
-    const audioT = audio ? new Date(audio.updated_at).getTime() : 0
-    if (ebookT === 0 && audioT === 0) return null
-    return audioT > ebookT ? 'audiobook' : 'ebook'
+export function pairSourceFromProgress(progressRecords) {
+    if (!progressRecords) return null
+    for (const rec of progressRecords) {
+        if (rec?.source === 'ebook' || rec?.source === 'audiobook') return rec.source
+    }
+    return null
 }
