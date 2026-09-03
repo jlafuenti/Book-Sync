@@ -68,8 +68,8 @@ class ServerUrlPolicyTest {
     // The IPv4 samples use 203.0.113.x (RFC 5737 TEST-NET-3, the documentation
     // range) rather than a realistic 192.168.x.y. Not cosmetic: the repo-wide
     // guard in server/tests/test_android_no_personal_hosts.py fails the build on
-    // an RFC1918 literal anywhere in the Android sources, tests included. The
-    // parser does not care which address this is.
+    // an RFC1918 literal anywhere in the Android sources — tests and comments
+    // included (issue #188). The parser does not care which address this is.
     @Test
     fun `a bare host gets https rather than being rejected`() {
         // What a real user types on first run. Rejecting these would be correct

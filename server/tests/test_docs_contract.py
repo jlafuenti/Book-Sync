@@ -2,8 +2,8 @@
 Docs index contract (issues #239, #241 — pre-publication review).
 
 `docs/` had no index of its own and the root README kept a hand-maintained
-table listing 8 of 10 files, which is how `docs/handoff-position-sync.md` and
-five shipped implementation plans under `docs/superpowers/` sat in the tree with
+table listing 8 of 10 files, which is how a merged-branch handoff note and five
+shipped implementation plans under `docs/superpowers/` sat in the tree with
 nothing pointing at them and nobody noticing they had gone stale. GitHub renders
 `docs/` as a bare file list, so on a public repo an unindexed file is just a
 filename.
@@ -136,4 +136,56 @@ def test_no_shipped_implementation_plans_under_docs():
         f"Implementation plans tracked under docs/: {offenders}. Plans and specs "
         "belong in the issue/PR or an untracked path, not in the published docs "
         "tree where a visitor can't tell them from current documentation."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #183: CLAUDE.md documented env vars that do not exist.
+#
+# `REMOTE_TRANSCRIPTION_URL`, `EBOOKS_PATH`, `AUDIOBOOKS_PATH` and
+# `APP_DATA_PATH` were all read by nothing. `Settings` is configured with
+# `extra = "ignore"`, so setting one is not an error — it is silently discarded,
+# and the operator gets the default with no clue why. Every agent session and
+# most contributors read this file first, so a wrong name here propagates.
+# ---------------------------------------------------------------------------
+
+_CONFIG_SECTION_HEADING = "### Key Config Variables"
+_ENV_TOKEN_RE = re.compile(r"`([A-Z][A-Z0-9_]{2,})`")
+
+
+def _claude_md_config_section() -> str:
+    with open(os.path.join(_REPO_ROOT, "CLAUDE.md"), encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.find(_CONFIG_SECTION_HEADING)
+    assert start != -1, (
+        f"CLAUDE.md no longer has a '{_CONFIG_SECTION_HEADING}' section. If it "
+        "moved, point this test at the new heading; if the names moved into "
+        "README.md, this test should follow them there."
+    )
+    rest = text[start + len(_CONFIG_SECTION_HEADING):]
+    end = rest.find("\n#")
+    return rest if end == -1 else rest[:end]
+
+
+def _settings_env_names() -> set[str]:
+    """Every name `Settings` will actually read: aliases, plus field names."""
+    from config import Settings
+
+    names = set()
+    for field_name, field in Settings.model_fields.items():
+        names.add(field_name.upper())
+        if field.alias:
+            names.add(field.alias.upper())
+    return names
+
+
+def test_claude_md_config_names_are_real_settings_aliases():
+    documented = set(_ENV_TOKEN_RE.findall(_claude_md_config_section()))
+    assert documented, "no env var names found in the CLAUDE.md config section"
+    unknown = sorted(documented - _settings_env_names())
+    assert not unknown, (
+        f"CLAUDE.md documents env vars that `Settings` does not read: {unknown}. "
+        "config.py uses `extra = \"ignore\"`, so setting one of these does "
+        "nothing at all and reports nothing. Use the `alias=` value from "
+        "server/config.py."
     )

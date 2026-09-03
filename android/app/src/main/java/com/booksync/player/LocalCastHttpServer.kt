@@ -12,11 +12,12 @@ import java.util.logging.Level
  * Tiny LAN-only HTTP server that streams downloaded audiobook files to a Cast receiver.
  *
  * Why this exists: the Google Home Mini hardcodes its DNS to 8.8.8.8/8.8.4.4 and ignores
- * the DHCP-provided resolver, so it can't resolve our LAN-only `tandem.lafuenti.com` and
- * fails the Cast LOAD before any HTTP request leaves the speaker. Audiobooks are already
- * on-device after download, so the phone can serve them directly to the speaker over the
- * Wi-Fi LAN — no DNS, no public exposure. This mirrors how Audiobookshelf casts (direct
- * file streaming with HTTP Range support, mimeType audio/mp4).
+ * the DHCP-provided resolver, so it can't resolve a LAN-only hostname (the usual way to
+ * reach a self-hosted Tandem) and fails the Cast LOAD before any HTTP request leaves the
+ * speaker. Audiobooks are already on-device after download, so the phone can serve them
+ * directly to the speaker over the Wi-Fi LAN — no DNS, no public exposure. This mirrors
+ * how Audiobookshelf casts (direct file streaming with HTTP Range support, mimeType
+ * audio/mp4).
  *
  * URL shape: `http://<phone-IP>:<port>/<pathToken>/<URL-encoded filename>`.
  *
