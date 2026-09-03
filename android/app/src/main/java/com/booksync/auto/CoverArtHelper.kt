@@ -9,6 +9,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.booksync.data.remote.ServerUrlManager
+import com.booksync.data.util.localFileName
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.player.CoverArtRung
 import com.booksync.player.coverArtPlan
@@ -71,8 +72,14 @@ class CoverArtHelper @Inject constructor(
         serverCoverPath: String? = null,
     ): Uri? {
         val coverFile = File(coversDir, "$audiobookId.jpg")
+        // Sanitised, not joined verbatim (issue #177): this name comes from the
+        // server. No repository dependency here on purpose, so it uses the pure
+        // helper and asserts containment itself.
+        val audioDir = File(context.filesDir, AUDIOBOOKS_DIR)
         val audioFile = audiobookFilename
-            ?.let { File(File(context.filesDir, AUDIOBOOKS_DIR), it) }
+            ?.let { localFileName(it) }
+            ?.let { File(audioDir, it) }
+            ?.takeIf { it.canonicalPath.startsWith(audioDir.canonicalPath + File.separator) }
             ?.takeIf { it.exists() }
 
         val plan = coverArtPlan(

@@ -4,6 +4,7 @@ import com.booksync.sync.SyncMatcher
 
 import android.content.Context
 import com.booksync.data.local.dao.*
+import com.booksync.data.util.localFileName
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.*
@@ -602,7 +603,7 @@ class BookSyncRepository @Inject constructor(
         log("downloadEbook — pairId=${pair.id} file=${pair.ebookFilename}")
         val file = streamToFile(
             api.downloadEbook(pair.ebookId),
-            File(File(context.filesDir, "ebooks"), pair.ebookFilename),
+            requireLocalFile("ebooks", pair.ebookFilename),
             onProgress,
         )
         bookPairDao.setEbookDownloaded(pair.id, true)
@@ -614,7 +615,7 @@ class BookSyncRepository @Inject constructor(
     suspend fun downloadStandaloneEbook(ebook: EBookEntity, onProgress: (Int) -> Unit = {}): File {
         val file = streamToFile(
             api.downloadEbook(ebook.id),
-            File(File(context.filesDir, "ebooks"), ebook.filename),
+            requireLocalFile("ebooks", ebook.filename),
             onProgress,
         )
         eBookDao.setDownloaded(ebook.id, true)
@@ -626,7 +627,7 @@ class BookSyncRepository @Inject constructor(
         log("downloadAudiobook — pairId=${pair.id} file=${pair.audiobookFilename}")
         val file = streamToFile(
             api.downloadAudiobook(pair.audiobookId),
-            File(File(context.filesDir, "audiobooks"), pair.audiobookFilename),
+            requireLocalFile("audiobooks", pair.audiobookFilename),
             onProgress,
         )
         bookPairDao.setAudiobookDownloaded(pair.id, true)
@@ -638,7 +639,7 @@ class BookSyncRepository @Inject constructor(
     suspend fun downloadStandaloneAudiobook(audio: AudioBookEntity, onProgress: (Int) -> Unit = {}): File {
         val file = streamToFile(
             api.downloadAudiobook(audio.id),
-            File(File(context.filesDir, "audiobooks"), audio.filename),
+            requireLocalFile("audiobooks", audio.filename),
             onProgress,
         )
         audioBookDao.setDownloaded(audio.id, true)
@@ -736,11 +737,72 @@ class BookSyncRepository @Inject constructor(
         return false
     }
 
+    // ---------------------------------------------------------------------
+    // Local file paths (issue #177)
+    //
+    // Every one of these names arrives in the server's JSON. Joined verbatim
+    // they were a path traversal: "../datastore/booksync_prefs.preferences_pb"
+    // as a filename let a hostile or mistyped server overwrite the token store
+    // or the Room database with a book body, and the delete paths would remove
+    // any file under filesDir. Writes cannot escape the sandbox on Android 10+,
+    // so the blast radius is the app's own data — still the first thing a
+    // reviewer files against a public repo.
+    //
+    // An honest server only ever sends basenames, so this is an identity
+    // mapping for every file already on disk: no migration, and nothing that
+    // works today stops working.
+    // ---------------------------------------------------------------------
+
+    /** [localFile] for the ebooks directory. Null when the name is not a plain filename. */
+    fun localEbookFile(serverFilename: String): File? = localFile("ebooks", serverFilename)
+
+    /** [localFile] for the audiobooks directory. Null when the name is not a plain filename. */
+    fun localAudioFile(serverFilename: String): File? = localFile("audiobooks", serverFilename)
+
+    /**
+     * Resolve a server-supplied filename inside [dirName], or null.
+     *
+     * The containment assertion is belt and braces: [localFileName] has already
+     * rejected anything with a separator, so a canonical path outside the
+     * directory should be unreachable. That is exactly why it is worth
+     * asserting — if the platform ever disagrees with the string checks, this
+     * catches it rather than trusting them.
+     */
+    private fun localFile(dirName: String, serverFilename: String): File? {
+        val safe = localFileName(serverFilename) ?: run {
+            logW("rejected server filename for $dirName: ${serverFilename.take(80)}")
+            return null
+        }
+        val dir = File(context.filesDir, dirName)
+        val file = File(dir, safe)
+        val root = dir.canonicalPath + File.separator
+        if (!file.canonicalPath.startsWith(root)) {
+            logW("path escaped $dirName after sanitising: ${serverFilename.take(80)}")
+            return null
+        }
+        return file
+    }
+
+    /**
+     * A path that cannot exist, for read accessors whose callers expect a
+     * non-null File and already handle "the file is not there". Better than
+     * throwing on a cover lookup or an artwork refresh.
+     */
+    private fun unusableFile(dirName: String): File =
+        File(File(context.filesDir, dirName), ".rejected-by-localFileName")
+
+    /** As [localEbookFile]/[localAudioFile], for write paths that must fail loudly. */
+    private fun requireLocalFile(dirName: String, serverFilename: String): File =
+        localFile(dirName, serverFilename)
+            ?: throw IllegalArgumentException(
+                "Server sent an unusable $dirName filename; refusing to write outside $dirName"
+            )
+
     fun getEbookFile(pair: BookPairEntity): File =
-        File(context.filesDir, "ebooks/${pair.ebookFilename}")
+        localEbookFile(pair.ebookFilename) ?: unusableFile("ebooks")
 
     fun getAudiobookFile(pair: BookPairEntity): File =
-        File(context.filesDir, "audiobooks/${pair.audiobookFilename}")
+        localAudioFile(pair.audiobookFilename) ?: unusableFile("audiobooks")
 
     /**
      * The same file [downloadStandaloneEbook] writes — the standalone reader
@@ -749,7 +811,7 @@ class BookSyncRepository @Inject constructor(
      * builds the same path.
      */
     fun getStandaloneEbookFile(ebook: EBookEntity): File =
-        File(context.filesDir, "ebooks/${ebook.filename}")
+        localEbookFile(ebook.filename) ?: unusableFile("ebooks")
 
     suspend fun deleteEbook(pair: BookPairEntity) {
         getEbookFile(pair).delete()
@@ -762,12 +824,12 @@ class BookSyncRepository @Inject constructor(
     }
 
     suspend fun deleteStandaloneEbook(ebook: EBookEntity) {
-        File(context.filesDir, "ebooks/${ebook.filename}").delete()
+        localEbookFile(ebook.filename)?.delete()
         eBookDao.setDownloaded(ebook.id, false)
     }
 
     suspend fun deleteStandaloneAudiobook(audio: AudioBookEntity) {
-        File(context.filesDir, "audiobooks/${audio.filename}").delete()
+        localAudioFile(audio.filename)?.delete()
         audioBookDao.setDownloaded(audio.id, false)
     }
 
