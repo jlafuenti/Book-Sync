@@ -89,5 +89,10 @@ The variables that actually move it:
 - **Contention.** With the off-hours window on, wall-clock time includes the hours the queue
   spends waiting for the window to open.
 
-Time your first real book and extrapolate; `TRANSCRIPTION_REMOTE_TIMEOUT` (default 7200s) may need
-raising for long books on modest hardware.
+Time your first real book and extrapolate. The knob is **System → Transcription Settings → Remote
+Timeout (s)** — a database setting, not an environment variable — and it defaults to 86400s (24 h).
+
+Raise it if a book could take longer than that; lowering it does **not** make a dead worker fail
+faster. `POST /v1/transcribe` is one blocking request that returns only when the whole book is
+transcribed, so the timeout has to outlast the entire job: set it below your longest book and that
+book fails partway through with nothing to show for it. The minimum accepted value is 60s.

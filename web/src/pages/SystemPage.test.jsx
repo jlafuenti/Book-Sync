@@ -60,7 +60,7 @@ function baseSettings(overrides = {}) {
         transcription_provider: 'remote_with_fallback',
         transcription_remote_url: 'http://192.168.1.50:9000',
         transcription_remote_key: '',
-        transcription_remote_timeout: 7200,
+        transcription_remote_timeout: 86400,
         auto_transcribe_enabled: false,
         whisper_model: 'medium',
         abs_enabled: false,
@@ -96,6 +96,30 @@ describe('TranscriptionSettingsSection', () => {
         await waitFor(() => expect(keyInput).toHaveValue('********'))
         expect(keyInput).toHaveAttribute('type', 'password')
         expect(screen.getByText(/Required by the Jetson server/)).toBeInTheDocument()
+    })
+
+    // Issue #248: the server honours this value now (it used to be clamped up
+    // to 24 h), so the UI must state the real default and must not quietly
+    // substitute a different one when the field is emptied.
+    it('shows the 24h default for the remote timeout, not the old 7200s', async () => {
+        render(<TranscriptionSettingsSection />)
+
+        expect(await screen.findByText(/Default: 86400s \(24 h\)/)).toBeInTheDocument()
+        expect(screen.getByText(/blocks for the whole job/)).toBeInTheDocument()
+        expect(screen.queryByText(/7200/)).not.toBeInTheDocument()
+    })
+
+    it('falls back to 86400 when the timeout field is cleared', async () => {
+        render(<TranscriptionSettingsSection />)
+        const timeoutInput = await screen.findByRole('spinbutton')
+        await waitFor(() => expect(timeoutInput).toHaveValue(86400))
+
+        fireEvent.change(timeoutInput, { target: { value: '' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({ transcription_remote_timeout: 86400 })
+        ))
     })
 
     it('saves settings including whatever key is currently in the field', async () => {
