@@ -204,3 +204,15 @@ The first account is the superadmin created on first boot. Additional users regi
 
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.
+
+### Audit log retention
+
+Security-relevant events (logins, failed logins, lockouts, role and password changes) go to the
+`audit_logs` table, readable by admins in the user-management Audit Log tab. Each row holds a user id, the
+client IP and a short description — on a failed login that description includes the username that
+was typed — so it is the most personal table in every nightly dump.
+
+Rows are deleted once they are older than **`audit_log_retention_days`, which defaults to 90**.
+Set it to `0` to keep the log forever. The value lives in system settings (`PUT /api/settings/`,
+admin only) and the prune runs on the backup scheduler's tick (every 10 minutes), so a change
+takes effect without a restart. The `details` text is capped at 500 characters at write time.

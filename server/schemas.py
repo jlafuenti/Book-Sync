@@ -39,7 +39,12 @@ class UserCreate(BaseModel):
 
 
 class UserLogin(BaseModel):
-    username: str
+    # max_length mirrors UserCreate: without it a login attempt could carry an
+    # arbitrarily long username straight into the audit row's `details` (Text,
+    # uncapped) on every failure — issue #261. No min_length: a too-short
+    # username is a wrong username, and 422-ing it would leak which lengths
+    # are registrable.
+    username: str = Field(..., max_length=50)
     password: str
 
 
