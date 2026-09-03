@@ -31,6 +31,13 @@ Notes:
   errors in files unrelated to whatever you changed. A crashed run could also leave the
   shared file locked on Windows, breaking every later run. Pinned by
   `tests/test_harness_db_isolation.py`.
+- **Foreign keys are enforced.** SQLite defaults to `PRAGMA foreign_keys=OFF` and the
+  setting is per-connection, so `conftest.py` re-arms it on every connect. Without it no
+  cascade or FK decision in the schema was exercised at all: deleting a user left orphan
+  `user_progress` rows and the test passed, while production (Postgres) returned a 500
+  (issue #198). A factory that seeds a child row pointing at a parent id that does not
+  exist now fails — seed the parent. Pinned by
+  `tests/test_harness_db_isolation.py::test_sqlite_harness_enforces_foreign_keys`.
 - The Postgres migration test (`test_migrations_postgres.py`) self-skips unless
   `RUN_PG_TESTS=1` and a Postgres `DATABASE_URL` are set (it runs in its own CI job).
   It drives the **Alembic** migrations (issue #53): `alembic upgrade head` builds the

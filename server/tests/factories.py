@@ -8,7 +8,7 @@ fixture in conftest.py.)
 
 import zipfile
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.sync_map import SyncMap, SyncPoint
@@ -61,6 +61,33 @@ async def suspend_user_progress_uniqueness(db):
     """
     await db.execute(text("DROP INDEX ux_user_progress_user_ebook"))
     await db.execute(text("DROP INDEX ux_user_progress_user_audiobook"))
+
+
+async def ensure_users(db, *user_ids):
+    """Insert placeholder `User` rows with these exact ids, if absent.
+
+    Tests that build `Bookmark` / `UserProgress` rows by hand hard-code
+    `user_id=1`. That was free while the SQLite harness ran with
+    `PRAGMA foreign_keys=OFF`; enforcement is on now (issue #198), so the
+    parent row has to exist. Use the `make_user` fixture instead when the test
+    needs a real, loggable account — this is only for the id.
+    """
+    from models.user import User
+
+    for user_id in user_ids or (1,):
+        existing = (await db.execute(
+            select(User).where(User.id == user_id)
+        )).scalar_one_or_none()
+        if existing is not None:
+            continue
+        db.add(User(
+            id=user_id,
+            username=f"fixture-user-{user_id}",
+            email=f"fixture-user-{user_id}@example.com",
+            hashed_password="not-a-real-hash",
+            role="user",
+        ))
+    await db.commit()
 
 
 async def make_ebook(db, *, title="E", filename="e.epub"):

@@ -109,3 +109,52 @@ def test_client_request_fields_exist_on_server_model(kotlin_dtos, kotlin_name, m
         f"{kotlin_name} sends field(s) {sorted(dropped)} that server "
         f"{model.__name__} does not accept (silently dropped)."
     )
+
+
+# ---------------------------------------------------------------------------
+# ON DELETE contract (issue #198)
+#
+# The ORM cascade and the database's own FK action have to agree, and Alembic
+# autogenerate does not diff `ondelete` — a hand-written migration set these,
+# and nothing but a test stops the model and the migration drifting apart
+# again. Reflected from the live test schema, so this asserts what the database
+# actually has, not what the declaration says.
+#
+# `audit_logs` is deliberately NOT in this list: history must survive the user,
+# so its `user_id` stays `SET NULL`.
+# ---------------------------------------------------------------------------
+
+_CASCADING_USER_FKS = [("user_progress", "user_id"), ("bookmarks", "user_id")]
+
+
+async def _reflected_fks(table):
+    from sqlalchemy import inspect
+
+    from database import engine
+
+    async with engine.connect() as conn:
+        return await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys(table)
+        )
+
+
+@pytest.mark.parametrize("table,column", _CASCADING_USER_FKS,
+                         ids=[t for t, _ in _CASCADING_USER_FKS])
+async def test_user_child_fks_cascade_on_delete(table, column):
+    fks = [fk for fk in await _reflected_fks(table)
+           if fk["constrained_columns"] == [column]
+           and fk["referred_table"] == "users"]
+    assert len(fks) == 1, f"expected one {table}.{column} -> users.id FK, got {fks}"
+    assert fks[0].get("options", {}).get("ondelete", "").upper() == "CASCADE", (
+        f"{table}.{column} must be ON DELETE CASCADE — deleting a user who has "
+        f"read anything 500s on Postgres otherwise (issue #198)"
+    )
+
+
+async def test_audit_log_user_fk_is_set_null_not_cascade():
+    """Deleting an account must not erase the audit trail of what it did."""
+    fks = [fk for fk in await _reflected_fks("audit_logs")
+           if fk["referred_table"] == "users"]
+    assert fks
+    for fk in fks:
+        assert fk.get("options", {}).get("ondelete", "").upper() == "SET NULL"
