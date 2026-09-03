@@ -83,9 +83,9 @@ vi.mock('../components/CoverImg', () => ({ default: () => null }))
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
 vi.mock('../contexts/AudioPlayerContext', () => ({ useAudioPlayer: () => player }))
 
-function renderPage() {
+function renderPage(entry = '/book/audiobook/1538') {
     return render(
-        <MemoryRouter initialEntries={['/book/audiobook/1538']}>
+        <MemoryRouter initialEntries={[entry]}>
             <Routes>
                 <Route path="/book/:type/:id" element={<BookDetailPage />} />
             </Routes>
@@ -244,7 +244,11 @@ describe('BookDetailPage reader/player handoff', () => {
         return await screen.findByTestId('reader')
     }
 
-    it('switching to audio takes the audio anchor from the canonical record', async () => {
+    // Issue #212: the handoff is a resume, so it backs up RESUME_REWIND_SECONDS
+    // (5 s) exactly like unpausing and exactly like Android's `epubToAudioText`.
+    // The *stored* anchor stays the raw matched point -- the rewind is applied
+    // here, at the call site, not to what `doSave` wrote.
+    it('switching to audio rewinds 5s off the canonical anchor', async () => {
         getPositionMock.mockResolvedValue({ audio_position_ms: 42000 })
         await openTheReader()
 
@@ -252,7 +256,17 @@ describe('BookDetailPage reader/player handoff', () => {
 
         await waitFor(() => expect(getPositionMock).toHaveBeenCalledWith('pair', 77))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            1538, expect.anything(), 42000, 900))
+            1538, expect.anything(), 37000, 900))
+    })
+
+    it('clamps the handoff rewind at 0 for an anchor under 5s', async () => {
+        getPositionMock.mockResolvedValue({ audio_position_ms: 2000 })
+        await openTheReader()
+
+        fireEvent.click(screen.getByText('to-audio'))
+
+        await waitFor(() => expect(player.play).toHaveBeenCalledWith(
+            1538, expect.anything(), 0, 900))
     })
 
     it('falls back to the progress projection when the record has no audio position', async () => {
@@ -264,7 +278,7 @@ describe('BookDetailPage reader/player handoff', () => {
 
         await waitFor(() => expect(getProgressMock).toHaveBeenCalledWith('audiobook', 1538))
         await waitFor(() => expect(player.play).toHaveBeenCalledWith(
-            1538, expect.anything(), 9000, 900))
+            1538, expect.anything(), 4000, 900))
     })
 
     it('issues the reader flush before starting the audiobook (issue #158)', async () => {
@@ -342,5 +356,45 @@ describe('BookDetailPage description rendering (issue #286)', () => {
         // And no anchor carries a javascript: URL.
         const hrefs = [...container.querySelectorAll('a')].map(a => a.getAttribute('href') || '')
         expect(hrefs.some(h => h.trim().toLowerCase().startsWith('javascript:'))).toBe(false)
+    })
+})
+
+
+// ---------------------------------------------------------------------------
+// Issue #267: arriving here from the app-wide mini-player's "switch to ebook".
+//
+// Both pages that already had the handoff open the reader through component
+// state, not a URL, so the shell cannot hand the user over by navigating alone
+// — it carries the intent in router state and this page acts on it. Without
+// this half, the mini-player's Read button lands the user on the book's detail
+// page and stops there, which is worse than not offering it.
+// ---------------------------------------------------------------------------
+describe('BookDetailPage opens the reader from router state (issue #267)', () => {
+    beforeEach(() => {
+        getEbookMock.mockResolvedValue({
+            id: 900, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr',
+            cover_path: null, pair_id: 77,
+        })
+    })
+
+    it('opens the reader at the chapter the handoff carried', async () => {
+        renderPage({ pathname: '/book/ebook/900', state: { openReader: true, initialChapter: 3 } })
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader.getAttribute('data-chapter')).toBe('3')
+    })
+
+    it('still opens the reader when the handoff had no chapter to give', async () => {
+        renderPage({ pathname: '/book/ebook/900', state: { openReader: true, initialChapter: null } })
+
+        const reader = await screen.findByTestId('reader')
+        expect(reader.getAttribute('data-chapter')).toBe('null')
+    })
+
+    it('leaves the reader closed on a normal visit', async () => {
+        renderPage('/book/ebook/900')
+
+        await screen.findByText('L. E. Modesitt Jr')
+        expect(screen.queryByTestId('reader')).toBeNull()
     })
 })

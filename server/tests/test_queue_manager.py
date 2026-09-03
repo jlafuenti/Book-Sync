@@ -1297,3 +1297,245 @@ async def test_cancel_after_the_last_checkpoint_is_not_overwritten_by_completed(
     await queue_manager._process_next_item()
 
     assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Retry ladder for a missing provider (issue #242)
+#
+# The old ladder was a flat 30 s x 5 — a ~2.5-minute budget, which a Jetson
+# reboot plus a model load outruns, so the book died for an outage it would
+# have survived.
+# ---------------------------------------------------------------------------
+
+def test_retry_delay_backs_off_exponentially_and_is_capped():
+    delays = [
+        queue_manager.retry_delay_seconds(n, base_seconds=30, cap_seconds=900)
+        for n in range(1, 9)
+    ]
+    assert delays[:5] == [30, 60, 120, 240, 480]
+    assert delays[5:] == [900, 900, 900]
+
+
+def test_retry_delay_is_sane_for_a_degenerate_retry_count():
+    # retry_count is 1-based; anything lower must still produce the base delay
+    # rather than a fractional or negative sleep.
+    assert queue_manager.retry_delay_seconds(0, base_seconds=30, cap_seconds=900) == 30
+    assert queue_manager.retry_delay_seconds(-3, base_seconds=30, cap_seconds=900) == 30
+
+
+async def test_retry_policy_defaults_when_settings_are_absent(db):
+    assert await queue_manager.load_retry_policy() == (
+        queue_manager.DEFAULT_RETRY_MAX,
+        queue_manager.DEFAULT_RETRY_BASE_SECONDS,
+    )
+
+
+async def test_retry_policy_ignores_nonsense_settings(db):
+    """A typo in a settings row must never wedge the queue — same contract the
+    off-hours loader keeps."""
+    db.add(SystemSetting(key="transcription_retry_max", value="not a number"))
+    db.add(SystemSetting(key="transcription_retry_base_seconds", value="0"))
+    await db.commit()
+
+    assert await queue_manager.load_retry_policy() == (
+        queue_manager.DEFAULT_RETRY_MAX,
+        queue_manager.DEFAULT_RETRY_BASE_SECONDS,
+    )
+
+
+async def test_provider_unavailable_sleeps_with_exponential_backoff(db, monkeypatch):
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending", retry_count=2)
+    slept = []
+
+    async def _record_sleep(seconds):
+        slept.append(seconds)
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("remote offline")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _record_sleep)
+
+    assert await queue_manager._process_next_item() is True
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.retry_count == 3
+    # Third retry: 30 * 2**2.
+    assert slept == [120]
+
+
+async def test_retry_ceiling_and_delay_come_from_settings(db, monkeypatch):
+    """An operator with a flaky worker can widen the window without a deploy."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(db, pair.id, status="pending", retry_count=4)
+    db.add(SystemSetting(key="transcription_retry_max", value="8"))
+    db.add(SystemSetting(key="transcription_retry_base_seconds", value="10"))
+    await db.commit()
+    slept = []
+
+    async def _record_sleep(seconds):
+        slept.append(seconds)
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("still offline")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _record_sleep)
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    # Would have been a permanent failure under the hard-coded ceiling of 5.
+    assert refreshed.status == "pending"
+    assert refreshed.retry_count == 5
+    assert "5/8" in (refreshed.message or "")
+    assert slept == [160]  # 10 * 2**4
+    assert (await _get(BookPair, pair.id)).status == PairStatus.TRANSCRIBING
+
+
+async def test_permanent_failure_does_not_sleep_out_the_full_backoff(db, monkeypatch):
+    """Once the item is dead there is nothing to back off for — only the short
+    guard against spinning on the next item."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(db, pair.id, status="pending", retry_count=4)
+    slept = []
+
+    async def _record_sleep(seconds):
+        slept.append(seconds)
+
+    async def _raise(item_id, pair_id):
+        raise ProviderUnavailableError("still offline")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _raise)
+    monkeypatch.setattr("asyncio.sleep", _record_sleep)
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
+    assert slept == [queue_manager.DEFAULT_RETRY_BASE_SECONDS]
+
+
+# ---------------------------------------------------------------------------
+# Progress-write throttling (issue #244)
+#
+# Remote polling fires the progress callback twice a second for the whole run,
+# and each call used to be its own session + UPDATE + commit — ~144k writes for
+# a 20-hour book, for a value the UI reads every few seconds.
+# ---------------------------------------------------------------------------
+
+def test_progress_throttle_suppresses_unchanged_and_sub_threshold_updates():
+    throttle = queue_manager.ProgressThrottle(min_delta=0.005, max_interval=5.0)
+    writes = 0
+    # 100 polls at 2 Hz — 50 s of a long book, progress creeping by 0.0001.
+    for i in range(100):
+        if throttle.should_write(0.10 + i * 0.0001, "Transcribing: 1:00 / 20:00 (5%)", 1000.0 + i * 0.5):
+            writes += 1
+    # One at the start, then one per 5 s window. The creeping progress never
+    # crosses the 0.005 threshold within a window.
+    assert writes == 10
+
+
+def test_progress_throttle_writes_when_progress_moves_past_the_threshold():
+    throttle = queue_manager.ProgressThrottle(min_delta=0.005, max_interval=5.0)
+    assert throttle.should_write(0.10, "Transcribing", 1000.0) is True
+    assert throttle.should_write(0.104, "Transcribing", 1000.5) is False
+    assert throttle.should_write(0.106, "Transcribing", 1001.0) is True
+
+
+def test_progress_throttle_forces_a_write_when_the_message_changes():
+    """A different *kind* of message (paused, waiting, loading) must reach the
+    UI promptly — but the digits inside a progress message churn on every poll
+    and must not count as a change."""
+    throttle = queue_manager.ProgressThrottle(min_delta=0.005, max_interval=5.0)
+    assert throttle.should_write(0.10, "Transcribing: 1:00 / 20:00 (5%)", 1000.0) is True
+    assert throttle.should_write(0.1001, "Transcribing: 1:07 / 20:00 (5%)", 1000.5) is False
+    assert throttle.should_write(0.1002, "Loading model...", 1001.0) is True
+
+
+async def test_scheduled_progress_tasks_are_retained_until_done():
+    """Fire-and-forget tasks can be garbage-collected mid-flight; hold a
+    reference until they finish."""
+    queue_manager._inflight_updates.clear()
+    release = asyncio.Event()
+
+    async def _work():
+        await release.wait()
+
+    task = queue_manager._spawn_tracked(_work())
+    assert task in queue_manager._inflight_updates
+
+    release.set()
+    await task
+    await asyncio.sleep(0)  # let the done-callback run
+    assert task not in queue_manager._inflight_updates
+
+
+async def test_progress_callback_writes_are_bounded(monkeypatch):
+    """The end-to-end wiring: 100 provider callbacks must not become 100 rows
+    written."""
+    writes = []
+
+    async def _fake_update(item_id, **kwargs):
+        writes.append(kwargs)
+
+    monkeypatch.setattr(queue_manager, "_update_queue_item", _fake_update)
+
+    clock = {"t": 1000.0}
+    callback = queue_manager._make_progress_callback(
+        item_id=1,
+        provider_name="Fake",
+        loop=asyncio.get_running_loop(),
+        now=lambda: clock["t"],
+    )
+
+    for i in range(100):
+        callback(i * 0.0001, 72000.0, None)
+        clock["t"] += 0.5
+
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert 0 < len(writes) <= 12, f"expected a bounded number of writes, got {len(writes)}"
+    # Writes land on the 5 s heartbeat, so the newest one carries the value
+    # from the start of the current window, not the very last poll.
+    assert writes[-1]["progress"] == pytest.approx(0.05 + 0.0090 * 0.45, abs=1e-3)
+
+
+async def test_progress_callback_uses_the_provider_message_when_supplied(monkeypatch):
+    writes = []
+
+    async def _fake_update(item_id, **kwargs):
+        writes.append(kwargs)
+
+    monkeypatch.setattr(queue_manager, "_update_queue_item", _fake_update)
+
+    callback = queue_manager._make_progress_callback(
+        item_id=7, provider_name="Jetson", loop=asyncio.get_running_loop()
+    )
+    callback(0.5, None, "Transcribing: 1:00 / 2:00 (50%)")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert writes[0]["message"] == "Jetson - Transcribing: 1:00 / 2:00 (50%)"
+    assert writes[0]["progress"] == pytest.approx(0.275, abs=1e-3)
+
+
+async def test_progress_callback_falls_back_to_a_bare_percentage(monkeypatch):
+    """No provider message and no known duration — a percentage is all there
+    is to say."""
+    writes = []
+
+    async def _fake_update(item_id, **kwargs):
+        writes.append(kwargs)
+
+    monkeypatch.setattr(queue_manager, "_update_queue_item", _fake_update)
+
+    callback = queue_manager._make_progress_callback(
+        item_id=3, provider_name="Local Whisper", loop=asyncio.get_running_loop()
+    )
+    callback(0.25, None, None)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert writes[0]["message"] == "Transcribing via Local Whisper... (25%)"

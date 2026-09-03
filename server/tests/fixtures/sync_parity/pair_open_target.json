@@ -1,0 +1,58 @@
+[
+  {
+    "name": "audiobook_source_opens_the_player",
+    "why": "The documented router: bookmarks.source decides which format opens next. Listening on the phone and then tapping the pair must land in the player, not the reader.",
+    "source": "audiobook",
+    "available": { "ebook": true, "audiobook": true },
+    "expected": "audiobook"
+  },
+  {
+    "name": "ebook_source_opens_the_reader",
+    "why": "The mirror case. A reader save always claims `ebook`, so a reading session reopens in the reader.",
+    "source": "ebook",
+    "available": { "ebook": true, "audiobook": true },
+    "expected": "ebook"
+  },
+  {
+    "name": "no_source_prefers_the_ebook",
+    "why": "A pair nobody has opened yet has no claim to follow. Preferring the ebook is the historical default and keeps a first tap deterministic.",
+    "source": null,
+    "available": { "ebook": true, "audiobook": true },
+    "expected": "ebook"
+  },
+  {
+    "name": "no_source_falls_through_to_the_audiobook",
+    "why": "Preference, not a hard rule: with no ebook available there is still something to open.",
+    "source": null,
+    "available": { "ebook": false, "audiobook": true },
+    "expected": "audiobook"
+  },
+  {
+    "name": "audiobook_source_but_no_audiobook_falls_back_to_the_reader",
+    "why": "The claimed format may not be openable here — deleted locally on Android, absent from the pair on the web. Fall back rather than routing at nothing.",
+    "source": "audiobook",
+    "available": { "ebook": true, "audiobook": false },
+    "expected": "ebook"
+  },
+  {
+    "name": "ebook_source_but_no_ebook_falls_back_to_the_player",
+    "why": "Mirror of the case above.",
+    "source": "ebook",
+    "available": { "ebook": false, "audiobook": true },
+    "expected": "audiobook"
+  },
+  {
+    "name": "nothing_available_goes_to_details",
+    "why": "Neither format can be opened, so the tap lands on the details screen instead of a dead reader/player.",
+    "source": "audiobook",
+    "available": { "ebook": false, "audiobook": false },
+    "expected": "details"
+  },
+  {
+    "name": "nothing_available_and_no_source_goes_to_details",
+    "why": "Same, with no claim to follow either.",
+    "source": null,
+    "available": { "ebook": false, "audiobook": false },
+    "expected": "details"
+  }
+]

@@ -38,7 +38,14 @@ class RemoteWhisperProvider(TranscriptionProvider):
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     async def _poll_progress(self, stop_event: asyncio.Event, progress_callback: Callable):
-        """Polls the remote server for progress while transcription is running."""
+        """Polls the remote server for progress while transcription is running.
+
+        Polling stays at 2 Hz so a pause or a stall is noticed quickly, but the
+        callback only fires when the worker actually reported something new
+        (issue #244) — the consumer's job is a DB write, and re-reporting an
+        identical status half a second later buys nothing.
+        """
+        last_reported = None
         async with httpx.AsyncClient() as client:
             while not stop_event.is_set():
                 try:
@@ -50,9 +57,11 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         if data.get("active"):
                             progress = data.get("progress", 0.0)
                             message = data.get("message")
-                            # We pass None for duration to the callback,
-                            # because the Jetson message already handles the time logic
-                            progress_callback(progress, None, message)
+                            if (progress, message) != last_reported:
+                                last_reported = (progress, message)
+                                # We pass None for duration to the callback,
+                                # because the Jetson message already handles the time logic
+                                progress_callback(progress, None, message)
                 except httpx.RequestError as e:
                     logger.debug(f"Progress polling failed: {e}")
 

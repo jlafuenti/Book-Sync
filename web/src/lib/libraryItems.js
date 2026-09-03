@@ -1,4 +1,4 @@
-import { lastFormatFromProgress } from '../utils/pairRouting'
+import { pairSourceFromProgress } from '../utils/pairRouting'
 
 /**
  * Adapters between `LibraryItem`s (what `GET /api/library/items` returns —
@@ -16,9 +16,10 @@ export function entryKey(entry) {
 }
 
 /**
- * Group progress rows by pair id so a pair entry can carry `lastFormat`
- * (which side the user last used — decides where a tap lands). Rows that
- * predate `book_pair_id` are mapped through the loaded items' media ids.
+ * Group progress rows by pair id so a pair entry can carry the pair's
+ * `bookmarks.source` (which format the user last consumed — decides where a
+ * tap lands). Rows that predate `book_pair_id` are mapped through the loaded
+ * items' media ids.
  */
 export function groupProgressByPair(progress, items) {
     const ebookToPair = {}
@@ -63,8 +64,9 @@ export function toDisplayEntry(item, progressByPair = {}) {
             pair_status: p.status,
             ebook_id: eb?.id ?? null,
             audiobook_id: ab?.id ?? null,
-            // 'audiobook' | 'ebook' | null — drives where a click lands.
-            lastFormat: lastFormatFromProgress(progressByPair[p.id]),
+            // `bookmarks.source`: 'audiobook' | 'ebook' | null — drives where
+            // a click lands, via pairTargetPath (issue #215).
+            lastFormat: pairSourceFromProgress(progressByPair[p.id]),
             pair: p,
         }
     }
