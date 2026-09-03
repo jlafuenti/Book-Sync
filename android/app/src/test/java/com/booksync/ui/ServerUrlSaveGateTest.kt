@@ -76,7 +76,13 @@ class ServerUrlSaveGateTest {
     }
 
     private fun loginViewModel(): LoginViewModel =
-        LoginViewModel(mockk(relaxed = true), mockk(relaxed = true), serverUrlManager, mockk(relaxed = true))
+        LoginViewModel(
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            serverUrlManager,
+            mockk(relaxed = true),
+            com.booksync.data.remote.FirstRunGate(),
+        )
 
     private fun accountViewModel(): AccountViewModel {
         val api = mockk<BookSyncApi>()

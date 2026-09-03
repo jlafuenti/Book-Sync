@@ -1,6 +1,7 @@
 package com.booksync.ui.auth
 
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.HealthResponse
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.ServerUrlManager
@@ -20,6 +21,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -35,10 +37,17 @@ import java.io.IOException
  * only failed later, at sign-in. The probe exists to answer "is there a Tandem
  * server at this address" before credentials are involved.
  *
- * The one hard rule is that it never throws. It runs on a string a stranger just
- * typed, so unreachable hosts, wrong ports, HTML from a reverse proxy and
- * unparseable bodies are all ordinary inputs, and every one of them has to end
- * as a sentence on screen.
+ * Two rules, the second learned on a device:
+ *
+ *  - **It never throws.** It runs on a string a stranger just typed, so
+ *    unreachable hosts, wrong ports, HTML from a reverse proxy and unparseable
+ *    bodies are all ordinary inputs, and every one of them has to end as a
+ *    sentence on screen.
+ *  - **It never stores an address it has not verified.** The first cut stored
+ *    the URL up front so the base-URL interceptor would route the probe there.
+ *    That tore the first-run screen down mid-probe — the sign-in form appeared
+ *    over a server that does not exist, the exact outcome #175 is about — and
+ *    left the mistyped host configured for every later request.
  */
 private const val PROBE_SERVER_URL = "https://tandem.example.com"
 
@@ -57,7 +66,7 @@ class LoginViewModelConnectionTest {
         every { serverUrlManager.serverUrlFlow } returns flowOf("")
         every { serverUrlManager.currentUrl } returns ""
         coEvery { serverUrlManager.setServerUrl(any()) } returns true
-        coEvery { api.getHealth() } returns HealthResponse(status = "healthy")
+        coEvery { api.getHealth(any()) } returns HealthResponse(status = "healthy")
     }
 
     @After
@@ -65,12 +74,15 @@ class LoginViewModelConnectionTest {
         Dispatchers.resetMain()
     }
 
-    private fun newViewModel() = LoginViewModel(
+    private fun newViewModel(gate: FirstRunGate = FirstRunGate()) = LoginViewModel(
         api = api,
         tokenManager = mockk<TokenManager>(relaxed = true),
         serverUrlManager = serverUrlManager,
         userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
+        firstRunGate = gate,
     )
+
+    // -- The probe itself --------------------------------------------------
 
     @Test
     fun `a healthy server maps to Connected`() {
@@ -82,20 +94,19 @@ class LoginViewModelConnectionTest {
     }
 
     @Test
-    fun `the probed url is stored so the next request goes to it`() {
-        // BaseUrlInterceptor reads the stored URL per request, so storing it is
-        // what makes the probe hit the host the user typed rather than the
-        // placeholder Retrofit was built with.
+    fun `the probe is addressed to the typed server, not to the configured one`() {
+        // An absolute URL, because nothing is configured yet and there is
+        // therefore no base URL that would reach it.
         val vm = newViewModel()
 
         vm.checkConnection("tandem.example.com")
 
-        coVerify(exactly = 1) { serverUrlManager.setServerUrl("https://tandem.example.com") }
+        coVerify(exactly = 1) { api.getHealth("https://tandem.example.com/api/health") }
     }
 
     @Test
     fun `an unreachable server maps to a readable failure, not an exception`() {
-        coEvery { api.getHealth() } throws IOException("failed to connect")
+        coEvery { api.getHealth(any()) } throws IOException("failed to connect")
 
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
@@ -107,8 +118,11 @@ class LoginViewModelConnectionTest {
 
     @Test
     fun `an http error maps to a readable failure naming the status`() {
-        coEvery { api.getHealth() } throws HttpException(
-            Response.error<Unit>(503, """{"status":"unhealthy"}""".toResponseBody("application/json".toMediaType())),
+        coEvery { api.getHealth(any()) } throws HttpException(
+            Response.error<Unit>(
+                503,
+                """{"status":"unhealthy"}""".toResponseBody("application/json".toMediaType()),
+            ),
         )
 
         val vm = newViewModel()
@@ -124,7 +138,7 @@ class LoginViewModelConnectionTest {
         // Someone pointing the app at their router's admin page gets a 200 or a
         // 404 from something that is not Tandem; "couldn't reach it" would be a
         // lie that sends them to check their wifi.
-        coEvery { api.getHealth() } throws HttpException(
+        coEvery { api.getHealth(any()) } throws HttpException(
             Response.error<Unit>(404, "".toResponseBody(null)),
         )
 
@@ -138,7 +152,7 @@ class LoginViewModelConnectionTest {
     fun `an unparseable body is a failure, not a crash`() {
         // A reverse proxy or captive portal answers 200 with HTML; kotlinx
         // serialization throws on it inside the Retrofit converter.
-        coEvery { api.getHealth() } throws RuntimeException("Unexpected JSON token")
+        coEvery { api.getHealth(any()) } throws RuntimeException("Unexpected JSON token")
 
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
@@ -155,26 +169,15 @@ class LoginViewModelConnectionTest {
         val state = vm.connectionState.value
         assertTrue(state is ConnectionState.Failed)
         assertEquals(INVALID_SERVER_URL_MESSAGE, (state as ConnectionState.Failed).message)
-        coVerify(exactly = 0) { api.getHealth() }
+        coVerify(exactly = 0) { api.getHealth(any()) }
         coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
-    }
-
-    @Test
-    fun `a url the manager refuses is reported rather than silently ignored`() {
-        coEvery { serverUrlManager.setServerUrl(any()) } returns false
-
-        val vm = newViewModel()
-        vm.checkConnection(PROBE_SERVER_URL)
-
-        assertTrue(vm.connectionState.value is ConnectionState.Failed)
-        coVerify(exactly = 0) { api.getHealth() }
     }
 
     @Test
     fun `a server too old to report a status still counts as reachable`() {
         // The DTO's fields are nullable on purpose: a server predating the
         // version fields must not be reported as broken.
-        coEvery { api.getHealth() } returns HealthResponse()
+        coEvery { api.getHealth(any()) } returns HealthResponse()
 
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
@@ -184,14 +187,130 @@ class LoginViewModelConnectionTest {
 
     @Test
     fun `re-checking clears the previous result`() {
-        coEvery { api.getHealth() } throws IOException("offline")
+        coEvery { api.getHealth(any()) } throws IOException("offline")
         val vm = newViewModel()
         vm.checkConnection(PROBE_SERVER_URL)
         assertTrue(vm.connectionState.value is ConnectionState.Failed)
 
-        coEvery { api.getHealth() } returns HealthResponse(status = "healthy")
+        coEvery { api.getHealth(any()) } returns HealthResponse(status = "healthy")
         vm.checkConnection(PROBE_SERVER_URL)
 
         assertEquals(ConnectionState.Connected, vm.connectionState.value)
+    }
+
+    // -- Storing only what was verified ------------------------------------
+
+    @Test
+    fun `a failed probe does not store the address`() {
+        // The device bug: storing first meant a mistyped host became the
+        // configured server, and every later request went to it.
+        coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
+
+        val vm = newViewModel()
+        vm.checkConnection("nope.invalid")
+
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+    }
+
+    @Test
+    fun `a rejected probe does not store the address either`() {
+        coEvery { api.getHealth(any()) } throws HttpException(
+            Response.error<Unit>(500, "".toResponseBody(null)),
+        )
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        coVerify(exactly = 0) { serverUrlManager.setServerUrl(any()) }
+    }
+
+    @Test
+    fun `a successful probe stores the normalised address exactly once`() {
+        val vm = newViewModel()
+
+        vm.checkConnection("  TANDEM.example.com  ")
+
+        coVerify(exactly = 1) { serverUrlManager.setServerUrl("https://tandem.example.com") }
+    }
+
+    @Test
+    fun `a store the manager refuses is reported rather than claimed as success`() {
+        coEvery { serverUrlManager.setServerUrl(any()) } returns false
+
+        val vm = newViewModel()
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        assertTrue(vm.connectionState.value is ConnectionState.Failed)
+    }
+
+    // -- The screen stays put ----------------------------------------------
+    //
+    // This state lives in an application-scoped gate rather than in the
+    // composable. Storing the URL on success re-creates the login destination,
+    // and a `rememberSaveable` — or a flag on a ViewModel scoped to that
+    // destination — dies with it, which is how the welcome screen vanished
+    // mid-probe on the device.
+
+    @Test
+    fun `an unconfigured launch shows the first-run screen`() {
+        assertTrue(newViewModel().showFirstRun.value)
+    }
+
+    @Test
+    fun `a configured launch never shows it`() {
+        every { serverUrlManager.currentUrl } returns PROBE_SERVER_URL
+        every { serverUrlManager.serverUrlFlow } returns flowOf(PROBE_SERVER_URL)
+
+        assertFalse(newViewModel().showFirstRun.value)
+    }
+
+    @Test
+    fun `a failed probe leaves the first-run screen up`() {
+        coEvery { api.getHealth(any()) } throws IOException("Unable to resolve host")
+
+        val vm = newViewModel()
+        vm.checkConnection("nope.invalid")
+
+        // Otherwise the failure message is rendered on a screen nobody is
+        // looking at, behind a password prompt for a server that does not exist.
+        assertTrue(vm.showFirstRun.value)
+    }
+
+    @Test
+    fun `a successful probe leaves the first-run screen up until it is dismissed`() {
+        val vm = newViewModel()
+
+        vm.checkConnection(PROBE_SERVER_URL)
+
+        // The "Connected" confirmation and the Continue button live there.
+        assertTrue(vm.showFirstRun.value)
+
+        vm.dismissFirstRun()
+        assertFalse(vm.showFirstRun.value)
+    }
+
+    @Test
+    fun `dismissal survives a rebuilt ViewModel`() {
+        // The destination is re-created when the stored URL changes; a fresh
+        // LoginViewModel must not put the welcome screen back over the login form.
+        val gate = FirstRunGate()
+        val vm = newViewModel(gate)
+        vm.checkConnection(PROBE_SERVER_URL)
+        vm.dismissFirstRun()
+
+        every { serverUrlManager.currentUrl } returns PROBE_SERVER_URL
+        assertFalse(newViewModel(gate).showFirstRun.value)
+    }
+
+    @Test
+    fun `a rebuilt ViewModel mid-first-run still shows the screen`() {
+        val gate = FirstRunGate()
+        newViewModel(gate)
+
+        // Storing the URL is what re-creates the destination, so by the time the
+        // second ViewModel is built the app is already "configured". The latched
+        // launch state is what keeps the screen alive across that.
+        every { serverUrlManager.currentUrl } returns PROBE_SERVER_URL
+        assertTrue(newViewModel(gate).showFirstRun.value)
     }
 }

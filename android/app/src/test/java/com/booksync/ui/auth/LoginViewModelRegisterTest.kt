@@ -1,6 +1,7 @@
 package com.booksync.ui.auth
 
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
 import com.booksync.data.remote.RegisterRequest
 import com.booksync.data.remote.ServerUrlManager
@@ -88,6 +89,7 @@ class LoginViewModelRegisterTest {
             tokenManager = tokenManager,
             serverUrlManager = serverUrlManager,
             userScopeProvider = mockk<UserScopeProvider>(relaxed = true),
+            firstRunGate = FirstRunGate(),
         )
     }
 

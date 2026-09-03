@@ -37,18 +37,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.BYPASS_BASE_URL_HEADER
+import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
 import com.booksync.data.remote.TANDEM_REPO_URL
 import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.shouldExpandAdvanced
-import com.booksync.data.remote.shouldShowFirstRun
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.RegisterRequest
 import com.booksync.data.remote.ServerUrlManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -86,6 +89,7 @@ class LoginViewModel @Inject constructor(
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
     private val userScopeProvider: UserScopeProvider,
+    private val firstRunGate: FirstRunGate,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -106,6 +110,26 @@ class LoginViewModel @Inject constructor(
 
     val currentServerUrl = serverUrlManager.serverUrlFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), serverUrlManager.currentUrl)
+
+    /**
+     * Whether to show the welcome screen instead of the sign-in form (issue #175).
+     *
+     * Derived from [FirstRunGate], which is application-scoped, not from the
+     * current URL: a successful probe stores the URL, that re-creates the login
+     * destination, and anything held in the composable or in this ViewModel would
+     * go with it — putting the user on a password prompt in the middle of the
+     * flow. See the gate for the full account.
+     */
+    private val startedUnconfigured = firstRunGate.startedUnconfigured(serverUrlManager.currentUrl)
+
+    val showFirstRun: StateFlow<Boolean> = firstRunGate.dismissed
+        .map { dismissed -> startedUnconfigured && !dismissed }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, startedUnconfigured)
+
+    /** The user tapped "Continue to sign in", or skipped. */
+    fun dismissFirstRun() {
+        firstRunGate.dismiss()
+    }
 
     /** The error Card is shared with login failures; editing either field clears it. */
     fun clearError() {
@@ -208,13 +232,19 @@ class LoginViewModel @Inject constructor(
      * Probe `{url}/api/health` and say whether there is a Tandem server there
      * (issue #175).
      *
-     * The address is **stored first** because that is how the request reaches it:
-     * `BaseUrlInterceptor` rewrites every request from
-     * `ServerUrlManager.currentUrl`, so there is no way to send one to a URL that
-     * is not the configured one. Storing is harmless — a wrong value is
-     * overwritten by the next attempt, and it is the value the user wants anyway.
-     * It is validated by [normalizeServerUrl] before it goes anywhere near
-     * storage; issue #149 is what happens when it isn't.
+     * **Probe first, store only what answered.** The first cut had this the other
+     * way round — store, then let `BaseUrlInterceptor` route the probe at the
+     * configured server — and it failed on a device in the worst possible way:
+     * typing a host that does not resolve stored it anyway, storing it re-created
+     * the login destination, and the welcome screen was replaced by a username
+     * and password prompt for a server that does not exist. The failure message
+     * was rendered on a screen nobody could see any more, and every later request
+     * in the app went to the mistyped host.
+     *
+     * So the request carries an absolute URL and opts out of the interceptor
+     * ([BYPASS_BASE_URL_HEADER]), and [ServerUrlManager.setServerUrl] is called
+     * only once `GET /api/health` has actually answered. A failed check changes
+     * no state at all beyond the message on screen.
      *
      * Nothing here may throw. Its input is a string a stranger just typed, so a
      * dead host, a wrong port, a captive portal answering HTML and a body the
@@ -225,15 +255,17 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _connectionState.value = ConnectionState.Checking
 
+            // Validated before it is sent anywhere, let alone stored; issue #149
+            // is what happens when it isn't.
             val normalized = normalizeServerUrl(url)
-            if (normalized == null || !serverUrlManager.setServerUrl(normalized)) {
+            if (normalized == null) {
                 _connectionState.value = ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
                 return@launch
             }
 
-            _connectionState.value = try {
-                api.getHealth()
-                ConnectionState.Connected
+            val failure = try {
+                api.getHealth("$normalized/api/health")
+                null
             } catch (e: HttpException) {
                 // 404 means something answered but it is not Tandem — a router
                 // admin page, say. Calling that "couldn't reach it" would send
@@ -243,14 +275,24 @@ class LoginViewModel @Inject constructor(
                 } else {
                     "$normalized answered HTTP ${e.code()}"
                 }
-                ConnectionState.Failed("$hint — check the address and that the server is running.")
+                "$hint — check the address and that the server is running."
             } catch (e: IOException) {
-                ConnectionState.Failed(
-                    "Could not reach $normalized — check the address, that you are on the " +
-                        "right network, and that the server is running.",
-                )
+                "Could not reach $normalized — check the address, that you are on the " +
+                    "right network, and that the server is running."
             } catch (e: Exception) {
-                ConnectionState.Failed("$normalized did not answer like a Tandem server.")
+                "$normalized did not answer like a Tandem server."
+            }
+
+            if (failure != null) {
+                _connectionState.value = ConnectionState.Failed(failure)
+                return@launch
+            }
+
+            // Verified. Now it is worth keeping.
+            _connectionState.value = if (serverUrlManager.setServerUrl(normalized)) {
+                ConnectionState.Connected
+            } else {
+                ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
             }
         }
     }
@@ -263,16 +305,14 @@ fun LoginScreen(
 ) {
     val currentServerUrl by viewModel.currentServerUrl.collectAsState()
 
-    // Decided once, on the value the app actually launched with, and kept across
-    // configuration changes. Not derived from `currentServerUrl` on every
-    // recomposition: "Check connection" stores the URL, so a derived flag would
-    // yank the screen away the instant the probe is sent — including when it
-    // fails, which is exactly when the explanation is still needed.
-    var firstRunDismissed by rememberSaveable { mutableStateOf(false) }
-    val startedUnconfigured = rememberSaveable { shouldShowFirstRun(currentServerUrl) }
+    // Owned by the ViewModel, backed by an application-scoped gate — not by a
+    // `rememberSaveable` here. A successful probe stores the URL, which
+    // re-creates this destination and takes composable state (and any ViewModel
+    // scoped to it) with it. See FirstRunGate.
+    val showFirstRun by viewModel.showFirstRun.collectAsState()
 
-    if (startedUnconfigured && !firstRunDismissed) {
-        FirstRunScreen(viewModel = viewModel, onDone = { firstRunDismissed = true })
+    if (showFirstRun) {
+        FirstRunScreen(viewModel = viewModel, onDone = viewModel::dismissFirstRun)
     } else {
         SignInScreen(
             onLoginSuccess = onLoginSuccess,
