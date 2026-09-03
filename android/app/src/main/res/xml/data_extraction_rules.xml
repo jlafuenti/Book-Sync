@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What may leave the device (issue #176), for API 31+.
+
+  The access and refresh tokens live unencrypted in
+  files/datastore/booksync_prefs.preferences_pb. With no rules at all that file
+  was eligible for cloud backup and for Android 12+ device-to-device transfer, so
+  a transferred image carried a live 30-day refresh token to another device with
+  no login. Plaintext on the device is fine — storage is encrypted at rest — the
+  copy that leaves is the problem.
+
+  Deliberately an INCLUDE-list. Naming only what may be copied means anything
+  new — a cache, a log, another DataStore — is excluded by default. An
+  exclude-list has to be updated every time a file is added and silently leaks
+  whatever nobody remembered.
+
+  So this keeps:
+    database   — Room: reading progress, the library cache
+    sharedpref — reader and player settings (font size, theme, speed)
+
+  and therefore leaves behind: files/datastore (tokens, server URL, device id),
+  files/ebooks and files/audiobooks (also far past the 25 MB backup quota), and
+  the diagnostic logs at the filesDir root.
+
+  A restored device mints a new device id, which is correct: it is a different
+  device, and position hints are per-device by design (docs/position-sync-contract.md).
+
+  cloud-backup and device-transfer are separate sections on purpose — they are
+  independent, and device transfer has no size quota, which is what made this
+  exposure live rather than theoretical.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>
