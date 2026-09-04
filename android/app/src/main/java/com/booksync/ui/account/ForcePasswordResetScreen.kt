@@ -88,7 +88,7 @@ fun ForcePasswordResetScreen(
             fontSize = 14.sp,
         )
         Text(
-            "New password must be at least 8 characters.",
+            PasswordPolicy.MESSAGE,
             color = colors.textMuted,
             fontSize = 13.sp,
         )

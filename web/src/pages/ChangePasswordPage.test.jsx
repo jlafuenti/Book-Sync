@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ChangePasswordPage from './ChangePasswordPage'
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PASSWORD_POLICY_MESSAGE } from '../lib/passwordPolicy'
 
 const { changePasswordMock, getMeMock } = vi.hoisted(() => ({
     changePasswordMock: vi.fn(),
@@ -57,5 +58,49 @@ describe('ChangePasswordPage', () => {
                 expect.objectContaining({ username: 'admin' }),
             )
         })
+    })
+
+    // Issue #205: the form used to say "at least 6 characters" while the API
+    // enforced 6 and the Android sheet 8. All three now share 8..128.
+    it('rejects a password one character under the floor without calling the API', async () => {
+        render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
+
+        const short = 'a'.repeat(PASSWORD_MIN_LENGTH - 1)
+        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: short } })
+        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: short } })
+        fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
+
+        await waitFor(() => expect(document.querySelector('.alert-error').textContent)
+            .toContain(PASSWORD_POLICY_MESSAGE))
+        expect(changePasswordMock).not.toHaveBeenCalled()
+    })
+
+    it('accepts a password exactly at the floor', async () => {
+        changePasswordMock.mockResolvedValue({})
+        getMeMock.mockResolvedValue({ id: 1, username: 'admin', must_reset_password: false })
+        render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
+
+        const ok = 'a'.repeat(PASSWORD_MIN_LENGTH)
+        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: ok } })
+        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: ok } })
+        fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
+
+        await waitFor(() => expect(changePasswordMock).toHaveBeenCalledWith('old-pw', ok))
+    })
+
+    it('rejects a password one character over the ceiling without calling the API', async () => {
+        render(<ChangePasswordPage onPasswordChanged={vi.fn()} />)
+
+        const long = 'a'.repeat(PASSWORD_MAX_LENGTH + 1)
+        fireEvent.change(screen.getByLabelText('Current Password'), { target: { value: 'old-pw' } })
+        fireEvent.change(screen.getByLabelText('New Password'), { target: { value: long } })
+        fireEvent.change(screen.getByLabelText('Confirm New Password'), { target: { value: long } })
+        fireEvent.click(screen.getByRole('button', { name: /set new password/i }))
+
+        await waitFor(() => expect(document.querySelector('.alert-error').textContent)
+            .toContain(PASSWORD_POLICY_MESSAGE))
+        expect(changePasswordMock).not.toHaveBeenCalled()
     })
 })
