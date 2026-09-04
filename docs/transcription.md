@@ -66,9 +66,14 @@ the same value into the worker's `TRANSCRIPTION_API_KEY`.
   6 (re-attach) / 10 (wait-for-idle) consecutive unreachable polls, and hand the item to the
   retry ladder. Those poll failures are logged at WARNING with a counter. Before that, a worker
   that died inside either loop left the item `in_progress` forever and nothing else dispatched.
-- **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled;
-  cancelling an in-progress job also tells the worker to drop its partial work. An in-progress
-  item can't be *deleted* — cancel it first.
+- **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled. An
+  in-progress item can't be *deleted* — cancel it first. Cancelling an in-progress job asks the
+  worker to stop at its next chunk boundary and then discards the checkpoint and the audio it
+  retained, so the GPU is handed back within one chunk instead of at the end of the book (#196).
+  A transcription that finished anyway is **kept**: cancelling the sync does not throw away the
+  transcript, and a later re-queue picks it up from the cache instead of re-transcribing.
+  The stop is best effort — an unreachable worker still leaves the item cancelled, and the
+  worker's own 48h sweep collects the leftovers.
 - **Retries with a ceiling, on a backoff ladder.** A provider-unavailable failure re-pends the item
   and burns a retry; after the ceiling is reached the item is marked permanently failed with the
   error attached. The wait doubles each time — 30s, 60s, 120s, 240s, 480s — capped at 15 minutes,
