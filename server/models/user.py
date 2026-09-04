@@ -13,6 +13,14 @@ from utils import utcnow
 ROLE_HIERARCHY = {"superadmin": 4, "admin": 3, "editor": 2, "user": 1}
 VALID_ROLES = set(ROLE_HIERARCHY.keys())
 
+# Score for a role nobody recognises. An unknown *user* role scoring 0 is the
+# safe direction — it clears nothing. An unknown *minimum* scoring 0 is the
+# dangerous one, because every caller clears a bar of 0, so a typo in a required
+# role does not fail the check, it deletes it (issue #359). Minimums are
+# therefore never scored: they are rejected outright, here and in
+# `routers.auth.require_role`.
+_UNKNOWN_ROLE_LEVEL = 0
+
 
 class User(Base):
     """A registered user of the Tandem system."""
@@ -50,8 +58,16 @@ class User(Base):
                             cascade="all, delete-orphan")
 
     def has_role(self, minimum_role: str) -> bool:
-        """Check if user's role meets or exceeds the minimum required role."""
-        return ROLE_HIERARCHY.get(self.role, 0) >= ROLE_HIERARCHY.get(minimum_role, 0)
+        """True if this user's role meets or exceeds `minimum_role`.
+
+        Fails closed on a minimum that is not a real role (issue #359): a bar
+        nobody can name is cleared by nobody, not by everybody. Callers that
+        want the typo to be loud rather than silent should use
+        `routers.auth.require_role`, which raises.
+        """
+        if minimum_role not in ROLE_HIERARCHY:
+            return False
+        return ROLE_HIERARCHY.get(self.role, _UNKNOWN_ROLE_LEVEL) >= ROLE_HIERARCHY[minimum_role]
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
