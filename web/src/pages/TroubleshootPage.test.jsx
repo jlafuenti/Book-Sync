@@ -225,3 +225,46 @@ describe('TroubleshootPage mobile layout', () => {
         expect(table.closest('.table-wrapper')).not.toBeNull()
     })
 })
+
+// Issue #279: both confirmations on this page are the shared Modal primitive.
+describe('TroubleshootPage confirmations are dialogs', () => {
+    it('the remove-tracks confirmation is labelled and closes on Escape', async () => {
+        const withTracks = {
+            item_type: 'folder', item_id: 7, title: 'Dune', author: 'Frank Herbert',
+            file_path: '/data/audiobooks/Herbert/Dune', file_size: 1234, file_count: 12,
+            extension: '.mp3', imported_track_count: 12, detail: 'multi-file',
+        }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { multi_file_audiobook: [withTracks] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Multi-file audiobooks/))
+        const trigger = await screen.findByRole('button', { name: /Remove imported tracks \(12\)/ })
+        trigger.focus()
+        fireEvent.click(trigger)
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName(/Remove 12 imported track rows\?/)
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(document.activeElement).toBe(trigger)
+        expect(removeMultiFileTracksMock).not.toHaveBeenCalled()
+    })
+
+    it('the bulk-delete confirmation is labelled with the selection count', async () => {
+        const row = { item_type: 'audiobook', item_id: 1538, title: 'Antiagon Fire', detail: 'gone', file_size: 100 }
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([], { missing: [row] }))
+        renderPage()
+
+        fireEvent.click(await screen.findByText(/Missing files/))
+        fireEvent.click((await screen.findAllByRole('checkbox'))[0])
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete Selected' }))
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAccessibleName('Delete 1 item?')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+        expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})

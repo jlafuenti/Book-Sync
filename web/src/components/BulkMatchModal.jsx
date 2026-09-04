@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import MatchTab from './MatchTab'
+import Modal from './Modal'
 import { updateEbookMetadata, updateAudiobookMetadata, applyRemoteCover } from '../api'
 
 export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
@@ -40,16 +41,23 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
     }
 
     return (
-        <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.7)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center', zIndex: 1000
-        }}>
-            <div className="card" style={{ width: '90%', maxWidth: '860px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}>
+        <Modal
+            onClose={onClose}
+            labelledBy="bulk-match-title"
+            closeOnBackdrop={false}
+            overlayClassName=""
+            overlayStyle={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.7)', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', zIndex: 1000
+            }}
+            className="card"
+            style={{ width: '90%', maxWidth: '860px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}
+        >
                 {done ? (
                     <div style={{ textAlign: 'center', padding: '40px 0' }}>
                         <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>✅</div>
-                        <h3>Done — matched {appliedCount} of {books.length} book{books.length !== 1 ? 's' : ''}</h3>
+                        <h3 id="bulk-match-title">Done — matched {appliedCount} of {books.length} book{books.length !== 1 ? 's' : ''}</h3>
                         <button className="btn btn-primary" onClick={onClose} style={{ marginTop: '16px' }}>Close</button>
                     </div>
                 ) : (
@@ -60,7 +68,7 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
                                 <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
                                     Book {index + 1} of {books.length}
                                 </div>
-                                <h3 style={{ margin: 0 }}>{current.title || current.filename}</h3>
+                                <h3 id="bulk-match-title" style={{ margin: 0 }}>{current.title || current.filename}</h3>
                                 {current.author && <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>by {current.author}</div>}
                                 {current.series && (
                                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '2px' }}>
@@ -98,7 +106,6 @@ export default function BulkMatchModal({ books, bookType, onClose, onUpdate }) {
                         </div>
                     </>
                 )}
-            </div>
-        </div>
+        </Modal>
     )
 }

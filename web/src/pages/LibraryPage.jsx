@@ -15,6 +15,7 @@ import { toDisplayEntry, entryKey, groupProgressByPair, patchMedia } from '../li
 import { formatDate } from '../lib/datetime'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import BulkMatchModal from '../components/BulkMatchModal'
+import Modal from '../components/Modal'
 import FilterPill from '../components/FilterPill'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import { useAuth } from '../contexts/AuthContext'
@@ -1240,9 +1241,17 @@ function LibraryPage({ tab }) {
 
             {/* Delete Confirmation */}
             {deleteTarget && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div className="card" style={{ padding: '24px', maxWidth: '480px', width: '90%' }}>
-                        <h3 style={{ marginTop: 0 }}>Confirm Delete</h3>
+                <Modal
+                    onClose={() => setDeleteTarget(null)}
+                    labelledBy="confirm-delete-title"
+                    closeOnBackdrop={false}
+                    closeOnEscape={!deleting}
+                    overlayClassName=""
+                    overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+                    className="card"
+                    style={{ padding: '24px', maxWidth: '480px', width: '90%' }}
+                >
+                        <h3 id="confirm-delete-title" style={{ marginTop: 0 }}>Confirm Delete</h3>
                         <p>
                             Are you sure you want to delete <strong>{deleteTarget.title}</strong>
                             {deleteTarget.author ? ` by ${deleteTarget.author}` : ''}?
@@ -1265,8 +1274,7 @@ function LibraryPage({ tab }) {
                                 {deleting ? 'Deleting...' : 'Delete'}
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Modal>
             )}
 
             {/* Edit Metadata */}
@@ -1346,9 +1354,17 @@ function LibraryPage({ tab }) {
 
             {/* Bulk Delete Confirmation */}
             {bulkDeleteOpen && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div className="card" style={{ padding: '24px', maxWidth: '480px', width: '90%' }}>
-                        <h3 style={{ marginTop: 0 }}>Confirm Delete</h3>
+                <Modal
+                    onClose={() => setBulkDeleteOpen(false)}
+                    labelledBy="confirm-bulk-delete-title"
+                    closeOnBackdrop={false}
+                    closeOnEscape={!bulkDeleting}
+                    overlayClassName=""
+                    overlayStyle={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+                    className="card"
+                    style={{ padding: '24px', maxWidth: '480px', width: '90%' }}
+                >
+                        <h3 id="confirm-bulk-delete-title" style={{ marginTop: 0 }}>Confirm Delete</h3>
                         <p>Are you sure you want to delete <strong>{selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}</strong>?</p>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                             For paired items, both the ebook and audiobook will be deleted.
@@ -1368,8 +1384,7 @@ function LibraryPage({ tab }) {
                                 {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Modal>
             )}
 
             {/* Bulk Edit Modal */}

@@ -309,3 +309,48 @@ describe('LibraryPage mobile search is URL-backed (issue #213)', () => {
         await waitFor(() => expect(lastQuery().q).toBeUndefined())
     })
 })
+
+// Issue #279: both delete confirmations are the shared Modal primitive.
+// They never closed on a backdrop click and still don't — over a destructive
+// confirmation a stray click on the dimmed page should not be an answer — but
+// they are now labelled dialogs that trap focus and take Escape.
+describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
+    it('the single-item confirmation names the book and takes Escape', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3)], 1))
+        const { container } = renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByTitle('More options'))
+        fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('Confirm Delete')
+        expect(dialog).toHaveTextContent('Ebook 3')
+        expect(dialog.contains(document.activeElement)).toBe(true)
+
+        // Backdrop click is deliberately inert on a destructive confirmation.
+        fireEvent.click(container.querySelector('div[class=""]'))
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+    })
+
+    it('the bulk confirmation counts the selection and takes Escape', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), audioItem(4)], 2))
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAccessibleName('Confirm Delete')
+        expect(dialog).toHaveTextContent('1 item')
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})

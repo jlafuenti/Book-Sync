@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import PairsPage from './PairsPage'
 import { AuthProvider } from '../contexts/AuthContext'
@@ -83,5 +83,26 @@ describe('PairsPage pair link routes on bookmarks.source', () => {
         renderTab('paired')
         expect(await screen.findByText('Ship of Magic'))
             .toHaveAttribute('href', '/book/ebook/10')
+    })
+})
+
+// Issue #279: the pairing modal is now the shared Modal primitive.
+describe('PairsPage pairing modal is a real dialog', () => {
+    it('opens labelled by its heading and closes on Escape, restoring focus', async () => {
+        renderTab('unpaired-books')
+        const trigger = await screen.findByRole('button', { name: '🎧 Pair' })
+
+        trigger.focus()
+        fireEvent.click(trigger)
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('Pair "Lonely Ebook" with an Audiobook')
+        expect(dialog.contains(document.activeElement)).toBe(true)
+        expect(screen.getByRole('button', { name: 'Create Pair' })).toBeDisabled()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(document.activeElement).toBe(trigger)
     })
 })
