@@ -1784,14 +1784,22 @@ class BookSyncRepository @Inject constructor(
     suspend fun audioToEpubText(pairId: Int, audioPositionMs: Int): Pair<Int, String> {
         val points = syncPointDao.getPointsForPair(pairId)
 
-        // Sort by audioStartMs to find the correct sync point closest to the audio position
-        val sorted = points.sortedBy { it.audioStartMs }
-        val best = sorted.filter { it.audioStartMs <= audioPositionMs }.lastOrNull()
+        // Shared with the server's `audio_to_epub` and pinned to the same golden
+        // vectors: the last point that has already started, and — for a position
+        // earlier than every point (issue #200) — the *first* point rather than
+        // chapter 0 with no preview. A map can legitimately start well into the
+        // audio, and answering "chapter 0, nothing" there made the restore
+        // ladder's audio rung fail on a position the map could perfectly well
+        // place at its own beginning.
+        val best = SyncMatcher.pointForAudioPosition(points, audioPositionMs) { it.audioStartMs }
         android.util.Log.d("AudioToEpub", "audioToEpubText: audioPos=${audioPositionMs}ms, " +
             "best=${best?.let { "ch${it.epubChapter} s${it.epubSentenceIndex} audio=${it.audioStartMs}ms preview='${it.epubTextPreview?.take(50)}'" } ?: "null"}")
         return if (best != null) {
             Pair(best.epubChapter, best.epubTextPreview ?: "")
         } else {
+            // No sync map at all: nothing to name. The reader treats an empty
+            // preview as an unresolved rung, which is what keeps a failed
+            // restore from writing chapter 0 over a real position.
             Pair(0, "")
         }
     }
