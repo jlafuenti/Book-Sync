@@ -52,8 +52,7 @@ Notes:
   produces failures that don't exist in CI. Tests that need optional heavy deps should
   `pytest.importorskip(...)` so a missing dep skips instead of breaking collection.
   `requirements.txt` no longer carries the heavy transcription stack (torch /
-  openai-whisper live in `requirements-local.txt`), so no filtering is needed — CI's
-  `grep -viE '^(torch|openai-whisper)'` is a historical no-op.
+  openai-whisper live in `requirements-local.txt`), so CI installs it directly.
 - Don't create virtualenvs under `server/tests/`. They sit inside `testpaths`, so
   collection crawls their site-packages; `norecursedirs` in `pytest.ini` guards against it
   and `.gitignore` keeps them untracked, but `server/.venv` is the right home.
@@ -80,7 +79,13 @@ Write the failing test first, watch it fail for the right reason, then make it p
 - `auth_header(user)` — `Authorization: Bearer …` for that user.
 - `make_client(*routers)` — an `httpx.AsyncClient` for a minimal app mounting just the
   router(s) under test (avoids the heavy full app). Async context manager.
+- `client` — the same thing, pre-built with the `auth` and `sync` routers, for the common
+  case where those two are all you need. Prefer `make_client` for anything else.
 - `tests.factories.make_book_pair(db, …)` / `make_sync_map(db, …)` — seed common rows.
+- `tests.factories.suspend_user_progress_uniqueness(db)` and its siblings
+  (`suspend_file_path_uniqueness`, `suspend_book_pair_uniqueness`) — drop a unique index
+  for one test, so a test can reproduce the pre-fix state that the index now makes
+  unrepresentable. The schema is rebuilt per test, so nothing else sees it.
 
 **Pattern — a router endpoint test:**
 
@@ -155,8 +160,9 @@ Patch coverage targets exactly what a change touches, which is the useful signal
 
 These modules are **excluded from patch coverage** because they are external-tool /
 hardware / environment-specific and are covered by manual verification or the dedicated
-Postgres job, not unit tests. Keep this list in sync with the `--exclude` args in
-`.github/workflows/tests.yml`:
+Postgres job, not unit tests. This list must stay in step with the `--exclude` args in
+`.github/workflows/tests.yml` — `server/tests/test_docs_contract.py` asserts it rather than
+leaving it to whoever edits one of the two:
 
 ```
 server/database.py                       # migrations exercised by the Postgres job
@@ -205,24 +211,40 @@ Same rule, different knob. After any PR that raises the web total, bump each ent
 `coverage.thresholds` (`web/vite.config.js`) to `metric_total − 3`, whole percent — all four
 metrics, not just lines. Milestone targets for lines: **30 → 40 → 50** and up.
 
-Highest-leverage backfill targets are the large, near-zero pages (percentages as of the
-2026-07-27 run): `ImportSourcesPage.jsx` (0.2%), `TranscriptionPage.jsx` (1.1%),
-`PairsPage.jsx` (1.4%), `NewPairsPage.jsx` (4.3%), `LibraryPage.jsx` (6.2%),
-`UserManagementPage.jsx` (6.7%), `UnpairedPage.jsx` (6.3%). Component-level gaps worth
-closing first because they are small: `FilterPill.jsx` (1.9%), `MobileTopBar.jsx` (6.3%),
-`MobileDrawer.jsx` (19%).
+The web thresholds are the furthest behind: 28/28/28/64 against a measured
+66.11 / 75.61 / 47.73 / 66.11 on 2026-09-04. Ratcheting them is a change to a CI gate, so it
+belongs in its own PR rather than riding along with unrelated work — but it is overdue.
+
+`npm run coverage` prints a per-file table; the largest near-zero entries in it are the
+highest-leverage backfill targets. **Read the current numbers off that table rather than
+this paragraph** — a list of percentages in a document goes stale the first time somebody
+adds a test, and this one has twice.
+
+As of the 2026-09-04 run (66.11% lines overall) the near-zero files were
+`TranscriptionEditorPage.jsx` (0%), `NewItemsPage.jsx` (0.4%), `CalibreCleanupModal.jsx`
+(0.5%), `ChapterEditor.jsx` (0.7%), `BatchMatchModal.jsx` (1.2%) and `NewPairsPage.jsx`
+(4.3%). Component-level gaps worth closing first because they are small:
+`MobileTopBar.jsx` (6.3%) and `MobileDrawer.jsx` (19.1%).
 
 ### Android
 
 Same rule again. After any PR that raises the Android total, bump `minValue` in the `kover`
 block of `android/app/build.gradle.kts` to `new_total − 3`, whole percent. Milestone targets:
 **10 → 20 → 30 → 40** and up (a lower ladder than server/web — the module started further
-back). Reached 40 on 2026-09-03; next rung is 50.
+back). Past 40 as of 2026-09-03; next rung is 50.
 
-Highest-leverage backfill targets, by **missed** lines as of the 2026-09-03 run. The list is
+**Do not read the floor off this document — read it off `minValue` in the
+`kover { reports { verify { … } } }` block of `android/app/build.gradle.kts`, and get the
+current total from `./gradlew :app:koverLogDebug`.** The number quoted here has drifted from
+the gradle file twice (issues #240 and this refresh), which is why
+`server/tests/test_docs_contract.py` now fails the build when the two disagree.
+
+Highest-leverage backfill targets, by **missed** lines, measured against the earlier
+2026-09-03 run (the 43.86% baseline, before the first-run screen of #175 landed). The list is
 no longer "all at 0%": `BookSyncRepository`, `PlayerViewModel` and `DownloadedViewModel` are
 part-covered, and `AuthInterceptor` has dropped off it entirely (#143/#218). What is left is
-mostly the ViewModels:
+mostly the ViewModels. **Regenerate it before working from it** — the command is under the
+table:
 
 | Class (with its lambdas) | Missed | Covered |
 |---|---|---|
@@ -268,7 +290,8 @@ server:
 
 1. **Global floor (anti-backslide)** — vitest `coverage.thresholds` in the `test.coverage`
    block of `web/vite.config.js`, currently **28% lines / 28% statements / 28% functions /
-   64% branches**. `npm run coverage` exits non-zero below any of them, and CI runs that on
+   64% branches** (pinned against that file by `server/tests/test_docs_contract.py`).
+   `npm run coverage` exits non-zero below any of them, and CI runs that on
    every push (not just PRs), so no separate workflow step is needed.
 2. **Patch coverage (stop-the-bleeding, PRs only)** — `diff-cover` requires **≥80%** coverage
    of the lines a PR adds or changes.
@@ -366,9 +389,12 @@ cd android
 ```
 
 The floor lives in the `kover { reports { verify { ... } } }` block of
-`android/app/build.gradle.kts`, currently **40% lines** — measured total was **43.86%**
-(1722/3926 lines) on 2026-09-03, floor set a few points under, exactly like the server's
-`--cov-fail-under`. `.github/workflows/android-tests.yml` runs
+`android/app/build.gradle.kts` — that file is the source of truth, and
+`server/tests/test_docs_contract.py` fails the build if the number below stops matching it.
+It is currently **45% lines**; measured total was **48.55%** (2020/4161 lines) on 2026-09-03,
+floor set a few points under, exactly like the server's `--cov-fail-under`. Run
+`./gradlew :app:koverLogDebug` for today's total rather than trusting that figure.
+`.github/workflows/android-tests.yml` runs
 `koverXmlReportDebug` + `koverVerifyDebug` after the test step (Kover reuses the test run; it
 does not re-execute the suite) and uploads `reportDebug.xml` as the `android-coverage`
 artifact.
