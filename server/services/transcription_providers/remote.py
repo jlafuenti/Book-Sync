@@ -32,9 +32,19 @@ class RemoteWhisperProvider(TranscriptionProvider):
     Intended for use with the Jetson Orin Nano transcription server.
     """
 
-    def __init__(self, remote_url: str, timeout: int = 7200, api_key: str = ""):
+    def __init__(
+        self,
+        remote_url: str,
+        timeout: int = 7200,
+        api_key: str = "",
+        language: str = "",
+    ):
         self.remote_url = remote_url.rstrip("/")
         self.timeout = timeout
+        # ISO 639-1 code sent with each job, or "" to let the worker detect
+        # once per file and pin that (issue #246). Sending "" would be a
+        # request to transcribe in the empty language, so it is omitted.
+        self.language = language
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     async def _poll_progress(self, stop_event: asyncio.Event, progress_callback: Callable):
@@ -223,9 +233,12 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                 f"Sending POST /v1/transcribe/resume request{attempt_label} "
                                 f"(no upload — worker still holds the audio)..."
                             )
+                            resume_body = self._checkpoint_params(audio_path)
+                            if self.language:
+                                resume_body["language"] = self.language
                             response = await client.post(
                                 f"{self.remote_url}/v1/transcribe/resume",
-                                json=self._checkpoint_params(audio_path),
+                                json=resume_body,
                                 headers=self._headers,
                             )
                         else:
@@ -234,6 +247,7 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                 response = await client.post(
                                     f"{self.remote_url}/v1/transcribe",
                                     files={"audio_file": (filename, f, "audio/mpeg")},
+                                    data={"language": self.language} if self.language else None,
                                     headers=self._headers,
                                 )
                     except httpx.ConnectError as e:
@@ -350,6 +364,28 @@ class RemoteWhisperProvider(TranscriptionProvider):
                             current_file_on_orin or "unknown", progress_callback
                         )
                         continue
+
+                elif response.status_code == 413:
+                    # The worker's upload cap (#238). The file will be exactly
+                    # as large next time, so retrying just re-uploads multiple
+                    # GB to be refused again — fail fast with the fix in the
+                    # message. Non-retriable by being a TranscriptionError.
+                    raise TranscriptionError(
+                        f"Remote worker refused the upload as too large — raise "
+                        f"MAX_UPLOAD_BYTES on the worker (currently rejecting "
+                        f"{os.path.getsize(audio_path)} bytes): {response.text[:300]}"
+                    )
+
+                elif response.status_code == 507:
+                    # Out of disk on the worker (#238). Retriable — space may
+                    # be freed, and the queue's retry ceiling bounds it — but
+                    # the message has to name the disk, or the operator sees
+                    # five identical multi-GB retries and no explanation.
+                    raise ProviderUnavailableError(
+                        f"Remote worker is out of disk (will retry): free space in "
+                        f"its checkpoint volume (/tmp/booksync_checkpoints) or grow "
+                        f"the volume — {response.text[:300]}"
+                    )
 
                 elif response.status_code >= 500:
                     error_body = response.text

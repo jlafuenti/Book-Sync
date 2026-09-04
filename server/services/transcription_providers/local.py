@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 class LocalWhisperProvider(TranscriptionProvider):
     """Runs OpenAI Whisper locally on the Book Sync server's CPU/GPU."""
 
+    def __init__(self, language: str = ""):
+        # ISO 639-1 code forced on every chunk, or "" to detect once per file
+        # and pin that (issue #246). Set from the `transcription_language`
+        # system setting by the provider factory.
+        self.language = language
+
     async def transcribe(
         self,
         audio_path: str,
@@ -31,6 +37,7 @@ class LocalWhisperProvider(TranscriptionProvider):
                 transcribe_audiobook,
                 audio_path,
                 progress_callback=progress_callback,
+                language=self.language or None,
             )
             return sentences
         except ImportError as e:

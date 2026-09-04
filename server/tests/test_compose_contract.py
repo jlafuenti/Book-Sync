@@ -181,6 +181,47 @@ def test_caddyfile_template_caps_request_bodies():
         assert needle in text, f"Caddyfile.example missing {needle!r}"
 
 
+def test_jetson_template_states_the_lan_only_assumption_above_its_ports():
+    """The worker's whole security model is "nobody outside the LAN can reach
+    it" (issue #238): plaintext HTTP, one shared bearer token, every request
+    carrying it in the clear. `ports: - "9000:9000"` publishes on every
+    interface, so the assumption has to be stated where it is acted on — a
+    cheap guard against the comment being dropped on the next template edit.
+    """
+    path = COMPOSE_TEMPLATES[1]
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    ports_line = next(
+        (i for i, line in enumerate(lines) if line.strip() == "ports:"), None
+    )
+    assert ports_line is not None, "jetson template declares no ports:"
+
+    preamble = "\n".join(lines[max(0, ports_line - 12):ports_line]).lower()
+    for needle in ("lan", "must not", "internet"):
+        assert needle in preamble, (
+            f"jetson/docker-compose.example.yml: no comment above `ports:` "
+            f"mentioning {needle!r} — the LAN-only assumption is unstated."
+        )
+
+
+def test_jetson_template_sizes_and_places_the_upload_temp_dir():
+    """Uploads cost twice the file size in temp space, and the container's
+    default /tmp is not the volume the README tells you to size (#238)."""
+    body = _services(COMPOSE_TEMPLATES[1])["transcriber"]
+    env = _env_vars(body)
+
+    assert "TMPDIR" in env, (
+        "jetson/docker-compose.example.yml does not set TMPDIR — the spooled "
+        "upload and its copy would land on the container's unsized /tmp."
+    )
+    mounted = [m.split(":")[1] for m in _mounts(body) if ":" in m]
+    assert any(env["TMPDIR"].startswith(target) for target in mounted), (
+        f"TMPDIR={env['TMPDIR']} is not inside any mounted volume."
+    )
+    assert "MAX_UPLOAD_BYTES" in env, "no MAX_UPLOAD_BYTES cap in the jetson template"
+
+
 def test_parser_finds_the_expected_services():
     """Guard the hand-rolled parser itself: a silently-empty parse would pass above."""
     main = _services(COMPOSE_TEMPLATES[0])
