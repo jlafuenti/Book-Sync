@@ -96,10 +96,11 @@ async def test_remote_timeout_below_the_floor_is_rejected(make_client, make_user
 
 async def test_transcription_language_defaults_to_auto(make_client, make_user, auth_header):
     """Issue #246: "" is auto-detect — the worker detects once per file and
-    pins that, rather than re-detecting every chunk."""
-    user = await make_user(username="u", role="user")
+    pins that, rather than re-detecting every chunk. Read as an admin: once
+    #263 lands, anyone below admin gets only a short allow-list."""
+    admin = await make_user(username="admin0", role="admin")
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/", headers=auth_header(user))
+        r = await c.get("/api/settings/", headers=auth_header(admin))
     assert r.json()["transcription_language"] == ""
 
 
