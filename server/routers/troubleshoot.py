@@ -8,6 +8,7 @@ and re-queue. Backed by the `library_verify` background scan for the expensive
 integrity checks.
 """
 
+import asyncio
 import logging
 import os
 from collections import defaultdict
@@ -32,7 +33,8 @@ from services.uploads import stream_upload_to_path
 from utils import safe_join
 from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
-from routers.auth import get_current_user, get_editor_user
+from rate_limit import expensive_reads
+from routers.auth import get_current_user, get_editor_user, rate_limited
 from services import chapter_repair, library_verify
 from services import sync_map_audit as sync_map_audit_service
 from services.position_service import (
@@ -82,42 +84,88 @@ def _item_dict(item, item_type: str, detail: str = "", pair_id: Optional[int] = 
 # Issues
 # ---------------------------------------------------------------------------
 
+def _scan_library_files(ebook_rows: List[dict], audiobook_rows: List[dict]) -> dict:
+    """Stat every library file and check every audiobook's chapter atom.
+
+    **Blocking, and the reason this endpoint had to change (issue #208):** one
+    `os.path.isfile` plus one `os.path.getsize` per row, plus a mutagen atom
+    parse per audiobook, all against a NAS mount. On the event loop — which is
+    where it used to run — that stalled every other request for its duration,
+    on a server with a single uvicorn worker.
+
+    Takes plain dicts rather than ORM rows so nothing here can touch the
+    session from a worker thread: the caller snapshots the columns first.
+    """
+    missing, zero_byte, unsupported, chapter_encoding_bad = [], [], [], []
+
+    for row in ebook_rows:
+        path = row.get("file_path")
+        if not path or not os.path.isfile(path):
+            missing.append({**row, "detail": "File not found on storage"})
+        else:
+            sz = os.path.getsize(path)
+            if sz < _TINY_EBOOK_BYTES:
+                zero_byte.append({**row, "detail": f"File is only {sz} bytes"})
+        fmt = (row.get("format") or "").lower()
+        if fmt in ("mobi", "azw3"):
+            converted = Path(path).with_suffix(".epub").exists() if path else False
+            if not converted:
+                unsupported.append(
+                    {**row, "detail": f"{fmt.upper()} needs conversion to EPUB"}
+                )
+
+    for row in audiobook_rows:
+        path = row.get("file_path")
+        if not path or not os.path.isfile(path):
+            missing.append({**row, "detail": "File not found on storage"})
+        else:
+            sz = os.path.getsize(path)
+            if sz < _TINY_AUDIO_BYTES:
+                zero_byte.append(
+                    {**row, "detail": f"File is only {sz} bytes — likely truncated"}
+                )
+            ok, detail = chapter_repair.check_chapter_encoding_cached(path)
+            if not ok:
+                chapter_encoding_bad.append(
+                    {**row, "detail": detail or "Non-UTF-8 chapter title"}
+                )
+
+    return {
+        "missing": missing,
+        "zero_byte": zero_byte,
+        "unsupported": unsupported,
+        "chapter_encoding_bad": chapter_encoding_bad,
+    }
+
+
 @router.get("/issues")
 async def get_issues(
     db: AsyncSession = Depends(get_db),
     # Editor: this page's own fix controls are editor-gated, so gating its data
     # at admin would lock out exactly the role it was built for (issue #283).
-    _: User = Depends(get_editor_user),
+    #
+    # Rate limited on top of that (issue #208). The role check bounds who may
+    # ask; nothing bounded how often, and this is two full-table loads plus a
+    # stat and an atom parse per row.
+    _: User = Depends(rate_limited(expensive_reads, get_editor_user)),
 ):
     """Return all current issues grouped by category. Cheap categories are
     computed live; audio/ebook integrity come from the last scan."""
     ebooks = (await db.execute(select(EBook))).scalars().all()
     audiobooks = (await db.execute(select(AudioBook))).scalars().all()
 
-    missing, zero_byte, unsupported = [], [], []
-    for eb in ebooks:
-        if not eb.file_path or not os.path.isfile(eb.file_path):
-            missing.append(_item_dict(eb, "ebook", "File not found on storage"))
-        else:
-            sz = os.path.getsize(eb.file_path)
-            if sz < _TINY_EBOOK_BYTES:
-                zero_byte.append(_item_dict(eb, "ebook", f"File is only {sz} bytes"))
-        if (eb.format or "").lower() in ("mobi", "azw3"):
-            converted = Path(eb.file_path).with_suffix(".epub").exists() if eb.file_path else False
-            if not converted:
-                unsupported.append(_item_dict(eb, "ebook", f"{(eb.format or '').upper()} needs conversion to EPUB"))
-
-    chapter_encoding_bad = []
-    for ab in audiobooks:
-        if not ab.file_path or not os.path.isfile(ab.file_path):
-            missing.append(_item_dict(ab, "audiobook", "File not found on storage"))
-        else:
-            sz = os.path.getsize(ab.file_path)
-            if sz < _TINY_AUDIO_BYTES:
-                zero_byte.append(_item_dict(ab, "audiobook", f"File is only {sz} bytes — likely truncated"))
-            ok, detail = chapter_repair.check_chapter_encoding(ab.file_path)
-            if not ok:
-                chapter_encoding_bad.append(_item_dict(ab, "audiobook", detail or "Non-UTF-8 chapter title"))
+    # Snapshot the columns the scan needs before handing them to a thread: ORM
+    # instances are bound to this request's session, and an expired attribute
+    # touched off-loop would issue IO on it.
+    scan = await asyncio.to_thread(
+        _scan_library_files,
+        [_item_dict(eb, "ebook") for eb in ebooks],
+        [_item_dict(ab, "audiobook") for ab in audiobooks],
+    )
+    missing = scan["missing"]
+    zero_byte = scan["zero_byte"]
+    unsupported = scan["unsupported"]
+    chapter_encoding_bad = scan["chapter_encoding_bad"]
 
     # Expensive integrity results from the last scan.
     audio_corrupt, ebook_drm, ebook_unreadable = [], [], []

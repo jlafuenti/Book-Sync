@@ -14,7 +14,8 @@ from database import get_db
 from schemas import MatchRequest, MatchResult
 from models.book import EBook, AudioBook
 from models.user import User
-from routers.auth import get_current_user, get_editor_user
+from rate_limit import external_metadata_searches
+from routers.auth import get_current_user, get_editor_user, rate_limited
 from routers.library import sanitize_filename
 from services import credentials as credential_store
 from services.url_safety import assert_safe_url, UnsafeUrlError
@@ -63,13 +64,19 @@ async def fetch_google_books(query: str, author: Optional[str]) -> List[MatchRes
     if author:
         q += f"+inauthor:{author}"
         
-    url = f"https://www.googleapis.com/books/v1/volumes?q={q}&maxResults=10"
+    # Passed as `params`, never interpolated into the URL (issue #208). The
+    # query is caller-controlled, and as an f-string a `&` in a title started a
+    # new URL parameter while a `#` truncated the request at that point — so an
+    # ordinary search asked Google something other than what was typed, and a
+    # crafted one could append parameters of its own. httpx encodes these.
+    url = "https://www.googleapis.com/books/v1/volumes"
+    params = {"q": q, "maxResults": 10}
     if hasattr(settings, 'google_books_api_key') and settings.google_books_api_key:
-        url += f"&key={settings.google_books_api_key}"
-    
+        params["key"] = settings.google_books_api_key
+
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(url, timeout=10.0)
+            resp = await client.get(url, params=params, timeout=10.0)
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as e:
@@ -348,7 +355,12 @@ async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchRe
 async def search_metadata(
     req: MatchRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user)
+    # Rate limited per user (issue #208). Unlike the other buckets this one is
+    # not metering server CPU: every call spends the admin-configured Google
+    # Books / Hardcover / Audible quota on the caller's behalf, and exhausting
+    # that breaks matching for everyone until it resets. Hence the tightest
+    # default of the three.
+    _: User = Depends(rate_limited(external_metadata_searches)),
 ):
     """Search external providers for book metadata."""
     if req.provider == "google":

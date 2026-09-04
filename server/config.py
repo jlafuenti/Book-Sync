@@ -75,6 +75,63 @@ class Settings(BaseSettings):
         default=15 * 60, alias="REFRESH_FAILURE_WINDOW_SECONDS"
     )
 
+    # ── Per-user rate limits on expensive reads (issue #208) ─────────────────
+    #
+    # Keyed on the authenticated user's id, not the client address: behind Caddy
+    # and docker NAT every caller shares the proxy's address (#294), so an IP
+    # bucket here would throttle the whole deployment together. Same reasoning,
+    # and the same FailedLoginTracker machinery, as the /auth/change-password
+    # bucket above — see rate_limit.UserRateLimiter and docs/operations.md,
+    # "Rate limits on expensive reads".
+    #
+    # These count *every* request, not just failures, so they are much more
+    # generous than the auth buckets. Each is set at least an order of magnitude
+    # above what the UI actually does, so the ceiling is only ever reached by a
+    # loop: the Troubleshoot and System pages each fire their reads once on load.
+
+    # Endpoints that stat every library file, walk a data root or shell out:
+    # /api/troubleshoot/issues, /api/library/verify, /api/stats/disk_usage,
+    # /api/library/calibre-status. All four are also cached, so the limit is a
+    # second line rather than the only one.
+    expensive_read_limit: int = Field(default=30, alias="EXPENSIVE_READ_LIMIT")
+    expensive_read_window_seconds: int = Field(
+        default=60, alias="EXPENSIVE_READ_WINDOW_SECONDS"
+    )
+
+    # Library search and queue history: bounded queries, but still a DB round
+    # trip per call that nothing else meters.
+    search_read_limit: int = Field(default=60, alias="SEARCH_READ_LIMIT")
+    search_read_window_seconds: int = Field(
+        default=60, alias="SEARCH_READ_WINDOW_SECONDS"
+    )
+
+    # POST /api/library/match/search — the only bucket that meters something the
+    # operator pays for rather than something the server computes. It spends the
+    # admin-configured Google Books / Hardcover / Audible quota on any caller's
+    # behalf, and quota exhaustion breaks matching for everyone until it resets,
+    # so this one is the tightest of the three.
+    external_metadata_search_limit: int = Field(
+        default=20, alias="EXTERNAL_METADATA_SEARCH_LIMIT"
+    )
+    external_metadata_search_window_seconds: int = Field(
+        default=60, alias="EXTERNAL_METADATA_SEARCH_WINDOW_SECONDS"
+    )
+
+    # ── TTL caches on the same endpoints (issues #208, #233) ─────────────────
+    # A page that polls and a hostile loop should cost the same. Values are
+    # seconds; 0 disables caching.
+
+    # Recursive os.scandir over three data roots — the most expensive of them.
+    disk_usage_cache_seconds: int = Field(default=300, alias="DISK_USAGE_CACHE_SECONDS")
+    # `ebook-convert --version` in a subprocess; the answer changes on rebuild.
+    calibre_status_cache_seconds: int = Field(
+        default=300, alias="CALIBRE_STATUS_CACHE_SECONDS"
+    )
+    # Per-audiobook mutagen atom parse, keyed on (path, mtime, size) so an edited
+    # file is re-checked immediately regardless of the TTL.
+    chapter_encoding_cache_seconds: int = Field(
+        default=300, alias="CHAPTER_ENCODING_CACHE_SECONDS"
+    )
     # GET /api/health/backup (issue #233). Unauthenticated, so this cache is what
     # bounds it instead of a per-user bucket; well under any sane monitor's
     # interval, and staleness is measured in hours.

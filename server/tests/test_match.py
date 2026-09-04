@@ -270,3 +270,82 @@ async def test_open_library_maps_subjects_to_tags(make_client, make_user, auth_h
                          json={"provider": "openlibrary", "query": "dune"})
     (res,) = r.json()
     assert res["tags"] == "Science fiction, Deserts, Politics"
+
+
+# ---------------------------------------------------------------------------
+# Query encoding and rate limiting (issue #208)
+# ---------------------------------------------------------------------------
+
+async def test_google_query_is_url_encoded(
+    make_client, make_user, auth_header, monkeypatch
+):
+    """The query was interpolated into the URL as a raw f-string.
+
+    A `&` in a title started a new URL parameter and a `#` truncated the request
+    at that point, so a perfectly ordinary search ("Crime & Punishment") asked
+    Google something other than what the user typed — and the caller controls
+    every character of it.
+    """
+    user = await make_user(username="enc", role="user")
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"items": []})
+
+    _patch_outbound_transport(monkeypatch, handler)
+    async with make_client(match.router) as c:
+        await c.post("/match/search", headers=auth_header(user),
+                     json={"provider": "google",
+                           "query": "Crime & Punishment #1",
+                           "author": "Fyodor Dostoevsky"})
+
+    assert seen["params"]["q"] == "Crime & Punishment #1+inauthor:Fyodor Dostoevsky"
+    assert seen["params"]["maxResults"] == "10"
+
+
+async def test_google_api_key_is_sent_as_a_parameter_not_concatenated(
+    make_client, make_user, auth_header, monkeypatch
+):
+    user = await make_user(username="enckey", role="user")
+    monkeypatch.setattr(app_settings, "google_books_api_key", "test-key")
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"items": []})
+
+    _patch_outbound_transport(monkeypatch, handler)
+    async with make_client(match.router) as c:
+        await c.post("/match/search", headers=auth_header(user),
+                     json={"provider": "google", "query": "dune"})
+
+    assert seen["params"]["key"] == "test-key"
+
+
+async def test_match_search_is_rate_limited(
+    make_client, make_user, auth_header, monkeypatch
+):
+    """This bucket meters the operator's third-party quota, not server CPU.
+
+    Every call spends from the admin-configured Google Books / Hardcover /
+    Audible allowance on the caller's behalf, and exhausting it breaks matching
+    for everyone until it resets.
+    """
+    user = await make_user(username="rl", role="user")
+    monkeypatch.setattr(app_settings, "external_metadata_search_limit", 2)
+    _patch_outbound_transport(
+        monkeypatch, lambda request: httpx.Response(200, json={"items": []})
+    )
+
+    body = {"provider": "google", "query": "dune"}
+    async with make_client(match.router) as c:
+        codes = [
+            (await c.post("/match/search", headers=auth_header(user),
+                          json=body)).status_code
+            for _ in range(3)
+        ]
+        over = await c.post("/match/search", headers=auth_header(user), json=body)
+
+    assert codes == [200, 200, 429]
+    assert int(over.headers["Retry-After"]) > 0

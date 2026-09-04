@@ -51,7 +51,9 @@ from schemas import (
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
 )
-from routers.auth import get_current_user, get_editor_user
+from rate_limit import expensive_reads, search_reads
+from routers.auth import get_current_user, get_editor_user, rate_limited
+from services.cache import TTLValue
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 from services.audio_duration import probe_duration_seconds
@@ -1532,15 +1534,40 @@ def _q_param() -> Optional[str]:
     return Query(None, min_length=1, description="Substring match on title, author, or series")
 
 
+# Hard cap on `/api/library/search`, which is not paginated (issue #208). Three
+# unbounded queries, and — before the escaping below — `q=%` returned the whole
+# library three times over in one request. 200 is well above any result a person
+# scans by eye and well below anything that hurts.
+SEARCH_MAX_RESULTS = 200
+
+# LIKE's own wildcards. Someone typing `%` into a search box means the character,
+# not "everything"; `_` means the character, not "any character". Escaped with a
+# backslash, declared to the DB with `escape="\\"` so the same term behaves
+# identically on SQLite and Postgres.
+_LIKE_ESCAPE = "\\"
+
+
+def _like_term(q: str) -> str:
+    """`q` as a LIKE substring pattern with its wildcards neutralised.
+
+    The backslash is escaped first, or escaping the wildcards afterwards would
+    re-escape the escapes.
+    """
+    escaped = q.lower()
+    for ch in (_LIKE_ESCAPE, "%", "_"):
+        escaped = escaped.replace(ch, _LIKE_ESCAPE + ch)
+    return f"%{escaped}%"
+
+
 def _search_clause(model, q: Optional[str]):
     """`WHERE lower(title|author|series) LIKE %q%` for one model, or None."""
     if not q:
         return None
-    term = f"%{q.lower()}%"
+    term = _like_term(q)
     return or_(
-        func.lower(model.title).like(term),
-        func.lower(model.author).like(term),
-        func.lower(model.series).like(term),
+        func.lower(model.title).like(term, escape=_LIKE_ESCAPE),
+        func.lower(model.author).like(term, escape=_LIKE_ESCAPE),
+        func.lower(model.series).like(term, escape=_LIKE_ESCAPE),
     )
 
 
@@ -1665,58 +1692,46 @@ async def get_audiobook_detail(
 async def search_library(
     q: str = Query(..., min_length=1, description="Search query for title, author, or series"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(rate_limited(search_reads)),
 ):
-    """Global search across ebooks, audiobooks, and book pairs."""
-    search_term = f"%{q.lower()}%"
-    
-    # Search EBooks
-    ebook_query = select(EBook).where(
-        or_(
-            func.lower(EBook.title).like(search_term),
-            func.lower(EBook.author).like(search_term),
-            func.lower(EBook.series).like(search_term)
-        )
-    )
-    ebooks_result = await db.execute(ebook_query)
-    ebooks = ebooks_result.scalars().all()
-    
-    # Search Audiobooks
-    audiobook_query = select(AudioBook).where(
-        or_(
-            func.lower(AudioBook.title).like(search_term),
-            func.lower(AudioBook.author).like(search_term),
-            func.lower(AudioBook.series).like(search_term)
-        )
-    )
-    audiobooks_result = await db.execute(audiobook_query)
-    audiobooks = audiobooks_result.scalars().all()
-    
-    # Search BookPairs (matching either the ebook or audiobook)
+    """Global search across ebooks, audiobooks, and book pairs.
+
+    Bounded on both axes since issue #208. Each of the three queries stops at
+    `SEARCH_MAX_RESULTS`, and `truncated` says when one of them did, so a client
+    can tell "nothing else matched" from "narrow your query". The term's LIKE
+    wildcards are escaped by `_search_clause`, which is shared with the
+    paginated browse so the two cannot disagree about what `%` means — before
+    that, `q=%` returned the entire library three times in a single request.
+    """
+    # Ask for one more than the cap: if it comes back, there was more to find.
+    probe = SEARCH_MAX_RESULTS + 1
+
+    ebook_query = select(EBook).where(_search_clause(EBook, q)).limit(probe)
+    ebooks = (await db.execute(ebook_query)).scalars().all()
+
+    audiobook_query = select(AudioBook).where(_search_clause(AudioBook, q)).limit(probe)
+    audiobooks = (await db.execute(audiobook_query)).scalars().all()
+
+    # Pairs match on either side.
     pair_query = (
         select(BookPair)
         .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
         .join(BookPair.ebook)
         .join(BookPair.audiobook)
-        .where(
-            or_(
-                func.lower(EBook.title).like(search_term),
-                func.lower(EBook.author).like(search_term),
-                func.lower(EBook.series).like(search_term),
-                func.lower(AudioBook.title).like(search_term),
-                func.lower(AudioBook.author).like(search_term),
-                func.lower(AudioBook.series).like(search_term)
-            )
-        )
+        .where(or_(_search_clause(EBook, q), _search_clause(AudioBook, q)))
+        .limit(probe)
     )
-    pairs_result = await db.execute(pair_query)
-    pairs = pairs_result.scalars().all()
-    
+    pairs = (await db.execute(pair_query)).scalars().all()
+
+    truncated = any(len(rows) > SEARCH_MAX_RESULTS
+                    for rows in (ebooks, audiobooks, pairs))
+
     return SearchResponse(
         query=q,
-        ebooks=ebooks,
-        audiobooks=audiobooks,
-        book_pairs=pairs
+        ebooks=ebooks[:SEARCH_MAX_RESULTS],
+        audiobooks=audiobooks[:SEARCH_MAX_RESULTS],
+        book_pairs=pairs[:SEARCH_MAX_RESULTS],
+        truncated=truncated,
     )
 
 
@@ -3100,45 +3115,74 @@ async def delete_audiobook(
 # Verify files & cleanup orphans
 # ---------------------------------------------------------------------------
 
+# Hard cap on each of `/verify`'s two lists (issue #208). A library whose mount
+# has dropped is *entirely* orphaned, and the honest answer to that is not a
+# response body with one entry per book — it is the first 200 plus `truncated`,
+# which says as much as the operator needs to know before going to look at the
+# mount. Cleaning up and re-running gets the next batch.
+VERIFY_MAX_RESULTS = 200
+
+
+def _find_orphans(rows: List[dict], limit: int) -> tuple[List[dict], bool]:
+    """Rows whose `file_path` is gone, capped. **Blocking** — one stat per row.
+
+    Takes plain dicts, not ORM instances: this runs in a worker thread and must
+    not touch the request's session.
+    """
+    orphans = []
+    truncated = False
+    for row in rows:
+        if row["file_path"] and not os.path.isfile(row["file_path"]):
+            if len(orphans) >= limit:
+                truncated = True
+                break
+            orphans.append(row)
+    return orphans, truncated
+
+
+def _verify_row(item) -> dict:
+    return {
+        "id": item.id,
+        "title": item.title,
+        "author": item.author,
+        "filename": item.filename,
+        "file_path": item.file_path,
+        "format": item.format,
+    }
+
+
 @router.get("/verify")
 async def verify_files(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(rate_limited(expensive_reads)),
 ):
     """
     Check every ebook and audiobook file_path against the filesystem.
     Returns lists of entries whose source files no longer exist.
+
+    The stat loop used to run on the event loop, one call per library row over a
+    NAS mount, on a single-worker server — so a full library made every other
+    request wait, `/api/health` included. It now runs in a worker thread, and
+    each list stops at `VERIFY_MAX_RESULTS` with `truncated` set (issue #208).
     """
-    orphaned_ebooks = []
-    orphaned_audiobooks = []
+    ebook_rows = [
+        _verify_row(e) for e in (await db.execute(select(EBook))).scalars().all()
+    ]
+    audiobook_rows = [
+        _verify_row(a) for a in (await db.execute(select(AudioBook))).scalars().all()
+    ]
 
-    ebooks_result = await db.execute(select(EBook))
-    for ebook in ebooks_result.scalars().all():
-        if ebook.file_path and not os.path.isfile(ebook.file_path):
-            orphaned_ebooks.append({
-                "id": ebook.id,
-                "title": ebook.title,
-                "author": ebook.author,
-                "filename": ebook.filename,
-                "file_path": ebook.file_path,
-                "format": ebook.format,
-            })
+    def _scan():
+        ebooks, eb_truncated = _find_orphans(ebook_rows, VERIFY_MAX_RESULTS)
+        audiobooks, ab_truncated = _find_orphans(audiobook_rows, VERIFY_MAX_RESULTS)
+        return ebooks, audiobooks, eb_truncated or ab_truncated
 
-    audiobooks_result = await db.execute(select(AudioBook))
-    for ab in audiobooks_result.scalars().all():
-        if ab.file_path and not os.path.isfile(ab.file_path):
-            orphaned_audiobooks.append({
-                "id": ab.id,
-                "title": ab.title,
-                "author": ab.author,
-                "filename": ab.filename,
-                "file_path": ab.file_path,
-                "format": ab.format,
-            })
+    orphaned_ebooks, orphaned_audiobooks, truncated = await asyncio.to_thread(_scan)
 
     return {
         "orphaned_ebooks": orphaned_ebooks,
         "orphaned_audiobooks": orphaned_audiobooks,
+        "truncated": truncated,
     }
 
 
@@ -3414,9 +3458,8 @@ def _convert_to_epub_sync(src_path: str) -> str:
 # Calibre status
 # ---------------------------------------------------------------------------
 
-@router.get("/calibre-status")
-async def get_calibre_status(current_user: User = Depends(get_current_user)):
-    """Check whether calibre's ebook-convert is available in the server container."""
+def _probe_calibre() -> dict:
+    """Ask `ebook-convert` for its version. **Blocking** — up to 10 s."""
     try:
         result = subprocess.run(
             ["ebook-convert", "--version"],
@@ -3432,6 +3475,26 @@ async def get_calibre_status(current_user: User = Depends(get_current_user)):
         return {"available": False, "error": "ebook-convert not found — rebuild the server container to install calibre"}
     except subprocess.TimeoutExpired:
         return {"available": False, "error": "version check timed out"}
+
+
+#: Whether calibre is installed changes on an image rebuild, not between two
+#: page loads — so the subprocess runs at most once per
+#: `CALIBRE_STATUS_CACHE_SECONDS` (issue #208).
+calibre_status_cache = TTLValue(lambda: settings.calibre_status_cache_seconds)
+
+
+@router.get("/calibre-status")
+async def get_calibre_status(
+    current_user: User = Depends(rate_limited(expensive_reads)),
+):
+    """Check whether calibre's ebook-convert is available in the server container.
+
+    `subprocess.run` with a 10 s timeout used to run inline on the event loop, so
+    one wedged `ebook-convert` blocked every other request for those ten seconds
+    — on a single-worker server, with a System page tile calling this on load.
+    Now: worker thread, cached (issue #208).
+    """
+    return await calibre_status_cache.get(_probe_calibre)
 
 
 # ---------------------------------------------------------------------------

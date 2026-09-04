@@ -456,3 +456,77 @@ async def test_items_kind_is_ignored_where_it_does_not_apply_and_never_errors(db
     assert nothing["total"] == 0 and nothing["items"] == []
     facets = (await c.get("/api/library/facets?tab=unpaired&kind=pair", headers=headers)).json()
     assert facets["authors"] == [] and facets["series"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/library/search — bounded and wildcard-safe (issue #208)
+#
+# The paginated browse above is capped at `limit=500`; `/search` was not
+# paginated at all and ran three unbounded queries. Worse, it built its LIKE
+# term with no escaping, so `q=%` matched every row: one request returned the
+# entire library three times over, and any authenticated user could ask for it
+# in a loop.
+# ---------------------------------------------------------------------------
+
+async def test_search_treats_sql_wildcards_as_literal_text(db, library_client):
+    """`%` and `_` are characters someone typed, not a request for everything."""
+    c, headers = library_client
+    await _seed_ebooks(db, 3, title="Ordinary Title")
+
+    for wildcard in ("%", "_"):
+        body = (await c.get(f"/api/library/search?q={wildcard}", headers=headers)).json()
+        assert body["ebooks"] == [], f"{wildcard!r} still matched everything"
+        assert body["audiobooks"] == []
+        assert body["book_pairs"] == []
+
+
+async def test_search_still_finds_a_literal_wildcard_character(db, library_client):
+    """Escaping must not make such a title unfindable — it is a real title."""
+    c, headers = library_client
+    db.add_all([
+        EBook(title="100% Wolf", author="A", filename="w.epub", file_path="/x/w.epub"),
+        EBook(title="Ordinary Title", author="A", filename="o.epub", file_path="/x/o.epub"),
+    ])
+    await db.commit()
+
+    body = (await c.get("/api/library/search?q=100%25", headers=headers)).json()
+
+    assert [e["title"] for e in body["ebooks"]] == ["100% Wolf"]
+
+
+async def test_search_results_are_capped(db, library_client):
+    c, headers = library_client
+    from routers import library
+
+    await _seed_ebooks(db, library.SEARCH_MAX_RESULTS + 5, title="Capped Title")
+
+    body = (await c.get("/api/library/search?q=capped", headers=headers)).json()
+
+    assert len(body["ebooks"]) == library.SEARCH_MAX_RESULTS
+    assert body["truncated"] is True
+
+
+async def test_search_does_not_claim_truncation_when_it_fits(db, library_client):
+    c, headers = library_client
+    await _seed_ebooks(db, 3, title="Small Result")
+
+    body = (await c.get("/api/library/search?q=small", headers=headers)).json()
+
+    assert len(body["ebooks"]) == 3
+    assert body["truncated"] is False
+
+
+async def test_search_is_rate_limited(db, library_client, monkeypatch):
+    from config import settings
+
+    c, headers = library_client
+    monkeypatch.setattr(settings, "search_read_limit", 2)
+
+    codes = [
+        (await c.get("/api/library/search?q=x", headers=headers)).status_code
+        for _ in range(3)
+    ]
+    over = await c.get("/api/library/search?q=x", headers=headers)
+
+    assert codes == [200, 200, 429]
+    assert int(over.headers["Retry-After"]) > 0
