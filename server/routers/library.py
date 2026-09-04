@@ -1397,13 +1397,21 @@ async def _rehash_impl(db: AsyncSession) -> dict:
     stores raw hash values, so without the remap every existing exclusion
     would silently stop matching. Rows whose file is missing keep their stale
     hash (harmless: it can no longer collide with a composite hash).
+
+    Deliberately *not* batched, unlike the other three library jobs (issue
+    #202): the second pass remaps `auto_pair_excluded_hashes` through the
+    old→new mapping the first pass builds, so committing part-way would leave
+    rows rehashed with their exclusions still pointing at the old values — every
+    unpair the user has ever recorded silently stops matching, and the next scan
+    re-pairs what they broke apart. The two passes have to land together. It
+    takes the job guard like the others, which is what stops it overlapping a
+    scan; a crash mid-rehash costs a re-run, not correctness.
     """
     from services.file_hash import hash_file
 
     hash_map: dict[str, str] = {}
     rehashed = 0
     skipped_missing = 0
-    batch = _Batch(db)
 
     for model in (EBook, AudioBook):
         result = await db.execute(select(model))
@@ -1422,7 +1430,6 @@ async def _rehash_impl(db: AsyncSession) -> dict:
             if book.file_hash != new_hash:
                 book.file_hash = new_hash
                 rehashed += 1
-            await batch.tick()
 
     exclusions_remapped = 0
     if hash_map:
