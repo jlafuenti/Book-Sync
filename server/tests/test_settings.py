@@ -94,6 +94,40 @@ async def test_remote_timeout_below_the_floor_is_rejected(make_client, make_user
     assert body["whisper_model"] == "medium"
 
 
+async def test_transcription_language_defaults_to_auto(make_client, make_user, auth_header):
+    """Issue #246: "" is auto-detect — the worker detects once per file and
+    pins that, rather than re-detecting every chunk."""
+    user = await make_user(username="u", role="user")
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/", headers=auth_header(user))
+    assert r.json()["transcription_language"] == ""
+
+
+async def test_transcription_language_round_trips(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"transcription_language": "ES"})
+        assert put.status_code == 200
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+    # Normalised on the way in, so the stored value is what Whisper expects.
+    assert body["transcription_language"] == "es"
+
+
+async def test_unknown_transcription_language_is_rejected(make_client, make_user, auth_header):
+    """A code Whisper doesn't know fails every chunk of every job. Reject it at
+    the door, and — like the timeout — take the rest of the PUT down with it."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"transcription_language": "elvish", "whisper_model": "small"})
+        assert put.status_code == 422
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    assert body["transcription_language"] == ""
+    assert body["whisper_model"] == "medium"
+
+
 async def test_backup_settings_round_trip_with_types(make_client, make_user, auth_header):
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:

@@ -13,6 +13,10 @@ commands run from inside `jetson/` with no `-f` flag needed.
 - Docker + Docker Compose.
 - Network reachability between the Jetson and the machine running the main Tandem server (same
   LAN/VPN is typical — port 9000 does **not** need to be reachable from the public internet).
+  **It must not be.** This worker speaks plaintext HTTP and authenticates with a shared bearer
+  token, so every request puts that token on the wire in the clear. The compose template's
+  `ports: - "9000:9000"` publishes on every interface; bind the LAN address explicitly
+  (`- "<lan-ip>:9000:9000"`) or front it with TLS (Caddy, Tailscale) if it has to cross networks.
 
 ### Host prep (JetPack)
 
@@ -127,6 +131,36 @@ Tandem → Settings → Transcription:
   from the UI).
 - Click **Test Connection** — it should report the GPU and model status. A `401`/authentication
   error here means the two keys don't match. **"Model: Not Loaded" is normal** — see below.
+
+## Worker environment variables
+
+All set in `jetson/docker-compose.yml` (copied from the template in step 2). Only
+`TRANSCRIPTION_API_KEY` is mandatory.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRANSCRIPTION_API_KEY` | *(none)* | Shared bearer secret required on every `/v1/*` request. The container refuses to start without it. |
+| `WHISPER_MODEL` | `medium` | faster-whisper model size (`tiny` → `large-v3`). |
+| `WHISPER_COMPUTE_TYPE` | `float16` | CTranslate2 compute type. |
+| `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu`. |
+| `WHISPER_LANGUAGE` | *(unset = auto)* | ISO 639-1 code forced on every chunk. Unset means detect once per file and pin that for the rest of it — never per-chunk re-detection. A `language` form field on `POST /v1/transcribe` overrides this per job, which is what Tandem's **Transcription Language** setting sends. |
+| `VAD_FILTER` | `true` | Voice-activity filtering before transcription. |
+| `MODEL_IDLE_UNLOAD_MIN` | `30` | Idle minutes before the weights are released; `0` keeps them resident. |
+| `MAX_UPLOAD_BYTES` | `4294967296` (4 GiB) | Largest accepted upload. Over it, `POST /v1/transcribe` answers 413 before reading the body; `0` disables the cap. |
+| `TMPDIR` | `/tmp/booksync_checkpoints/tmp` | Where the spooled upload and its copy land. Keep it on the sized checkpoint volume — the default container `/tmp` is not. |
+| `SERVER_PORT` | `9000` | Listen port inside the container. |
+
+An upload costs roughly **twice** the file size in temp space (Starlette spools the multipart
+body to disk, then the endpoint copies it), so size the `booksync_checkpoints` volume for two
+copies of your largest audiobook plus the one a paused job parks there. When free space is
+short the worker answers `507` instead of filling the disk, and Tandem surfaces that as
+"remote worker is out of disk" and retries rather than failing the book outright. A request
+whose `Content-Length` is over `MAX_UPLOAD_BYTES` gets a `413` before the body is read, and
+Tandem treats that as permanent rather than re-uploading the same file five times.
+
+Uploads clean themselves up, but a hard stop mid-upload (an OoM-kill, a power cut) can leave
+one behind; anything older than 48h in `TMPDIR` is swept at startup, and only when `TMPDIR` is
+inside the checkpoint volume — the worker never sweeps a system temp directory it might share.
 
 ## Sharing the GPU (issue #106)
 
