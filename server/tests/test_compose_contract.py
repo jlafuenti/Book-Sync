@@ -384,7 +384,7 @@ def test_jetson_template_points_the_model_cache_at_the_persisted_volume():
     path = os.path.join(_REPO_ROOT, "jetson", "docker-compose.example.yml")
     with open(path, encoding="utf-8") as f:
         text = f.read()
-    mount = re.search(r"whisper_models:(\S+)/hub", text)
+    mount = re.search(r"whisper_models:(\S+)/hub\b", text)
     assert mount, "jetson/docker-compose.example.yml: whisper_models must be mounted at <HF_HOME>/hub"
     assert f"HF_HOME={mount.group(1)}" in text, (
         "jetson/docker-compose.example.yml: HF_HOME must equal the parent of the "
