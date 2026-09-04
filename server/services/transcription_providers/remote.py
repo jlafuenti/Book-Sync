@@ -220,10 +220,19 @@ class RemoteWhisperProvider(TranscriptionProvider):
         # Check if the Orin already has a cached result for this file (e.g. after a server
         # restart where the previous upload completed but the result was never received).
         # This avoids re-uploading and re-transcribing a multi-hour job unnecessarily.
+        #
+        # Identified by filename *and* byte size (issue #181). On the basename
+        # alone, a second book called `audiobook.m4b` was served the first
+        # one's transcript, which then aligned against the wrong EPUB and was
+        # marked SYNCED with no error anywhere. An older worker ignores the
+        # extra query parameters, so this is safe to send at any version.
         try:
             async with httpx.AsyncClient() as check_client:
                 cached_check = await check_client.get(
-                    f"{self.remote_url}/v1/result/{filename}", timeout=10.0, headers=self._headers
+                    f"{self.remote_url}/v1/result/{filename}",
+                    params=self._checkpoint_params(audio_path),
+                    timeout=10.0,
+                    headers=self._headers,
                 )
             if cached_check.status_code == 200:
                 logger.info(f"Found cached result for {filename} on remote server — skipping upload.")
@@ -307,11 +316,31 @@ class RemoteWhisperProvider(TranscriptionProvider):
                     # race against state changes between the 409 and the follow-up GET.
                     try:
                         conflict_data = response.json()
-                        current_file_on_orin = conflict_data.get("current_job", {}).get("file")
+                        current_job = conflict_data.get("current_job", {})
+                        current_file_on_orin = current_job.get("file")
+                        current_size_on_orin = current_job.get("size")
                     except Exception:
                         current_file_on_orin = None
+                        current_size_on_orin = None
 
-                    if current_file_on_orin == filename:
+                    # Same basename is not the same book (issue #181). The
+                    # worker reports the size of the job holding the slot; only
+                    # re-attach when it matches ours. `None` means an older
+                    # worker that doesn't send it — keep the legacy behaviour
+                    # rather than breaking a mixed deploy.
+                    is_our_job = current_file_on_orin == filename and (
+                        current_size_on_orin is None
+                        or current_size_on_orin == os.path.getsize(audio_path)
+                    )
+                    if current_file_on_orin == filename and not is_our_job:
+                        logger.warning(
+                            f"Remote worker is busy with a different {filename} "
+                            f"({current_size_on_orin} bytes, ours is "
+                            f"{os.path.getsize(audio_path)}) — waiting for it rather "
+                            f"than claiming its transcript."
+                        )
+
+                    if is_our_job:
                         # Orin is already transcribing OUR file (e.g. after a server restart).
                         # Re-attach by polling until it finishes, then fetch the cached result.
                         logger.info(
@@ -392,7 +421,10 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
                         async with httpx.AsyncClient() as result_client:
                             result_resp = await result_client.get(
-                                f"{self.remote_url}/v1/result/{filename}", timeout=60.0, headers=self._headers
+                                f"{self.remote_url}/v1/result/{filename}",
+                                params=self._checkpoint_params(audio_path),
+                                timeout=60.0,
+                                headers=self._headers,
                             )
                         if result_resp.status_code == 200:
                             data = result_resp.json()

@@ -117,6 +117,7 @@ class JobStatus:
     message: str = "Idle"
     started_at: Optional[float] = None  # time.time()
     current_file: Optional[str] = None  # filename being transcribed
+    current_size: Optional[int] = None  # byte size the client declared
 
 
 class PausedAtCheckpoint(Exception):
@@ -135,9 +136,23 @@ _job_lock = threading.Lock()
 # cleanly, leaving a checkpoint (and the audio) behind for a free resume.
 _pause_event = threading.Event()
 
-# Store recent transcription results for 24 hours to allow re-attachment
+# Finished transcripts kept for a while so a client that lost the connection
+# can pick its result up instead of re-transcribing a multi-hour book.
+#
+# Keyed on `_checkpoint_key_for(filename, size)` — the same identity the
+# checkpoint routes use — not on the bare filename (issue #181). `audiobook.m4b`
+# and `Unabridged.m4b` are ordinary basenames in a real library, and a
+# filename-only key handed book A's transcript to book B: aligned against B's
+# EPUB, marked SYNCED, no error anywhere.
+#
+# Each value is `(result, saved_at, filename)`. The filename is carried so a
+# client that predates the `size` parameter can still be answered — but only
+# when exactly one entry has that name (see `_lookup_result`).
 _recent_results = {}
 _results_lock = threading.Lock()
+
+# How long a finished result stays servable.
+RESULT_CACHE_TTL_SEC = 86400
 
 # ---------------------------------------------------------------------------
 # Model loading / unloading
@@ -359,6 +374,56 @@ def _checkpoint_key_for(filename: str, file_size: int) -> str:
 def _checkpoint_key(audio_path: str, filename: str) -> str:
     """Checkpoint key for an audio file already on disk here."""
     return _checkpoint_key_for(filename, os.path.getsize(audio_path))
+
+
+def _prune_results_locked(now: Optional[float] = None) -> None:
+    """Drop expired cached results. The caller must hold `_results_lock`.
+
+    Called on read as well as on write (issue #181): eviction only happened
+    when a *later* job finished, so on a lightly used worker a stale entry
+    stayed servable for days, not the 24 h the TTL implies.
+    """
+    now = time.time() if now is None else now
+    for key in [
+        k for k, entry in _recent_results.items() if now - entry[1] > RESULT_CACHE_TTL_SEC
+    ]:
+        del _recent_results[key]
+
+
+def _cache_result(filename: str, file_size: int, result: dict) -> None:
+    """Store a finished transcript under (filename, size)."""
+    with _results_lock:
+        _prune_results_locked()
+        _recent_results[_checkpoint_key_for(filename, file_size)] = (
+            result, time.time(), filename,
+        )
+    logger.info(
+        f"  Cached result for '{filename}' ({file_size} bytes) — available via /v1/result/"
+    )
+
+
+def _lookup_result(filename: str, size: Optional[int]) -> Optional[dict]:
+    """Find a cached transcript by (filename, size), or by name alone.
+
+    `size` is optional so a client that predates it keeps working. Without it
+    the answer is only given when exactly one cached entry carries that
+    filename — guessing between two would be the very swap this key exists to
+    prevent, and a 404 just sends the old client down the upload path.
+    """
+    with _results_lock:
+        _prune_results_locked()
+        if size is not None:
+            entry = _recent_results.get(_checkpoint_key_for(filename, size))
+            return entry[0] if entry else None
+        matches = [entry for entry in _recent_results.values() if entry[2] == filename]
+        if len(matches) == 1:
+            return matches[0][0]
+        if matches:
+            logger.warning(
+                f"/v1/result/{filename} asked for without a size and {len(matches)} "
+                f"cached results share that name — refusing to guess."
+            )
+        return None
 
 
 def _checkpoint_path_for(filename: str, file_size: int) -> str:
@@ -597,9 +662,10 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
 
     start_time = time.time()
 
-    # Capture current_file before the job starts to avoid race conditions
-    with _job_lock:
-        captured_filename = _job_status.current_file
+    # Nothing here reads `_job_status.current_file` any more: it is a global a
+    # later request can overwrite mid-job, and the result cache used to be
+    # keyed on it (issue #181). `original_filename` is the same value with no
+    # race, and the cache key is derived from it at the end of the run.
 
     logger.info(f"Starting transcription: {audio_path}")
     logger.info(f"  Model: {WHISPER_MODEL}, Compute: {WHISPER_COMPUTE_TYPE}, VAD: {VAD_FILTER}")
@@ -848,16 +914,16 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
             "processing_time_seconds": round(processing_time, 2),
         }
 
-        # Save result for later retrieval (in case client disconnected)
-        with _results_lock:
-            now = time.time()
-            to_delete = [k for k, (v, t) in _recent_results.items() if now - t > 86400]
-            for k in to_delete:
-                del _recent_results[k]
-
-            if captured_filename:
-                _recent_results[captured_filename] = (result, now)
-                logger.info(f"  Cached result for '{captured_filename}' (available via /v1/result/)")
+        # Save result for later retrieval (in case client disconnected).
+        # Keyed on (filename, size), from the function's own arguments — not
+        # `_job_status.current_file`, which a second request can overwrite
+        # while this one runs (issue #181).
+        try:
+            _cache_result(original_filename, os.path.getsize(audio_path), result)
+        except OSError as e:
+            # The audio vanished under us. The transcript still goes back on
+            # this response; only the re-fetch shortcut is lost.
+            logger.warning(f"  Could not cache result for '{original_filename}': {e}")
 
         return result
 
@@ -1011,6 +1077,11 @@ def get_status():
             "progress": _job_status.progress,
             "message": _job_status.message,
             "current_file": _job_status.current_file,
+            # Byte size of the job holding the slot (issue #181). A basename
+            # alone does not identify a book — the client needs both to tell
+            # "that's my job, re-attach" from "that's a different book that
+            # happens to be called audiobook.m4b too".
+            "current_size": _job_status.current_size,
             "instance_id": INSTANCE_ID,
         }
 
@@ -1034,6 +1105,7 @@ def _active_job_conflict(requested_file: str, client_ip: str = "unknown"):
             running_for = f"{hours}h {mins}m" if hours else f"{mins}m"
 
         current_file = _job_status.current_file
+        current_size = _job_status.current_size
         progress = _job_status.progress
         message = _job_status.message
 
@@ -1049,6 +1121,10 @@ def _active_job_conflict(requested_file: str, client_ip: str = "unknown"):
             "instance_id": INSTANCE_ID,
             "current_job": {
                 "file": current_file,
+                # A new key, beside the old ones (issue #181). A client that
+                # ignores it behaves exactly as before; one that reads it can
+                # refuse to re-attach to a same-named different book.
+                "size": current_size,
                 "progress": progress,
                 "message": message,
                 "running_for": running_for,
@@ -1058,18 +1134,26 @@ def _active_job_conflict(requested_file: str, client_ip: str = "unknown"):
 
 
 @app.get("/v1/result/{filename}", dependencies=[Depends(verify_api_key)])
-def get_result(filename: str):
+def get_result(filename: str, size: Optional[int] = None):
     """
     Get the cached result of a **completed** transcription job.
+
+    `size` is the file's byte size and, with the filename, identifies the job —
+    the same pair /v1/checkpoint uses. Without it two books that share a
+    basename (`audiobook.m4b`) get each other's transcripts, silently
+    (issue #181).
+
+    It is **optional** rather than required so a server that predates it is not
+    422'd mid-job; such a request is answered only when exactly one cached
+    entry carries that filename.
 
     Paused jobs are never cached here — a partial transcript served from this
     route is indistinguishable from a finished one and would silently truncate
     the book. Use /v1/checkpoint to ask about partial progress.
     """
-    with _results_lock:
-        if filename in _recent_results:
-            result, timestamp = _recent_results[filename]
-            return JSONResponse(status_code=200, content=result)
+    result = _lookup_result(filename, size)
+    if result is not None:
+        return JSONResponse(status_code=200, content=result)
 
     raise HTTPException(status_code=404, detail="Result not found or expired")
 
@@ -1170,6 +1254,7 @@ async def transcribe_resume(body: ResumeRequest):
 
     with _job_lock:
         _job_status.current_file = body.filename
+        _job_status.current_size = body.size
 
     logger.info(f"Resuming {body.filename} from retained audio at {audio_path}")
     try:
@@ -1212,15 +1297,17 @@ async def transcribe(request: Request, audio_file: UploadFile = File(...)):
         tmp.close()
 
         client_ip = request.client.host if request and request.client else "unknown"
-        file_size_mb = os.path.getsize(tmp.name) / (1024 * 1024)
+        file_size = os.path.getsize(tmp.name)
         logger.info(
-            f"Received file: {audio_file.filename} ({file_size_mb:.1f} MB) "
+            f"Received file: {audio_file.filename} ({file_size / (1024 * 1024):.1f} MB) "
             f"from {client_ip}"
         )
 
-        # Track current filename for 409 details
+        # Track current filename *and size* for 409 details — a basename alone
+        # doesn't identify a book (issue #181).
         with _job_lock:
             _job_status.current_file = audio_file.filename
+            _job_status.current_size = file_size
 
         # Run transcription in a background thread so the event loop
         # stays free for /v1/status polling requests

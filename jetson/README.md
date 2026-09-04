@@ -147,6 +147,12 @@ pipeline) on the Orin's 8GB of unified memory:
   checkpoint means no audio is transcribed twice.
 - Nothing partial is ever served from `/v1/result/{filename}` — a truncated transcript is
   indistinguishable from a complete one to the client, so paused jobs stay out of that cache.
+- **A job is identified by filename *and* byte size**, everywhere: the checkpoint routes, the
+  result cache, `current_size` on `/v1/status`, and `current_job.size` in the 409 body (#181).
+  `audiobook.m4b` is an ordinary basename, and on the name alone the second book with it was
+  handed the first one's transcript with no error anywhere. Pass `?size=` to
+  `/v1/result/{filename}`; it is optional so an older Tandem still works, but a request without
+  it is answered only when exactly one cached entry has that name.
 
 Turn the schedule itself on in Tandem → Settings → Transcription → **Only transcribe
 during off-hours**.
