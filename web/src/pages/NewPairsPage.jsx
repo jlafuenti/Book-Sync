@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { getNewPairs, acknowledgeNewPairs, getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies } from '../api'
 import { useAuth } from '../contexts/AuthContext'
+import useListFetch from '../hooks/useListFetch'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
 import CoverImg from '../components/CoverImg'
 // Server timestamps are naive UTC — parse via the shared helper (issue #216).
@@ -31,10 +32,6 @@ export default function NewPairsPage() {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
 
-    const [pairs, setPairs] = useState([])
-    const [discrepancyMap, setDiscrepancyMap] = useState({})  // pairId → [fields]
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState(null)
 
     // Filter: 'all' | 'mismatches' | 'clean'
     const [filter, setFilter] = useState('all')
@@ -52,28 +49,29 @@ export default function NewPairsPage() {
     const [expandedPairId, setExpandedPairId] = useState(null)
     const [saving, setSaving] = useState(false)
 
-    const load = useCallback(async () => {
-        try {
-            setLoading(true)
+    // Issue #276: the loading/error/load() triple is the shared hook now. It
+    // still fetches both lists in one round trip and keys the discrepancies by
+    // pair id — that shaping is the page's, the fetch plumbing is not.
+    const { data, loading, error, reload: load } = useListFetch(
+        useCallback(async () => {
             const [pairsData, discData] = await Promise.all([
                 getNewPairs(),
                 getMetadataDiscrepancies(),
             ])
-            setPairs(pairsData)
             const map = {}
             discData.forEach(d => { map[d.pair_id] = d })
-            setDiscrepancyMap(map)
-            setSelected(new Set())
-            setExpandedPairId(null)
-            lastClickedRef.current = null
-        } catch (e) {
-            setError(e.message)
-        } finally {
-            setLoading(false)
-        }
-    }, [])
-
-    useEffect(() => { load() }, [load])
+            return { pairs: pairsData, discrepancyMap: map }
+        }, []),
+        {
+            onLoaded: useCallback(() => {
+                setSelected(new Set())
+                setExpandedPairId(null)
+                lastClickedRef.current = null
+            }, []),
+        },
+    )
+    const pairs = data?.pairs || []
+    const discrepancyMap = data?.discrepancyMap || {}
 
     const cleanPairs = pairs.filter(p => !discrepancyMap[p.id] || discrepancyMap[p.id].discrepancies.length === 0)
     const mismatchPairs = pairs.filter(p => discrepancyMap[p.id]?.discrepancies.length > 0)

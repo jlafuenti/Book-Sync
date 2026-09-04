@@ -337,6 +337,32 @@ describe('LibraryPage delete confirmations are dialogs (issue #279)', () => {
         expect(screen.queryByRole('dialog')).toBeNull()
     })
 
+    it('bulk edit is the shared modal and PATCHes each selected id (issue #276)', async () => {
+        getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), ebookItem(5)], 2))
+        updateEbookMetadataMock.mockResolvedValue({})
+        renderPage()
+        await screen.findByText('Ebook 3')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+        fireEvent.click(screen.getByText('Ebook 3'))
+        fireEvent.click(screen.getByText('Ebook 5'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit Metadata' }))
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAccessibleName('Edit 2 Items')
+        expect(dialog).toHaveTextContent('Only filled fields will be updated.')
+
+        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], {
+            target: { value: 'Robin Hobb' },
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledTimes(2))
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, { author: 'Robin Hobb' })
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(5, { author: 'Robin Hobb' })
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    })
+
     it('the bulk confirmation counts the selection and takes Escape', async () => {
         getLibraryItemsPageMock.mockResolvedValue(pageOf([ebookItem(3), audioItem(4)], 2))
         renderPage()
