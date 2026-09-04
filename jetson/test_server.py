@@ -308,6 +308,8 @@ def test_paused_job_is_not_served_from_the_result_cache(
     """A partial transcript handed out by /v1/result would silently truncate
     the book — the client cannot tell it apart from a finished one."""
     audio, _ = _run_job(monkeypatch, tmp_path)
+    # Read the size now: pausing moves the source next to the checkpoint.
+    size = audio.stat().st_size
     jetson_server._job_status.current_file = "book.m4b"
     monkeypatch.setattr(
         jetson_server, "_save_checkpoint",
@@ -316,7 +318,12 @@ def test_paused_job_is_not_served_from_the_result_cache(
 
     jetson_server._transcribe_file(str(audio), "book.m4b")
 
+    # Neither shape of the lookup may find it: not by name alone, and not by
+    # the (filename, size) identity a current client sends.
     assert client.get("/v1/result/book.m4b", headers=AUTH).status_code == 404
+    assert client.get(
+        "/v1/result/book.m4b", params={"size": size}, headers=AUTH
+    ).status_code == 404
 
 
 def test_checkpoint_endpoint_reports_paused_progress_and_retained_audio(
