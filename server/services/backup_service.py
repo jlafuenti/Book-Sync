@@ -215,6 +215,40 @@ def get_status() -> dict:
     }
 
 
+def get_freshness() -> dict:
+    """Freshness and nothing else — the unauthenticated probe's payload (#233).
+
+    Deliberately *not* :func:`get_status`. That one names the backup directory,
+    the newest dump's filename, its exact size and its timestamp, all of which
+    are fine for an admin and none of which an anonymous caller has any business
+    learning. This returns a status word and a coarse age in whole hours:
+
+        ``ok``     — a dump exists and is newer than the staleness threshold
+        ``stale``  — a dump exists but is older than it
+        ``never``  — there is no dump at all, or the directory is unreadable
+
+    ``never`` covers the unreadable case on purpose. A probe that raised would
+    make the endpoint 500, and a monitor cannot tell "the API is broken" from
+    "the backups are gone" — whereas both of *those* deserve the same page. The
+    cost is one directory listing plus one stat, and no database access at all.
+
+    Blocking (the backups directory is a NAS mount); callers run it in a thread.
+    """
+    try:
+        ids = _list_ids()
+        if not ids:
+            return {"status": "never", "age_hours": None}
+        st = _dump_path(ids[-1]).stat()
+    except OSError:
+        logger.warning("Backup freshness probe could not read %s", settings.backups_dir)
+        return {"status": "never", "age_hours": None}
+    age = max(0, int(time.time() - st.st_mtime))
+    return {
+        "status": "stale" if age > _BACKUP_STALE_AFTER_SECONDS else "ok",
+        "age_hours": age // 3600,
+    }
+
+
 # ── delete / prune ─────────────────────────────────────────────────────────
 
 def _remove_backup_files(backup_id: str) -> None:

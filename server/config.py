@@ -75,6 +75,13 @@ class Settings(BaseSettings):
         default=15 * 60, alias="REFRESH_FAILURE_WINDOW_SECONDS"
     )
 
+    # GET /api/health/backup (issue #233). Unauthenticated, so this cache is what
+    # bounds it instead of a per-user bucket; well under any sane monitor's
+    # interval, and staleness is measured in hours.
+    backup_probe_cache_seconds: int = Field(
+        default=60, alias="BACKUP_PROBE_CACHE_SECONDS"
+    )
+
     # Whisper Transcription
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisper_device: str = Field(

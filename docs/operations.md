@@ -86,6 +86,93 @@ response field, a changed type, a removed endpoint, a newly required request fie
 not breaks. The rule and the release checklist live in `server/version.py` and
 [android.md](android.md).
 
+## Monitoring
+
+Every health signal Tandem exposes is pull-only. Nothing here pages you on its own — the API can
+be down, or the nightly backup can have been failing for a week, and the only place that shows is
+a badge somebody has to open the System page to see. Point an external checker at the three
+endpoints below and that stops being true.
+
+Any checker works — Uptime Kuma on the same host, or a hosted monitor. Run it **outside** the
+compose stack: one that dies with the server cannot tell you the server died. The compose
+healthcheck on `server` (`docker-compose.example.yml`) is not a substitute; it feeds Docker's
+container status and notifies nobody.
+
+| Check | Expect | Interval | Alert when |
+|---|---|---|---|
+| `GET /api/livez` | 200 `{"status":"alive"}` | 60 s | non-200, or no answer in 10 s, twice running |
+| `GET /api/health` | 200 `{"status":"healthy",...}` | 60 s | 503, or no answer in 15 s, twice running |
+| `GET /api/health/backup` | 200 `{"status":"ok","age_hours":N}` | 1 h | body contains `"stale"` or `"never"`, twice running |
+
+All three are **unauthenticated** — that is what makes them wireable. Access tokens last 24 h, so
+anything requiring a login cannot be polled by a monitor without a token-refresh dance.
+
+"Twice running" everywhere: a single missed poll during a restart or a `docker compose up -d
+--build` is normal and should not page anyone.
+
+### What each one tells you
+
+**`/api/livez`** is liveness — the process is up, dependencies unchecked. It answers during a
+database outage, so `livez` up + `health` down localizes the fault to Postgres without a single
+log line.
+
+**`/api/health`** is readiness: it runs `SELECT 1` and returns 503 when the database does not
+answer inside 5 s (issue #47). This is the one that matters most. First moves when it fires:
+
+```bash
+docker compose ps                    # is db up at all?
+docker compose logs --tail=100 server
+docker compose logs --tail=100 db
+```
+
+The healthy payload also carries `app_version` and `api_version` (see "Client support window"),
+so the same check doubles as a record of when a deploy landed.
+
+**`/api/health/backup`** is backup freshness, and nothing else (issue #233):
+
+```bash
+curl -s https://tandem.example.com/api/health/backup
+# {"status":"ok","age_hours":9}
+```
+
+| `status` | Means |
+|---|---|
+| `ok` | a dump exists and is newer than 36 hours |
+| `stale` | a dump exists but is older than 36 hours — the nightly run is failing |
+| `never` | there is no dump at all, or the backups directory is unreadable |
+
+`never` covers the unreadable-directory case deliberately: a missing NAS mount and a missing
+backup deserve the same page, and a probe that 500'd instead would look identical to the API
+being broken.
+
+It stays **200** in all three states. A stale backup is a real problem but not a readiness
+failure, and a 503 here would pull the service out of a load balancer over a backup that did not
+run. So the alert rule has to match on the body, not the status code — for example, in Uptime
+Kuma: monitor type HTTP(s) - Keyword, keyword `"status":"ok"`, **invert keyword** off, retries 2.
+Any checker that supports a body assertion can express the same thing:
+
+```bash
+# Equivalent as a shell check (exit 1 = alert)
+curl -sf https://tandem.example.com/api/health/backup | grep -q '"status":"ok"'
+```
+
+When it fires, work through [backup-restore.md](backup-restore.md) — the usual causes are a full
+or unmounted `BACKUPS_DIR` and a `pg_dump` failure, both of which are in `docker compose logs
+server | grep backup-service`. The admin console's System page has the detail this probe
+deliberately withholds (location, filename, size, exact timestamp) at `GET /api/stats/backup`.
+
+The probe costs one directory listing and one stat, runs off the event loop, and is cached for
+`BACKUP_PROBE_CACHE_SECONDS` (default 60) — so polling it more often than that is free, and a
+hostile loop against an unauthenticated endpoint cannot hammer the NAS mount. It never touches
+the database, which is what keeps it answering during exactly the outage that makes
+`/api/health` fail.
+
+### Not covered yet
+
+A transcription job wedged in `processing` is not detectable from outside — `queue_manager.py`
+sets `started_at` but never compares it against a deadline. That watchdog is tracked separately;
+when it lands, a fourth check belongs in the table above.
+
 ## Reverse proxy
 
 If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is
