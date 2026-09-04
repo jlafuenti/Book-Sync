@@ -49,14 +49,189 @@ def enc_key(monkeypatch):
 
 
 async def test_get_settings_returns_defaults(make_client, make_user, auth_header):
-    user = await make_user(username="u", role="user")
+    # Admin, not a plain user: the operator's configuration is admin-only since
+    # issue #263 — see the allow-list tests below.
+    admin = await make_user(username="admin0", role="admin")
     async with make_client(settings_router.router) as c:
-        r = await c.get("/api/settings/", headers=auth_header(user))
+        r = await c.get("/api/settings/", headers=auth_header(admin))
     assert r.status_code == 200
     body = r.json()
     assert body["whisper_model"] == "medium"
     assert body["transcription_remote_timeout"] == 86400
     assert body["abs_api_token"] == ""  # nothing stored yet
+
+
+# ---------------------------------------------------------------------------
+# Role-scoped GET (issue #263)
+#
+# `GET /api/settings/` used to hand every signed-in account the whole operator
+# configuration: the Audiobookshelf URL, the transcription worker's URL, the
+# filename patterns that describe the library layout, the backup schedule and
+# retention. Secrets were masked, but the rest is precisely the reconnaissance
+# an attacker wants, and no non-admin screen ever needed it.
+#
+# Below admin the response is an allow-list of exactly what the web reads
+# outside the admin pages: `abs_enabled` (BookDetailPage decides whether to
+# offer the ABS enrich action) and `hardcover_configured` (MatchTab picks its
+# default metadata provider). `hardcover_configured` is a derived boolean, not
+# the masked token string, so a non-admin never learns anything about the
+# credential beyond "an admin set one".
+# ---------------------------------------------------------------------------
+
+PLAIN_USER_KEYS = {"abs_enabled", "hardcover_configured"}
+
+
+@pytest.mark.parametrize("role", ["user", "editor"])
+async def test_settings_get_is_an_allowlist_below_admin(
+    make_client, make_user, auth_header, role
+):
+    user = await make_user(username=f"u_{role}", role=role)
+    async with make_client(settings_router.router) as c:
+        r = await c.get("/api/settings/", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert set(r.json()) == PLAIN_USER_KEYS
+
+
+async def test_settings_get_hides_internal_config_from_plain_user(
+    make_client, make_user, auth_header
+):
+    """The specific keys that made this a reconnaissance surface."""
+    user = await make_user(username="u", role="user")
+    async with make_client(settings_router.router) as c:
+        body = (await c.get("/api/settings/", headers=auth_header(user))).json()
+
+    for leaked in (
+        "abs_url",
+        "abs_api_token",
+        "abs_audiobooks_prefix",
+        "transcription_remote_url",
+        "transcription_remote_key",
+        "hardcover_api_token",
+        "ebook_filename_patterns",
+        "audiobook_filename_patterns",
+        "whisper_model",
+        "backup_enabled",
+        "backup_hour",
+        "backup_keep_daily",
+        "backup_keep_monthly",
+        "audit_log_retention_days",
+    ):
+        assert leaked not in body, f"{leaked} still reaches a plain user"
+
+
+async def test_settings_get_full_for_admin(make_client, make_user, auth_header):
+    admin = await make_user(username="admin_full", role="admin")
+    async with make_client(settings_router.router) as c:
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    assert set(settings_router.DEFAULT_SETTINGS) <= set(body)
+    assert "abs_url" in body and "transcription_remote_url" in body
+    # The derived flag is in the admin payload too — MatchTab renders for
+    # admins as well, and it reads the same key for every role.
+    assert body["hardcover_configured"] is False
+
+
+async def test_admin_secrets_are_still_masked(
+    make_client, make_user, auth_header, enc_key
+):
+    """The allow-list must not become an excuse to stop masking."""
+    admin = await make_user(username="admin_mask", role="admin")
+    async with make_client(settings_router.router) as c:
+        await c.put(
+            "/api/settings/",
+            headers=auth_header(admin),
+            json={
+                "abs_api_token": "abs-secret",
+                "transcription_remote_key": "jetson-secret",
+                "hardcover_api_token": "hc-secret",
+            },
+        )
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
+
+    assert body["abs_api_token"] == _SECRET_PLACEHOLDER
+    assert body["transcription_remote_key"] == _SECRET_PLACEHOLDER
+    assert body["hardcover_api_token"] == _SECRET_PLACEHOLDER
+    for value in body.values():
+        assert value not in ("abs-secret", "jetson-secret", "hc-secret")
+
+
+async def test_hardcover_configured_tracks_the_credential_store(
+    make_client, make_user, auth_header, enc_key
+):
+    admin = await make_user(username="admin_hc2", role="admin")
+    user = await make_user(username="reader_hc", role="user")
+    async with make_client(settings_router.router) as c:
+        before = (await c.get("/api/settings/", headers=auth_header(user))).json()
+        assert before["hardcover_configured"] is False
+
+        await c.put(
+            "/api/settings/",
+            headers=auth_header(admin),
+            json={"hardcover_api_token": "secret-hc-token"},
+        )
+        after = (await c.get("/api/settings/", headers=auth_header(user))).json()
+
+    assert after["hardcover_configured"] is True
+    # Still a boolean, never the token or its mask.
+    assert after["hardcover_configured"] is not _SECRET_PLACEHOLDER
+
+
+async def test_abs_enabled_reaches_a_plain_user(make_client, make_user, auth_header):
+    """BookDetailPage's ABS action must keep working for a reader account."""
+    admin = await make_user(username="admin_abs2", role="admin")
+    user = await make_user(username="reader_abs", role="user")
+    async with make_client(settings_router.router) as c:
+        assert (
+            await c.get("/api/settings/", headers=auth_header(user))
+        ).json()["abs_enabled"] is False
+
+        await c.put(
+            "/api/settings/", headers=auth_header(admin), json={"abs_enabled": True}
+        )
+        body = (await c.get("/api/settings/", headers=auth_header(user))).json()
+
+    assert body["abs_enabled"] is True
+
+
+async def test_update_still_returns_the_full_dict_to_the_admin(
+    make_client, make_user, auth_header
+):
+    """PUT echoes the settings back; the admin who just wrote them must see
+    everything, not the reader allow-list."""
+    admin = await make_user(username="admin_put", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put(
+            "/api/settings/", headers=auth_header(admin), json={"whisper_model": "small"}
+        )
+
+    assert r.status_code == 200
+    assert r.json()["whisper_model"] == "small"
+    assert set(settings_router.DEFAULT_SETTINGS) <= set(r.json())
+
+
+async def test_put_does_not_persist_the_derived_flag(
+    make_client, make_user, auth_header, db
+):
+    """A client echoing the GET payload back must not write `hardcover_configured`
+    as a settings row — it is computed from the credential store on every read."""
+    from sqlalchemy import select as _select
+
+    from models.settings import SystemSetting
+
+    admin = await make_user(username="admin_derived", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put(
+            "/api/settings/",
+            headers=auth_header(admin),
+            json={"hardcover_configured": True, "whisper_model": "tiny"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["hardcover_configured"] is False  # no credential stored
+    rows = (await db.execute(_select(SystemSetting))).scalars().all()
+    assert "hardcover_configured" not in {row.key for row in rows}
+    assert "whisper_model" in {row.key for row in rows}
 
 
 async def test_update_requires_admin(make_client, make_user, auth_header):
@@ -565,9 +740,10 @@ async def test_test_remote_passes_through_the_workers_model_state(
 
 async def test_offhours_defaults_are_exposed_and_disabled(make_client, make_user, auth_header):
     """Default off => transcription behaves exactly as it did before #106."""
-    user = await make_user(username="u", role="user")
+    # Admin: the window is operator configuration, admin-only since #263.
+    admin = await make_user(username="admin_oh0", role="admin")
     async with make_client(settings_router.router) as c:
-        body = (await c.get("/api/settings/", headers=auth_header(user))).json()
+        body = (await c.get("/api/settings/", headers=auth_header(admin))).json()
     assert body["transcription_offhours_enabled"] is False
     assert body["transcription_offhours_start"] == "01:00"
     assert body["transcription_offhours_end"] == "07:00"

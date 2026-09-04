@@ -45,6 +45,18 @@ jobs:
         # docs/testing.md for the policy.
         run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
 
+      - name: OpenAPI export is current (issue #260)
+        # Drift gate, same shape as `alembic check` below: regenerate
+        # docs/openapi.json from the live app and fail if it differs from what
+        # is committed. Runs from the repo root so `git diff` sees the path.
+        # The committed export is the API reference for everyone not running in
+        # dev — the interactive /docs is dev-only (issue #263) — so a stale one
+        # is worse than none.
+        working-directory: ${{ github.workspace }}
+        run: |
+          python server/scripts/export_openapi.py
+          git diff --exit-code docs/openapi.json
+
       - name: Check patch coverage (PRs)
         # Stop-the-bleeding gate: lines a PR changes must be >=80% covered. Runs
         # from the repo root so diff-cover can resolve git paths. The exclude list

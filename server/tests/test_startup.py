@@ -378,3 +378,103 @@ def test_bootstrap_logger_still_emits_somewhere(tmp_path):
         "bootstrap logger has no handler of its own, so with propagate=False the "
         "operator would never see the generated password at all"
     )
+
+
+# ---------------------------------------------------------------------------
+# Swagger / OpenAPI are dev-only (issues #263, #260)
+#
+# `/docs`, `/redoc` and `/openapi.json` were served unauthenticated on the API
+# port. Behind a reverse proxy that routes only `/api/*` to the server they are
+# hidden by accident rather than by design, and the container's published port
+# is reachable on the LAN — so the full route inventory was one `curl` away for
+# anyone who could reach the host. They stay on in dev, where they are the
+# fastest way to read the API; the committed `docs/openapi.json` (issue #260) is
+# the substitute everywhere else.
+#
+# The app is built at import time, so the end-to-end tests reload `main` with
+# `app_env` flipped and reload it back afterwards.
+# ---------------------------------------------------------------------------
+
+
+def test_docs_urls_are_none_in_prod():
+    import main
+
+    assert main.docs_urls("prod") == {
+        "docs_url": None,
+        "redoc_url": None,
+        "openapi_url": None,
+    }
+
+
+def test_docs_urls_are_served_in_dev():
+    import main
+
+    assert main.docs_urls("dev") == {
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+        "openapi_url": "/openapi.json",
+    }
+
+
+async def test_root_does_not_advertise_docs():
+    """`root()` linked `/docs` unconditionally — a dead link once the schema is
+    withheld, and a signpost to it everywhere else."""
+    pytest.importorskip("audible")
+    import main
+
+    payload = await main.root()
+    assert "docs" not in payload
+    assert payload["name"] == "Tandem"
+
+
+@pytest.fixture
+def main_in_env(monkeypatch):
+    """Reimport `main` with a given `app_env`, restoring the dev build after."""
+    import importlib
+
+    import main
+
+    def _reload(app_env):
+        monkeypatch.setattr(settings, "app_env", app_env)
+        return importlib.reload(main)
+
+    yield _reload
+
+    monkeypatch.setattr(settings, "app_env", "dev")
+    importlib.reload(main)
+
+
+@pytest.mark.parametrize("app_env", ["prod", "dev"])
+def test_app_is_built_with_the_env_gated_docs_urls(main_in_env, app_env):
+    """The toggle is wired into the real app, not merely importable.
+
+    Reloaded under a known env rather than read off whatever `main` some earlier
+    test imported — the lifespan tests above import it with `app_env` patched.
+    """
+    pytest.importorskip("audible")
+    module = main_in_env(app_env)
+
+    expected = module.docs_urls(app_env)
+    assert module.app.docs_url == expected["docs_url"]
+    assert module.app.redoc_url == expected["redoc_url"]
+    assert module.app.openapi_url == expected["openapi_url"]
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_paths_404_in_prod(main_in_env, path):
+    pytest.importorskip("audible")
+    from fastapi.testclient import TestClient
+
+    prod_main = main_in_env("prod")
+    # No `with`: TestClient's context manager runs the lifespan, which starts the
+    # background services. Routing is all this needs.
+    assert TestClient(prod_main.app).get(path).status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_paths_are_served_in_dev(main_in_env, path):
+    pytest.importorskip("audible")
+    from fastapi.testclient import TestClient
+
+    dev_main = main_in_env("dev")
+    assert TestClient(dev_main.app).get(path).status_code == 200
