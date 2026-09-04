@@ -94,8 +94,15 @@ class DownloadWorker @AssistedInject constructor(
                 Log.d("DownloadWorker", "Starting doWork for pairId=$pairId, type=$type")
 
                 if (type == "STANDALONE_EBOOK") {
-                    val ebook = repository.getEbookById(pairId)
-                        ?: return@withContext Result.failure(workDataOf(ERROR_KEY to "Ebook not found in DB"))
+                    // resolve*, not get* (issue #338): a search result names an
+                    // id the local cache may never have seen, and reading Room
+                    // alone made that tap a silent no-op. A null here means the
+                    // server answered and does not have the book; anything else
+                    // throws and lands in the retry classifier below.
+                    val ebook = repository.resolveEbookById(pairId)
+                        ?: return@withContext Result.failure(
+                            workDataOf(ERROR_KEY to "That ebook is no longer in the library on the server."),
+                        )
                     
                     try {
                         val info = createForegroundInfo(type, ebook.title)
@@ -114,8 +121,10 @@ class DownloadWorker @AssistedInject constructor(
                 }
 
                 if (type == "STANDALONE_AUDIOBOOK") {
-                    val audiobook = repository.getAudiobookById(pairId)
-                        ?: return@withContext Result.failure(workDataOf(ERROR_KEY to "Audiobook not found in DB"))
+                    val audiobook = repository.resolveAudiobookById(pairId)
+                        ?: return@withContext Result.failure(
+                            workDataOf(ERROR_KEY to "That audiobook is no longer in the library on the server."),
+                        )
                     
                     try {
                         val info = createForegroundInfo(type, audiobook.title)
@@ -135,8 +144,10 @@ class DownloadWorker @AssistedInject constructor(
                 }
 
                 // Otherwise, it's a BookPair
-                val pair = repository.getPairById(pairId)
-                    ?: return@withContext Result.failure(workDataOf(ERROR_KEY to "Pair not found in DB"))
+                val pair = repository.resolvePairById(pairId)
+                    ?: return@withContext Result.failure(
+                        workDataOf(ERROR_KEY to "That book is no longer in the library on the server."),
+                    )
 
                 try {
                     val info = createForegroundInfo(type, pair.ebookTitle)
