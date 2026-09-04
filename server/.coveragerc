@@ -4,7 +4,14 @@
 # SQLAlchemy's async runs DB work in a greenlet; without this, coverage loses
 # the trace across the greenlet switch and misses lines that execute after an
 # `await` into the DB (surfaced as false "uncovered" lines in CI on Python 3.12).
-concurrency = greenlet
+#
+# `thread` is coverage's default and naming `greenlet` alone silently replaced
+# it, so nothing running under `asyncio.to_thread` was traced at all. Issue #208
+# moved every blocking read off the event loop into exactly those threads, which
+# turned the whole of `_scan_library_files`, `_find_orphans` and
+# `check_chapter_encoding_cached` into false "uncovered" lines — code the tests
+# do execute, and assert on. Both are listed now.
+concurrency = greenlet,thread
 omit =
     tests/*
     */__pycache__/*

@@ -316,6 +316,33 @@ get_admin_user = require_role("admin")
 get_editor_user = require_role("editor")
 
 
+def rate_limited(bucket, role_dependency=get_current_user):
+    """Dependency factory: `role_dependency`, then a per-user rate limit (#208).
+
+    Wraps whichever role check the endpoint already used, rather than sitting
+    beside it, so the **order** is fixed: authenticate, authorize, then spend
+    from the bucket. A caller who may not use the endpoint at all gets 401/403
+    and spends nothing — otherwise any logged-in account could drain an
+    editor-only bucket and deny it to the editors, turning the rate limit into
+    the attack.
+
+    Over the limit is 429 with a `Retry-After` naming the seconds until the
+    window drops back below it, matching what the auth endpoints already answer
+    so a client needs one retry path, not two. See `rate_limit.UserRateLimiter`
+    and docs/operations.md, "Rate limits on expensive reads".
+    """
+    async def dependency(current_user: User = Depends(role_dependency)) -> User:
+        retry_after = bucket.acquire(current_user.id)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests — slow down and try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        return current_user
+    return dependency
+
+
 # ---------------------------------------------------------------------------
 # Audit log helper
 # ---------------------------------------------------------------------------

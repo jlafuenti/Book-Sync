@@ -83,3 +83,62 @@ class TTLValue:
         value = await asyncio.to_thread(producer)
         self.put(value)
         return value
+
+
+class TTLMemo:
+    """Many cached values, one per key, each with the same TTL.
+
+    :class:`TTLValue` caches *the* answer; this caches an answer *per item* —
+    the Troubleshoot scan's per-audiobook chapter check, where the expensive
+    work is one mutagen parse per file and the loop is what needs bounding.
+
+    Callers key on identity *plus* content (`(path, mtime, size)`), so an edited
+    file misses the cache immediately and the TTL only governs how long an
+    untouched file's verdict is trusted. `max_entries` bounds memory against a
+    library that grows, or a caller that keys on something unbounded; the oldest
+    entries go first.
+
+    Synchronous, unlike ``TTLValue.get`` — the loop that uses it is already
+    inside one ``asyncio.to_thread`` hop, so adding another per item would just
+    buy thread-pool churn.
+    """
+
+    def __init__(
+        self,
+        ttl_supplier: Callable[[], float],
+        max_entries: int = 10_000,
+        clock: Optional[Callable[[], float]] = None,
+    ):
+        self._ttl_supplier = ttl_supplier
+        self._max_entries = max_entries
+        self._clock: Callable[[], float] = clock or time.monotonic
+        self._lock = Lock()
+        self._entries: "dict[object, tuple[float, T]]" = {}
+
+    @property
+    def ttl(self) -> float:
+        return max(0.0, float(self._ttl_supplier()))
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+    def get(self, key, producer: Callable[[], T]) -> T:
+        """Cached value for ``key``, or ``producer()`` stored under it."""
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and now < entry[0]:
+                return entry[1]
+        value = producer()
+        with self._lock:
+            self._entries[key] = (self._clock() + self.ttl, value)
+            if len(self._entries) > self._max_entries:
+                # Insertion-ordered, so the head is the least recently stored.
+                for stale in list(self._entries)[: len(self._entries) - self._max_entries]:
+                    del self._entries[stale]
+        return value

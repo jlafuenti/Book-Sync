@@ -32,6 +32,10 @@ from routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
+# Ceiling on `GET /bookmark/{pair_id}/log` (issue #208). Same number as every
+# other capped read endpoint.
+BOOKMARK_LOG_MAX_LIMIT = 200
+
 
 # The staleness rule (issue #54) lives in position_service.is_stale. There is
 # exactly one write path — `PUT /position/{scope}/{ident}` — so there is
@@ -42,7 +46,13 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 @router.get("/bookmark/{pair_id}/log", response_model=List[BookmarkLogResponse])
 async def get_bookmark_log(
     pair_id: int,
-    limit: int = 50,
+    # Bounded (issue #208). Not one of the endpoints the issue named, but the
+    # same defect — a bare `int` with no ceiling — and this is the read every
+    # reading client polls, so it is the last place to leave unbounded. Same 200
+    # as `queue/history`. Not rate limited: the query is a single indexed lookup
+    # scoped to the caller's own bookmark, and throttling it would throttle
+    # position sync itself.
+    limit: int = Query(50, ge=1, le=BOOKMARK_LOG_MAX_LIMIT, description="Page size"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

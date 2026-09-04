@@ -173,6 +173,72 @@ A transcription job wedged in `processing` is not detectable from outside — `q
 sets `started_at` but never compares it against a deadline. That watchdog is tracked separately;
 when it lands, a fourth check belongs in the table above.
 
+## Rate limits on expensive reads
+
+A handful of read endpoints stat every file in the library, walk a data root, or shell out. The
+server runs a **single uvicorn worker** (see "Single process only"), so while one of those runs
+synchronously nothing else is served — including login and `/api/health`, whose compose
+healthcheck gives up after 10 s. One authenticated user in a loop was enough to stall the whole
+deployment (issue #208).
+
+Three fixes are layered, and all three are load-bearing:
+
+1. **Off the event loop.** The blocking work runs in a worker thread (`asyncio.to_thread`), so a
+   slow NAS mount delays that one request instead of every request.
+2. **Cached.** Results are reused for a short TTL, so a page that polls and a hostile loop cost
+   the same.
+3. **Rate limited per user**, as a backstop for whatever the first two miss.
+
+| Bucket | Endpoints | Default | Tune with |
+|---|---|---|---|
+| Expensive reads | `/api/troubleshoot/issues`, `/api/library/verify`, `/api/stats/disk_usage`, `/api/library/calibre-status` | 30 requests / 60 s | `EXPENSIVE_READ_LIMIT`, `EXPENSIVE_READ_WINDOW_SECONDS` |
+| Search reads | `/api/library/search`, `/api/transcription/queue/history` | 60 requests / 60 s | `SEARCH_READ_LIMIT`, `SEARCH_READ_WINDOW_SECONDS` |
+| External metadata | `POST /api/library/match/search` | 20 requests / 60 s | `EXTERNAL_METADATA_SEARCH_LIMIT`, `EXTERNAL_METADATA_SEARCH_WINDOW_SECONDS` |
+
+| Cache | Default TTL | Tune with |
+|---|---|---|
+| `/api/stats/disk_usage` | 300 s | `DISK_USAGE_CACHE_SECONDS` |
+| `/api/library/calibre-status` | 300 s | `CALIBRE_STATUS_CACHE_SECONDS` |
+| Per-audiobook chapter-encoding check (`/api/troubleshoot/issues`) | 300 s | `CHAPTER_ENCODING_CACHE_SECONDS` |
+| `/api/health/backup` | 60 s | `BACKUP_PROBE_CACHE_SECONDS` |
+
+Buckets are keyed on the **authenticated user's id**, not the client address — behind a proxy and
+docker NAT every caller shares one address (see "Reverse proxy"), so an IP bucket would throttle
+the whole deployment together and protect nobody. Over the limit is **429** with a `Retry-After`
+header naming the seconds until the window drops back below it. Same sliding-window machinery as
+the login throttle, so the same caveat applies: counters live in the server process, reset on
+restart, and are per worker.
+
+Unlike the auth buckets these count **every** request, not just failures, which is why the
+numbers are an order of magnitude higher. The UI fires each of these reads once per page load;
+only a loop reaches the ceiling. If you legitimately hit one — a script doing a bulk metadata
+pass, say — raise the matching limit rather than removing the dependency, and remember that the
+external-metadata bucket is metering an API quota you pay for, not server CPU.
+
+The `chapter_encoding` cache is keyed on `(path, mtime, size)`, so repairing a file makes the next
+Troubleshoot load re-check it immediately regardless of the TTL.
+
+### Page-size caps
+
+Every list endpoint has a ceiling, and a `limit` over it is refused with **422** rather than
+silently served.
+
+| Endpoint | Cap | Over it |
+|---|---|---|
+| `/api/library/{ebooks,audiobooks,pairs,items,...}` | `limit=500` | 422 |
+| `/api/transcription/queue/history` | `limit=200` | 422 |
+| `/api/sync/bookmark/{pair}/log` | `limit=200` | 422 |
+| `/api/library/search` | 200 rows per section | `truncated: true` |
+| `/api/library/verify` | 200 orphans per list | `truncated: true` |
+
+The last two are not paginated, so they cap the body instead of rejecting the request, and set
+`truncated` so a client can tell "nothing else matched" from "there is more". For `verify` that
+matters: a library whose mount has dropped is *entirely* orphaned, and the useful answer is the
+first 200 plus a flag, not one row per book. Clean those up and run it again for the next batch.
+
+`%` and `_` in a search term are matched **literally**, not as SQL wildcards — `q=%` used to
+return the whole library three times in one response.
+
 ## Reverse proxy
 
 If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is

@@ -18,7 +18,7 @@ Endpoints:
 import asyncio
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -36,10 +36,20 @@ from schemas import (
     QueueAddRequest,
     QueuePriorityUpdate,
 )
-from routers.auth import get_current_user, get_admin_user, get_editor_user
+from rate_limit import search_reads
+from routers.auth import (
+    get_current_user,
+    get_admin_user,
+    get_editor_user,
+    rate_limited,
+)
 from utils import utcnow
 
 router = APIRouter(prefix="/api/transcription", tags=["transcription"])
+
+# Ceiling on `GET /queue/history` (issue #208). Same number as the other capped
+# read endpoints — no reason for a client to have to learn a different one.
+QUEUE_HISTORY_MAX_LIMIT = 200
 
 
 # ====================================================================
@@ -389,10 +399,13 @@ async def get_offhours_status(
 
 @router.get("/queue/history", response_model=List[QueueItemResponse])
 async def get_queue_history(
-    limit: int = 50,
-    offset: int = 0,
+    # Bounded since issue #208: this was a bare `int`, so `?limit=10000000` was
+    # a valid request that loaded that many rows and then ran a per-row pair
+    # lookup on each of them. 200 matches the other capped read endpoints.
+    limit: int = Query(50, ge=1, le=QUEUE_HISTORY_MAX_LIMIT, description="Page size"),
+    offset: int = Query(0, ge=0, description="Rows to skip"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(rate_limited(search_reads)),
 ):
     """Get all historical queue items (completed, failed, cancelled), newest first."""
     result = await db.execute(

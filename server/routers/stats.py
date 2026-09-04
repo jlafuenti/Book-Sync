@@ -14,8 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from database import get_db
 from models.user import User
-from routers.auth import get_current_user, get_admin_user, get_superadmin_user
+from rate_limit import expensive_reads
+from routers.auth import (
+    get_current_user,
+    get_admin_user,
+    get_superadmin_user,
+    rate_limited,
+)
 from services import backup_service
+from services.cache import TTLValue
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -72,33 +79,35 @@ def format_bytes(size: int) -> str:
     return f"{n:.2f} {power_labels[count]}B"
 
 
-@router.get("/disk_usage", response_model=DiskUsageStats)
-async def get_disk_usage(
-    # Admin: capacity and usage of all three data roots is infrastructure detail,
-    # and the admin console is its only caller (issue #283).
-    _: User = Depends(get_admin_user),
-):
-    """Get disk usage statistics for configured directories."""
-    
-    # Heloer for filesystem stats (total, free) + directory size (used)
+#: Recursive scans of three data roots, cached for `DISK_USAGE_CACHE_SECONDS`
+#: (issue #208). Capacity moves slowly and the System page polls, so a stale
+#: answer costs the operator nothing while a fresh one costs a full walk of the
+#: library over a NAS mount.
+disk_usage_cache = TTLValue(lambda: settings.disk_usage_cache_seconds)
+
+
+def _collect_disk_usage() -> "DiskUsageStats":
+    """Walk all three data roots. **Blocking** — callers run it in a thread."""
+
+    # Helper for filesystem stats (total, free) + directory size (used)
     def get_partition_stats(path: str):
         # Recursive size of the directory itself
         used_size = get_dir_size(path)
-        
+
         # Filesystem stats (capacity of the drive)
         try:
             total, _, free = shutil.disk_usage(path)
         except Exception:
             total, free = 0, 0
-            
+
         return used_size, total, free
 
     # Ebooks
     eb_used, eb_total, eb_free = get_partition_stats(settings.ebook_dir)
-    
+
     # Audiobooks
     ab_used, ab_total, ab_free = get_partition_stats(settings.audiobook_dir)
-    
+
     # App Data
     ad_used, ad_total, ad_free = get_partition_stats(settings.app_data_dir)
 
@@ -127,6 +136,25 @@ async def get_disk_usage(
         app_data_total_human=format_bytes(ad_total),
         app_data_free_human=format_bytes(ad_free),
     )
+
+
+@router.get("/disk_usage", response_model=DiskUsageStats)
+async def get_disk_usage(
+    # Admin: capacity and usage of all three data roots is infrastructure detail,
+    # and the admin console is its only caller (issue #283).
+    #
+    # Rate limited on top of that (issue #208): the role check bounds *who* can
+    # ask, not how often, and this is the most expensive read the API has.
+    _: User = Depends(rate_limited(expensive_reads, get_admin_user)),
+):
+    """Get disk usage statistics for configured directories.
+
+    The scan itself is synchronous `os.scandir` recursion over a NAS mount. It
+    used to run on the event loop, where — single uvicorn worker — it stalled
+    every other request for its duration, `/api/health` included. It now runs in
+    a worker thread and its result is cached (issue #208).
+    """
+    return await disk_usage_cache.get(_collect_disk_usage)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

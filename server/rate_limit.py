@@ -238,3 +238,104 @@ failed_refreshes = FailedLoginTracker(
     limit_supplier=lambda: settings.refresh_failure_limit,
     window_supplier=lambda: settings.refresh_failure_window_seconds,
 )
+
+
+# ---------------------------------------------------------------------------
+# Per-user request buckets on the expensive read endpoints (issue #208)
+# ---------------------------------------------------------------------------
+
+
+class UserRateLimiter:
+    """Sliding-window bucket over *every* request from one user.
+
+    The trackers above count only failures, because for an auth endpoint that is
+    the abuse worth bounding. Here the successful call is the expensive one — a
+    stat of every file in the library, a walk of a data root, a subprocess, a
+    third-party API call on the operator's quota — so this counts them all.
+
+    Same sliding window and the same :class:`FailedLoginTracker` machinery
+    underneath, deliberately: one implementation of "how many of these in the
+    last N seconds", one place to swap when the server ever runs more than one
+    worker (see the **Storage** note at the top of this module — counters are
+    in-process, so N workers means N counts and an N-times-higher effective
+    limit).
+
+    Keyed by the authenticated user's **id**, never the client address. Behind
+    Caddy and docker NAT every caller shares the proxy's address (issue #294),
+    so an IP bucket would throttle the whole deployment as one and protect
+    nobody — the same reasoning as ``failed_password_changes``.
+
+    The lockout-DoS worry that constrains the login limit does not apply: a
+    caller must present their own valid access token to spend from their own
+    bucket, so the only account they can throttle is theirs.
+    """
+
+    def __init__(
+        self,
+        limit_supplier: Callable[[], int],
+        window_supplier: Callable[[], int],
+        clock: Optional[Callable[[], float]] = None,
+    ):
+        self._counter = FailedLoginTracker(
+            clock=clock,
+            normalize=lambda user_id: str(user_id),
+            limit_supplier=limit_supplier,
+            window_supplier=window_supplier,
+        )
+
+    @property
+    def limit(self) -> int:
+        return self._counter.limit
+
+    @property
+    def window(self) -> int:
+        return self._counter.window
+
+    def acquire(self, user_id) -> Optional[int]:
+        """Spend one request; return ``Retry-After`` seconds if there is none left.
+
+        ``None`` means allowed. A refused call is **not** counted — otherwise a
+        client that kept hammering would keep pushing its own window forward and
+        never recover, which is a lockout rather than a rate limit.
+        """
+        retry_after = self._counter.retry_after(user_id)
+        if retry_after is not None:
+            return retry_after
+        self._counter.record_failure(user_id)
+        return None
+
+    def reset(self) -> None:
+        """Drop all state. Test hook; never called at runtime."""
+        self._counter.reset()
+
+
+#: Endpoints that stat every library file, walk a data root, or shell out:
+#: ``/api/troubleshoot/issues``, ``/api/library/verify``,
+#: ``/api/stats/disk_usage``, ``/api/library/calibre-status``. All four are also
+#: cached and run off the event loop, so this is the third layer, not the only
+#: one.
+expensive_reads = UserRateLimiter(
+    limit_supplier=lambda: settings.expensive_read_limit,
+    window_supplier=lambda: settings.expensive_read_window_seconds,
+)
+
+#: ``/api/library/search`` and ``/api/transcription/queue/history`` — bounded
+#: queries since #208, but still an unmetered DB round trip per call.
+search_reads = UserRateLimiter(
+    limit_supplier=lambda: settings.search_read_limit,
+    window_supplier=lambda: settings.search_read_window_seconds,
+)
+
+#: ``POST /api/library/match/search``. The only bucket here metering something
+#: the operator *pays for* rather than something the server computes: it spends
+#: the admin-configured Google Books / Hardcover / Audible quota on the caller's
+#: behalf, and exhausting that breaks matching for everyone until it resets.
+#: Hence the tightest of the three.
+external_metadata_searches = UserRateLimiter(
+    limit_supplier=lambda: settings.external_metadata_search_limit,
+    window_supplier=lambda: settings.external_metadata_search_window_seconds,
+)
+
+#: Every shipped bucket, so tests and future introspection can reach them all
+#: without naming each one (and forgetting the next one added).
+USER_RATE_LIMITERS = (expensive_reads, search_reads, external_metadata_searches)
