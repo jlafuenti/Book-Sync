@@ -43,6 +43,10 @@ services:
       # audiobook *twice over* — the spooled request body plus the copy.
       - booksync_checkpoints:/tmp/booksync_checkpoints
     environment:
+      # The base image's own default is /data/models/huggingface, which is
+      # *not* the volume above — without this line every container recreate
+      # downloads the model again (issue #374).
+      - HF_HOME=/root/.cache/huggingface
       - WHISPER_MODEL=medium
       - WHISPER_COMPUTE_TYPE=float16
       - WHISPER_DEVICE=cuda

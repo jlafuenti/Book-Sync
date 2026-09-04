@@ -1195,13 +1195,22 @@ def startup_event():
     # TMPDIR points at the sized checkpoint volume in the compose template
     # (#238), so both the spooled request body and the endpoint's copy land on
     # storage the operator was told to size — not the container's default /tmp.
-    # Compose can't create the directory, so do it here.
+    # Compose can't create the directory, so do it here — from the raw
+    # environment value, not from tempfile.gettempdir(): that call silently
+    # drops a TMPDIR that does not exist yet and answers /tmp, so on a fresh
+    # volume "create whatever gettempdir says" creates /tmp and the cap
+    # measures the wrong disk. It also caches its answer, hence the reset.
+    wanted = os.environ.get("TMPDIR")
+    if wanted:
+        try:
+            os.makedirs(wanted, exist_ok=True)
+            tempfile.tempdir = None
+        except OSError as e:
+            logger.warning(f"Could not create the upload temp dir {wanted}: {e}")
     upload_tmp = tempfile.gettempdir()
-    try:
-        os.makedirs(upload_tmp, exist_ok=True)
-        logger.info(f"Upload temp dir: {upload_tmp} (cap {MAX_UPLOAD_BYTES} bytes)")
-    except OSError as e:
-        logger.warning(f"Could not create the upload temp dir {upload_tmp}: {e}")
+    if wanted and os.path.realpath(upload_tmp) != os.path.realpath(wanted):
+        logger.warning(f"TMPDIR={wanted} is not usable; uploads will spool in {upload_tmp}")
+    logger.info(f"Upload temp dir: {upload_tmp} (cap {MAX_UPLOAD_BYTES} bytes)")
 
     _cleanup_stale_uploads()
     _cleanup_old_checkpoints()
