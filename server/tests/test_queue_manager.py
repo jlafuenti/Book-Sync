@@ -786,6 +786,136 @@ async def test_cancel_returns_false_for_an_already_finished_item(db):
     assert await queue_manager.cancel_item(item.id) is False
 
 
+# ---------------------------------------------------------------------------
+# Cancelling an in-progress job reaches the worker (issue #196)
+#
+# "Cancel" used to flip the DB row and nothing else: the worker kept the GPU
+# for the remaining hours of the book — starving the off-hours pipeline the
+# window exists to protect — and when it finally finished, the server saw the
+# cancel flag and returned before persisting, throwing the transcript away.
+# ---------------------------------------------------------------------------
+
+async def test_cancelling_an_in_progress_item_asks_the_worker_to_stop(db):
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="in_progress")
+    provider = _FakeProvider()
+    queue_manager._active_item_id = item.id
+    queue_manager._active_provider = provider
+
+    assert await queue_manager.cancel_item(item.id) is True
+
+    assert provider.pause_calls == 1, "the worker must be told to stop at its next chunk"
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+
+
+async def test_cancelling_a_different_item_does_not_touch_the_running_job(db):
+    """Only the *running* item's provider gets the pause request."""
+    pair = await make_book_pair(db)
+    running = await _seed_item(db, pair.id, status="in_progress")
+    pair2 = await make_book_pair(db)
+    other = await _seed_item(db, pair2.id, status="pending")
+
+    provider = _FakeProvider()
+    queue_manager._active_item_id = running.id
+    queue_manager._active_provider = provider
+
+    await queue_manager.cancel_item(other.id)
+
+    assert provider.pause_calls == 0
+
+
+async def test_cancel_survives_a_worker_that_cannot_be_reached(db):
+    """Asking the worker is best effort — a dead worker must not fail the cancel."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="in_progress")
+
+    class _BrokenProvider(_FakeProvider):
+        async def request_pause(self):
+            raise RuntimeError("worker unreachable")
+
+    queue_manager._active_item_id = item.id
+    queue_manager._active_provider = _BrokenProvider()
+
+    assert await queue_manager.cancel_item(item.id) is True
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+
+
+async def test_a_cancelled_job_that_then_pauses_stays_cancelled_and_discards_the_checkpoint(
+    db, monkeypatch
+):
+    """The pause we asked for comes back as TranscriptionPaused.
+
+    `_mark_item_paused` sets the row back to `pending` unconditionally, which
+    would silently un-cancel the job and re-run it in the next window.
+    """
+    pair = await make_book_pair(db)
+    audio_path = (await db.execute(
+        select(AudioBook).where(AudioBook.id == pair.audiobook_id)
+    )).scalar_one().file_path
+    item = await _seed_item(db, pair.id, status="pending")
+
+    provider = _FakeProvider()
+
+    async def _fake_get_provider():
+        return provider
+
+    monkeypatch.setattr(
+        "services.transcription_providers.get_transcription_provider", _fake_get_provider
+    )
+
+    async def _pipeline(item_id, pair_id):
+        queue_manager._cancel_requested.add(item_id)
+        raise TranscriptionPaused("paused", completed_through_sec=900, progress=0.5)
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _pipeline)
+
+    assert await queue_manager._process_next_item() is True
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "cancelled"
+    assert refreshed.paused_at is None, "a cancelled item must not look resumable"
+    assert refreshed.completed_at is not None
+    assert provider.discarded == [audio_path], (
+        "the worker's checkpoint and retained audio are dead weight now"
+    )
+
+
+async def test_a_cancelled_job_is_not_re_pended_when_the_provider_goes_away(db, monkeypatch):
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="pending")
+
+    async def _pipeline(item_id, pair_id):
+        queue_manager._cancel_requested.add(item_id)
+        raise ProviderUnavailableError("worker rebooted")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _pipeline)
+    monkeypatch.setattr(queue_manager.asyncio, "sleep", _noop_sleep)
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "cancelled"
+    assert (refreshed.retry_count or 0) == 0, "a cancelled job must not burn retries"
+
+
+async def test_a_cancelled_job_is_not_marked_failed_when_the_pipeline_errors(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+
+    async def _pipeline(item_id, pair_id):
+        queue_manager._cancel_requested.add(item_id)
+        raise RuntimeError("torn down mid-job")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _pipeline)
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+    assert (await _get(BookPair, pair.id)).status != PairStatus.ERROR, (
+        "a job the user cancelled is not an error the operator has to clear"
+    )
+
+
 async def test_discarding_a_checkpoint_survives_a_broken_provider(db, monkeypatch):
     """Cleanup is best effort — an unreachable worker must not turn a
     successful cancel into an error."""
@@ -1240,10 +1370,31 @@ async def test_cancel_at_each_checkpoint_leaves_the_item_cancelled(db, monkeypat
     # The pipeline stopped at that checkpoint rather than running on.
     assert box[0].transcribe_calls == (0 if checkpoint == "before_provider" else 1)
     assert await _sync_map_for(pair.id) is None
-    # A transcript reached the cache only if the provider had already run and
-    # the checkpoint that follows it let the run continue.
-    expected_transcripts = 1 if checkpoint == "after_epub_extract" else 0
+    # A transcript reached the cache whenever the provider actually ran: since
+    # issue #196 the persist happens before the post-transcribe cancel check,
+    # so cancelling the *sync* never throws away hours of *transcription*.
+    expected_transcripts = 0 if checkpoint == "before_provider" else 1
     assert len(await _transcripts_for(pair.id)) == expected_transcripts
+
+
+async def test_a_completed_transcript_is_persisted_even_when_the_item_was_cancelled(
+    db, monkeypatch
+):
+    """Cancelling the sync must not discard a transcription that already finished.
+
+    The worker had already spent the hours; a re-queue should pick the
+    transcript up from the cache rather than starting from scratch.
+    """
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline_cancelling_at(monkeypatch, "after_transcribe", item.id, [])
+
+    await queue_manager._process_next_item()
+
+    transcripts = await _transcripts_for(pair.id)
+    assert len(transcripts) == 1
+    assert transcripts[0].sentence_count == len(TRANSCRIPT)
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
 
 
 @pytest.mark.parametrize("checkpoint", CHECKPOINTS)
