@@ -3154,7 +3154,7 @@ def _verify_row(item) -> dict:
 @router.get("/verify")
 async def verify_files(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(rate_limited(expensive_reads)),
+    _: User = Depends(rate_limited(expensive_reads, get_editor_user)),
 ):
     """
     Check every ebook and audiobook file_path against the filesystem.
@@ -3164,6 +3164,12 @@ async def verify_files(
     NAS mount, on a single-worker server — so a full library made every other
     request wait, `/api/health` included. It now runs in a worker thread, and
     each list stops at `VERIFY_MAX_RESULTS` with `truncated` set (issue #208).
+
+    Editor and up: this is a curation view. Nothing here is actionable without
+    the edit and re-scan controls, which are already editor-gated, so opening it
+    to every account only bought anyone a full pass over every row on demand.
+    The web hides the entry point to match (`RequireRole`), but that is cosmetic
+    -- this dependency is the boundary.
     """
     ebook_rows = [
         _verify_row(e) for e in (await db.execute(select(EBook))).scalars().all()
@@ -3485,14 +3491,17 @@ calibre_status_cache = TTLValue(lambda: settings.calibre_status_cache_seconds)
 
 @router.get("/calibre-status")
 async def get_calibre_status(
-    current_user: User = Depends(rate_limited(expensive_reads)),
+    current_user: User = Depends(rate_limited(expensive_reads, get_editor_user)),
 ):
     """Check whether calibre's ebook-convert is available in the server container.
 
     `subprocess.run` with a 10 s timeout used to run inline on the event loop, so
     one wedged `ebook-convert` blocked every other request for those ten seconds
     — on a single-worker server, with a System page tile calling this on load.
-    Now: worker thread, cached (issue #208).
+    Now: worker thread, cached, and editor-gated (issue #208) -- whether the
+    conversion binary is installed is an operator's question, and a read-only
+    account can convert nothing. The role check runs before the bucket, so a
+    refused caller starts no subprocess.
     """
     return await calibre_status_cache.get(_probe_calibre)
 
