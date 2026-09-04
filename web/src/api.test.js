@@ -1181,6 +1181,34 @@ describe('paginated library lists (issue #48)', () => {
         expect(fetchMock.mock.calls[0][0]).toBe('/api/library/pairs?page=1&limit=500')
     })
 
+    // Issue #277: resolving one pair used to mean walking the whole listing.
+    it('getPair(id) costs one request against the single-pair endpoint', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: 9, ebook: { title: 'Dune' } }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getPair } = await import('./api')
+        const pair = await getPair(9)
+
+        expect(pair).toEqual({ id: 9, ebook: { title: 'Dune' } })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/pairs/9')
+    })
+
+    it('getPair(id) surfaces the server detail on a 404', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 404,
+            text: async () => JSON.stringify({ detail: 'Pair not found' }),
+            json: async () => ({ detail: 'Pair not found' }),
+        }))
+        localStorage.setItem('tandem_token', 't')
+
+        const { getPair } = await import('./api')
+        await expect(getPair(9)).rejects.toThrow('Pair not found')
+    })
+
     it('getNewItems() keeps the {ebooks, audiobooks} array shape, walking both sub-lists', async () => {
         const fetchMock = vi.fn()
             .mockResolvedValueOnce({

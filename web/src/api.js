@@ -542,9 +542,28 @@ export async function rescanAllLibrary() {
 // and accepts `q` for a server-side title/author/series search. The `*Page`
 // functions expose one page for a paged UI; the legacy whole-list functions
 // (`getEbooks()`, `getPairs()`, ...) keep their array return shape by walking
-// every page, for the pages that still assemble lists locally (Home,
-// Continue, Series, Transcription, System). The Library page is server-driven
-// (issue #120, `getLibraryItemsPage` below) and no longer uses them.
+// every page, for the pages that still assemble lists locally.
+//
+// **Live checklist of who still walks the whole library** (issue #277) — a page
+// leaving this list should leave the comment too:
+//
+//   HomePage         getEbooks + getAudiobooks + getPairs — builds Continue /
+//                    Finished / Up-next shelves across all three lists at once.
+//                    Wants a `/library/summary`-style aggregate; filed apart.
+//   SeriesPage       getEbooks + getAudiobooks + getPairs — groups the whole
+//                    library by series client-side. Server-side `series` facet
+//                    exists; moving it onto getLibraryItemsPage is filed apart.
+//   SystemPage       getEbooks + getAudiobooks + getPairs — only to *count*
+//                    them; wants the same aggregate as Home.
+//   PairsPage        getPairs + getUnpairedMedia — renders every pair.
+//   TranscriptionPage getPairs — partitions every pair by transcription state.
+//   LibraryPage      fetchAllPages over getLibraryItemsPage, and only for
+//                    "select all in tab" / new-pair sweeps — bounded by an
+//                    explicit user action, not a page load.
+//
+// Migrated: LibraryPage's main list is server-driven (issue #120,
+// `getLibraryItemsPage`), UnpairedPage uses `getUnpairedMedia()`, and
+// TranscriptionEditorPage uses `getPair()` (issue #277).
 
 const FETCH_ALL_PAGE_SIZE = 500;
 
@@ -682,6 +701,18 @@ export async function rescanBook(type, id) {
 
 export function getPairs() {
     return fetchAllPages((page) => getPairsPage({ page, limit: FETCH_ALL_PAGE_SIZE }));
+}
+
+/**
+ * One pair by id (issue #277).
+ *
+ * Returns the same `BookPairResponse` the listing's `items` carry, including
+ * `sync_map_version`. Use this instead of filtering `getPairs()` — a page that
+ * needs one pair should not download the library to find it.
+ */
+export async function getPair(pairId) {
+    const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}`);
+    return _jsonOrThrow(resp, 'Failed to fetch pair');
 }
 
 export async function createPair(ebookId, audiobookId) {

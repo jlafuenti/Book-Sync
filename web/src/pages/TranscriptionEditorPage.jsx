@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getSyncMap, updateTranscriptionText, getPairs } from '../api'
+import { getSyncMap, updateTranscriptionText, getPair } from '../api'
 import './TranscriptionPage.css'
 
 function TranscriptionEditorPage() {
@@ -37,15 +37,20 @@ function TranscriptionEditorPage() {
                     sentence: pt.epub_sentence_index
                 }))
                 setPoints(pts)
-
-                // Also fetch the pair info to display title
-                const pairs = await getPairs()
-                const found = pairs.find(p => p.id == pairId)
-                if (found) setPair(found)
             } catch (err) {
                 setError(err.message)
             } finally {
                 setLoading(false)
+            }
+
+            // The pair is only the subheading's title/author (issue #277). It
+            // used to come from `getPairs()` — the whole library, filtered
+            // client-side to one row. Fetch the one, and keep its failure off
+            // the editor: a missing pair must not blank the points.
+            try {
+                setPair(await getPair(pairId))
+            } catch {
+                // Subheading stays empty; the sync map is what matters here.
             }
         }
         load()
