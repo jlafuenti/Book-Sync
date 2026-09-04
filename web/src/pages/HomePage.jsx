@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     getAllProgress, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
-    updatePosition, resetPairProgress, resetPosition, getProgress as apiGetProgress, getPosition,
-    getDeviceId, getDeviceName,
+    resetPairProgress, resetPosition, getProgress as apiGetProgress, getPosition,
 } from '../api'
 import { useAudioPlayer } from '../contexts/AudioPlayerContext'
+import { positionTarget, writePosition } from '../lib/position'
+import { switchToEbook } from '../lib/handoff'
 import { handoffPositionMs } from '../lib/playbackOffsets'
 import { resolvePairOpenTarget } from '../lib/pairOpenTarget'
 import { pairSourceFromProgress } from '../utils/pairRouting'
@@ -450,15 +451,6 @@ function HomePage() {
 
     // --- Actions ---
 
-    // Device attribution + write-ordering fields sent with every progress
-    // write (issue #54). captured_at is read fresh per-call so a batch of
-    // Promise.all writes each stamp their own moment.
-    const deviceMeta = () => ({
-        device_id: getDeviceId(),
-        device_name: getDeviceName(),
-        captured_at: new Date().toISOString(),
-    })
-
     const handleMarkComplete = async (item) => {
         // Optimistic removal — instant feedback
         setContinueItems(prev => prev.filter(i => i.itemId !== item.itemId))
@@ -466,11 +458,14 @@ function HomePage() {
             // One write for a pair: both halves share a single canonical
             // record, so the two per-media writes this replaced could be
             // adjudicated separately and leave the book half-complete.
-            if (item.itemType === 'pair') {
-                await updatePosition('pair', item.book_pair_id, { is_completed: true, ...deviceMeta() })
-            } else {
-                await updatePosition(item.itemType, item.mediaId, { is_completed: true, ...deviceMeta() })
-            }
+            // Only a `pair` item addresses the pair scope. A standalone item
+            // can still carry a `book_pair_id` (it is spread off the progress
+            // row) for a pair this page could not resolve, and that must not
+            // silently redirect the write.
+            const target = positionTarget(
+                item.itemType === 'pair' ? item : null, item.itemType, item.mediaId,
+            )
+            await writePosition(target, { is_completed: true })
         } catch (err) {
             console.error('Failed to mark complete:', err)
         } finally {
@@ -597,11 +592,10 @@ function HomePage() {
             <AudioPlayerView
                 onClose={() => { setPlayerOpen(false); loadData() }}
                 onSwitchToEbook={audioPlayer.pairedEbookId ? async (pairId) => {
-                    audioPlayer.pause()
-                    const posMs = Math.floor(audioPlayer.currentTime * 1000)
-                    const pos = await updatePosition('pair', pairId, {
-                        source: 'audiobook', audio_position_ms: posMs, ...deviceMeta(),
-                    }).catch(() => null)
+                    // Shared with BookDetailPage's and the mini-player's
+                    // handoff so `source` and the device metadata are written
+                    // the same way from all three (issue #267).
+                    const pos = await switchToEbook(audioPlayer, pairId)
                     setPlayerOpen(false)
                     const ebookBook = mediaLookup.ebooks[audioPlayer.pairedEbookId]
                     setReaderOpen({

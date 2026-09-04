@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
-import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, getPosition, updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName } from '../api'
+import { getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata, rescanBook, getSettings, enrichAudiobookFromAbs, getProgress, getPosition, resetPairProgress, resetPosition } from '../api'
+// Scope + device metadata for a position write come from one module (#274).
+import { positionTarget, writePosition } from '../lib/position'
 import ReactMarkdown from 'react-markdown'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import EbookReader from '../components/EbookReader'
@@ -28,13 +30,6 @@ function formatDuration(seconds) {
     if (h > 0) return `${h}h ${m}m ${s}s`
     if (m > 0) return `${m}m ${s}s`
     return `${s}s`
-}
-
-// Which canonical record a write for this book addresses. A paired book has
-// ONE record shared by the reader and the player; an unpaired one gets its own
-// standalone record for its own media scope.
-function positionTarget(book, mediaType, mediaId) {
-    return book?.pair_id ? ['pair', book.pair_id] : [mediaType, mediaId]
 }
 
 // Server timestamps are naive UTC — parse them through the shared helper
@@ -314,12 +309,10 @@ function BookDetailPage() {
                         {/* Mark Complete / Reset Progress */}
                         {progress && !progress.is_completed && (
                             <button className="btn btn-secondary" onClick={async () => {
-                                await updatePosition(...positionTarget(book, type, id), {
-                                    is_completed: true,
-                                    device_id: getDeviceId(),
-                                    device_name: getDeviceName(),
-                                    captured_at: new Date().toISOString(),
-                                })
+                                await writePosition(
+                                    positionTarget(book, type, id),
+                                    { is_completed: true },
+                                )
                                 setProgress(p => ({ ...p, is_completed: true }))
                                 showToast('Marked as complete')
                             }}>

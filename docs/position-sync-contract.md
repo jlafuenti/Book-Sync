@@ -99,6 +99,18 @@ The client shows something but sets no position as established.
 
 A client must not write *anchors* until it knows where the reader is. On
 Android this is `PositionSavePolicy`; the web reader keeps the boolean form.
+
+> **Where the web assembles a write.** `web/src/lib/position.js` (issue #274) is
+> the web client's single seam for the rules below and for the `source` rule in
+> the next section: `positionTarget` picks the scope, `deviceMeta` builds the
+> `device_id`/`device_name`/`captured_at` triple, `writePosition` is the one
+> call that reaches `updatePosition`, and `conflictFrom` reads the rejection.
+> `keepalivePosition` is the single deliberate exception, and only for the
+> transport — an unload flush must be a `keepalive` request, and its payload
+> comes from the same builder. These rules used to be hand-copied at nine call
+> sites in five files, with four different spellings of `positionTarget`; adding
+> a field to this contract meant finding every one, and missing one gave a write
+> that was silently mis-adjudicated rather than an error.
 Every save produces one of two verdicts — there is no "suppress everything":
 
 - **`FullSave`** — the restore landed, the record was genuinely empty, or the
