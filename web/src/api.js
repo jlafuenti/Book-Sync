@@ -109,7 +109,7 @@ async function mintMediaToken(resourceType, resourceId) {
     const resp = await fetchWithAuth(
         `${API_BASE}/auth/media-token?resource_type=${resourceType}&resource_id=${encodeURIComponent(resourceId)}`
     );
-    if (!resp.ok) throw new Error('Failed to get media token');
+    await ensureOk(resp, 'Failed to get media token');
     const { token, expires_in } = await resp.json();
     mediaTokenCache.set(`${resourceType}:${resourceId}`, {
         token, expiresAt: Date.now() + expires_in * 1000,
@@ -353,6 +353,39 @@ async function fetchWithAuth(url, options = {}) {
     return response;
 }
 
+/**
+ * The error contract (issue #275).
+ *
+ * Every failed response becomes an `Error` carrying the server's `detail` when
+ * it has one, and the caller's own fallback string when it does not. This used
+ * to be copied inline at ~70 call sites instead of called, so whether a user
+ * saw the server's explanation or a fixed English string depended on which
+ * function the page happened to reach for: `updateMe`, `getUsers`,
+ * `getAuditLog` and `getSyncMap` discarded `detail` while their immediate
+ * neighbours surfaced it.
+ *
+ * The body is read defensively — a 502 from the proxy is HTML and `.json()`
+ * throws a SyntaxError on it, which would replace the real failure with a parse
+ * error. The two unauthenticated endpoints (`login`, `register`) deliberately
+ * use `errorMessage` below instead, which also appends the status: those are
+ * the calls people make when the app is *down*, and which server failed is the
+ * only actionable thing left.
+ *
+ * These are the single seam for anything the client should later do to every
+ * request — cancellation, retry, telemetry, an offline-aware message.
+ */
+export async function ensureOk(resp, fallback) {
+    if (resp.ok) return resp;
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.detail || fallback);
+}
+
+/** `ensureOk`, then the parsed body — the shape most endpoints want. */
+export async function jsonOrThrow(resp, fallback) {
+    await ensureOk(resp, fallback);
+    return resp.json();
+}
+
 // ============ Auth ============
 
 /**
@@ -438,8 +471,7 @@ export async function updateMe(data) {
         method: 'PUT',
         body: JSON.stringify(data),
     });
-    if (!resp.ok) throw new Error('Failed to update profile');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update profile');
 }
 
 export function getAccessToken() {
@@ -451,8 +483,7 @@ export async function changePassword(oldPassword, newPassword) {
         method: 'POST',
         body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to change password');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to change password');
 }
 
 // ============ User Management (Admin) ============
@@ -460,8 +491,7 @@ export async function changePassword(oldPassword, newPassword) {
 export async function getUsers(filter) {
     const params = filter ? `?filter=${filter}` : '';
     const resp = await fetchWithAuth(`${API_BASE}/users/${params}`);
-    if (!resp.ok) throw new Error('Failed to fetch users');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch users');
 }
 
 export async function createUser(data) {
@@ -469,8 +499,7 @@ export async function createUser(data) {
         method: 'POST',
         body: JSON.stringify(data),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to create user');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to create user');
 }
 
 export async function updateUser(id, data) {
@@ -478,16 +507,14 @@ export async function updateUser(id, data) {
         method: 'PATCH',
         body: JSON.stringify(data),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to update user');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update user');
 }
 
 export async function approveUser(id) {
     const resp = await fetchWithAuth(`${API_BASE}/users/${id}/approve`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to approve user');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to approve user');
 }
 
 export async function resetUserPassword(id, newPassword) {
@@ -495,16 +522,14 @@ export async function resetUserPassword(id, newPassword) {
         method: 'POST',
         body: JSON.stringify({ new_password: newPassword }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to reset password');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to reset password');
 }
 
 export async function deleteUser(id) {
     const resp = await fetchWithAuth(`${API_BASE}/users/${id}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to delete user');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to delete user');
 }
 
 export async function getAuditLog(page = 1, limit = 50, action, userId) {
@@ -512,28 +537,24 @@ export async function getAuditLog(page = 1, limit = 50, action, userId) {
     if (action) params += `&action=${action}`;
     if (userId) params += `&user_id=${userId}`;
     const resp = await fetchWithAuth(`${API_BASE}/users/audit-log${params}`);
-    if (!resp.ok) throw new Error('Failed to fetch audit log');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch audit log');
 }
 
 // ============ Library ============
 
 export async function scanLibrary() {
     const resp = await fetchWithAuth(`${API_BASE}/library/scan`, { method: 'POST' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Scan failed');
-    return resp.json();
+    return jsonOrThrow(resp, 'Scan failed');
 }
 
 export async function normalizeLibrary() {
     const resp = await fetchWithAuth(`${API_BASE}/library/normalize`, { method: 'POST' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Normalize failed');
-    return resp.json();
+    return jsonOrThrow(resp, 'Normalize failed');
 }
 
 export async function rescanAllLibrary() {
     const resp = await fetchWithAuth(`${API_BASE}/library/rescan-all`, { method: 'POST' });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Force rescan failed');
-    return resp.json();
+    return jsonOrThrow(resp, 'Force rescan failed');
 }
 
 // ---- Paginated list endpoints (issue #48) ----
@@ -575,8 +596,7 @@ function pageQuery({ page = 1, limit = 100, q } = {}) {
 
 async function fetchPage(path, opts, what) {
     const resp = await fetchWithAuth(`${API_BASE}${path}${pageQuery(opts)}`);
-    if (!resp.ok) throw new Error(`Failed to fetch ${what}`);
-    return resp.json();
+    return jsonOrThrow(resp, `Failed to fetch ${what}`);
 }
 
 // Walk `fetchOnePage(page)` until a page comes back short (or `total` is
@@ -641,8 +661,7 @@ export async function getLibraryItemsPage(opts = {}) {
     const extra = browseQuery(opts);
     const path = `/library/items${pageQuery(opts)}${extra ? `&${extra}` : ''}`;
     const resp = await fetchWithAuth(`${API_BASE}${path}`);
-    if (!resp.ok) throw new Error('Failed to fetch library items');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch library items');
 }
 
 /**
@@ -666,8 +685,7 @@ export async function getUnpairedMedia() {
 export async function getLibraryFacets(opts = {}) {
     const extra = browseQuery(opts);
     const resp = await fetchWithAuth(`${API_BASE}/library/facets${extra ? `?${extra}` : ''}`);
-    if (!resp.ok) throw new Error('Failed to fetch library facets');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch library facets');
 }
 
 export function getEbooks() {
@@ -676,8 +694,7 @@ export function getEbooks() {
 
 export async function getEbook(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}`);
-    if (!resp.ok) throw new Error('Failed to fetch ebook');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch ebook');
 }
 
 export function getAudiobooks() {
@@ -686,16 +703,14 @@ export function getAudiobooks() {
 
 export async function getAudiobook(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}`);
-    if (!resp.ok) throw new Error('Failed to fetch audiobook');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch audiobook');
 }
 
 export async function rescanBook(type, id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/${type}s/${id}/rescan`, {
         method: 'POST'
     });
-    if (!resp.ok) throw new Error(`Failed to rescan ${type}`);
-    return resp.json();
+    return jsonOrThrow(resp, `Failed to rescan ${type}`);
 }
 
 
@@ -712,7 +727,7 @@ export function getPairs() {
  */
 export async function getPair(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}`);
-    return _jsonOrThrow(resp, 'Failed to fetch pair');
+    return jsonOrThrow(resp, 'Failed to fetch pair');
 }
 
 export async function createPair(ebookId, audiobookId) {
@@ -720,15 +735,14 @@ export async function createPair(ebookId, audiobookId) {
         method: 'POST',
         body: JSON.stringify({ ebook_id: ebookId, audiobook_id: audiobookId }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to create pair');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to create pair');
 }
 
 export async function deletePair(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs/${pairId}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) throw new Error('Failed to delete pair');
+    await ensureOk(resp, 'Failed to delete pair');
 }
 
 export async function uploadEbook(file) {
@@ -738,8 +752,7 @@ export async function uploadEbook(file) {
         method: 'POST',
         body: formData,
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Upload failed');
-    return resp.json();
+    return jsonOrThrow(resp, 'Upload failed');
 }
 
 export async function uploadAudiobook(file) {
@@ -749,8 +762,7 @@ export async function uploadAudiobook(file) {
         method: 'POST',
         body: formData,
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Upload failed');
-    return resp.json();
+    return jsonOrThrow(resp, 'Upload failed');
 }
 
 export async function uploadEbookCover(id, file) {
@@ -760,8 +772,7 @@ export async function uploadEbookCover(id, file) {
         method: 'POST',
         body: formData,
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to upload cover');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to upload cover');
 }
 
 export async function uploadAudiobookCover(id, file) {
@@ -771,8 +782,7 @@ export async function uploadAudiobookCover(id, file) {
         method: 'POST',
         body: formData,
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to upload cover');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to upload cover');
 }
 
 // ============ Transcription ============
@@ -781,22 +791,19 @@ export async function startTranscription(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/start`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to start transcription');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to start transcription');
 }
 
 export async function getTranscriptionStatus(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/status`);
-    if (!resp.ok) throw new Error('Failed to get status');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to get status');
 }
 
 export async function cancelTranscription(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/${pairId}/cancel`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error('Failed to cancel transcription');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to cancel transcription');
 }
 
 export async function updateTranscriptionText(pairId, points) {
@@ -804,16 +811,14 @@ export async function updateTranscriptionText(pairId, points) {
         method: 'PUT',
         body: JSON.stringify({ points }),
     });
-    if (!resp.ok) throw new Error('Failed to update transcription text');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update transcription text');
 }
 
 // ============ Transcription Queue ============
 
 export async function getTranscriptionQueue() {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/queue`);
-    if (!resp.ok) throw new Error('Failed to fetch transcription queue');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch transcription queue');
 }
 
 export async function addToQueue(pairIds) {
@@ -821,16 +826,14 @@ export async function addToQueue(pairIds) {
         method: 'POST',
         body: JSON.stringify({ pair_ids: pairIds }),
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to add to queue');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to add to queue');
 }
 
 export async function removeFromQueue(itemId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to remove from queue');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to remove from queue');
 }
 
 export async function updateQueuePriority(itemId, priority) {
@@ -838,14 +841,12 @@ export async function updateQueuePriority(itemId, priority) {
         method: 'PUT',
         body: JSON.stringify({ priority }),
     });
-    if (!resp.ok) throw new Error('Failed to update priority');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update priority');
 }
 
 export async function getQueueHistory(limit = 50, offset = 0) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/history?limit=${limit}&offset=${offset}`);
-    if (!resp.ok) throw new Error('Failed to fetch queue history');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch queue history');
 }
 
 // Dispatch a queued item immediately, ignoring the off-hours window (#106).
@@ -853,8 +854,7 @@ export async function runQueueItemNow(itemId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}/run-now`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to start item');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to start item');
 }
 
 // Retry a failed or cancelled history item (#247). The server queues a *new*
@@ -863,45 +863,39 @@ export async function requeueQueueItem(itemId) {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/queue/${itemId}/requeue`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error((await resp.json()).detail || 'Failed to retry item');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to retry item');
 }
 
 // Current off-hours window state, for the queue page banner.
 export async function getOffHoursStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/transcription/offhours`);
-    if (!resp.ok) throw new Error('Failed to fetch off-hours status');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch off-hours status');
 }
 
 // ============ Sync ============
 
 export async function getSyncMap(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/files/syncmap/${pairId}`);
-    if (!resp.ok) throw new Error('Failed to get sync map');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to get sync map');
 }
 
 // ============ Stats ============
 
 export async function getDiskUsage() {
     const resp = await fetchWithAuth(`${API_BASE}/stats/disk_usage`);
-    if (!resp.ok) throw new Error('Failed to fetch disk usage');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch disk usage');
 }
 
 // ============ Backups (issue #60) ============
 
 export async function getBackupStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/stats/backup`);
-    if (!resp.ok) throw new Error('Failed to fetch backup status');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch backup status');
 }
 
 export async function listBackups() {
     const resp = await fetchWithAuth(`${API_BASE}/stats/backups`);
-    if (!resp.ok) throw new Error('Failed to list backups');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to list backups');
 }
 
 export async function restoreBackup(backupId) {
@@ -910,12 +904,7 @@ export async function restoreBackup(backupId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ backup_id: backupId, confirm: true }),
     });
-    if (!resp.ok) {
-        let detail = 'Failed to restore backup';
-        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
-        throw new Error(detail);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to restore backup');
 }
 
 export async function createBackup(label) {
@@ -924,31 +913,21 @@ export async function createBackup(label) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: label || null }),
     });
-    if (!resp.ok) {
-        let detail = 'Failed to create backup';
-        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
-        throw new Error(detail);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to create backup');
 }
 
 export async function deleteBackup(backupId) {
     const resp = await fetchWithAuth(`${API_BASE}/stats/backups/${encodeURIComponent(backupId)}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) {
-        let detail = 'Failed to delete backup';
-        try { detail = (await resp.json()).detail || detail; } catch { /* non-JSON */ }
-        throw new Error(detail);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to delete backup');
 }
 
 // Fetch the .dump with the auth header, then trigger a browser download of the
 // blob (an <a href> can't carry the Authorization header).
 export async function downloadBackup(backupId) {
     const resp = await fetchWithAuth(`${API_BASE}/stats/backups/${encodeURIComponent(backupId)}/download`);
-    if (!resp.ok) throw new Error('Failed to download backup');
+    await ensureOk(resp, 'Failed to download backup');
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -964,8 +943,7 @@ export async function downloadBackup(backupId) {
 
 export async function getAllProgress() {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress`);
-    if (!resp.ok) throw new Error('Failed to fetch all progress');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch all progress');
 }
 
 export async function getProgress(mediaType, mediaId) {
@@ -975,8 +953,7 @@ export async function getProgress(mediaType, mediaId) {
     // book could end up with two rows and 500 forever after (issue #64). There
     // is no body to parse now — null is the position, not an error.
     if (resp.status === 204) return null;
-    if (!resp.ok) throw new Error('Failed to fetch progress');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch progress');
 }
 
 // There is no `updateProgress` — `user_progress` is a read-only projection of
@@ -986,8 +963,7 @@ export async function resetPairProgress(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/progress/pair/${pairId}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) throw new Error('Failed to reset pair progress');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to reset pair progress');
 }
 
 // ============ Canonical position ============
@@ -1006,8 +982,7 @@ export async function resetPairProgress(pairId) {
 export async function getPosition(scope, id) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`);
     if (resp.status === 204) return null;
-    if (!resp.ok) throw new Error('Failed to fetch position');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch position');
 }
 
 export async function updatePosition(scope, id, position) {
@@ -1022,8 +997,7 @@ export async function updatePosition(scope, id, position) {
         const body = await resp.json();
         return Object.assign(body, { rejected: true });
     }
-    if (!resp.ok) throw new Error('Failed to update position');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update position');
 }
 
 /**
@@ -1038,8 +1012,7 @@ export async function resetPosition(scope, id) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/position/${scope}/${id}`, {
         method: 'DELETE',
     });
-    if (!resp.ok) throw new Error('Failed to reset position');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to reset position');
 }
 
 // ============ Bookmarks ============
@@ -1049,8 +1022,7 @@ export async function resetPosition(scope, id) {
 
 export async function getBookmarkLog(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/sync/bookmark/${pairId}/log`);
-    if (!resp.ok) throw new Error('Failed to fetch bookmark log');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch bookmark log');
 }
 
 /**
@@ -1116,7 +1088,7 @@ export async function matchTextToAudio(pairId, epubText, chapterHint = 0) {
 
 export async function fetchEbookBlob(ebookId) {
     const resp = await fetchWithAuth(`${API_BASE}/files/ebook/${ebookId}`);
-    if (!resp.ok) throw new Error('Failed to fetch ebook file');
+    await ensureOk(resp, 'Failed to fetch ebook file');
     return resp.arrayBuffer();
 }
 
@@ -1129,8 +1101,7 @@ export async function getAudiobookStreamUrl(audiobookId) {
 
 export async function getSettings() {
     const resp = await fetchWithAuth(`${API_BASE}/settings/`);
-    if (!resp.ok) throw new Error('Failed to fetch settings');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to fetch settings');
 }
 
 export async function updateSettings(settings) {
@@ -1144,7 +1115,7 @@ export async function updateSettings(settings) {
     // Surface the server's `detail` — settings validation (e.g. an invalid
     // off-hours window) explains exactly what's wrong, and a generic message
     // would throw that away.
-    return _jsonOrThrow(resp, 'Failed to update settings');
+    return jsonOrThrow(resp, 'Failed to update settings');
 }
 
 export async function testRemoteConnection(url, key = '') {
@@ -1159,23 +1130,14 @@ export async function testRemoteConnection(url, key = '') {
         body: JSON.stringify({ url, key }),
     });
 
-    if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try {
-            const errBody = await resp.json();
-            if (errBody.detail) msg = errBody.detail;
-        } catch(e) {}
-        throw new Error(msg);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
 export async function generateTranscriptionRemoteKey() {
     const resp = await fetchWithAuth(`${API_BASE}/settings/transcription-remote-key/generate`, {
         method: 'POST',
     });
-    if (!resp.ok) throw new Error('Failed to generate key');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to generate key');
 }
 
 export async function testAbsConnection(url, token = '') {
@@ -1185,15 +1147,7 @@ export async function testAbsConnection(url, token = '') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, token }),
     });
-    if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try {
-            const errBody = await resp.json();
-            if (errBody.detail) msg = errBody.detail;
-        } catch(e) {}
-        throw new Error(msg);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
 export async function testHardcoverConnection(token = '') {
@@ -1202,34 +1156,17 @@ export async function testHardcoverConnection(token = '') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
     });
-    if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try {
-            const errBody = await resp.json();
-            if (errBody.detail) msg = errBody.detail;
-        } catch(e) {}
-        throw new Error(msg);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
 export async function enrichLibraryFromAbs() {
     const resp = await fetchWithAuth(`${API_BASE}/library/enrich-abs`, { method: 'POST' });
-    if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try { const e = await resp.json(); if (e.detail) msg = e.detail; } catch(e) {}
-        throw new Error(msg);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, `HTTP ${resp.status}`);
 }
 
 export async function enrichAudiobookFromAbs(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/enrich-abs`, { method: 'POST' });
-    if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try { const e = await resp.json(); if (e.detail) msg = e.detail; } catch(e) {}
-        throw new Error(msg);
-    }
+    await ensureOk(resp, `HTTP ${resp.status}`);
     // Returns { status, message, book }
     return resp.json();
 }
@@ -1242,8 +1179,7 @@ export async function updateEbookMetadata(bookId, meta) {
         },
         body: JSON.stringify(meta),
     });
-    if (!resp.ok) throw new Error('Failed to update ebook metadata');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update ebook metadata');
 }
 
 export async function updateAudiobookMetadata(bookId, meta) {
@@ -1254,22 +1190,19 @@ export async function updateAudiobookMetadata(bookId, meta) {
         },
         body: JSON.stringify(meta),
     });
-    if (!resp.ok) throw new Error('Failed to update audiobook metadata');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update audiobook metadata');
 }
 
 // ============ Chapters ============
 
 export async function getEbookChapters(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}/chapters`);
-    if (!resp.ok) throw new Error('Failed to get ebook chapters');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to get ebook chapters');
 }
 
 export async function getAudiobookChapters(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}/chapters`);
-    if (!resp.ok) throw new Error('Failed to get audiobook chapters');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to get audiobook chapters');
 }
 
 export async function updateAudiobookChapters(id, chapters) {
@@ -1278,8 +1211,7 @@ export async function updateAudiobookChapters(id, chapters) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(chapters)
     });
-    if (!resp.ok) throw new Error('Failed to update audiobook chapters');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to update audiobook chapters');
 }
 
 // ============ Match ============
@@ -1290,17 +1222,7 @@ export async function searchMetadata(provider, query, author) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, query, author })
     });
-    if (!resp.ok) {
-        let errMessage = 'Failed to search metadata';
-        try {
-            const errData = await resp.json();
-            if (errData && errData.detail) errMessage = errData.detail;
-        } catch (e) {
-            // Ignore JSON parse errors
-        }
-        throw new Error(errMessage);
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to search metadata');
 }
 
 export async function applyRemoteCover(bookType, bookId, coverUrl) {
@@ -1309,16 +1231,14 @@ export async function applyRemoteCover(bookType, bookId, coverUrl) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ book_type: bookType, book_id: bookId, cover_url: coverUrl })
     });
-    if (!resp.ok) throw new Error('Failed to apply remote cover');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to apply remote cover');
 }
 
 // ============ Cleanup ============
 
 export async function getMetadataDiscrepancies() {
     const resp = await fetchWithAuth(`${API_BASE}/library/pairs-discrepancies`);
-    if (!resp.ok) throw new Error('Failed to get metadata discrepancies');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to get metadata discrepancies');
 }
 
 export async function resolveMetadataDiscrepancies(pairId, resolutions) {
@@ -1327,8 +1247,7 @@ export async function resolveMetadataDiscrepancies(pairId, resolutions) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resolutions)
     });
-    if (!resp.ok) throw new Error('Failed to resolve metadata discrepancies');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to resolve metadata discrepancies');
 }
 
 // ============ New Items / New Pairs Inbox ============
@@ -1354,8 +1273,7 @@ export async function acknowledgeNewItems(ebookIds = [], audiobookIds = []) {
         method: 'POST',
         body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds }),
     });
-    if (!resp.ok) throw new Error('Failed to acknowledge new items');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to acknowledge new items');
 }
 
 export function getNewPairs() {
@@ -1367,8 +1285,7 @@ export async function acknowledgeNewPairs(pairIds) {
         method: 'POST',
         body: JSON.stringify({ pair_ids: pairIds }),
     });
-    if (!resp.ok) throw new Error('Failed to acknowledge new pairs');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to acknowledge new pairs');
 }
 
 export async function ignoreMetadataDiscrepancies(pairId, fields) {
@@ -1377,8 +1294,7 @@ export async function ignoreMetadataDiscrepancies(pairId, fields) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields })
     });
-    if (!resp.ok) throw new Error('Failed to ignore metadata discrepancies');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to ignore metadata discrepancies');
 }
 
 // ============ Delete & Verify ============
@@ -1387,20 +1303,19 @@ export async function deleteEbook(id, deleteFile = false) {
     const resp = await fetchWithAuth(`${API_BASE}/library/ebooks/${id}?delete_file=${deleteFile}`, {
         method: 'DELETE'
     });
-    if (!resp.ok) throw new Error('Failed to delete ebook');
+    await ensureOk(resp, 'Failed to delete ebook');
 }
 
 export async function deleteAudiobook(id, deleteFile = false) {
     const resp = await fetchWithAuth(`${API_BASE}/library/audiobooks/${id}?delete_file=${deleteFile}`, {
         method: 'DELETE'
     });
-    if (!resp.ok) throw new Error('Failed to delete audiobook');
+    await ensureOk(resp, 'Failed to delete audiobook');
 }
 
 export async function verifyFiles() {
     const resp = await fetchWithAuth(`${API_BASE}/library/verify`);
-    if (!resp.ok) throw new Error('Failed to verify files');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to verify files');
 }
 
 export async function cleanupOrphans(ebookIds, audiobookIds) {
@@ -1409,24 +1324,21 @@ export async function cleanupOrphans(ebookIds, audiobookIds) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ebook_ids: ebookIds, audiobook_ids: audiobookIds })
     });
-    if (!resp.ok) throw new Error('Failed to cleanup orphaned entries');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to cleanup orphaned entries');
 }
 
 // ============ Calibre ============
 
 export async function getCalibreStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/library/calibre-status`);
-    if (!resp.ok) throw new Error('Failed to check calibre status');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to check calibre status');
 }
 
 // ============ Unsupported Files ============
 
 export async function getUnsupportedFiles() {
     const resp = await fetchWithAuth(`${API_BASE}/library/unsupported`);
-    if (!resp.ok) throw new Error('Failed to load unsupported files');
-    return resp.json();
+    return jsonOrThrow(resp, 'Failed to load unsupported files');
 }
 
 export async function convertUnsupportedFile(id, deleteSource = false) {
@@ -1434,11 +1346,7 @@ export async function convertUnsupportedFile(id, deleteSource = false) {
         `${API_BASE}/library/unsupported/${id}/convert?delete_source=${deleteSource}`,
         { method: 'POST' }
     );
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || 'Conversion failed');
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Conversion failed');
 }
 
 export async function convertAllUnsupportedFiles(deleteSource = false) {
@@ -1446,59 +1354,35 @@ export async function convertAllUnsupportedFiles(deleteSource = false) {
         `${API_BASE}/library/unsupported/convert-all?delete_source=${deleteSource}`,
         { method: 'POST' }
     );
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || 'Batch conversion failed');
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Batch conversion failed');
 }
 
 export async function deleteUnsupportedSource(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/${id}/source`, {
         method: 'DELETE',
     });
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || 'Delete failed');
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Delete failed');
 }
 
 export async function forceDeleteUnsupportedFile(id) {
     const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/${id}/force`, {
         method: 'DELETE',
     });
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || 'Force delete failed');
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Force delete failed');
 }
 
 export async function forceDeleteAllUnsupportedFiles() {
     const resp = await fetchWithAuth(`${API_BASE}/library/unsupported/force-all`, {
         method: 'DELETE',
     });
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || 'Force delete all failed');
-    }
-    return resp.json();
+    return jsonOrThrow(resp, 'Force delete all failed');
 }
 
 /* ── Import Sources ──────────────────────────────────────────────────── */
 
-async function _jsonOrThrow(resp, fallback) {
-    if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || fallback);
-    }
-    return resp.json();
-}
-
 export async function listImportSources() {
     const resp = await fetchWithAuth(`${API_BASE}/import/sources`);
-    return _jsonOrThrow(resp, 'Failed to list import sources');
+    return jsonOrThrow(resp, 'Failed to list import sources');
 }
 
 export async function updateImportSourceConfig(sourceKey, config) {
@@ -1506,19 +1390,19 @@ export async function updateImportSourceConfig(sourceKey, config) {
         method: 'PUT',
         body: JSON.stringify(config),
     });
-    return _jsonOrThrow(resp, 'Failed to update source config');
+    return jsonOrThrow(resp, 'Failed to update source config');
 }
 
 export async function triggerImportSync(sourceKey) {
     const resp = await fetchWithAuth(`${API_BASE}/import/sources/${sourceKey}/sync`, {
         method: 'POST',
     });
-    return _jsonOrThrow(resp, 'Failed to trigger sync');
+    return jsonOrThrow(resp, 'Failed to trigger sync');
 }
 
 export async function getImportJobs(sourceKey) {
     const resp = await fetchWithAuth(`${API_BASE}/import/sources/${sourceKey}/jobs`);
-    return _jsonOrThrow(resp, 'Failed to fetch jobs');
+    return jsonOrThrow(resp, 'Failed to fetch jobs');
 }
 
 export async function audibleLoginStart() {
@@ -1526,7 +1410,7 @@ export async function audibleLoginStart() {
         method: 'POST',
         body: JSON.stringify({}),
     });
-    return _jsonOrThrow(resp, 'Failed to start Audible login');
+    return jsonOrThrow(resp, 'Failed to start Audible login');
 }
 
 export async function audibleLoginComplete(stateToken, responseUrl) {
@@ -1534,14 +1418,14 @@ export async function audibleLoginComplete(stateToken, responseUrl) {
         method: 'POST',
         body: JSON.stringify({ state_token: stateToken, response_url: responseUrl }),
     });
-    return _jsonOrThrow(resp, 'Audible login failed');
+    return jsonOrThrow(resp, 'Audible login failed');
 }
 
 export async function audibleDisconnect() {
     const resp = await fetchWithAuth(`${API_BASE}/import/audible/disconnect`, {
         method: 'POST',
     });
-    return _jsonOrThrow(resp, 'Failed to disconnect Audible');
+    return jsonOrThrow(resp, 'Failed to disconnect Audible');
 }
 
 export async function uploadAcsm(file) {
@@ -1551,12 +1435,12 @@ export async function uploadAcsm(file) {
         method: 'POST',
         body: fd,
     });
-    return _jsonOrThrow(resp, 'Upload failed');
+    return jsonOrThrow(resp, 'Upload failed');
 }
 
 export async function acsmAuthorizationStatus() {
     const resp = await fetchWithAuth(`${API_BASE}/import/acsm/authorization`);
-    return _jsonOrThrow(resp, 'Failed to check authorization');
+    return jsonOrThrow(resp, 'Failed to check authorization');
 }
 
 export async function acsmAuthorize({ mode, email = '', password = '' }) {
@@ -1564,36 +1448,36 @@ export async function acsmAuthorize({ mode, email = '', password = '' }) {
         method: 'POST',
         body: JSON.stringify({ mode, email, password }),
     });
-    return _jsonOrThrow(resp, 'Authorization failed');
+    return jsonOrThrow(resp, 'Authorization failed');
 }
 
 export async function acsmDeauthorize() {
     const resp = await fetchWithAuth(`${API_BASE}/import/acsm/deauthorize`, {
         method: 'POST',
     });
-    return _jsonOrThrow(resp, 'Failed to revoke authorization');
+    return jsonOrThrow(resp, 'Failed to revoke authorization');
 }
 
 // ============ Troubleshoot Library ============
 
 export async function getLibraryIssues() {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/issues`);
-    return _jsonOrThrow(resp, 'Failed to load library issues');
+    return jsonOrThrow(resp, 'Failed to load library issues');
 }
 
 export async function startLibraryScan() {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan`, { method: 'POST' });
-    return _jsonOrThrow(resp, 'Failed to start scan');
+    return jsonOrThrow(resp, 'Failed to start scan');
 }
 
 export async function getLibraryScanProgress() {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan/progress`);
-    return _jsonOrThrow(resp, 'Failed to get scan progress');
+    return jsonOrThrow(resp, 'Failed to get scan progress');
 }
 
 export async function cancelLibraryScan() {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/scan/cancel`, { method: 'POST' });
-    return _jsonOrThrow(resp, 'Failed to cancel scan');
+    return jsonOrThrow(resp, 'Failed to cancel scan');
 }
 
 export async function bulkDeleteIssues(items, deleteFile = true) {
@@ -1601,7 +1485,7 @@ export async function bulkDeleteIssues(items, deleteFile = true) {
         method: 'POST',
         body: JSON.stringify({ items }),
     });
-    return _jsonOrThrow(resp, 'Bulk delete failed');
+    return jsonOrThrow(resp, 'Bulk delete failed');
 }
 
 export async function replaceLibraryFile(itemType, itemId, file) {
@@ -1611,17 +1495,17 @@ export async function replaceLibraryFile(itemType, itemId, file) {
         method: 'POST',
         body: formData,
     });
-    return _jsonOrThrow(resp, 'Replace failed');
+    return jsonOrThrow(resp, 'Replace failed');
 }
 
 export async function requeuePair(pairId) {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/requeue/${pairId}`, { method: 'POST' });
-    return _jsonOrThrow(resp, 'Requeue failed');
+    return jsonOrThrow(resp, 'Requeue failed');
 }
 
 export async function repairChapterEncoding(itemId) {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/repair-chapter-encoding/${itemId}`, { method: 'POST' });
-    return _jsonOrThrow(resp, 'Repair failed');
+    return jsonOrThrow(resp, 'Repair failed');
 }
 
 export async function bulkRepairChapterEncoding(itemIds) {
@@ -1629,7 +1513,7 @@ export async function bulkRepairChapterEncoding(itemIds) {
         method: 'POST',
         body: JSON.stringify({ item_ids: itemIds }),
     });
-    return _jsonOrThrow(resp, 'Bulk repair failed');
+    return jsonOrThrow(resp, 'Bulk repair failed');
 }
 
 export async function dismissFailedAcsm(filename) {
@@ -1637,7 +1521,7 @@ export async function dismissFailedAcsm(filename) {
         method: 'POST',
         body: JSON.stringify({ filename }),
     });
-    return _jsonOrThrow(resp, 'Dismiss failed');
+    return jsonOrThrow(resp, 'Dismiss failed');
 }
 
 // Multi-file audiobook folders (issue #63): flagged by the library scan, not
@@ -1648,14 +1532,14 @@ export async function dismissMultiFileFolder(folderId) {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/multi-file/${folderId}/dismiss`, {
         method: 'POST',
     });
-    return _jsonOrThrow(resp, 'Dismiss failed');
+    return jsonOrThrow(resp, 'Dismiss failed');
 }
 
 export async function removeMultiFileTracks(folderId) {
     const resp = await fetchWithAuth(`${API_BASE}/troubleshoot/multi-file/${folderId}/remove-tracks`, {
         method: 'POST',
     });
-    return _jsonOrThrow(resp, 'Removing imported tracks failed');
+    return jsonOrThrow(resp, 'Removing imported tracks failed');
 }
 
 export async function deleteOrphanCovers(filenames) {
@@ -1663,5 +1547,5 @@ export async function deleteOrphanCovers(filenames) {
         method: 'POST',
         body: JSON.stringify({ filenames }),
     });
-    return _jsonOrThrow(resp, 'Delete failed');
+    return jsonOrThrow(resp, 'Delete failed');
 }
