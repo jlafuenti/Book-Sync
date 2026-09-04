@@ -87,3 +87,37 @@ async def test_fallback_provider_gets_the_same_timeout(stored_settings):
     provider = await factory.get_transcription_provider()
 
     assert provider._remote.timeout == 1800
+
+
+async def test_fallback_mode_warns_when_the_local_leg_is_not_installed(
+    stored_settings, monkeypatch, caplog
+):
+    """The stock image has no local Whisper, so 'remote_with_fallback' is just
+    'remote' with extra words. Say so once at construction (issue #191)."""
+    stored_settings(transcription_provider="remote_with_fallback")
+
+    async def _not_installed(self):
+        return False
+
+    monkeypatch.setattr(factory.LocalWhisperProvider, "is_available", _not_installed)
+
+    with caplog.at_level(logging.WARNING, logger="services.transcription_providers"):
+        await factory.get_transcription_provider()
+
+    assert "behaves as 'remote'" in caplog.text
+
+
+async def test_fallback_mode_is_quiet_when_local_whisper_is_installed(
+    stored_settings, monkeypatch, caplog
+):
+    stored_settings(transcription_provider="remote_with_fallback")
+
+    async def _installed(self):
+        return True
+
+    monkeypatch.setattr(factory.LocalWhisperProvider, "is_available", _installed)
+
+    with caplog.at_level(logging.WARNING, logger="services.transcription_providers"):
+        await factory.get_transcription_provider()
+
+    assert "behaves as 'remote'" not in caplog.text
