@@ -13,6 +13,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
+import Modal from '../components/Modal'
 import useIsMobile from '../hooks/useIsMobile'
 import './SystemPage.css'
 
@@ -957,9 +958,8 @@ export function UnsupportedFilesTab({ canAdmin }) {
             )}
 
             {forceDeleteConfirm && (
-                <div className="modal-overlay" onClick={() => setForceDeleteConfirm(null)}>
-                    <div className="modal-dialog" onClick={e => e.stopPropagation()}>
-                        <h3 style={{ marginTop: 0 }}>Confirm Force Delete</h3>
+                <Modal onClose={() => setForceDeleteConfirm(null)} labelledBy="force-delete-title" className="modal-dialog">
+                        <h3 id="force-delete-title" style={{ marginTop: 0 }}>Confirm Force Delete</h3>
                         <p>
                             {forceDeleteConfirm === 'all'
                                 ? 'All unsupported files will be permanently deleted from the filesystem and the library.'
@@ -972,8 +972,7 @@ export function UnsupportedFilesTab({ canAdmin }) {
                                 Delete
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Modal>
             )}
         </div>
     )

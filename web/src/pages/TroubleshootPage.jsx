@@ -11,6 +11,7 @@ import {
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
+import Modal from '../components/Modal'
 import './TroubleshootPage.css'
 
 /* ── Category metadata ─────────────────────────────────────────────── */
@@ -381,9 +382,8 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                     <input ref={replaceInputRef} type="file" style={{ display: 'none' }} onChange={onReplacePicked} />
 
                     {confirmRemoveTracks && (
-                        <div className="modal-overlay" onClick={() => setConfirmRemoveTracks(null)}>
-                            <div className="modal-dialog" onClick={e => e.stopPropagation()}>
-                                <h3 style={{ marginTop: 0 }}>
+                        <Modal onClose={() => setConfirmRemoveTracks(null)} labelledBy="confirm-remove-tracks-title" className="modal-dialog">
+                                <h3 id="confirm-remove-tracks-title" style={{ marginTop: 0 }}>
                                     Remove {confirmRemoveTracks.imported_track_count} imported track
                                     row{confirmRemoveTracks.imported_track_count === 1 ? '' : 's'}?
                                 </h3>
@@ -396,21 +396,18 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
                                     <button className="btn btn-secondary" onClick={() => setConfirmRemoveTracks(null)}>Cancel</button>
                                     <button className="btn btn-danger" onClick={doRemoveTracks}>Remove tracks</button>
                                 </div>
-                            </div>
-                        </div>
+                        </Modal>
                     )}
 
                     {confirmDelete && (
-                        <div className="modal-overlay" onClick={() => setConfirmDelete(false)}>
-                            <div className="modal-dialog" onClick={e => e.stopPropagation()}>
-                                <h3 style={{ marginTop: 0 }}>Delete {selected.size} item{selected.size !== 1 ? 's' : ''}?</h3>
+                        <Modal onClose={() => setConfirmDelete(false)} labelledBy="confirm-bulk-delete-title" className="modal-dialog">
+                                <h3 id="confirm-bulk-delete-title" style={{ marginTop: 0 }}>Delete {selected.size} item{selected.size !== 1 ? 's' : ''}?</h3>
                                 <p>The selected files will be permanently deleted from storage and unpaired. This cannot be undone.</p>
                                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                                     <button className="btn btn-secondary" onClick={() => setConfirmDelete(false)}>Cancel</button>
                                     <button className="btn btn-danger" onClick={doBulkDelete}>Delete</button>
                                 </div>
-                            </div>
-                        </div>
+                        </Modal>
                     )}
                 </div>
             )}

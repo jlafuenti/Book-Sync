@@ -6,6 +6,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 // Audit-log and user timestamps are naive UTC (issue #216).
 import { formatDate, formatDateTime } from '../lib/datetime'
+import Modal from '../components/Modal'
 import './UserManagementPage.css'
 
 const ROLES = ['user', 'editor', 'admin']
@@ -93,10 +94,9 @@ function CreateUserModal({ onClose, onCreated }) {
     }
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
+        <Modal onClose={onClose} labelledBy="create-user-title">
                 <div className="admin-modal-header">
-                    <h2>Create User</h2>
+                    <h2 id="create-user-title">Create User</h2>
                     <button className="btn btn-icon btn-secondary" onClick={onClose}>✕</button>
                 </div>
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
@@ -129,8 +129,7 @@ function CreateUserModal({ onClose, onCreated }) {
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
+        </Modal>
     )
 }
 
@@ -156,10 +155,9 @@ function ResetPasswordModal({ user, onClose, onReset }) {
     }
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
+        <Modal onClose={onClose} labelledBy="reset-password-title">
                 <div className="admin-modal-header">
-                    <h2>Reset Password — {user.username}</h2>
+                    <h2 id="reset-password-title">Reset Password — {user.username}</h2>
                     <button className="btn btn-icon btn-secondary" onClick={onClose}>✕</button>
                 </div>
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
@@ -186,8 +184,7 @@ function ResetPasswordModal({ user, onClose, onReset }) {
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
+        </Modal>
     )
 }
 

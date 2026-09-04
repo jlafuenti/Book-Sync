@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ImportSourcesPage from './ImportSourcesPage'
 
 // Issue #216: `last_sync_at` is naive UTC. Parsed as local time it lands in
@@ -12,9 +12,16 @@ const { listSourcesMock, getJobsMock } = vi.hoisted(() => ({
     getJobsMock: vi.fn(),
 }))
 
+const { audibleLoginStartMock } = vi.hoisted(() => ({ audibleLoginStartMock: vi.fn() }))
+
 vi.mock('../api', async (importOriginal) => {
     const actual = await importOriginal()
-    return { ...actual, listImportSources: listSourcesMock, getImportJobs: getJobsMock }
+    return {
+        ...actual,
+        listImportSources: listSourcesMock,
+        getImportJobs: getJobsMock,
+        audibleLoginStart: audibleLoginStartMock,
+    }
 })
 
 const source = (overrides = {}) => ({
@@ -55,5 +62,28 @@ describe('ImportSourcesPage last-sync label (issue #216)', () => {
         render(<ImportSourcesPage />)
 
         expect(await screen.findByText('Never synced')).toBeInTheDocument()
+    })
+})
+
+// Issue #279: the Audible connect flow is the shared Modal primitive now.
+describe('Audible connect dialog (issue #279)', () => {
+    it('opens as a labelled dialog and Escape closes it, restoring focus', async () => {
+        listSourcesMock.mockResolvedValue([source({ connected: false })])
+        audibleLoginStartMock.mockResolvedValue({ login_url: 'https://example.invalid/login', state_token: 'tok' })
+        render(<ImportSourcesPage />)
+
+        const trigger = await screen.findByRole('button', { name: 'Connect Audible' })
+        trigger.focus()
+        fireEvent.click(trigger)
+
+        const dialog = await screen.findByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('Connect Audible')
+        expect(dialog).toHaveClass('import-modal')
+        await waitFor(() => expect(audibleLoginStartMock).toHaveBeenCalled())
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+        expect(document.activeElement).toBe(trigger)
     })
 })

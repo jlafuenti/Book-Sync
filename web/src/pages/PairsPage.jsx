@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getPairs, getUnpairedMedia, createPair, deletePair, getAllProgress } from '../api'
 import { pairTargetPath, pairSourceFromProgress } from '../utils/pairRouting'
 import MetadataCleanupModal from '../components/MetadataCleanupModal'
+import Modal from '../components/Modal'
 import { useAuth } from '../contexts/AuthContext'
 
 // Tri-state sort: null → 'asc' → 'desc' → null
@@ -497,9 +498,8 @@ function PairsPage({ tab }) {
 
             {/* Pairing Modal */}
             {canEdit && showModal && selectedItem && (
-                <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal" onClick={e => e.stopPropagation()}>
-                        <h3>
+                <Modal onClose={() => setShowModal(false)} labelledBy="pair-modal-title">
+                        <h3 id="pair-modal-title">
                             {modalMode === 'pair-ebook'
                                 ? `Pair "${selectedItem.title}" with an Audiobook`
                                 : `Pair "${selectedItem.title}" with an Ebook`}
@@ -547,8 +547,7 @@ function PairsPage({ tab }) {
                                 Create Pair
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Modal>
             )}
 
             {showCleanupModal && (
