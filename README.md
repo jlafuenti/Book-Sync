@@ -192,12 +192,15 @@ the testing policy, and the position-sync contract. Deploying the remote transcr
 
 Tests run in CI on every push/PR. **Write a failing test first**, then make it pass.
 
-- **Server:** `cd server && pip install -r requirements.txt -r requirements-dev.txt && pytest`.
-  Runs on SQLite — no Docker needed. Use `ptw` for the auto-rerun TDD loop.
+- **Server:** `cd server && ./setup-testenv.sh` once per clone or worktree, then
+  `.venv/Scripts/python.exe -m pytest -q` (`.venv/bin/python` on macOS/Linux). Runs on
+  SQLite — no Docker needed. Use `ptw` for the auto-rerun TDD loop. Don't use a global
+  interpreter: it produces failures CI doesn't have, and skips tests CI runs.
 - **Web:** `cd web && npx vitest run` (watch mode: `npm test`).
 - **Android:** `cd android && ./gradlew :app:testDebugUnitTest`.
-- **Jetson:** `cd jetson && python -m pytest test_server.py -v` — not in CI, run it manually when
-  you touch `jetson/server.py`.
+- **Jetson:** `cd jetson && python -m pytest test_server.py -v` — runs in CI only when
+  `jetson/**` changes, so run it locally when you touch `jetson/server.py` from a branch that
+  changes nothing else there.
 - **Coverage gates:** a global floor plus per-PR **patch coverage** (changed lines must be
   ≥80% covered). Full policy, the fixtures/helpers available, and how to write a test:
   **[docs/testing.md](docs/testing.md)**.
