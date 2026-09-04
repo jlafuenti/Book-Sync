@@ -59,7 +59,13 @@ the same value into the worker's `TRANSCRIPTION_API_KEY`.
 
 ## Queue behavior
 
-- **Strictly serial.** One job runs at a time; the rest sit `pending`.
+- **Strictly serial.** One job runs at a time; the rest sit `pending`. Because of that, every
+  wait the server does on the worker is bounded (#195): when a `409` says the worker is already
+  running our file the server re-attaches and polls, and when it says a *different* file is
+  running the server waits for it to go idle — both give up on the remote timeout, or after
+  6 (re-attach) / 10 (wait-for-idle) consecutive unreachable polls, and hand the item to the
+  retry ladder. Those poll failures are logged at WARNING with a counter. Before that, a worker
+  that died inside either loop left the item `in_progress` forever and nothing else dispatched.
 - **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled;
   cancelling an in-progress job also tells the worker to drop its partial work. An in-progress
   item can't be *deleted* — cancel it first.

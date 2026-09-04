@@ -5,11 +5,13 @@ restarted mid-job" — both look like active=false on /v1/status, but only the
 former has a cached result waiting at /v1/result/{filename}.
 """
 
+import asyncio
 from unittest.mock import patch
 
 import httpx
 import pytest
 
+from services.transcription_providers import remote as remote_module
 from services.transcription_providers.base import (
     ProviderUnavailableError,
     TranscriptionPaused,
@@ -430,3 +432,225 @@ async def test_poll_progress_skips_callback_when_status_unchanged():
         (0.10, "Transcribing: 1:00 / 20:00 (5%)"),
         (0.11, "Transcribing: 1:07 / 20:00 (5%)"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# The two poll loops must be able to give up (issue #195)
+#
+# Both used to be `while True:` with every transport error swallowed at DEBUG.
+# A worker that died — or stayed busy forever — while the server was inside one
+# of them left the item `in_progress` with no error recorded, and since the
+# queue is strictly serial, nothing else was ever dispatched.
+# ---------------------------------------------------------------------------
+
+def _conflict_response(current_file: str, **extra) -> httpx.Response:
+    job = {"file": current_file, "progress": 0.4, "message": "Transcribing"}
+    job.update(extra)
+    return _json_response(409, {
+        "detail": "A transcription is already in progress.",
+        "instance_id": "worker-a",
+        "current_job": job,
+    })
+
+
+@pytest.mark.asyncio
+async def test_reattach_gives_up_when_the_worker_stops_responding(tmp_path):
+    """The 409 said the worker holds our file, then it goes dark for good.
+
+    Without a cap this polls forever and the queue never dispatches again.
+    """
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    status_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal status_calls
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("book.m4b")
+        if request.url.path == "/v1/status":
+            status_calls += 1
+            raise httpx.ConnectError("worker is gone", request=request)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None):
+        with pytest.raises(ProviderUnavailableError, match="unreachable"):
+            await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+    assert status_calls == remote_module.REATTACH_MAX_POLL_ERRORS
+
+
+@pytest.mark.asyncio
+async def test_reattach_survives_a_brief_poll_blip(tmp_path):
+    """The cap must not be so eager that a couple of dropped polls kill the job."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    polls = [
+        "boom",
+        "boom",
+        {"active": True, "progress": 0.6, "instance_id": "worker-a"},
+        "boom",
+        {"active": False, "progress": 1.0, "instance_id": "worker-a"},
+    ]
+    result_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal result_calls
+        if request.url.path == "/v1/result/book.m4b":
+            result_calls += 1
+            if result_calls == 1:
+                return _json_response(404, {"detail": "Result not found or expired"})
+            return _json_response(200, {
+                "sentences": [{"text": "Hello.", "start_ms": 0, "end_ms": 900}],
+                "duration_seconds": 7200.0, "processing_time_seconds": 12.0,
+            })
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("book.m4b")
+        if request.url.path == "/v1/status":
+            nxt = polls.pop(0)
+            if nxt == "boom":
+                raise httpx.ConnectError("blip", request=request)
+            return _json_response(200, nxt)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None):
+        sentences = await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+    assert [s.text for s in sentences] == ["Hello."]
+
+
+@pytest.mark.asyncio
+async def test_reattach_gives_up_at_the_deadline_even_while_polls_succeed(tmp_path):
+    """A worker that answers happily but never finishes still has to time out."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("book.m4b")
+        if request.url.path == "/v1/status":
+            return _json_response(200, {"active": True, "progress": 0.4, "instance_id": "worker-a"})
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    clock = iter([0.0] + [float(n) * 10_000 for n in range(1, 50)])
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None), \
+         patch("services.transcription_providers.remote.time.monotonic", side_effect=lambda: next(clock)):
+        with pytest.raises(ProviderUnavailableError, match="re-attach"):
+            await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_server_idle_gives_up_after_the_deadline(tmp_path):
+    """A 409 naming *another* file, and that file never finishes."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("other.m4b")
+        if request.url.path == "/v1/status":
+            return _json_response(200, {"active": True, "progress": 0.4, "instance_id": "worker-a"})
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+    clock = iter([0.0] + [float(n) * 10_000 for n in range(1, 50)])
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None), \
+         patch("services.transcription_providers.remote.time.monotonic", side_effect=lambda: next(clock)):
+        with pytest.raises(ProviderUnavailableError, match="waiting for the worker"):
+            await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_server_idle_gives_up_when_the_worker_stops_responding(tmp_path):
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    status_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal status_calls
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            return _conflict_response("other.m4b")
+        if request.url.path == "/v1/status":
+            status_calls += 1
+            raise httpx.ConnectError("worker is gone", request=request)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None):
+        with pytest.raises(ProviderUnavailableError, match="unreachable"):
+            await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+    assert status_calls == remote_module.WAIT_FOR_IDLE_MAX_POLL_ERRORS
+
+
+@pytest.mark.asyncio
+async def test_wait_for_server_idle_recovers_from_a_brief_blip(tmp_path):
+    """Two dropped polls then the worker frees up — the upload must proceed."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+
+    polls = ["boom", "boom", {"active": False, "progress": 0.0, "instance_id": "worker-a"}]
+    transcribe_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal transcribe_calls
+        if request.url.path == "/v1/result/book.m4b":
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, {"exists": False})
+        if request.url.path == "/v1/transcribe":
+            transcribe_calls += 1
+            if transcribe_calls == 1:
+                return _conflict_response("other.m4b")
+            return _json_response(200, {
+                "sentences": [{"text": "Hello.", "start_ms": 0, "end_ms": 900}],
+                "duration_seconds": 7200.0, "processing_time_seconds": 12.0,
+            })
+        if request.url.path == "/v1/status":
+            nxt = polls.pop(0)
+            if nxt == "boom":
+                raise httpx.ConnectError("blip", request=request)
+            return _json_response(200, nxt)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    provider, fake_async_client = _mock_transport_provider("http://fake-orin:9000", "k", handler)
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client), \
+         patch("services.transcription_providers.remote.asyncio.sleep", return_value=None):
+        sentences = await asyncio.wait_for(provider.transcribe(str(audio_file)), timeout=5)
+
+    assert [s.text for s in sentences] == ["Hello."]
+    assert transcribe_calls == 2
