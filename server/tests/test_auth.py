@@ -6,6 +6,9 @@ and the must_reset_password change-password flow. These pin current behavior so
 future refactors of the auth surface can't silently regress.
 """
 
+import ast
+import io
+import os
 from datetime import timedelta
 
 import pytest
@@ -29,6 +32,8 @@ from routers.auth import (
     verify_password,
 )
 from utils import utcnow
+
+_SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +246,113 @@ async def test_require_role_gate(make_user, role, minimum, allowed):
         with pytest.raises(Exception) as exc:  # HTTPException
             await dep(current_user=user)
         assert getattr(exc.value, "status_code", None) == 403
+
+
+# ---------------------------------------------------------------------------
+# RBAC — an unknown *minimum* role must fail closed (issue #359)
+#
+# `ROLE_HIERARCHY.get(minimum_role, 0)` scored an unrecognised minimum as 0, and
+# every caller clears a bar of 0. So `require_role("editorr")` did not fail the
+# check, it removed it: the endpoint still looked gated in the source, nothing
+# logged, nothing 500'd, and a plain `user` sailed through. The only symptom was
+# a negative test nobody had written.
+#
+# The floor is now validated where the dependency is built — at import, because
+# the three aliases are module-level — so a typo is a startup crash instead of a
+# silently open route. `User.has_role` fails closed for the same reason.
+# ---------------------------------------------------------------------------
+
+def test_require_role_refuses_an_unknown_minimum():
+    """The factory raises, so a typo'd floor cannot become a working dependency."""
+    with pytest.raises(ValueError) as exc:
+        require_role("editorr")
+    assert "editorr" in str(exc.value)
+
+
+def test_require_role_refuses_an_empty_or_none_minimum():
+    for bad in ("", None):
+        with pytest.raises(ValueError):
+            require_role(bad)
+
+
+async def test_has_role_fails_closed_on_an_unknown_minimum(make_user):
+    """Even a superadmin does not clear a bar nobody can name."""
+    boss = await make_user(username="boss359", role="superadmin")
+    assert boss.has_role("superadmin") is True
+    assert boss.has_role("editorr") is False
+    assert boss.has_role("") is False
+    assert boss.has_role(None) is False
+
+
+async def test_has_role_still_denies_an_unknown_user_role(make_user):
+    """The other direction was already safe; keep it that way."""
+    odd = await make_user(username="odd359", role="wizard")
+    assert odd.has_role("user") is False
+
+
+# --- the typo can never pass silently again ------------------------------
+
+_ROLE_FLOOR_CALLS = {"require_role", "has_role"}
+
+
+def _role_floor_literals(source: str):
+    """String floors passed to require_role()/has_role(), parsed not grepped.
+
+    Parsed, because the prose in this file and in `require_role`'s own docstring
+    names the typo it guards against — a regex over raw text flags the warning
+    label as a real call site.
+    """
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name not in _ROLE_FLOOR_CALLS:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            yield first.value
+
+
+def _server_source_files():
+    """Every .py under server/, minus the test tree, the venv and caches."""
+    for dirpath, dirnames, filenames in os.walk(_SERVER_DIR):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in {".venv", "__pycache__", "tests", ".pytest_cache", "htmlcov"}
+        ]
+        for name in filenames:
+            if name.endswith(".py"):
+                yield os.path.join(dirpath, name)
+
+
+def test_every_role_floor_literal_in_the_server_is_a_known_role():
+    """Enumerate the floors the source actually asks for and check each one.
+
+    The import-time guard in `require_role` only fires for call sites that run
+    at import. This catches the rest — a floor named inside a request handler,
+    or a `has_role` call — without waiting for someone to exercise the route
+    with a low-privileged account.
+    """
+    found = []
+    for path in _server_source_files():
+        with io.open(path, encoding="utf-8") as fh:
+            source = fh.read()
+        for literal in _role_floor_literals(source):
+            rel = os.path.relpath(path, _SERVER_DIR).replace(os.sep, "/")
+            found.append((rel, literal))
+
+    assert found, (
+        "no require_role()/has_role() literals found in server/ — if the role "
+        "floors moved to another spelling, point this test at it rather than "
+        "deleting it."
+    )
+    unknown = sorted({f"{where}: {literal!r}" for where, literal in found
+                      if literal not in ROLE_HIERARCHY})
+    assert not unknown, (
+        f"Role floors naming a role that does not exist: {unknown}. "
+        f"Known roles: {sorted(ROLE_HIERARCHY)}."
+    )
 
 
 async def test_admin_gated_route_end_to_end(make_user, auth_header):

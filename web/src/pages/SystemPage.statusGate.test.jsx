@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import SystemPage from './SystemPage'
+import { roleMeets } from '../roles'
 
 /**
  * Issue #283: the status view's reads are admin-only server-side now.
@@ -45,10 +46,13 @@ vi.mock('../api', async (importOriginal) => {
     }
 })
 
-const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+// The real comparison, not a copy of it: these mocks used to reimplement
+// `(ROLE_HIERARCHY[role] || 0) >= (ROLE_HIERARCHY[min] || 0)`, which is the
+// fail-open form, so a typo'd minimum behaved the same here as in the app
+// and the suite stayed green either way (issue #359).
 vi.mock('../contexts/AuthContext', () => ({
     useAuth: () => ({
-        hasMinRole: (min) => (ROLE_HIERARCHY[authRef.role] || 0) >= (ROLE_HIERARCHY[min] || 0),
+        hasMinRole: (min) => roleMeets(authRef.role, min),
     }),
 }))
 
