@@ -124,9 +124,45 @@ def test_validate_ignores_blank_lines():
     validate_patterns(["<Title>", "", "   ", "<Author>/<Title>"])
 
 
+def test_a_pattern_that_will_not_compile_is_reported_as_such(monkeypatch):
+    """No pattern reaches `re.compile` broken today — every placeholder maps to
+    a fixed fragment and the literals are escaped. That is a property of the
+    current mapping, not a guarantee, so both the raise and the message it
+    produces are exercised rather than assumed."""
+    import re as _re
+
+    import services.filename_patterns as fp
+
+    class _ReWithBrokenCompile:
+        """Stands in for the `re` module inside this one module only —
+        patching the real `re.compile` would break pytest itself."""
+        error = _re.error
+        escape = staticmethod(_re.escape)
+
+        @staticmethod
+        def compile(*_args, **_kwargs):
+            raise _re.error("synthetic bad regex")
+
+    monkeypatch.setattr(fp, "re", _ReWithBrokenCompile)
+
+    with pytest.raises(PatternError) as exc:
+        regex_from_pattern("<Title>")
+    assert "synthetic bad regex" in str(exc.value)
+
+    with pytest.raises(PatternError) as exc:
+        validate_patterns(["<Title>"])
+    assert "synthetic bad regex" in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # Nothing escapes the scan loop
 # ---------------------------------------------------------------------------
+
+def test_compile_pattern_skips_a_blank_pattern():
+    """`value.split("\\n")` on a textarea produces these; they are not patterns."""
+    assert compile_pattern("") is None
+    assert compile_pattern("   ") is None
+
 
 def test_compile_pattern_returns_none_instead_of_raising(monkeypatch):
     """Belt and braces: whatever a stored pattern does to `re.compile`, the
@@ -212,3 +248,49 @@ async def test_a_stored_bad_pattern_does_not_break_the_scan(db, caplog):
 
     assert meta["title"] == "Some Title"
     assert meta["author"] == "Some Author"
+
+
+async def test_the_scan_skips_a_pattern_that_will_not_compile(db):
+    """`compile_pattern` returning None is the scan's skip signal. A blank line
+    in the stored list is the everyday way that happens — the settings textarea
+    produces one for every trailing newline."""
+    from routers.library import parse_filename_metadata_with_settings
+
+    await _set_patterns(db, ["", "<Author>/<Title>"])
+
+    meta = await parse_filename_metadata_with_settings(
+        "Some Title.epub",
+        db,
+        parent_dir_name="Some Author",
+        file_type="ebook",
+        relative_path="Some Author/Some Title.epub",
+    )
+    assert meta["title"] == "Some Title"
+
+
+async def test_a_pattern_that_blows_up_on_one_path_does_not_abort_the_scan(db, caplog):
+    """The remaining per-file `except` is about applying a compiled pattern to a
+    specific path, not about compiling it. It must still let the file fall
+    through to the filename fallback rather than take the scan down."""
+    import routers.library as library
+
+    class _ExplodingRegex:
+        def match(self, _target):
+            raise RuntimeError("synthetic match failure")
+
+    caplog.set_level(logging.WARNING)
+    await _set_patterns(db, ["<Title>"])
+    original = library.compile_pattern
+    library.compile_pattern = lambda _pattern: _ExplodingRegex()
+    try:
+        meta = await library.parse_filename_metadata_with_settings(
+            "Some Title.epub", db, parent_dir_name="Some Author", file_type="ebook",
+        )
+    finally:
+        library.compile_pattern = original
+
+    # Fell through to the filename fallback rather than raising.
+    assert meta["title"] == "Some Title"
+    assert meta["_metadata_source"] == "filename"
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("Some Title.epub" in m for m in messages), messages
