@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
     getEbooks, getAudiobooks, getPairs, updateEbookMetadata, updateAudiobookMetadata,
-    updatePosition, resetPairProgress, resetPosition, getDeviceId, getDeviceName,
+    resetPairProgress, resetPosition,
 } from '../api'
+import { positionTarget, writePosition } from '../lib/position'
 import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
@@ -314,15 +315,10 @@ export default function SeriesPage() {
     // per-media writes could be adjudicated separately and leave the book
     // half-complete); an unpaired book writes at its own media scope.
 
-    // Device attribution + write-ordering fields, same shape as HomePage's.
-    // captured_at is read per-call so each write in the batch stamps its own
-    // moment. A completion toggle carries no anchor fields and no `source`
-    // (docs/position-sync-contract.md).
-    const deviceMeta = () => ({
-        device_id: getDeviceId(),
-        device_name: getDeviceName(),
-        captured_at: new Date().toISOString(),
-    })
+    // Device attribution and write ordering come from `lib/position` (#274);
+    // `deviceMeta`'s fresh-per-call `captured_at` is what lets each write in
+    // this Promise.all batch stamp its own moment. A completion toggle carries
+    // no anchor fields and no `source` (docs/position-sync-contract.md).
 
     const selectedItems = () => allVisibleItems.filter(i => selectedKeys.has(i.key))
 
@@ -346,9 +342,13 @@ export default function SeriesPage() {
 
     const handleMarkSeriesComplete = () => applyToSelection(
         'Mark complete —',
-        item => item.type === 'pair'
-            ? updatePosition('pair', item.pairId, { is_completed: true, ...deviceMeta() })
-            : updatePosition(item.type, item.ebookId ?? item.audiobookId, { is_completed: true, ...deviceMeta() }),
+        item => writePosition(
+            positionTarget(
+                item.type === 'pair' ? { pair_id: item.pairId } : null,
+                item.type, item.ebookId ?? item.audiobookId,
+            ),
+            { is_completed: true },
+        ),
     )
 
     const handleResetSeriesProgress = () => applyToSelection(

@@ -188,6 +188,30 @@ describe('BookDetailPage progress actions (issue #54 device attribution)', () =>
         }))
     })
 
+    it('marks a PAIRED book complete at pair scope, not at its media scope', async () => {
+        // The pair's two halves share one canonical record. A media-scoped
+        // write would leave the pair's own record un-finished, so the book
+        // stays on Continue and reopens as unread (issue #274; contract
+        // § Completion, "Pairs complete as a pair").
+        getAudiobookMock.mockResolvedValue({
+            id: 1538, title: 'Antiagon Fire', author: 'L. E. Modesitt Jr', cover_path: null, pair_id: 77,
+        })
+        getProgressMock.mockResolvedValue({ is_completed: false, audio_position_ms: 1000 })
+        renderPage()
+
+        fireEvent.click(await screen.findByRole('button', { name: /Mark Complete/ }))
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+        expect(updatePositionMock).toHaveBeenCalledWith('pair', 77, expect.objectContaining({
+            is_completed: true,
+            device_id: 'device-abc',
+            device_name: 'Web · Chrome',
+            captured_at: expect.any(String),
+        }))
+        // A completion toggle carries no anchor and claims no format.
+        expect(updatePositionMock.mock.calls[0][2]).not.toHaveProperty('source')
+    })
+
     it('resets a standalone book with the scoped DELETE, not a zero-write', async () => {
         // The zero-write this replaced left the canonical record in place, so
         // the next save resurrected the position (issue #102 / issue #6).

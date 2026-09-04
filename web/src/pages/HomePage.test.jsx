@@ -205,6 +205,29 @@ describe('HomePage Continue Reading device attribution (issue #54)', () => {
         })))
     })
 
+    it('keeps a standalone card at its media scope even when the row names a pair', async () => {
+        // A progress row can carry a `book_pair_id` for a pair this page could
+        // not resolve into a card; the item is then standalone and its write
+        // must stay at the media scope. Routing it to `pair` on the strength of
+        // the id alone would write to a record the page never showed — the kind
+        // of silent mis-scoping the shared helper exists to prevent (#274).
+        getEbooksMock.mockResolvedValue([{ id: 11, title: 'Ebook A', author: 'A' }])
+        getAudiobooksMock.mockResolvedValue([])
+        getPairsMock.mockResolvedValue([])   // pair 999 is not in the pair map
+        getTranscriptionQueueMock.mockResolvedValue([])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 11, epub_progress_percent: 40, epub_chapter: 0,
+              book_pair_id: 999, is_completed: false, updated_at: '2024-01-02T00:00:00Z' },
+        ])
+        renderHome()
+
+        const card = await openMenu('Ebook A')
+        fireEvent.click(within(card).getByText('Mark Complete'))
+
+        await waitFor(() => expect(updatePositionMock).toHaveBeenCalled())
+        expect(updatePositionMock.mock.calls[0].slice(0, 2)).toEqual(['ebook', 11])
+    })
+
     it('calls the pair-level DELETE for a paired Reset Progress instead of zero-writing each leg', async () => {
         // The old per-leg zero-write left the canonical bookmark in place,
         // which re-seeded progress right back (issue: reset buttons not
@@ -419,13 +442,19 @@ describe('HomePage reader/player handoff', () => {
         await openThePlayerAndSwitchBack()
 
         expect(player.pause).toHaveBeenCalled()
+        // The full contract payload, pinned at the payload level (issue #274):
+        // pair scope, the `source` claim this handoff is allowed to make
+        // ("Who may claim `source`" — an explicit user command), and the whole
+        // device triple. All three now come from `lib/position`.
         await waitFor(() => expect(updatePositionMock).toHaveBeenCalledWith(
             'pair', 100, expect.objectContaining({
                 source: 'audiobook',
                 audio_position_ms: 12700,
                 device_id: 'device-abc',
+                device_name: 'Web · Chrome',
                 captured_at: expect.any(String),
             })))
+        expect(updatePositionMock).toHaveBeenCalledTimes(1)
 
         const reader = await screen.findByTestId('reader')
         expect(reader).toHaveAttribute('data-chapter', '4')
