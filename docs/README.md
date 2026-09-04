@@ -34,5 +34,6 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [terms.md](terms.md) | Terms of use for a hosted Tandem server — served at `/terms` and linked from both registration forms |
 | [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |

@@ -45,6 +45,7 @@ import com.booksync.data.remote.TANDEM_REPO_URL
 import com.booksync.data.remote.normalizeServerUrl
 import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.shouldExpandAdvanced
+import com.booksync.data.remote.termsUrl
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.RegisterRequest
@@ -816,6 +817,35 @@ private fun SignInScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
+            }
+
+            // Terms of use (issue #262). Shown only on the register form, and
+            // only once a server is configured — the terms are that operator's,
+            // served by their web app at /terms, so there is nothing to open
+            // before one is set. Disclosure, not a gate: `canSubmit` above does
+            // not look at this, and nothing here records an acceptance.
+            val termsLink = termsUrl(currentServerUrl)
+            AnimatedVisibility(visible = isRegistering && termsLink != null) {
+                val context = LocalContext.current
+                TextButton(
+                    onClick = {
+                        // Same defensive wrapping as the first-run repo link: a
+                        // device with no browser must not crash the sign-in screen.
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(termsLink))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.login_terms_link))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.padding(start = 6.dp).size(16.dp),
+                    )
+                }
             }
 
             // Advanced toggle — server URL configuration

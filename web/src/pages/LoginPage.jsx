@@ -129,6 +129,28 @@ function LoginPage({ onLogin }) {
                         Account requests must be approved by an admin before you can sign in.
                     </p>
                 )}
+
+                {/* Issue #262. Disclosure, not a gate: there is deliberately no
+                    acceptance checkbox and no server-side field, so this must
+                    never become a condition of submitting the form.
+
+                    A plain anchor rather than a router <Link>: it opens in a new
+                    tab so a half-filled request survives the detour, and this
+                    page is rendered outside the router in its own tests. /terms
+                    is served by the SPA fallback in web/Dockerfile. */}
+                {isRegistering && (
+                    <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                        <a
+                            href="/terms"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                        >
+                            Terms of use
+                        </a>
+                        {' '}— what this server does and does not promise, and what you may upload.
+                    </p>
+                )}
             </div>
         </div>
     )

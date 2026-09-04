@@ -8,8 +8,12 @@
   named here never leaves the device, including
   files/datastore/booksync_prefs.preferences_pb, which holds the access and
   refresh tokens in plaintext.
+
+  The `database` domain is deliberately absent (issue #364): a WAL-mode Room
+  database restored without a checkpoint opens as SQLITE_NOTADB and the platform
+  deletes it, taking every unsynced position and the offline queue with it. The
+  long version is in data_extraction_rules.xml.
 -->
 <full-backup-content>
-    <include domain="database" path="." />
     <include domain="sharedpref" path="." />
 </full-backup-content>
