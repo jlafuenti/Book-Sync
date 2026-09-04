@@ -74,9 +74,16 @@ def test_audio_to_epub_finds_covering_point():
     assert audio_to_epub(pts, 12000) == (1, 0)
 
 
-def test_audio_to_epub_before_first_point_returns_origin():
-    pts = [_P(0, 0, 3000)]
-    assert audio_to_epub(pts, 1000) == (0, 0)
+def test_audio_to_epub_before_first_point_returns_the_first_point():
+    """Issue #200. Not the book's origin — the first point the map actually
+    has. Where the map starts at (0, 0) the two coincide, which is exactly how
+    the old fallback stayed invisible."""
+    assert audio_to_epub([_P(0, 0, 3000)], 1000) == (0, 0)
+    assert audio_to_epub([_P(2, 4, 600_000), _P(2, 5, 605_000)], 1000) == (2, 4)
+
+
+def test_audio_to_epub_with_no_points_has_nothing_to_name():
+    assert audio_to_epub([], 1000) == (0, 0)
 
 
 # ---------------------------------------------------------------------------

@@ -215,6 +215,16 @@ def _anchor_text(bookmark: Bookmark, old_points: List[OldPoint]) -> Optional[str
     return fallback if len(fallback) >= MIN_REMAPPABLE_PREVIEW else None
 
 
+def _precedes_the_map(points_by_audio, audio_position_ms: int) -> bool:
+    """True when this audio position is earlier than every point on the map.
+
+    The exact boundary (`== points[0].audio_start_ms`) is *inside* the first
+    point, not before it. An empty map precedes nothing — there is no map to be
+    before — and the text branch handles that case.
+    """
+    return bool(points_by_audio) and audio_position_ms < points_by_audio[0].audio_start_ms
+
+
 def resolve_on_map(
     source,
     audio_position_ms: Optional[int],
@@ -230,7 +240,17 @@ def resolve_on_map(
 
     * **audiobook**-sourced with an audio position → `audio_to_epub`; the audio
       file didn't change, so that field is the truth. Returns `audio_ms=None`
-      because it must not be rewritten.
+      because it must not be rewritten. **Unless the position precedes every
+      point on the map** (issue #200), in which case the map has no evidence
+      about where this is at all — it falls through to the text anchor, and
+      returns None if that fails too. `audio_to_epub` answers the first point
+      there, which is right for "show me roughly where this is" but wrong as a
+      basis for *rewriting* a stored position: it would move a listener parked
+      in unaligned front matter to the start of the aligned text, bump
+      `anchor_revision` (staling every device's hint at once) and re-project
+      `user_progress`. Both callers handle None correctly — the re-map logs "no
+      usable anchor" and leaves the row alone, the write path keeps the
+      coordinates as sent and stamps the attested version.
     * otherwise → the text anchor through the shared matcher (unchanged — the
       Kotlin mirror and the parity vectors are untouched by this). Returns the
       matched point's audio start, since an ebook-sourced audio position *is*
@@ -240,7 +260,11 @@ def resolve_on_map(
     the same list sorted by `audio_start_ms` (`audio_to_epub` stops early).
     Returns None when there is nothing usable to resolve from.
     """
-    if source == BookmarkSource.AUDIOBOOK and audio_position_ms is not None:
+    if (
+        source == BookmarkSource.AUDIOBOOK
+        and audio_position_ms is not None
+        and not _precedes_the_map(points_by_audio, audio_position_ms)
+    ):
         ch, sentence = audio_to_epub(points_by_audio, audio_position_ms)
         return (ch, sentence, None)
     text = (anchor_text or "").strip()
@@ -400,8 +424,17 @@ def audio_to_epub(
     """
     Convert an audio position (milliseconds) to an EPUB position.
 
+    A position earlier than every point resolves to the **first** point, not to
+    (0, 0) (issue #200). The two are not the same thing: a map may legitimately
+    start well into the audio — unaligned front matter, a prologue the aligner
+    dropped — and answering with the book's origin invents a match at a sentence
+    the position has nothing to do with. The first point is the earliest place
+    this map can actually name. Only an empty map falls back to (0, 0), and
+    callers that must distinguish "nothing to resolve from" go through
+    `resolve_on_map`, which refuses that case rather than guessing.
+
     Args:
-        sync_points: List of SyncPoint objects (ordered by chapter, sentence)
+        sync_points: List of SyncPoint objects, **ordered by audio_start_ms**
         audio_position_ms: Current audio position in milliseconds
 
     Returns:
@@ -414,7 +447,10 @@ def audio_to_epub(
         else:
             break  # Points are ordered, so we can stop early
 
+    if best is None and sync_points:
+        best = sync_points[0]
+
     if best:
         return best.epub_chapter, best.epub_sentence_index
 
-    return 0, 0  # Beginning of ebook as fallback
+    return 0, 0  # No map at all — nothing this function can name

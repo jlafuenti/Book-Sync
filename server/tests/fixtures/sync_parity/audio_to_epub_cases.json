@@ -1,0 +1,82 @@
+[
+  {
+    "name": "covering_point_is_chosen",
+    "why": "The ordinary case: the last point that has already started.",
+    "points": [
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 0},
+      {"chapter": 0, "sentence_index": 1, "audio_start_ms": 5000},
+      {"chapter": 1, "sentence_index": 0, "audio_start_ms": 10000}
+    ],
+    "audio_position_ms": 7000,
+    "expected_point_index": 1
+  },
+  {
+    "name": "exact_boundary_belongs_to_the_point_that_starts_there",
+    "why": "A position equal to a point's start is inside it, not before it.",
+    "points": [
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 0},
+      {"chapter": 0, "sentence_index": 1, "audio_start_ms": 5000},
+      {"chapter": 1, "sentence_index": 0, "audio_start_ms": 10000}
+    ],
+    "audio_position_ms": 10000,
+    "expected_point_index": 2
+  },
+  {
+    "name": "past_the_last_point_stays_on_the_last_point",
+    "why": "Audio runs on past the final aligned sentence (credits, an outro).",
+    "points": [
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 0},
+      {"chapter": 1, "sentence_index": 0, "audio_start_ms": 10000}
+    ],
+    "audio_position_ms": 999000,
+    "expected_point_index": 1
+  },
+  {
+    "name": "before_the_first_point_resolves_to_the_first_point",
+    "why": "Issue #200. Unaligned front matter, or a prologue the aligner dropped, leaves the listener earlier than any point. Both platforms used to answer 'chapter 0, sentence 0' / 'chapter 0, no preview' here, which is indistinguishable from a real hit on the opening sentence and let a re-map silently relocate a bookmark to the start of the book. The first point is the earliest place the map can actually name, and saying so explicitly is what makes the caller able to tell it apart.",
+    "points": [
+      {"chapter": 2, "sentence_index": 4, "audio_start_ms": 600000},
+      {"chapter": 2, "sentence_index": 5, "audio_start_ms": 605000}
+    ],
+    "audio_position_ms": 1000,
+    "expected_point_index": 0
+  },
+  {
+    "name": "before_the_first_point_when_the_first_point_is_the_book_start",
+    "why": "The same rule where the first point genuinely is (0, 0) — the answer is identical, which is exactly why the old fallback hid the bug.",
+    "points": [
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 3000},
+      {"chapter": 0, "sentence_index": 1, "audio_start_ms": 8000}
+    ],
+    "audio_position_ms": 1000,
+    "expected_point_index": 0
+  },
+  {
+    "name": "points_out_of_audio_order_are_sorted_first",
+    "why": "Alignment emits reading order, which is usually but not contractually audio order.",
+    "points": [
+      {"chapter": 1, "sentence_index": 0, "audio_start_ms": 10000},
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 0},
+      {"chapter": 0, "sentence_index": 1, "audio_start_ms": 5000}
+    ],
+    "audio_position_ms": 6000,
+    "expected_point_index": 2
+  },
+  {
+    "name": "zero_position_on_a_map_starting_at_zero",
+    "why": "The commonest position of all must not be a special case.",
+    "points": [
+      {"chapter": 0, "sentence_index": 0, "audio_start_ms": 0},
+      {"chapter": 0, "sentence_index": 1, "audio_start_ms": 5000}
+    ],
+    "audio_position_ms": 0,
+    "expected_point_index": 0
+  },
+  {
+    "name": "no_points_at_all_resolves_to_nothing",
+    "why": "A pair with no sync map has nothing to say. Each platform expresses 'no point' in its own shape — Python falls back to (0, 0), Kotlin returns null — but neither may claim a match.",
+    "points": [],
+    "audio_position_ms": 5000,
+    "expected_point_index": null
+  }
+]
