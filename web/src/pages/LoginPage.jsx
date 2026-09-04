@@ -117,6 +117,15 @@ function LoginPage({ onLogin }) {
                     </button>
                 </form>
 
+                {!isRegistering && (
+                    /* Issue #204: there is no self-service reset. An admin resets a
+                       user (Users -> Reset password); a locked-out superadmin is
+                       recovered with the break-glass CLI in docs/operations.md. */
+                    <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                        Forgot your password? Ask your administrator to reset it.
+                    </p>
+                )}
+
                 <p style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                     {isRegistering ? 'Already have an account? ' : "Need an account? "}
                     <a href="#" onClick={switchMode} style={{ color: 'var(--accent)', textDecoration: 'none' }}>

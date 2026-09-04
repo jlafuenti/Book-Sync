@@ -346,6 +346,45 @@ because the count comes from the admin user list. Approve or reject in System �
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.
 
+### Account recovery
+
+There is **no self-service password reset** — no email is sent, no reset link exists. Recovery is
+by role:
+
+**An ordinary user** asks an admin. The admin opens System → User Management, uses **Reset
+password**, and hands the generated password over. The account is flagged `must_reset_password`,
+so the first thing it does at next sign-in is choose its own. The login screen says as much
+("Forgot your password? Ask your administrator to reset it.") so nobody has to guess.
+
+**A locked-out admin or the sole superadmin** has nobody above them, and the first-boot bootstrap
+only creates an account on an *empty* database — it will not mint a second one to rescue you. Use
+the break-glass script, which runs inside the server container against the configured
+`DATABASE_URL`:
+
+```bash
+docker compose exec server python -m scripts.reset_password <username>
+```
+
+It prints one generated password. That password is a handover credential, not a chosen one: the
+account must replace it at next sign-in. The script also bumps `token_version` and revokes every
+live session (so a device that still holds a token is signed out), re-activates the account if it
+had been deactivated, and writes a `password_reset` audit row with no acting user — a reset that
+came from the container shell rather than from an admin in the UI is exactly what that row means.
+The password itself is printed and nothing more; it is never written to the audit log or the
+server log.
+
+`--password` lets you supply one instead. Prefer the generated one — a password typed on the
+command line lands in your shell history.
+
+**Holding shell on the host is the authorisation.** That is why this is a script and not an
+endpoint: an endpoint would need an authorisation story of its own, and every such story is
+another way in. Self-service email reset is deliberately out of scope; if it is ever added it
+needs a signed, single-use, short-TTL token and its own rate limit.
+
+**This does not clear a login throttle.** The failed-attempt counters live in the server
+process's memory (see "Login throttling" above), so a username sitting at the limit stays locked
+until the window passes or the server restarts — the reset changes the password, not the bucket.
+
 ### Audit log retention
 
 Security-relevant events (logins, failed logins, lockouts, role and password changes) go to the
