@@ -171,6 +171,17 @@ is unreachable, so prefer `TRANSCRIPTION_PROVIDER=remote` unless you built with 
 The Jetson Orin Nano worker deploys separately, on its own host — see
 [jetson/README.md](jetson/README.md) for the sparse-clone-and-deploy walkthrough.
 
+### API docs are dev-only
+
+With the default `APP_ENV=prod` the server serves **no** interactive schema: `/docs`, `/redoc` and
+`/openapi.json` all return `404`. That is deliberate — the published container port is normally
+reachable on the LAN even when the reverse proxy forwards only `/api/*`, and the full route
+inventory is reconnaissance rather than a feature. Set `APP_ENV=dev` (local development only, where
+it also relaxes the secret/CORS startup checks) to get Swagger UI back at `/docs`.
+
+The reference that is always available is [docs/api.md](docs/api.md), with the generated
+[docs/openapi.json](docs/openapi.json) alongside it.
+
 ### Backups
 
 The server dumps Postgres and snapshots covers to `/backups` on a nightly schedule (point that

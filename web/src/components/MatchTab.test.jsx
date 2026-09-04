@@ -35,7 +35,10 @@ function fullResult(overrides = {}) {
 
 beforeEach(() => {
     searchMetadataMock.mockReset().mockResolvedValue([fullResult()])
-    getSettingsMock.mockReset().mockResolvedValue({ hardcover_api_token: '' })
+    // Issue #263: below admin, GET /api/settings/ returns only
+    // { abs_enabled, hardcover_configured }. MatchTab renders for editors, so
+    // it reads the derived boolean, never the masked token string.
+    getSettingsMock.mockReset().mockResolvedValue({ abs_enabled: false, hardcover_configured: false })
 })
 
 describe('MatchTab provider selection', () => {
@@ -58,7 +61,16 @@ describe('MatchTab provider selection', () => {
     })
 
     it('defaults ebooks to Hardcover when a token is configured', async () => {
-        getSettingsMock.mockResolvedValue({ hardcover_api_token: '********' })
+        getSettingsMock.mockResolvedValue({ abs_enabled: false, hardcover_configured: true })
+        render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
+        await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('hardcover'))
+    })
+
+    it('reads the derived boolean, not the masked token (issue #263)', async () => {
+        // A non-admin no longer receives `hardcover_api_token` at all. If the
+        // component went back to reading it, this payload would leave the
+        // provider on Google even though a token is configured.
+        getSettingsMock.mockResolvedValue({ hardcover_configured: true })
         render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
         await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('hardcover'))
     })
@@ -69,7 +81,7 @@ describe('MatchTab provider selection', () => {
         render(<MatchTab currentData={{}} onApply={vi.fn()} bookType="ebook" />)
 
         fireEvent.change(screen.getByRole('combobox'), { target: { value: 'openlibrary' } })
-        resolveSettings({ hardcover_api_token: '********' })
+        resolveSettings({ hardcover_configured: true })
 
         await waitFor(() => expect(getSettingsMock).toHaveBeenCalled())
         expect(screen.getByRole('combobox')).toHaveValue('openlibrary')
