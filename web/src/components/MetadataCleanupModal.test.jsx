@@ -104,6 +104,19 @@ describe('MetadataCleanupModal', () => {
         await waitFor(() => expect(onComplete).toHaveBeenCalled())
     })
 
+    it('is a labelled dialog that closes on Escape (issue #279)', async () => {
+        const onClose = vi.fn()
+        render(<MetadataCleanupModal onClose={onClose} onComplete={vi.fn()} />)
+        await screen.findByText('Resolving Pair 1 of 1')
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('✨ Clean Up Metadata')
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(onClose).toHaveBeenCalled()
+    })
+
     it('the ✕ button closes', async () => {
         const onClose = vi.fn()
         render(<MetadataCleanupModal onClose={onClose} onComplete={vi.fn()} />)
