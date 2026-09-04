@@ -201,8 +201,11 @@ Operationally:
   session with the same `device_id`, so one device holds one session.
 - **Lost device?** `POST /api/auth/logout-all` (or a password change) is the
   answer; a per-device logout from another device cannot revoke the lost one,
-  because the caller does not hold its refresh token. There is no client UI for
-  `logout-all` yet — call it with the account's own access token.
+  because the caller does not hold its refresh token. The user can do this
+  themselves — **Sign out everywhere**, in the web app's sidebar (and its mobile
+  drawer) and on the Android **Account** screen under Log out. Both confirm
+  first, and both clear the local tokens whether or not the call got through.
+  Calling it by hand with the account's own access token still works.
 - **Auditing**: a device logout writes a `logout` row whose details say
   `(device)` or `(all)`; `logout-all` writes `logout_all`.
 

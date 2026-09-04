@@ -185,6 +185,10 @@ body {
     display: flex;
 }
 
+.sidebar.expanded .sidebar-signout-all {
+    display: flex;
+}
+
 .sidebar.expanded .sidebar-footer {
     padding: 16px 24px;
     flex-direction: column;
@@ -291,6 +295,36 @@ body {
 .sidebar-footer {
     padding: 16px 24px;
     border-top: 1px solid var(--border);
+}
+
+/* Sign out everywhere (issue #250). Hidden with the sidebar collapsed, the same
+   as the Logout button beside the user name — see the `.sidebar.expanded` rule
+   further up. */
+.sidebar-signout-all {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 8px 12px;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.sidebar-signout-all:hover:not(:disabled) {
+    border-color: var(--error);
+    color: var(--error);
+}
+
+.sidebar-signout-all:disabled {
+    opacity: 0.6;
+    cursor: default;
 }
 
 .sidebar-user {
@@ -2201,6 +2235,18 @@ tr:hover td {
     .mobile-drawer .drawer-logout:hover {
         border-color: var(--error);
         color: var(--error);
+    }
+
+    /* The second .drawer-logout in the footer is "Sign out everywhere"
+       (issue #250); without this the two buttons sit flush against each
+       other and read as one control. */
+    .mobile-drawer .drawer-logout + .drawer-logout {
+        margin-top: 8px;
+    }
+
+    .mobile-drawer .drawer-logout:disabled {
+        opacity: 0.6;
+        cursor: default;
     }
 
     /* ---- Mini Player (mobile positioning) ---- */

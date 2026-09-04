@@ -114,6 +114,7 @@ fun AccountScreen(
 
     var showChangePassword     by remember { mutableStateOf(false) }
     var confirmLogout          by remember { mutableStateOf(false) }
+    var confirmLogoutAll       by remember { mutableStateOf(false) }
     var confirmClearDownloads  by remember { mutableStateOf(false) }
 
     if (showChangePassword) {
@@ -138,6 +139,27 @@ fun AccountScreen(
                 viewModel.logout()
             },
             onDismiss = { confirmLogout = false },
+        )
+    }
+
+    // Issue #250. Separate confirm from "Log out?" on purpose: this one cannot
+    // be undone from here and takes down every other device too, including one
+    // that is mid-book with positions it has not pushed yet
+    // (docs/position-sync-contract.md).
+    if (confirmLogoutAll) {
+        ConfirmDialog(
+            title = "Sign out everywhere?",
+            message = "This ends every session on your account — this phone, the web app, and any " +
+                "other device. Use it if a device has been lost. A signed-out device cannot send " +
+                "reading positions it has not synced yet; they wait on that device until it signs " +
+                "in again.",
+            confirmLabel = "Sign out everywhere",
+            destructive = true,
+            onConfirm = {
+                confirmLogoutAll = false
+                viewModel.logoutAll()
+            },
+            onDismiss = { confirmLogoutAll = false },
         )
     }
 
@@ -440,6 +462,26 @@ fun AccountScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
+                }
+            }
+
+            // Sign out everywhere (issue #250). Under Log out, and quieter than
+            // it: the per-device sign-out is the one people want, this is the
+            // one for a lost device. It is also the only normal user action
+            // that still bumps `token_version`.
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard),
+                ) {
+                    ActionRow(
+                        title = "Sign out everywhere",
+                        description = "End every session on this account, on all devices.",
+                        destructive = true,
+                        onClick = { confirmLogoutAll = true },
+                    )
                 }
             }
         }

@@ -429,6 +429,24 @@ export async function logout() {
     clearTokens();
 }
 
+export async function logoutAll() {
+    // The account-wide sign-out (issue #250). `logout` deliberately ends only
+    // this browser's session; this is the one to reach for when a device has
+    // been lost, and it is the *only* thing that still bumps `token_version`
+    // from a normal user action.
+    //
+    // No body: the endpoint takes none, because there is no session to name --
+    // every one of them is being revoked. Best-effort like `logout`, for the
+    // same reason: a failed request must not leave the browser signed in with
+    // tokens the user has just asked to destroy.
+    try {
+        await fetchWithAuth(`${API_BASE}/auth/logout-all`, { method: 'POST' });
+    } catch {
+        // ignore -- the local half must still happen
+    }
+    clearTokens();
+}
+
 export function isLoggedIn() {
     return !!accessToken;
 }
