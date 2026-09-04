@@ -310,8 +310,9 @@ class BookSyncRepository @Inject constructor(
      *
      * The write carries no anchor and no `source`: a completion toggle must not
      * move the position or re-claim which format opens next. Both local rows
-     * are flagged first (unsynced) so an offline toggle still shows on the
-     * Finished shelf and the sync sweep delivers it later.
+     * are flagged first (unsynced) so an offline toggle takes the book off
+     * Continue straight away and the sync sweep delivers it later. (There is
+     * no "finished" list to move it onto — see issue #272.)
      */
     suspend fun markPairComplete(pairId: Int, ebookId: Int, audiobookId: Int) {
         val nowMillis = System.currentTimeMillis()
