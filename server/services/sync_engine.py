@@ -81,7 +81,22 @@ async def save_sync_map(
     flow — funnels through here, so stamping at this one point is what keeps the
     drift audit's question ("was this map built from the file now on disk?")
     answerable for all of them.
+
+    Raises `ValueError` on an empty `aligned_points` (issue #194). This function
+    deletes the outgoing map's points before inserting the new ones, so saving
+    "nothing" is not a cheap no-op — it destroys a working map and puts nothing
+    in its place, while the pair goes on reporting itself synced. No map at all
+    beats an empty one: the former shows as unsynced and can be rebuilt, the
+    latter looks healthy and silently answers every position query with the
+    start of the book. The callers guard first; this is the backstop that stops
+    a future one from skipping that.
     """
+    if not aligned_points:
+        raise ValueError(
+            f"Refusing to save an empty sync map for pair {book_pair_id}: "
+            f"alignment produced no points."
+        )
+
     # Delete existing sync map for this pair
     result = await db.execute(
         select(SyncMap).where(SyncMap.book_pair_id == book_pair_id)

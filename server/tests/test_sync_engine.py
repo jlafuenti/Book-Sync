@@ -179,3 +179,41 @@ async def test_save_sync_map_replaces_and_bumps_version(db):
         select(SyncMap).where(SyncMap.book_pair_id == pair.id)
     )).scalars().all()
     assert len(maps) == 1  # old map replaced, not duplicated
+
+
+# ---------------------------------------------------------------------------
+# An empty point list is never a map (issue #194)
+# ---------------------------------------------------------------------------
+
+async def test_save_sync_map_refuses_an_empty_point_list(db):
+    """Defence in depth behind the pipeline's own guard.
+
+    `save_sync_map` deletes the outgoing map's points *before* inserting the
+    new ones, so a caller handing it `[]` destroys a working map and puts
+    nothing in its place. No caller should ever do that, and now none can.
+    """
+    pair = await make_book_pair(db)
+    original = await save_sync_map(db, pair.id, [_aligned(0, 0, 0), _aligned(0, 1, 3000)])
+
+    with pytest.raises(ValueError):
+        await save_sync_map(db, pair.id, [])
+
+    maps = (await db.execute(
+        select(SyncMap).where(SyncMap.book_pair_id == pair.id)
+    )).scalars().all()
+    assert len(maps) == 1
+    assert maps[0].id == original.id
+    assert maps[0].version == 1
+    points = (await db.execute(
+        select(SyncPoint).where(SyncPoint.sync_map_id == original.id)
+    )).scalars().all()
+    assert len(points) == 2
+
+
+async def test_save_sync_map_refuses_an_empty_list_on_a_first_ever_map(db):
+    pair = await make_book_pair(db)
+    with pytest.raises(ValueError):
+        await save_sync_map(db, pair.id, [])
+    assert (await db.execute(
+        select(SyncMap).where(SyncMap.book_pair_id == pair.id)
+    )).scalar_one_or_none() is None
