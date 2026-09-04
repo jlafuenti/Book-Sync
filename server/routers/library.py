@@ -52,6 +52,7 @@ from schemas import (
     LibraryFacets, LibraryCounts, FacetCount,
 )
 from routers.auth import get_current_user, get_editor_user
+from services.filename_patterns import compile_pattern, regex_from_pattern
 from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 from services.audio_duration import probe_duration_seconds
@@ -79,33 +80,10 @@ REGEX_AUTHOR_SERIES_TITLE = re.compile(r"^(.+?) - \[(.+?) (\d+(?:\.\d+)?)\] - (.
 REGEX_SERIES_TITLE = re.compile(r"^\[(.+?) (\d+(?:\.\d+)?)\] (.+)$")
 
 
-def regex_from_pattern(pattern: str) -> re.Pattern:
-    """
-    Convert a user-friendly pattern to a regex.
-    Tags: <Author>, <Series>, <Book Number>, <Title>, <Series Index>
-    Supports '/' in patterns to match against directory paths.
-    """
-    # Escape special regex chars in the pattern (except < > which we use for tags)
-    parts = re.split(r'(<[^>]+>)', pattern)
-    regex_parts = ["^"]
-    
-    tag_map = {
-        "<Author>": r"(?P<author>[^/]+?)",
-        "<Series>": r"(?P<series>[^/]+?)",
-        "<Book Number>": r"(?P<series_index>\d+(?:\.\d+)?)",
-        "<Series Index>": r"(?P<series_index>\d+(?:\.\d+)?)",
-        "<Title>": r"(?P<title>[^/]+?)",
-        "<Book Title>": r"(?P<title>[^/]+?)",
-    }
-    
-    for part in parts:
-        if part in tag_map:
-            regex_parts.append(tag_map[part])
-        else:
-            regex_parts.append(re.escape(part))
-            
-    regex_parts.append("$")
-    return re.compile("".join(regex_parts))
+# The pattern compiler moved to services/filename_patterns.py (issue #354) so
+# the settings PUT can validate a pattern without importing this router — which
+# it cannot, because this module already imports DEFAULT_SETTINGS from it. The
+# name stays exported here: it is what the rest of the router and its tests call.
 
 
 def is_path_pattern(pattern: str) -> bool:
@@ -197,9 +175,16 @@ async def parse_filename_metadata_with_settings(
     logger.debug(f"[metadata]   clean_name='{clean_name}', relative_path='{relative_path}', rel_path_stem='{rel_path_stem}'")
     
     for pattern_str in patterns:
+        # `compile_pattern` returns None rather than raising, and warns at most
+        # once per pattern for the whole process (issue #354). The old code
+        # compiled inside the try below, so a pattern that could not compile —
+        # `<Author>/<Title>/<Title>` was enough — logged a warning for every
+        # single file in the library, every scan, and matched nothing.
+        regex = compile_pattern(pattern_str)
+        if regex is None:
+            continue
+
         try:
-            regex = regex_from_pattern(pattern_str)
-            
             # Decide what to match against based on whether pattern uses directories
             if is_path_pattern(pattern_str):
                 match_target = rel_path_stem
@@ -234,8 +219,11 @@ async def parse_filename_metadata_with_settings(
                     logger.debug(f"[metadata]   Final (pattern): {meta}")
                     return meta
         except Exception as e:
-             logger.warning(f"[metadata]   Pattern '{pattern_str}' threw error: {e}")
-             continue # Skip invalid patterns
+             # Applying a compiled pattern to one path, not compiling it: this
+             # is now a per-file event about a specific file, which is what a
+             # per-file log line should be about.
+             logger.warning(f"[metadata]   Pattern '{pattern_str}' failed on '{filename}': {e}")
+             continue
 
     # Fallback to simple filename cleaning
     meta["title"] = extract_title_from_filename(filename)

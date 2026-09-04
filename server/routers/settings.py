@@ -10,6 +10,7 @@ from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
 from services import offhours
+from services.filename_patterns import PatternError, validate_patterns
 from services.url_safety import assert_safe_url, UnsafeUrlError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -168,6 +169,22 @@ async def update_settings(
             offhours.validate_settings(new_settings, stored=stored)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    # Filename patterns are validated here, once, instead of failing per file
+    # during a scan (issue #354). The old failure mode was a warning per file
+    # for every file in the library and no metadata from any of them — visible
+    # only to whoever read the log. Rejected before anything is written, so a
+    # bad pattern takes the rest of the PUT down with it rather than half-saving.
+    _PATTERN_KEYS = ("ebook_filename_patterns", "audiobook_filename_patterns")
+    for key in _PATTERN_KEYS:
+        if key not in new_settings:
+            continue
+        value = new_settings[key]
+        patterns = value if isinstance(value, list) else str(value).split("\n")
+        try:
+            validate_patterns(patterns)
+        except PatternError as e:
+            raise HTTPException(status_code=422, detail=f"{key}: {e}")
 
     # The remote timeout is honoured as stored since #248, so a typo here would
     # abandon every transcription seconds in. Rejected before anything is
