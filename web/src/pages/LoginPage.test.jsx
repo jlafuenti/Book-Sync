@@ -123,3 +123,21 @@ describe('LoginPage — request access', () => {
         expect(screen.queryByText(/Invalid username or password/)).toBeNull()
     })
 })
+
+describe('LoginPage - account recovery', () => {
+    // Issue #204: there is no self-service reset, and the screen used to say
+    // nothing at all about what a locked-out user should do.
+    it('points a user who forgot their password at their administrator', () => {
+        render(<LoginPage onLogin={vi.fn()} />)
+
+        expect(screen.getByText(/forgot your password/i).textContent)
+            .toMatch(/administrator/i)
+    })
+
+    it('does not show the recovery hint on the request-access form', () => {
+        render(<LoginPage onLogin={vi.fn()} />)
+        fireEvent.click(screen.getByText('Request Access'))
+
+        expect(screen.queryByText(/forgot your password/i)).toBeNull()
+    })
+})
