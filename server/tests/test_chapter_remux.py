@@ -371,3 +371,123 @@ def test_non_utf8_exported_metadata_is_decoded_leniently(monkeypatch, m4b):
 
     ok, err = chapter_repair.remux_with_chapters(m4b, CHAPTERS, timeout=5)
     assert ok, err
+
+
+# ---------------------------------------------------------------------------
+# The freeform snapshot/restore pair, on their own
+#
+# The remux tests above stub these out to pin *when* they are called. These pin
+# what they do. mutagen is doubled rather than driven against a real m4b — the
+# repo ships no audio fixture, and the manual round-trip against a real
+# narrator-tagged file is recorded in docs/testing.md instead.
+# ---------------------------------------------------------------------------
+
+class _FakeMP4(dict):
+    def __init__(self, tags=None, has_tags=True):
+        super().__init__()
+        self.tags = self if has_tags else None
+        self.saved = False
+        self.added_tags = False
+        if tags:
+            self.update(tags)
+
+    def add_tags(self):
+        self.added_tags = True
+        self.tags = self
+
+    def save(self):
+        self.saved = True
+
+
+def _fake_mutagen(monkeypatch, audio):
+    import mutagen.mp4
+    monkeypatch.setattr(mutagen.mp4, "MP4", lambda path: audio)
+    return audio
+
+
+def test_snapshot_keeps_only_the_freeform_atoms(monkeypatch, m4b):
+    audio = _fake_mutagen(monkeypatch, _FakeMP4({
+        "----:com.apple.iTunes:NARRATOR": [b"A Narrator"],
+        "----:com.apple.iTunes:SERIES": [b"A Series"],
+        "\xa9nam": ["A Title"],       # a plain ilst atom ffmpeg *can* write
+        "covr": [b"cover bytes"],
+    }))
+
+    snapshot = chapter_repair.snapshot_freeform_tags(m4b)
+
+    assert set(snapshot) == {"----:com.apple.iTunes:NARRATOR",
+                             "----:com.apple.iTunes:SERIES"}
+    assert snapshot["----:com.apple.iTunes:NARRATOR"] == [b"A Narrator"]
+    assert audio.saved is False, "a snapshot must not write to the file"
+
+
+def test_snapshot_of_an_untagged_file_is_empty(monkeypatch, m4b):
+    _fake_mutagen(monkeypatch, _FakeMP4(has_tags=False))
+    assert chapter_repair.snapshot_freeform_tags(m4b) == {}
+
+
+def test_restore_writes_the_snapshot_back_and_saves(monkeypatch, m4b):
+    audio = _fake_mutagen(monkeypatch, _FakeMP4({"\xa9nam": ["A Title"]}))
+
+    chapter_repair.restore_freeform_tags(m4b, {
+        "----:com.apple.iTunes:NARRATOR": [b"A Narrator"],
+    })
+
+    assert audio["----:com.apple.iTunes:NARRATOR"] == [b"A Narrator"]
+    assert audio["\xa9nam"] == ["A Title"], "the remux's own tags are left alone"
+    assert audio.saved is True
+
+
+def test_restore_adds_a_tag_block_when_the_remux_produced_none(monkeypatch, m4b):
+    audio = _fake_mutagen(monkeypatch, _FakeMP4(has_tags=False))
+
+    chapter_repair.restore_freeform_tags(m4b, {"----:com.apple.iTunes:SERIES": [b"S"]})
+
+    assert audio.added_tags is True
+    assert audio.saved is True
+
+
+def test_restore_of_an_empty_snapshot_does_not_open_the_file(monkeypatch, m4b):
+    audio = _fake_mutagen(monkeypatch, _FakeMP4())
+    chapter_repair.restore_freeform_tags(m4b, {})
+    assert audio.saved is False
+
+
+# ---------------------------------------------------------------------------
+# Stripping the exported chapters
+# ---------------------------------------------------------------------------
+
+def test_a_section_after_the_chapters_is_kept():
+    """A `[CHAPTER]` block ends at the next `[SECTION]` header, and that header
+    and everything under it must survive — dropping to the end of the file
+    would take the stream-level metadata with it."""
+    raw = (b";FFMETADATA1\n"
+           b"title=A Book\n"
+           b"[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1\ntitle=Old\n"
+           b"[STREAM]\nlanguage=eng\n")
+
+    kept = "".join(chapter_repair._ffmetadata_without_chapters(raw))
+
+    assert "title=A Book" in kept
+    assert "title=Old" not in kept
+    assert "[STREAM]" in kept and "language=eng" in kept
+
+
+def test_an_output_the_prober_cannot_read_is_refused(monkeypatch, m4b):
+    """ffprobe measured the original fine, so a replacement it cannot measure
+    is a replacement we must not install."""
+    seen = []
+
+    def _probe(path):
+        seen.append(path)
+        return 100.0 if len(seen) == 1 else None
+
+    monkeypatch.setattr(chapter_repair, "probe_duration_seconds", _probe)
+    _install_ffmpeg(monkeypatch)
+
+    ok, err = chapter_repair.remux_with_chapters(m4b, CHAPTERS, timeout=5)
+
+    assert not ok
+    assert "read back" in err
+    with open(m4b, "rb") as f:
+        assert f.read() == b"the original audiobook bytes"
