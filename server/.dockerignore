@@ -1,0 +1,50 @@
+# Build context for `build: ./server` (docker-compose.example.yml).
+#
+# server/Dockerfile ends in `COPY . .`, so without this file the image ships
+# whatever happens to be in this directory on the machine that ran the build.
+# Two of those are more than clutter: `.env` would be read by pydantic from
+# inside the image at runtime (config.py, `env_file = ".env"`), and a local
+# SQLite database is real data baked into a layer forever.
+#
+# Pinned by server/tests/test_dockerfile_contract.py (issue #234).
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Virtualenvs (setup-testenv.sh creates .venv/ right here)
+.venv/
+venv/
+
+# Tests and their fixtures — the runtime image never runs them
+tests/
+pytest.ini
+requirements-dev.txt
+
+# Caches and coverage output
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# Local databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Documentation and repo metadata
+docs/
+*.md
+.git
+.gitignore
+.dockerignore
+
+# Runtime data directories, if one was ever created here
+data/

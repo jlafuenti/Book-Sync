@@ -1,7 +1,10 @@
 FROM node:20-alpine AS build
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+# `npm ci` (not `npm install`) so the image installs exactly the tree CI tested
+# — the lockfile has to be copied with package.json, before the install, or
+# there is nothing for it to install from (issue #234).
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
