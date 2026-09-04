@@ -117,11 +117,11 @@ describe('MetadataCleanupModal', () => {
         expect(onClose).toHaveBeenCalled()
     })
 
-    it('the ✕ button closes', async () => {
+    it('the ✕ button closes and is labelled for a screen reader (issue #279)', async () => {
         const onClose = vi.fn()
         render(<MetadataCleanupModal onClose={onClose} onComplete={vi.fn()} />)
         await screen.findByText('Resolving Pair 1 of 1')
-        fireEvent.click(screen.getByRole('button', { name: '✕' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Close' }))
         expect(onClose).toHaveBeenCalled()
     })
 })

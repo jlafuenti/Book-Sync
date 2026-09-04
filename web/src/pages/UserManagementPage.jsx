@@ -97,7 +97,7 @@ function CreateUserModal({ onClose, onCreated }) {
         <Modal onClose={onClose} labelledBy="create-user-title">
                 <div className="admin-modal-header">
                     <h2 id="create-user-title">Create User</h2>
-                    <button className="btn btn-icon btn-secondary" onClick={onClose}>✕</button>
+                    <button className="btn btn-icon btn-secondary" onClick={onClose} aria-label="Close">✕</button>
                 </div>
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
                 <form onSubmit={handleSubmit}>
@@ -158,7 +158,7 @@ function ResetPasswordModal({ user, onClose, onReset }) {
         <Modal onClose={onClose} labelledBy="reset-password-title">
                 <div className="admin-modal-header">
                     <h2 id="reset-password-title">Reset Password — {user.username}</h2>
-                    <button className="btn btn-icon btn-secondary" onClick={onClose}>✕</button>
+                    <button className="btn btn-icon btn-secondary" onClick={onClose} aria-label="Close">✕</button>
                 </div>
                 {error && <div className="alert alert-error">⚠️ {error}</div>}
                 <form onSubmit={handleSubmit}>

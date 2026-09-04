@@ -116,6 +116,16 @@ describe('Modal primitive (issue #279)', () => {
         expect(document.activeElement).toBe(last)
     })
 
+    it('holds Tab on the dialog itself when nothing inside is focusable', () => {
+        render(<Modal onClose={vi.fn()} label="Empty"><p>Nothing here</p></Modal>)
+        const dialog = screen.getByRole('dialog')
+
+        document.body.focus()
+        fireEvent.keyDown(document, { key: 'Tab' })
+
+        expect(document.activeElement).toBe(dialog)
+    })
+
     it('leaves Tab alone in the middle of the dialog', () => {
         render(<Harness initialOpen />)
         const first = screen.getByRole('button', { name: 'First' })

@@ -67,6 +67,16 @@ describe('Create User modal', () => {
         fireEvent.click(container.querySelector('.modal-overlay'))
         expect(screen.queryByRole('dialog')).toBeNull()
     })
+
+    // Issue #279 also asked for names on the icon-only buttons; the header ✕
+    // announced itself as "✕" before.
+    it('the header ✕ is labelled and closes', async () => {
+        render(<UserManagementSection />)
+        fireEvent.click(await screen.findByRole('button', { name: '+ Create User' }))
+
+        fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+        expect(screen.queryByRole('dialog')).toBeNull()
+    })
 })
 
 describe('Reset Password modal', () => {
