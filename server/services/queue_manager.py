@@ -914,6 +914,20 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                                       completed_at=utcnow())
             return
 
+        # An empty result is a failure, not a transcript (issue #194). Checked
+        # here, *before* the persist below, because that persist overwrites a
+        # good cached transcript in place — so accepting `[]` would turn a
+        # silence-only pass, or a worker answering `{"sentences": []}`, into a
+        # loss that only a full re-transcription could undo.
+        if not whisper_sentences:
+            from services.transcription_providers.base import (
+                TranscriptionError as _TranscriptionError,
+            )
+            raise _TranscriptionError(
+                "Transcription produced no sentences — check that the audio "
+                "file actually contains speech."
+            )
+
         # Persist transcript immediately — before any EPUB work — so it is never lost
         sentences_data = [
             {"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
@@ -987,6 +1001,20 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # Step 3: Align texts
     from services.alignment import align_texts
     sync_points_data = await _asyncio.to_thread(align_texts, epub_sentences, whisper_sentences)
+
+    # Zero points is not a sync (issue #194). `save_sync_map` deletes the
+    # existing map before inserting the new one, so letting an empty result
+    # through would replace a working map with nothing while the pair went on
+    # reporting SYNCED and the queue said "Sync complete!". Failing here leaves
+    # the old map, its version and every bookmark exactly as they were
+    # (docs/position-sync-contract.md, "Re-transcription") and puts a reason in
+    # front of the user instead. The manual re-align path has always guarded
+    # this (`services/realign.py`); the main pipeline did not.
+    if not sync_points_data:
+        raise TranscriptionError(
+            "Alignment produced no points (empty transcript or ebook text) — "
+            "the existing sync map, if any, was left untouched."
+        )
 
     await _update_queue_item(item_id, progress=0.90, message="Saving sync map...")
 
