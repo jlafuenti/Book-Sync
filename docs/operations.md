@@ -212,7 +212,7 @@ Operationally:
 second replica of the container behind a load balancer. `server/entrypoint.sh` starts one uvicorn
 process with no `--workers`, and that is a correctness requirement, not a default.
 
-Four things in the server are process-local (issue #252):
+Five things in the server are process-local (issues #252, #202):
 
 | What | Where | What a second process does |
 |---|---|---|
@@ -220,6 +220,7 @@ Four things in the server are process-local (issue #252):
 | Cancel / pause state | `services/queue_manager.py`, module-level `_cancel_requested` / `_pause_requested` / `_active_provider` | A cancel or an off-hours pause only reaches whichever process owns the job; the other keeps going |
 | Startup recovery | `services/queue_manager.py`, `reset_stale_items()` | Flips *every* `in_progress` row back to `pending` at boot, re-queueing the other process's running job |
 | Schedulers | `main.py` lifespan → `import_scheduler`, `backup_service` | N processes means N nightly `pg_dump`s and N concurrent import syncs |
+| Library job guard | `services/library_jobs.py`, module-level `_state["running"]` | The 409 that stops `/library/scan`, `/rescan-all`, `/rehash` and `/enrich-abs` overlapping is a flag in one process's memory, so two processes run two scans; they then race on `ebooks.file_path` / `audiobooks.file_path` and the loser of every insert falls back to re-reading the winner's row (`routers/library.py`, `_insert_or_reread`) |
 
 `config.check_single_process()` refuses to boot when `WEB_CONCURRENCY`, `UVICORN_WORKERS` or
 `GUNICORN_WORKERS` is greater than 1, so the mistake surfaces in the container log rather than as a
@@ -233,9 +234,9 @@ and a refused one raises `RuntimeError: WEB_CONCURRENCY=2 would run the server a
 
 To scale, give the one process more CPU. Making the server genuinely multi-process is a redesign —
 an atomic claim (`UPDATE ... WHERE id=:id AND status='pending' RETURNING id`, or Postgres'
-`SELECT ... FOR UPDATE SKIP LOCKED`), cancellation moved onto the queue row, and a
-`worker_id`/heartbeat so startup recovery only touches rows owned by a dead process. Do that work
-before removing the guard, not after.
+`SELECT ... FOR UPDATE SKIP LOCKED`), cancellation moved onto the queue row, a `worker_id`/heartbeat
+so startup recovery only touches rows owned by a dead process, and the library job guard moved to a
+row or a Postgres advisory lock. Do that work before removing the guard, not after.
 
 ## Restart policies
 
