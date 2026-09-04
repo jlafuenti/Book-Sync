@@ -17,7 +17,9 @@ stubbed ffmpeg helpers.
 """
 
 import importlib
+import json
 import os
+import time
 
 os.environ.setdefault("TRANSCRIPTION_API_KEY", "test-key")
 
@@ -64,8 +66,12 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(jetson_server, "model", None)
     monkeypatch.setattr(jetson_server, "_model_state", "unloaded")
     monkeypatch.setattr(jetson_server, "_job_status", jetson_server.JobStatus())
+    # The result cache is a module global with a 24h TTL, so a finished job in
+    # one test would otherwise still be served in the next one.
+    jetson_server._recent_results.clear()
     jetson_server._pause_event.clear()
     yield
+    jetson_server._recent_results.clear()
     jetson_server._pause_event.clear()
 
 
@@ -443,3 +449,171 @@ def test_a_stale_pause_flag_does_not_stop_the_next_job(
 
     assert "status" not in result
     assert fake.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Result cache identity: filename + byte size (issue #181)
+#
+# The cache was keyed on the bare filename, and `audiobook.m4b` /
+# `Unabridged.m4b` are ordinary names in a real library. Queue book A, let it
+# finish, queue same-named book B: the pre-flight GET returned A's transcript,
+# the upload was skipped, and A's sentences were saved as B's — aligned against
+# B's EPUB, `pair.status = SYNCED`, "Sync complete!", no error anywhere.
+#
+# Identity is now (filename, size), the same pair the checkpoint routes already
+# use.
+# ---------------------------------------------------------------------------
+
+def test_result_cache_round_trips_for_matching_filename_and_size(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    audio, _ = _run_job(monkeypatch, tmp_path, body=b"book-a-bytes")
+    size = audio.stat().st_size
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    resp = client.get("/v1/result/book.m4b", params={"size": size}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["sentences"]
+
+
+def test_result_cache_does_not_serve_a_different_file_of_the_same_name(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """The whole bug: two books, one basename, silently swapped transcripts."""
+    audio, _ = _run_job(monkeypatch, tmp_path, body=b"book-a-bytes")
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    other_size = audio.stat().st_size + 12_345
+    resp = client.get("/v1/result/book.m4b", params={"size": other_size}, headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_result_cache_is_keyed_on_the_argument_not_on_job_status(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """A second request that claimed the slot must not rename our cache entry."""
+    audio, _ = _run_job(monkeypatch, tmp_path, body=b"book-a-bytes")
+    jetson_server._job_status.current_file = "someone-elses.m4b"
+    size = audio.stat().st_size
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert client.get(
+        "/v1/result/book.m4b", params={"size": size}, headers=AUTH
+    ).status_code == 200
+
+
+def test_result_cache_serves_a_legacy_request_with_no_size(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """A server that predates the size parameter must keep working (wire compat).
+
+    `size` is optional, not required: making it required would 422 every
+    re-attach fetch from an un-upgraded server and fail those books loudly.
+    """
+    audio, _ = _run_job(monkeypatch, tmp_path, body=b"book-a-bytes")
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    resp = client.get("/v1/result/book.m4b", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["sentences"]
+
+
+def test_a_legacy_request_with_no_size_refuses_an_ambiguous_name(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """Two cached entries share the basename — a no-size lookup can't pick one.
+
+    404 sends the old server down the upload path, which is slow but correct.
+    Guessing would reproduce exactly the swap this issue is about.
+    """
+    a = tmp_path / "a" / "book.m4b"
+    a.parent.mkdir()
+    a.write_bytes(b"book-a-bytes")
+    b = tmp_path / "b" / "book.m4b"
+    b.parent.mkdir()
+    b.write_bytes(b"book-b-bytes-which-are-longer")
+    fake = _FakeWhisper()
+    monkeypatch.setattr(jetson_server, "model", fake)
+    monkeypatch.setattr(jetson_server, "_model_state", "loaded")
+
+    jetson_server._transcribe_file(str(a), "book.m4b")
+    jetson_server._transcribe_file(str(b), "book.m4b")
+
+    assert client.get("/v1/result/book.m4b", headers=AUTH).status_code == 404
+    # ...but each is still reachable by its own size.
+    for path in (a, b):
+        assert client.get(
+            "/v1/result/book.m4b", params={"size": path.stat().st_size}, headers=AUTH
+        ).status_code == 200
+
+
+def test_expired_results_are_dropped_on_read(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """Entries were only evicted when a *later* job finished, so on a lightly
+    used worker a stale one stayed servable for days."""
+    audio, _ = _run_job(monkeypatch, tmp_path, body=b"book-a-bytes")
+    size = audio.stat().st_size
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    key = jetson_server._checkpoint_key_for("book.m4b", size)
+    result, _stamp, name = jetson_server._recent_results[key]
+    aged = time.time() - jetson_server.RESULT_CACHE_TTL_SEC - 60
+    jetson_server._recent_results[key] = (result, aged, name)
+
+    assert client.get(
+        "/v1/result/book.m4b", params={"size": size}, headers=AUTH
+    ).status_code == 404
+    assert key not in jetson_server._recent_results
+
+
+def test_status_reports_the_current_job_size(clean_state, client):
+    jetson_server._job_status.active = True
+    jetson_server._job_status.current_file = "book.m4b"
+    jetson_server._job_status.current_size = 4242
+
+    body = client.get("/v1/status", headers=AUTH).json()
+
+    assert body["current_file"] == "book.m4b"
+    assert body["current_size"] == 4242
+
+
+def test_the_409_body_reports_the_current_job_size(clean_state):
+    jetson_server._job_status.active = True
+    jetson_server._job_status.current_file = "book.m4b"
+    jetson_server._job_status.current_size = 4242
+
+    conflict = jetson_server._active_job_conflict("other.m4b")
+
+    assert conflict.status_code == 409
+    assert json.loads(conflict.body)["current_job"]["size"] == 4242
+
+
+def test_the_transcribe_endpoint_records_the_uploaded_size(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """The 409 a *second* client gets has to carry a size, or it can't tell
+    'that's my job' from 'that's a different book with my basename'."""
+    _run_job(monkeypatch, tmp_path)
+    body = b"uploaded-audio-bytes"
+    seen = {}
+
+    real = jetson_server._transcribe_file
+
+    def _capture(audio_path, original_filename, *args, **kwargs):
+        seen["size"] = jetson_server._job_status.current_size
+        return real(audio_path, original_filename, *args, **kwargs)
+
+    monkeypatch.setattr(jetson_server, "_transcribe_file", _capture)
+
+    resp = client.post(
+        "/v1/transcribe", headers=AUTH, files={"audio_file": ("book.m4b", body, "audio/mpeg")}
+    )
+
+    assert resp.status_code == 200
+    assert seen["size"] == len(body)
