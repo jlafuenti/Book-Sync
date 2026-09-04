@@ -38,6 +38,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -68,6 +71,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.booksync.data.local.entity.AudioBookEntity
@@ -77,6 +81,7 @@ import com.booksync.data.repository.PairOpenTarget
 import com.booksync.ui.components.EmptyState
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
+import com.booksync.worker.downloadUnavailableMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -351,6 +356,26 @@ class SearchViewModel @Inject constructor(
     // unique work name. TYPE is "ALL" for a pair, else the appropriate
     // standalone type.
 
+    /** Last download failure worth showing, or null. Rendered as a snackbar. */
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError = _downloadError.asStateFlow()
+
+    fun clearDownloadError() { _downloadError.value = null }
+
+    init {
+        // Search is reached without ever opening Library, and Library's toast
+        // is where download failures used to surface. Without this the whole
+        // screen was mute (issue #338).
+        viewModelScope.launch {
+            workManager.getWorkInfosByTagFlow("download_worker").collect { infos ->
+                infos.firstOrNull { it.state == WorkInfo.State.FAILED }
+                    ?.outputData
+                    ?.getString(DownloadWorker.ERROR_KEY)
+                    ?.let { _downloadError.value = it }
+            }
+        }
+    }
+
     /**
      * Which format this pair should reopen in (issue #220), the same lookup Home
      * and Library already make. Search is the one surface that used to skip it.
@@ -358,6 +383,20 @@ class SearchViewModel @Inject constructor(
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
         repository.resolvePairOpenTarget(pairId)
 
+    /**
+     * Resolve the row, *then* enqueue the download (issue #338).
+     *
+     * A search result comes from the server, so on a fresh install it can name
+     * an id Room has never seen. This used to enqueue regardless; the worker
+     * read Room, found nothing, and failed in ~40 ms without issuing a single
+     * request or showing anything. Resolving first both fills the cache — so
+     * the row the worker reads is there — and gives us somewhere to put the
+     * error when it cannot be filled.
+     *
+     * The worker resolves too, as the backstop for every other download entry
+     * point. Doing it here as well is what makes the failure *immediate and
+     * visible* rather than five silent retries away.
+     */
     fun downloadFromResult(item: SearchResultItem) {
         val id = item.numericId ?: return
         val type = when {
@@ -366,9 +405,25 @@ class SearchViewModel @Inject constructor(
             item.isAudiobook -> "STANDALONE_AUDIOBOOK"
             else             -> return
         }
-        val uniqueName = "download_search_${type.lowercase()}_$id"
-        val request = DownloadWorker.request((item.pairId ?: id), type)
-        workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+        viewModelScope.launch {
+            val found = try {
+                when (type) {
+                    "ALL"              -> repository.resolvePairById(item.pairId ?: id) != null
+                    "STANDALONE_EBOOK" -> repository.resolveEbookById(id) != null
+                    else               -> repository.resolveAudiobookById(id) != null
+                }
+            } catch (e: Exception) {
+                _downloadError.value = downloadUnavailableMessage(item.title, e)
+                return@launch
+            }
+            if (!found) {
+                _downloadError.value = downloadUnavailableMessage(item.title, cause = null)
+                return@launch
+            }
+            val uniqueName = "download_search_${type.lowercase()}_$id"
+            val request = DownloadWorker.request((item.pairId ?: id), type)
+            workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+        }
     }
 }
 
@@ -419,6 +474,18 @@ fun SearchScreen(
     val unpairedAudiobooks by viewModel.unpairedAudiobooks.collectAsState()
     val unpairedEbooks by viewModel.unpairedEbooks.collectAsState()
     val pairingError by viewModel.pairingError.collectAsState()
+
+    // A download that cannot start says so here (issue #338). Library toasts
+    // its own download errors; Search showed nothing at all, so the only trace
+    // of a failed tap was a logcat line.
+    val downloadError by viewModel.downloadError.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(downloadError) {
+        downloadError?.let {
+            snackbar.showSnackbar(it, duration = SnackbarDuration.Long)
+            viewModel.clearDownloadError()
+        }
+    }
 
     // ---- Pairing bottom sheet (unchanged flow, restyled chrome) ----
     if (pairingItem != null) {
@@ -506,6 +573,7 @@ fun SearchScreen(
                 ),
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
         containerColor = colors.bgPrimary,
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
