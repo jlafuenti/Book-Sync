@@ -224,7 +224,12 @@ class TestRepairChapterEncoding:
         chpl_pos = filepath.read_bytes().find(b"chpl")
         ffmpeg_calls = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro", "Middle"]))
             ffmpeg_calls.append(cmd)
@@ -247,7 +252,12 @@ class TestRepairChapterEncoding:
         inject_cmds = []
         meta_contents = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -293,7 +303,12 @@ class TestRepairChapterEncoding:
         filepath = tmp_path / "book.m4b"
         filepath.write_bytes(_synthetic_m4b(with_chpl=True))
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
             raise AssertionError(f"unexpected command: {cmd}")
@@ -313,7 +328,12 @@ class TestRepairChapterEncoding:
         filepath = tmp_path / "book.m4b"
         filepath.write_bytes(_synthetic_m4b(with_chpl=False))
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 return _FakeCompletedProcess(stdout=_ffprobe_json([]))
             raise AssertionError(f"unexpected command: {cmd}")
@@ -338,7 +358,12 @@ class TestRepairLeavesNoDamageOnFailure:
         original = _synthetic_m4b(with_chpl=True)
         filepath.write_bytes(original)
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
             raise AssertionError(f"unexpected command: {cmd}")
@@ -364,7 +389,12 @@ class TestRepairLeavesNoDamageOnFailure:
         filepath.write_bytes(original)
         probe_calls = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -396,7 +426,12 @@ class TestRepairLeavesNoDamageOnFailure:
         probe_calls = []
         checks = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -436,7 +471,12 @@ class TestRepairLeavesNoDamageOnFailure:
         filepath.write_bytes(_synthetic_m4b(with_chpl=True))
         probe_calls = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -467,7 +507,12 @@ class TestRepairLeavesNoDamageOnFailure:
         filepath = tmp_path / "book.m4b"
         filepath.write_bytes(_synthetic_m4b(with_chpl=True))
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 return _FakeCompletedProcess(stdout=_ffprobe_json(["Intro"]))
             raise AssertionError(f"unexpected command: {cmd}")
@@ -517,7 +562,12 @@ class TestRepairLeavesNoDamageOnFailure:
         filepath.write_bytes(original)
         probe_calls = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -550,7 +600,12 @@ class TestRepairLeavesNoDamageOnFailure:
         probe_calls = []
         checks = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:
@@ -590,7 +645,12 @@ class TestRepairLeavesNoDamageOnFailure:
         filepath.write_bytes(_synthetic_m4b(with_chpl=True))
         probe_calls = []
 
-        def fake_run(cmd, capture_output=True, timeout=None):
+        def fake_run(cmd, capture_output=True, timeout=None, **kwargs):
+            if "format=duration" in cmd:
+                # The remux verifies its own output before installing it
+                # (issue #192). A codec copy keeps the runtime, so the
+                # same answer for the original and the replacement.
+                return _FakeCompletedProcess(stdout="120.0")
             if cmd[0] == "ffprobe":
                 probe_calls.append(cmd)
                 if len(probe_calls) == 1:

@@ -1,83 +1,26 @@
 """
-Regression test for routers.chapters.update_audiobook_chapters: it exports
-the file's existing metadata via ffmpeg -f ffmetadata, then used to reopen
-that export with a hard-coded `encoding='utf-8'` text read. ffmpeg copies
-chapter title bytes through opaquely without validating encoding, so a file
-with a non-UTF-8 chapter title (see services/chapter_repair.py and
-services/test_abs_metadata.py for the underlying mutagen bug this mirrors)
-would crash this endpoint with a UnicodeDecodeError before it ever got to
-write the new chapters.
+`PUT /audiobooks/{id}/chapters` — the editor's chapter write-back.
+
+The remux itself moved into `services.chapter_repair.remux_with_chapters`
+(issue #192), shared with the chapter-encoding repair so the two paths that
+rewrite a purchased audiobook cannot drift apart. Its rules — freeform tags
+preserved, staged next to the target, atomic install, output verified — are
+covered by tests/test_chapter_remux.py. What is left here is the router's own
+contract: who may call it, what it does when the row or the file is missing,
+that the user's chapters are the ones handed to the remux, and that a remux
+failure surfaces as a 500 rather than a silent success.
 """
 
 import asyncio
 
 import pytest
 
-from routers import chapters
 from models.book import AudioBook
+from routers import chapters
 
 
-class _FakeProcess:
-    def __init__(self, returncode=0):
-        self.returncode = returncode
-
-    async def communicate(self):
-        return b"", b""
-
-
-@pytest.mark.asyncio
-async def test_update_chapters_survives_non_utf8_exported_metadata(
-    db, make_client, make_user, auth_header, monkeypatch, tmp_path
-):
-    user = await make_user(role="editor")
-    filepath = str(tmp_path / "book.m4b")
-    with open(filepath, "wb") as f:
-        f.write(b"fake m4b")
-    ab = AudioBook(title="Antiagon Fire", filename="book.m4b", file_path=filepath)
-    db.add(ab)
-    await db.commit()
-    await db.refresh(ab)
-
-    async def fake_exec(*cmd, **kwargs):
-        if "-f" in cmd and "ffmetadata" in cmd:
-            export_path = cmd[-1]
-            with open(export_path, "wb") as f:
-                f.write(
-                    b";FFMETADATA1\n"
-                    b"[CHAPTER]\n"
-                    b"TIMEBASE=1/1000\n"
-                    b"START=0\n"
-                    b"END=5000\n"
-                    b"title=Chapter \xc4ne\n"
-                )
-            return _FakeProcess(returncode=0)
-        elif "-map_metadata" in cmd:
-            out_path = cmd[-1]
-            with open(out_path, "wb") as f:
-                f.write(b"fake m4b bytes")
-            return _FakeProcess(returncode=0)
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-
-    async with make_client(chapters.router) as c:
-        resp = await c.put(
-            f"/audiobooks/{ab.id}/chapters",
-            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "New Chapter"}],
-            headers=auth_header(user),
-        )
-
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_update_chapters_escapes_ffmetadata_special_chars_in_titles(
-    db, make_client, make_user, auth_header, monkeypatch, tmp_path
-):
-    """ffmpeg's FFMETADATA1 format treats '=', ';', '#', '\\' and newlines as
-    special inside values — an unescaped title like "Part 1 = Intro" would be
-    silently truncated or misparsed on reinject."""
-    user = await make_user(role="editor")
+@pytest.fixture
+async def audiobook(db, tmp_path):
     filepath = str(tmp_path / "book.m4b")
     with open(filepath, "wb") as f:
         f.write(b"fake m4b")
@@ -85,80 +28,143 @@ async def test_update_chapters_escapes_ffmetadata_special_chars_in_titles(
     db.add(ab)
     await db.commit()
     await db.refresh(ab)
+    return ab
 
-    meta_contents = []
 
-    async def fake_exec(*cmd, **kwargs):
-        if "-f" in cmd and "ffmetadata" in cmd:
-            export_path = cmd[-1]
-            with open(export_path, "wb") as f:
-                f.write(b";FFMETADATA1\n")
-            return _FakeProcess(returncode=0)
-        elif "-map_metadata" in cmd:
-            meta_path = cmd[cmd.index("-i", cmd.index("-i") + 1) + 1]
-            with open(meta_path, "rb") as f:
-                meta_contents.append(f.read())
-            out_path = cmd[-1]
-            with open(out_path, "wb") as f:
-                f.write(b"fake m4b bytes")
-            return _FakeProcess(returncode=0)
-        raise AssertionError(f"unexpected command: {cmd}")
+def _capture_remux(monkeypatch, *, ok=True, error=None):
+    calls = []
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    def _remux(filepath, chapter_rows, timeout=60):
+        calls.append((filepath, chapter_rows))
+        return ok, error
+
+    monkeypatch.setattr(chapters.chapter_repair, "remux_with_chapters", _remux)
+    return calls
+
+
+async def test_update_chapters_hands_the_users_chapters_to_the_shared_remux(
+    db, make_client, make_user, auth_header, monkeypatch, audiobook
+):
+    user = await make_user(role="editor")
+    calls = _capture_remux(monkeypatch)
 
     async with make_client(chapters.router) as c:
         resp = await c.put(
-            f"/audiobooks/{ab.id}/chapters",
-            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "Part 1 = Intro; #5"}],
+            f"/audiobooks/{audiobook.id}/chapters",
+            json=[
+                {"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"},
+                {"id": 1, "start_time": 10.0, "end_time": 25.5, "title": "Part 1 = Intro"},
+            ],
             headers=auth_header(user),
         )
 
     assert resp.status_code == 200
-    meta_text = meta_contents[0].decode("utf-8")
-    assert "title=Part 1 \\= Intro\\; \\#5" in meta_text
+    assert len(calls) == 1
+    filepath, rows = calls[0]
+    assert filepath == audiobook.file_path
+    assert rows == [
+        {"start": 0.0, "end": 10.0, "title": "One"},
+        {"start": 10.0, "end": 25.5, "title": "Part 1 = Intro"},
+    ]
 
 
-@pytest.mark.asyncio
-async def test_update_chapters_reinject_maps_chapters_not_just_metadata(
+async def test_update_chapters_runs_the_remux_off_the_event_loop(
+    db, make_client, make_user, auth_header, monkeypatch, audiobook
+):
+    """`remux_with_chapters` shells out to ffmpeg synchronously and can take
+    minutes on a multi-GB book; running it inline would stall every other
+    request for the duration."""
+    user = await make_user(role="editor")
+    _capture_remux(monkeypatch)
+    threaded = []
+
+    real_to_thread = asyncio.to_thread
+
+    async def _spy(fn, *a, **kw):
+        threaded.append(fn)
+        return await real_to_thread(fn, *a, **kw)
+
+    monkeypatch.setattr(asyncio, "to_thread", _spy)
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            f"/audiobooks/{audiobook.id}/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"}],
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 200
+    assert threaded, "the remux must run in a worker thread"
+
+
+async def test_a_failed_remux_is_a_500_with_the_reason(
+    db, make_client, make_user, auth_header, monkeypatch, audiobook
+):
+    user = await make_user(role="editor")
+    _capture_remux(monkeypatch, ok=False, error="Failed to write chapters: no space left")
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            f"/audiobooks/{audiobook.id}/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"}],
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 500
+    assert "no space left" in resp.json()["detail"]
+
+
+async def test_update_chapters_requires_an_editor(
+    db, make_client, make_user, auth_header, monkeypatch, audiobook
+):
+    plain = await make_user(username="reader", role="user")
+    calls = _capture_remux(monkeypatch)
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            f"/audiobooks/{audiobook.id}/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"}],
+            headers=auth_header(plain),
+        )
+
+    assert resp.status_code == 403
+    assert calls == [], "a rejected caller must not reach the file"
+
+
+async def test_update_chapters_404s_for_an_unknown_audiobook(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    user = await make_user(role="editor")
+    calls = _capture_remux(monkeypatch)
+
+    async with make_client(chapters.router) as c:
+        resp = await c.put(
+            "/audiobooks/999999/chapters",
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"}],
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 404
+    assert calls == []
+
+
+async def test_update_chapters_404s_when_the_file_is_gone(
     db, make_client, make_user, auth_header, monkeypatch, tmp_path
 ):
-    """Regression guard: ffmpeg's -map_metadata does NOT map chapters — that
-    needs the separate -map_chapters flag, which defaults to input 0 (the
-    original file) if omitted. Without it, the reinject silently discards
-    the user's edited chapters and re-copies the original ones, so editing
-    chapters via this endpoint would report success while saving nothing
-    (confirmed against a real corrupted file in production)."""
     user = await make_user(role="editor")
-    filepath = str(tmp_path / "book.m4b")
-    with open(filepath, "wb") as f:
-        f.write(b"fake m4b")
-    ab = AudioBook(title="Some Book", filename="book.m4b", file_path=filepath)
+    ab = AudioBook(title="Missing", filename="gone.m4b",
+                   file_path=str(tmp_path / "gone.m4b"))
     db.add(ab)
     await db.commit()
     await db.refresh(ab)
-
-    async def fake_exec(*cmd, **kwargs):
-        if "-f" in cmd and "ffmetadata" in cmd:
-            export_path = cmd[-1]
-            with open(export_path, "wb") as f:
-                f.write(b";FFMETADATA1\n")
-            return _FakeProcess(returncode=0)
-        elif "-map_metadata" in cmd:
-            assert "-map_chapters" in cmd
-            assert cmd[cmd.index("-map_chapters") + 1] == "1"
-            out_path = cmd[-1]
-            with open(out_path, "wb") as f:
-                f.write(b"fake m4b bytes")
-            return _FakeProcess(returncode=0)
-        raise AssertionError(f"unexpected command: {cmd}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    calls = _capture_remux(monkeypatch)
 
     async with make_client(chapters.router) as c:
         resp = await c.put(
             f"/audiobooks/{ab.id}/chapters",
-            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "New Chapter"}],
+            json=[{"id": 0, "start_time": 0.0, "end_time": 10.0, "title": "One"}],
             headers=auth_header(user),
         )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 404
+    assert calls == []
