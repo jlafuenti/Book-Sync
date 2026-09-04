@@ -194,6 +194,26 @@ The floor is a starting point, not the goal. As coverage grows:
    - `abs_metadata` — mock `httpx` against the Audiobookshelf API shapes.
    - `files` — serving + byte-range streaming with temp files.
    - `chapters` — mock the ffmpeg/ffprobe subprocess calls.
+
+     The chapter write-back's rules — freeform tags preserved, staging next to the target,
+     atomic install, output verified — are covered by `tests/test_chapter_remux.py` against a
+     stubbed `subprocess.run`. Two things a stub cannot answer, so **check them by hand against
+     a real narrator-tagged `.m4b` whenever `remux_with_chapters` changes**, on a *copy*, never
+     on a library file:
+
+     ```bash
+     cp /path/to/book.m4b /tmp/probe.m4b
+     python -c "import mutagen.mp4,sys; print([k for k in mutagen.mp4.MP4(sys.argv[1]).tags if k.startswith('----')])" /tmp/probe.m4b
+     ffprobe -v error -show_chapters -show_entries format=duration /tmp/probe.m4b
+     # edit a chapter title through the endpoint against a DB row pointing at the copy, then:
+     python -c "import mutagen.mp4,sys; print([k for k in mutagen.mp4.MP4(sys.argv[1]).tags if k.startswith('----')])" /tmp/probe.m4b
+     ffprobe -v error -show_chapters -show_entries format=duration /tmp/probe.m4b
+     ```
+
+     The `----:com.apple.iTunes:*` keys and the duration must be unchanged and the chapter title
+     must be the new one. This is what ffmpeg's mov muxer silently gets wrong (issue #192): it
+     writes only its own fixed list of ilst atoms, so a stub asserting on argv can prove the
+     restore *ran* but not that it *worked*.
    - `epub_parser` — add a tiny fixture `.epub` and assert sentence extraction.
    - `library_verify`.
 3. Genuinely untestable branches (hardware/external) can be marked `# pragma: no cover` rather
