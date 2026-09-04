@@ -12,6 +12,7 @@ anchors or flow mappings at the service level, which a line scan handles fine.
 """
 
 import os
+import re
 
 import pytest
 
@@ -373,3 +374,19 @@ def test_no_service_mounts_two_sources_on_one_target(path):
             f"than one source on {duplicates}. Exactly one may win; the rest are "
             "invisible copies."
         )
+
+
+def test_jetson_template_points_the_model_cache_at_the_persisted_volume():
+    """Issue #374: the dustynv base image sets HF_HOME=/data/models/huggingface,
+    so a volume mounted at /root/.cache/huggingface/hub is never used and every
+    container recreate downloads the model again. The template must set HF_HOME
+    to the parent of the mount so the hub cache *is* the volume."""
+    path = os.path.join(_REPO_ROOT, "jetson", "docker-compose.example.yml")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    mount = re.search(r"whisper_models:(\S+)/hub", text)
+    assert mount, "jetson/docker-compose.example.yml: whisper_models must be mounted at <HF_HOME>/hub"
+    assert f"HF_HOME={mount.group(1)}" in text, (
+        "jetson/docker-compose.example.yml: HF_HOME must equal the parent of the "
+        "whisper_models mount, or the base image's default cache is used instead (issue #374)"
+    )

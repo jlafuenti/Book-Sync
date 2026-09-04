@@ -794,6 +794,27 @@ def test_abandoned_upload_temp_files_are_swept_from_the_checkpoint_volume(
     assert fresh.exists()
 
 
+def test_startup_creates_the_tmpdir_named_by_the_environment(clean_state, monkeypatch, tmp_path):
+    """On a fresh checkpoint volume the directory TMPDIR names does not exist
+    yet. Python's tempfile.gettempdir() silently drops a TMPDIR that does not
+    exist and answers /tmp instead — so creating "whatever gettempdir says"
+    creates /tmp and leaves uploads on the container's own filesystem, which is
+    exactly what #238 set out to stop. The directory must come from the raw
+    environment value, and tempfile's cached answer must be reset afterwards."""
+    import tempfile as _tempfile
+
+    wanted = tmp_path / "volume" / "tmp"
+    assert not wanted.exists()
+    monkeypatch.setenv("TMPDIR", str(wanted))
+    monkeypatch.setattr(_tempfile, "tempdir", None)
+    monkeypatch.setattr(jetson_server, "MODEL_IDLE_UNLOAD_MIN", 0)
+
+    jetson_server.startup_event()
+
+    assert wanted.is_dir()
+    assert os.path.realpath(_tempfile.gettempdir()) == os.path.realpath(str(wanted))
+
+
 def test_a_shared_system_temp_dir_is_never_swept(clean_state, monkeypatch, tmp_path):
     """On a dev box TMPDIR is the system temp, shared with every other process."""
     import tempfile as _tempfile
