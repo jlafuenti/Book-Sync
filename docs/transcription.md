@@ -41,9 +41,17 @@ multi-GB, so they're opt-in at build time:
 docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
 ```
 
-Without that, `remote_with_fallback` has nothing to fall back *to* — it just errors when the
-remote is down. On a remote-only image prefer `TRANSCRIPTION_PROVIDER=remote`, so the failure
-says what it is.
+Without that, `remote_with_fallback` has nothing to fall back *to*, so it behaves as `remote`:
+a remote outage is **retried** on the ladder below and, only if the ladder runs out, fails the
+item with an error naming the remote worker. It does not enter the local leg — doing so raised
+"Local Whisper isn't installed in this image", which failed the book on the first blip and named
+the wrong component (issue #191). The server logs one warning at startup of each job when the
+fallback leg is missing. Setting `TRANSCRIPTION_PROVIDER=remote` on a remote-only image is still
+clearer, but it is no longer the difference between a retry and a dead book.
+
+One remote failure is deliberately **not** retried: audio the worker cannot decode. That is a
+corrupt or truncated source file, so the item fails immediately with "re-import required" rather
+than re-uploading the same bytes five more times.
 
 The remote worker requires a shared API key on every request. Generate it from
 **System → Transcription Settings → Remote Server API Key** (the value is shown once) and paste
