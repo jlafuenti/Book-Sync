@@ -189,21 +189,42 @@ schema step. **An existing database created before Alembic must be stamped once*
 ### Environment variables
 
 Set in the `server` service's `environment:` block. Everything the server reads lives in
-[`server/config.py`](server/config.py). The one exception is `POSTGRES_PASSWORD`: it is a compose
-*interpolation* variable, read from a `.env` file next to `docker-compose.yml` (copy
-[`.env.example`](.env.example)) and substituted into both the `db` service and `DATABASE_URL`.
-`PUID`/`PGID` are compose interpolation variables too, and come from the same `.env`.
+[`server/config.py`](server/config.py). `PUID`/`PGID` are the exception: they are compose
+*interpolation* variables, read from a `.env` file next to `docker-compose.yml` (copy
+[`.env.example`](.env.example)) to fill the `user:` key, and the server process never sees them.
+
+**Secrets do not belong in `environment:`.** Anything set there is printed by `docker inspect` and
+sits in `/proc/1/environ`. Every secret below also has a `<NAME>_FILE` form that reads the value
+from a file instead — that is what the template ships, backed by compose `secrets:`. See
+[docs/operations.md → Secrets](docs/operations.md#secrets).
 
 **Mandatory** — with `APP_ENV=prod` (the default) the server *refuses to start* without these:
 
 | Variable | Why |
 |---|---|
 | `JWT_SECRET_KEY` | Signs access/refresh tokens. `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
-| `POSTGRES_PASSWORD` + matching `DATABASE_URL` | Startup rejects the shipped `booksync:booksync` credentials. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `POSTGRES_PASSWORD` | The `booksync` role's password. The server assembles `DATABASE_URL` from it (`postgresql+asyncpg://booksync:<password>@db:5432/booksync`) unless you set `DATABASE_URL` yourself; startup rejects the shipped `booksync:booksync` credentials either way. `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `DATABASE_URL` | Optional override of the assembled URL — set it only for an external database or non-default connection options |
 | `CORS_ORIGINS` | Comma-separated web origins. Startup rejects the wildcard `*`. |
 | `CREDENTIAL_ENC_KEYS` | Comma-separated Fernet keys encrypting import-source credentials (Audible auth blob, ABS token). First key encrypts, all are tried for decryption — rotation is "prepend a new key". `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
 
 Set `APP_ENV=dev` for local development to allow the insecure zero-config defaults. Never in prod.
+
+**Secrets from files** — the preferred form for all four of the above. `<NAME>_FILE` names a file
+holding the value (one trailing newline is stripped); it **wins** over a plain `<NAME>` that is
+also set, and a path that does not exist, cannot be read, or is empty is a startup error naming
+the variable, never a silent fallback. `docker-compose.example.yml` wires these to compose
+`secrets:` mounted at `/run/secrets/`; see [docs/operations.md → Secrets](docs/operations.md#secrets)
+for how to create the files and how to migrate an existing install without changing any value.
+
+| Variable | What it does |
+|---|---|
+| `JWT_SECRET_KEY_FILE` | Path to a file holding `JWT_SECRET_KEY` |
+| `CREDENTIAL_ENC_KEYS_FILE` | Path to a file holding `CREDENTIAL_ENC_KEYS` |
+| `POSTGRES_PASSWORD_FILE` | Path to a file holding `POSTGRES_PASSWORD`. The same file is mounted into the `db` service, which reads this variable natively — one secret, both containers, guaranteed in sync |
+| `DATABASE_URL_FILE` | Path to a file holding a complete `DATABASE_URL`. Only needed for an external database whose URL differs from the assembled one |
+| `GOOGLE_BOOKS_API_KEY_FILE` | Path to a file holding `GOOGLE_BOOKS_API_KEY` |
+| `ABS_API_TOKEN_FILE` | Path to a file holding `ABS_API_TOKEN` |
 
 **Exposing the stack behind a reverse proxy?** Set `FORWARDED_ALLOW_IPS` to your proxy's address,
 prefer putting the proxy (e.g. Caddy) on the compose network pointed at `server:8000`, and bind
@@ -216,6 +237,8 @@ bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#rev
 |---|---|---|
 | `PUID` / `PGID` | `1000` / `1000` | uid:gid the `server` and `web` containers run as (compose interpolation, from `.env` — not read by `server/config.py`). Set them to whatever owns your library on the host: `stat -c '%u:%g' /path/to/your/ebooks`. **On an existing install, change the ownership of your app-data and backups directories before restarting** — see [docs/operations.md](docs/operations.md#running-as-a-non-root-user). `db` is unaffected; the postgres image manages its own user |
 | `APP_ENV` | `prod` | `dev` permits default secrets and wildcard CORS |
+| `POSTGRES_USER` / `POSTGRES_DB` | `booksync` / `booksync` | Role and database name used to assemble `DATABASE_URL` when it is not set explicitly. Must match the `db` service's own `POSTGRES_USER`/`POSTGRES_DB` |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | `db` / `5432` | Where that assembled URL points — the compose service name and port |
 | `EBOOK_DIR` / `AUDIOBOOK_DIR` | `/data/ebooks` / `/data/audiobooks` | Library roots (mount your real folders here) |
 | `APP_DATA_DIR` / `COVERS_DIR` | `/data/app` / `/data/app/covers` | Extracted covers, working files |
 | `IMPORTS_DIR` | `/data/imports` | ACSM import staging (inbox / processed / failed) |
