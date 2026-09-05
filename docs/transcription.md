@@ -49,6 +49,30 @@ The remote worker requires a shared API key on every request. Generate it from
 **System → Transcription Settings → Remote Server API Key** (the value is shown once) and paste
 the same value into the worker's `TRANSCRIPTION_API_KEY`.
 
+## Language
+
+**System → Transcription Settings → Transcription Language**, stored as
+`transcription_language` in the database. It applies to both providers.
+
+Left on **Auto-detect** (the default, `""`), the transcriber detects the language from the
+first chunk of each book and *pins that answer for the whole file*. It does not re-detect per
+chunk, which is what it used to do and what made this a setting: a chunk that opens on music,
+silence, or a foreign-language epigraph gets detected as another language and comes back as
+transliterated garbage for that entire span — 15 minutes on the worker, an hour on the server.
+Alignment then finds no matches there and interpolates across the gap, so the symptom is a
+stretch of a book where the position sync is quietly wrong rather than an error anyone sees.
+
+Pin an explicit language if your library is single-language; it skips detection altogether.
+The accepted codes are the ISO 639-1 list in
+[`services/transcription_providers/__init__.py`](../server/services/transcription_providers/__init__.py)
+(`SUPPORTED_LANGUAGES`) — anything else is rejected with a 422 rather than saved and failed
+hours later. The setting reaches the remote worker as a `language` form field on
+`POST /v1/transcribe` (and in the resume body), so it needs no worker restart; the worker's own
+`WHISPER_LANGUAGE` env var is only the default for jobs that arrive without one.
+
+A paused job stores its pinned language in the checkpoint, so resuming continues in the same
+language rather than re-detecting from wherever the resume happens to start.
+
 ## Queue behavior
 
 - **Strictly serial.** One job runs at a time; the rest sit `pending`.

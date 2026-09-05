@@ -87,3 +87,53 @@ async def test_fallback_provider_gets_the_same_timeout(stored_settings):
     provider = await factory.get_transcription_provider()
 
     assert provider._remote.timeout == 1800
+
+
+# ---------------------------------------------------------------------------
+# Whisper language (issue #246)
+# ---------------------------------------------------------------------------
+
+async def test_configured_language_reaches_the_remote_provider(stored_settings):
+    stored_settings(transcription_language="es")
+
+    provider = await factory.get_transcription_provider()
+
+    assert provider.language == "es"
+
+
+async def test_language_defaults_to_auto(stored_settings):
+    """Empty means "let the worker detect once and pin", not "force ''"."""
+    stored_settings()
+
+    provider = await factory.get_transcription_provider()
+
+    assert provider.language == ""
+
+
+async def test_configured_language_reaches_the_local_provider(stored_settings):
+    stored_settings(transcription_provider="local", transcription_language="fr")
+
+    provider = await factory.get_transcription_provider()
+
+    assert provider.language == "fr"
+
+
+async def test_fallback_provider_passes_the_language_to_both_halves(stored_settings):
+    stored_settings(
+        transcription_provider="remote_with_fallback", transcription_language="de"
+    )
+
+    provider = await factory.get_transcription_provider()
+
+    assert provider._remote.language == "de"
+    assert provider._local.language == "de"
+
+
+def test_the_language_allow_list_is_lowercase_iso_639_1_plus_auto():
+    """`routers.settings` validates against this list, and the web UI mirrors
+    it — a stray uppercase or blank-with-whitespace entry would let a value
+    through that faster-whisper then rejects mid-job."""
+    assert "" in factory.SUPPORTED_LANGUAGES, "auto-detect must stay allowed"
+    codes = [c for c in factory.SUPPORTED_LANGUAGES if c]
+    assert codes == sorted(codes), "keep the list sorted so the UI reads predictably"
+    assert all(c == c.lower() and 2 <= len(c) <= 3 and c.isalpha() for c in codes)

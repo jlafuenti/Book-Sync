@@ -25,19 +25,44 @@ services:
     container_name: booksync_transcriber
     runtime: nvidia
     restart: unless-stopped
+    # LAN-ONLY. This worker speaks plaintext HTTP and authenticates with a
+    # shared bearer token, so every request puts that token on the wire in
+    # cleartext: it MUST NOT be reachable from the internet. The unqualified
+    # form below publishes on *every* interface — replace <lan-ip> with this
+    # host's LAN address to bind just that one, or put it behind TLS (Caddy,
+    # Tailscale) if it has to cross networks.
     ports:
+      # - "<lan-ip>:9000:9000"   # preferred: bind one interface
       - "9000:9000"
     volumes:
       - whisper_models:/root/.cache/huggingface/hub # Persist downloaded models
       # Checkpoints (and the audio retained for a paused job) survive restarts.
       # Size this for one audiobook: a paused job parks its source file here
       # until it resumes, completes, is cancelled, or ages out after 48h.
+      # TMPDIR below puts uploads on this same volume, so size it for the
+      # audiobook *twice over* — the spooled request body plus the copy.
       - booksync_checkpoints:/tmp/booksync_checkpoints
     environment:
+      # The base image's own default is /data/models/huggingface, which is
+      # *not* the volume above — without this line every container recreate
+      # downloads the model again (issue #374).
+      - HF_HOME=/root/.cache/huggingface
       - WHISPER_MODEL=medium
       - WHISPER_COMPUTE_TYPE=float16
       - WHISPER_DEVICE=cuda
       - VAD_FILTER=true
+      # ISO 639-1 code (en, es, fr, de, …) forced on every chunk. Leave blank
+      # to auto-detect on the first chunk of each file and pin that answer for
+      # the rest of it. Pin it if your library is single-language: a chunk that
+      # opens on music or a foreign epigraph can otherwise be detected as
+      # another language and come back as transliterated garbage.
+      - WHISPER_LANGUAGE=
+      # Largest accepted upload, in bytes (default 4 GiB). Anything over this
+      # gets a 413 before the body is read; 0 disables the cap.
+      - MAX_UPLOAD_BYTES=4294967296
+      # Put the spooled upload and its copy on the sized volume above rather
+      # than the container's default /tmp. The server creates this at startup.
+      - TMPDIR=/tmp/booksync_checkpoints/tmp
       # Release the model (~4GB of unified memory for `medium`) after this many
       # idle minutes; it reloads on the next job. Set 0 to keep it resident.
       # Pair this with Tandem → Settings → Transcription → "Only transcribe

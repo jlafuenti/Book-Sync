@@ -78,6 +78,11 @@ DEFAULT_SETTINGS = {
     "transcription_retry_base_seconds": 30,
     "auto_transcribe_enabled": False,
     "whisper_model": "medium",
+    # Whisper language for every job (issue #246). "" = auto: both providers
+    # detect once on the first chunk of a file and pin that for the rest,
+    # rather than re-detecting per chunk. Validated in update_settings against
+    # transcription_providers.SUPPORTED_LANGUAGES.
+    "transcription_language": "",
     # Off-hours transcription window (issue #106) — owned by services/offhours.py.
     # Defaults must match offhours.DEFAULTS. Disabled by default so transcription
     # keeps dispatching 24/7 until an admin opts in.
@@ -235,6 +240,24 @@ async def update_settings(
                     f"the whole transcription, so a short timeout fails every job"
                 ),
             )
+
+    # A language code Whisper doesn't know fails every chunk of every job, and
+    # the failure surfaces hours later as an empty transcript rather than a
+    # rejected setting. Validate (and normalise) before anything is written.
+    if "transcription_language" in new_settings:
+        from services.transcription_providers import SUPPORTED_LANGUAGES
+
+        raw = new_settings["transcription_language"]
+        language = "" if raw is None else str(raw).strip().lower()
+        if language not in SUPPORTED_LANGUAGES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"transcription_language must be empty (auto-detect) or one "
+                    f"of: {', '.join(c for c in SUPPORTED_LANGUAGES if c)}"
+                ),
+            )
+        new_settings["transcription_language"] = language
 
     for key, value in new_settings.items():
         # Derived, read-only view keys (hardcover_configured) are computed on
