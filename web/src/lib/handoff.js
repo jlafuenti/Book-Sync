@@ -1,4 +1,4 @@
-import { updatePosition, getDeviceId, getDeviceName } from '../api'
+import { writePosition } from './position'
 
 /**
  * The audio -> text half of the format handoff (issue #267).
@@ -31,11 +31,6 @@ import { updatePosition, getDeviceId, getDeviceName } from '../api'
 export async function switchToEbook(player, pairId) {
     player.pause()
     const audioPositionMs = Math.floor((player.currentTime || 0) * 1000)
-    return updatePosition('pair', pairId, {
-        source: 'audiobook',
-        audio_position_ms: audioPositionMs,
-        device_id: getDeviceId(),
-        device_name: getDeviceName(),
-        captured_at: new Date().toISOString(),
-    }).catch(() => null)
+    return writePosition(['pair', pairId], { audio_position_ms: audioPositionMs },
+        { claimSource: 'audiobook' }).catch(() => null)
 }
