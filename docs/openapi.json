@@ -1,6 +1,20 @@
 {
   "components": {
     "schemas": {
+      "AccountDelete": {
+        "description": "Body for `DELETE /api/auth/me` — self-service account deletion (#146).\n\nThe password is re-checked even though the caller already holds a valid\naccess token: this is the one authenticated action that cannot be undone,\nand a token left behind on a borrowed device should not be enough to\ndestroy the account it was signed into.",
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "AccountDelete",
+        "type": "object"
+      },
       "AcknowledgeItemsRequest": {
         "properties": {
           "audiobook_ids": {
@@ -4714,6 +4728,44 @@
       }
     },
     "/api/auth/me": {
+      "delete": {
+        "description": "Delete the caller's own account and everything belonging to it (#146).\n\nGoogle Play requires an in-app deletion path for any app that can create an\naccount. The only delete before this was ``DELETE /api/users/{id}``, which\nis admin-gated and refuses the caller's own row — so on a self-hosted\nserver the only way out was to ask the operator.\n\nWhat goes: the user, their bookmarks (and each bookmark's log rows and\nper-device position hints), their progress rows, and every one of their\n``refresh_tokens`` sessions (#250) — so the phone still holding a 30-day\nrefresh token cannot go on minting access tokens for an account that no\nlonger exists. That is the ``all, delete-orphan`` ORM cascades on ``User``\nand ``Bookmark``, backed by ``ON DELETE CASCADE`` on the FKs themselves\n(migrations 0011 and 0014); ``refresh_tokens`` has no ORM relationship at\nall and is deleted by the database alone, which is why the test asserts the\ncount rather than trusting the handler.\n\nWhat stays: the audit trail. ``audit_logs.user_id`` is ``ON DELETE SET\nNULL``, so the row written just below outlives the account with its actor\nredacted, while ``target_user_id`` — which carries no FK — keeps the number\nan operator needs to make sense of it.\n\nRefusals:\n\n* wrong password -> 403. Rate-limited through the same per-user bucket as\n  change-password (#264): both verify the current password, so both are the\n  same bcrypt oracle for anyone holding a stolen access token, and here the\n  payoff is destruction rather than takeover.\n* last active superadmin -> 409. Not a permission problem — the caller is\n  the most privileged account there is — but a deployment with no active\n  superadmin cannot approve a registration, promote anyone or open the\n  admin console, and nothing in the app can undo it.",
+        "operationId": "delete_me_api_auth_me_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDelete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Delete Me",
+        "tags": [
+          "auth"
+        ]
+      },
       "get": {
         "description": "Get the currently authenticated user's profile.",
         "operationId": "get_me_api_auth_me_get",
@@ -6490,7 +6542,7 @@
     },
     "/api/library/enrich-abs": {
       "post": {
-        "description": "Force re-enrich all audiobooks from Audiobookshelf metadata.\nOverwrites existing values (unlike the normal scan which only fills gaps).\nAlso writes enriched metadata back into each audio file's embedded tags.",
+        "description": "Force re-enrich all audiobooks from Audiobookshelf metadata.\nOverwrites existing values (unlike the normal scan which only fills gaps).\nAlso writes enriched metadata back into each audio file's embedded tags.\n\nRefuses with 409 while another library job is running (issue #202): this one\nrewrites tags on disk as it goes, so overlapping it with a scan means two\nwriters on the same files as well as the same rows.",
         "operationId": "enrich_library_from_abs_api_library_enrich_abs_post",
         "responses": {
           "200": {
@@ -7444,7 +7496,7 @@
     },
     "/api/library/rehash": {
       "post": {
-        "description": "One-time migration to the composite hash scheme (issue #45).\n\nRecomputes file_hash for every row whose file exists on disk, then remaps\nauto_pair_excluded_hashes through the old→new mapping — unpair memory\nstores raw hash values, so without the remap every existing exclusion\nwould silently stop matching. Rows whose file is missing keep their stale\nhash (harmless: it can no longer collide with a composite hash).",
+        "description": "Rehash the library; refuses with 409 while another job runs (issue #202).",
         "operationId": "rehash_library_api_library_rehash_post",
         "responses": {
           "200": {
@@ -7469,7 +7521,7 @@
     },
     "/api/library/rescan-all": {
       "post": {
-        "description": "Force a rescan of EVERY file in the library to extract metadata.\nOverrides all DB metadata fields with whatever is extracted from the files.",
+        "description": "Force a rescan of EVERY file in the library to extract metadata.\nOverrides all DB metadata fields with whatever is extracted from the files.\n\nRefuses with 409 while another library job is running (issue #202).",
         "operationId": "rescan_all_files_api_library_rescan_all_post",
         "responses": {
           "200": {
@@ -7494,7 +7546,7 @@
     },
     "/api/library/scan": {
       "post": {
-        "description": "Scan the ebook and audiobook directories for new files.\nRecursively searches subdirectories.\nExtracts metadata from filenames and tags.\nAdds any undiscovered files to the database and attempts auto-matching.",
+        "description": "Scan the ebook and audiobook directories for new files.\nRecursively searches subdirectories.\nExtracts metadata from filenames and tags.\nAdds any undiscovered files to the database and attempts auto-matching.\n\nRefuses with 409 while another library job is running (issue #202).",
         "operationId": "scan_library_api_library_scan_post",
         "responses": {
           "200": {
