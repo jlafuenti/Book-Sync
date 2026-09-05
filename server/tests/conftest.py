@@ -152,6 +152,43 @@ def _reset_failed_login_tracker():
     failed_logins.clock = _time.monotonic
 
 
+@pytest.fixture(autouse=True)
+def _reset_read_rate_limits_and_caches():
+    """Clear the per-user read buckets and the TTL caches between tests (#208).
+
+    Same reasoning as the login tracker above: both are process-global, so
+    without this a test that makes thirty calls leaves the next one starting at
+    the ceiling, and a cached disk-usage or calibre answer from one test's
+    tmp_path is served to the next test's. Both layers stay *enabled* — the real
+    behaviour is what the tests are for.
+    """
+    import rate_limit
+
+    # (module, attribute) rather than direct imports: `routers.library` and
+    # `main` pull in heavy optional dependencies, and several test modules skip
+    # themselves when those are absent. Clear only what has actually been
+    # imported, so this fixture never forces an import or fails on a missing one.
+    cache_attrs = [
+        ("main", "backup_probe_cache"),
+        ("routers.stats", "disk_usage_cache"),
+        ("routers.library", "calibre_status_cache"),
+        ("services.chapter_repair", "encoding_check_cache"),
+    ]
+
+    def _clear():
+        for bucket in rate_limit.USER_RATE_LIMITERS:
+            bucket.reset()
+        for module_name, attr in cache_attrs:
+            module = sys.modules.get(module_name)
+            cache = getattr(module, attr, None) if module is not None else None
+            if cache is not None:
+                cache.invalidate()
+
+    _clear()
+    yield
+    _clear()
+
+
 @pytest_asyncio.fixture
 async def db():
     """A raw AsyncSession for tests that build/inspect DB rows directly."""

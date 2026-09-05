@@ -94,6 +94,159 @@ response field, a changed type, a removed endpoint, a newly required request fie
 not breaks. The rule and the release checklist live in `server/version.py` and
 [android.md](android.md).
 
+## Monitoring
+
+Every health signal Tandem exposes is pull-only. Nothing here pages you on its own — the API can
+be down, or the nightly backup can have been failing for a week, and the only place that shows is
+a badge somebody has to open the System page to see. Point an external checker at the three
+endpoints below and that stops being true.
+
+Any checker works — Uptime Kuma on the same host, or a hosted monitor. Run it **outside** the
+compose stack: one that dies with the server cannot tell you the server died. The compose
+healthcheck on `server` (`docker-compose.example.yml`) is not a substitute; it feeds Docker's
+container status and notifies nobody.
+
+| Check | Expect | Interval | Alert when |
+|---|---|---|---|
+| `GET /api/livez` | 200 `{"status":"alive"}` | 60 s | non-200, or no answer in 10 s, twice running |
+| `GET /api/health` | 200 `{"status":"healthy",...}` | 60 s | 503, or no answer in 15 s, twice running |
+| `GET /api/health/backup` | 200 `{"status":"ok","age_hours":N}` | 1 h | body contains `"stale"` or `"never"`, twice running |
+
+All three are **unauthenticated** — that is what makes them wireable. Access tokens last 24 h, so
+anything requiring a login cannot be polled by a monitor without a token-refresh dance.
+
+"Twice running" everywhere: a single missed poll during a restart or a `docker compose up -d
+--build` is normal and should not page anyone.
+
+### What each one tells you
+
+**`/api/livez`** is liveness — the process is up, dependencies unchecked. It answers during a
+database outage, so `livez` up + `health` down localizes the fault to Postgres without a single
+log line.
+
+**`/api/health`** is readiness: it runs `SELECT 1` and returns 503 when the database does not
+answer inside 5 s (issue #47). This is the one that matters most. First moves when it fires:
+
+```bash
+docker compose ps                    # is db up at all?
+docker compose logs --tail=100 server
+docker compose logs --tail=100 db
+```
+
+The healthy payload also carries `app_version` and `api_version` (see "Client support window"),
+so the same check doubles as a record of when a deploy landed.
+
+**`/api/health/backup`** is backup freshness, and nothing else (issue #233):
+
+```bash
+curl -s https://tandem.example.com/api/health/backup
+# {"status":"ok","age_hours":9}
+```
+
+| `status` | Means |
+|---|---|
+| `ok` | a dump exists and is newer than 36 hours |
+| `stale` | a dump exists but is older than 36 hours — the nightly run is failing |
+| `never` | there is no dump at all, or the backups directory is unreadable |
+
+`never` covers the unreadable-directory case deliberately: a missing NAS mount and a missing
+backup deserve the same page, and a probe that 500'd instead would look identical to the API
+being broken.
+
+It stays **200** in all three states. A stale backup is a real problem but not a readiness
+failure, and a 503 here would pull the service out of a load balancer over a backup that did not
+run. So the alert rule has to match on the body, not the status code — for example, in Uptime
+Kuma: monitor type HTTP(s) - Keyword, keyword `"status":"ok"`, **invert keyword** off, retries 2.
+Any checker that supports a body assertion can express the same thing:
+
+```bash
+# Equivalent as a shell check (exit 1 = alert)
+curl -sf https://tandem.example.com/api/health/backup | grep -q '"status":"ok"'
+```
+
+When it fires, work through [backup-restore.md](backup-restore.md) — the usual causes are a full
+or unmounted `BACKUPS_DIR` and a `pg_dump` failure, both of which are in `docker compose logs
+server | grep backup-service`. The admin console's System page has the detail this probe
+deliberately withholds (location, filename, size, exact timestamp) at `GET /api/stats/backup`.
+
+The probe costs one directory listing and one stat, runs off the event loop, and is cached for
+`BACKUP_PROBE_CACHE_SECONDS` (default 60) — so polling it more often than that is free, and a
+hostile loop against an unauthenticated endpoint cannot hammer the NAS mount. It never touches
+the database, which is what keeps it answering during exactly the outage that makes
+`/api/health` fail.
+
+### Not covered yet
+
+A transcription job wedged in `processing` is not detectable from outside — `queue_manager.py`
+sets `started_at` but never compares it against a deadline. That watchdog is tracked separately;
+when it lands, a fourth check belongs in the table above.
+
+## Rate limits on expensive reads
+
+A handful of read endpoints stat every file in the library, walk a data root, or shell out. The
+server runs a **single uvicorn worker** (see "Single process only"), so while one of those runs
+synchronously nothing else is served — including login and `/api/health`, whose compose
+healthcheck gives up after 10 s. One authenticated user in a loop was enough to stall the whole
+deployment (issue #208).
+
+Three fixes are layered, and all three are load-bearing:
+
+1. **Off the event loop.** The blocking work runs in a worker thread (`asyncio.to_thread`), so a
+   slow NAS mount delays that one request instead of every request.
+2. **Cached.** Results are reused for a short TTL, so a page that polls and a hostile loop cost
+   the same.
+3. **Rate limited per user**, as a backstop for whatever the first two miss.
+
+| Bucket | Endpoints | Default | Tune with |
+|---|---|---|---|
+| Expensive reads | `/api/troubleshoot/issues`, `/api/library/verify`, `/api/stats/disk_usage`, `/api/library/calibre-status` | 30 requests / 60 s | `EXPENSIVE_READ_LIMIT`, `EXPENSIVE_READ_WINDOW_SECONDS` |
+| Search reads | `/api/library/search`, `/api/transcription/queue/history` | 60 requests / 60 s | `SEARCH_READ_LIMIT`, `SEARCH_READ_WINDOW_SECONDS` |
+| External metadata | `POST /api/library/match/search` | 20 requests / 60 s | `EXTERNAL_METADATA_SEARCH_LIMIT`, `EXTERNAL_METADATA_SEARCH_WINDOW_SECONDS` |
+
+| Cache | Default TTL | Tune with |
+|---|---|---|
+| `/api/stats/disk_usage` | 300 s | `DISK_USAGE_CACHE_SECONDS` |
+| `/api/library/calibre-status` | 300 s | `CALIBRE_STATUS_CACHE_SECONDS` |
+| Per-audiobook chapter-encoding check (`/api/troubleshoot/issues`) | 300 s | `CHAPTER_ENCODING_CACHE_SECONDS` |
+| `/api/health/backup` | 60 s | `BACKUP_PROBE_CACHE_SECONDS` |
+
+Buckets are keyed on the **authenticated user's id**, not the client address — behind a proxy and
+docker NAT every caller shares one address (see "Reverse proxy"), so an IP bucket would throttle
+the whole deployment together and protect nobody. Over the limit is **429** with a `Retry-After`
+header naming the seconds until the window drops back below it. Same sliding-window machinery as
+the login throttle, so the same caveat applies: counters live in the server process, reset on
+restart, and are per worker.
+
+Unlike the auth buckets these count **every** request, not just failures, which is why the
+numbers are an order of magnitude higher. The UI fires each of these reads once per page load;
+only a loop reaches the ceiling. If you legitimately hit one — a script doing a bulk metadata
+pass, say — raise the matching limit rather than removing the dependency, and remember that the
+external-metadata bucket is metering an API quota you pay for, not server CPU.
+
+The `chapter_encoding` cache is keyed on `(path, mtime, size)`, so repairing a file makes the next
+Troubleshoot load re-check it immediately regardless of the TTL.
+
+### Page-size caps
+
+Every list endpoint has a ceiling, and a `limit` over it is refused with **422** rather than
+silently served.
+
+| Endpoint | Cap | Over it |
+|---|---|---|
+| `/api/library/{ebooks,audiobooks,pairs,items,...}` | `limit=500` | 422 |
+| `/api/transcription/queue/history` | `limit=200` | 422 |
+| `/api/sync/bookmark/{pair}/log` | `limit=200` | 422 |
+| `/api/library/search` | 200 rows per section | `truncated: true` |
+| `/api/library/verify` | 200 orphans per list | `truncated: true` |
+
+The last two are not paginated, so they cap the body instead of rejecting the request, and set
+`truncated` so a client can tell "nothing else matched" from "there is more". For `verify` that
+matters: a library whose mount has dropped is *entirely* orphaned, and the useful answer is the
+first 200 plus a flag, not one row per book. Clean those up and run it again for the next batch.
+
+`%` and `_` in a search term are matched **literally**, not as SQL wildcards — `q=%` used to
+return the whole library three times in one response.
+
 ## Reverse proxy
 
 If you put Tandem behind a reverse proxy (Caddy, Traefik, the shipped `web` nginx container is

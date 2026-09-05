@@ -1,0 +1,31 @@
+# Build context for `build: ./web` (docker-compose.example.yml).
+#
+# web/Dockerfile does `COPY . .` before `npm run build`. A host `node_modules/`
+# copied in would shadow the tree `npm ci` just installed — different platform,
+# different resolution — which is exactly the reproducibility `npm ci` is there
+# to buy. Everything else here is output or test material the bundle never
+# references.
+#
+# Pinned by server/tests/test_dockerfile_contract.py (issue #234).
+
+# Dependency tree and build output — the image makes its own
+node_modules/
+dist/
+build/
+
+# Tests and coverage
+coverage/
+src/**/*.test.js
+src/**/*.test.jsx
+src/setupTests.js
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Documentation and repo metadata
+*.md
+.git
+.gitignore
+.dockerignore

@@ -3809,6 +3809,11 @@
           "query": {
             "title": "Query",
             "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5256,6 +5261,23 @@
         "summary": "Health"
       }
     },
+    "/api/health/backup": {
+      "get": {
+        "description": "Backup-staleness probe for an external monitor (issue #233).\n\n`GET /api/stats/backup` already answers this question, but it needs an admin\nlogin and access tokens last 24 h, so no uptime checker can poll it without\na token-refresh dance — which is why the only consumer of the staleness flag\ntoday is a badge on the System page, and a nightly backup can fail for a\nweek unnoticed.\n\nSo this one takes no credentials, and that fixes what it may say: a status\nword (`ok` / `stale` / `never`) and a coarse age in whole hours. No path, no\nfilename, no size, no timestamp — see `backup_service.get_freshness`.\n\nAlways 200. A stale backup is a real problem but not a readiness failure:\n503 here would take the service out of a load balancer over a backup that\ndid not run, and would be indistinguishable from the DB outage `/api/health`\nreports. The alert rule matches on the body — docs/operations.md,\n\"Monitoring\".\n\nCost is one directory listing and one stat, run off the event loop and\ncached for `BACKUP_PROBE_CACHE_SECONDS`. It never touches the database, so\nit keeps answering during exactly the outage that makes `/api/health` fail.",
+        "operationId": "backup_health_api_health_backup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Backup Health"
+      }
+    },
     "/api/import/acsm/authorization": {
       "get": {
         "operationId": "acsm_authorization_status_api_import_acsm_authorization_get",
@@ -6125,7 +6147,7 @@
     },
     "/api/library/calibre-status": {
       "get": {
-        "description": "Check whether calibre's ebook-convert is available in the server container.",
+        "description": "Check whether calibre's ebook-convert is available in the server container.\n\n`subprocess.run` with a 10 s timeout used to run inline on the event loop, so\none wedged `ebook-convert` blocked every other request for those ten seconds\n— on a single-worker server, with a System page tile calling this on load.\nNow: worker thread, cached (issue #208).",
         "operationId": "get_calibre_status_api_library_calibre_status_get",
         "responses": {
           "200": {
@@ -7627,7 +7649,7 @@
     },
     "/api/library/search": {
       "get": {
-        "description": "Global search across ebooks, audiobooks, and book pairs.",
+        "description": "Global search across ebooks, audiobooks, and book pairs.\n\nBounded on both axes since issue #208. Each of the three queries stops at\n`SEARCH_MAX_RESULTS`, and `truncated` says when one of them did, so a client\ncan tell \"nothing else matched\" from \"narrow your query\". The term's LIKE\nwildcards are escaped by `_search_clause`, which is shared with the\npaginated browse so the two cannot disagree about what `%` means — before\nthat, `q=%` returned the entire library three times in a single request.",
         "operationId": "search_library_api_library_search_get",
         "parameters": [
           {
@@ -8023,7 +8045,7 @@
     },
     "/api/library/verify": {
       "get": {
-        "description": "Check every ebook and audiobook file_path against the filesystem.\nReturns lists of entries whose source files no longer exist.\n\nEditor-gated (issue #263): the report lists the absolute `file_path` of\nevery orphaned row, and it drives the Maintenance menu's \"Verify Files\"\naction, which the web already shows only to editors.",
+        "description": "Check every ebook and audiobook file_path against the filesystem.\nReturns lists of entries whose source files no longer exist.\n\nEditor-gated (issue #263): the report lists the absolute `file_path` of\nevery orphaned row, and it drives the Maintenance menu's \"Verify Files\"\naction, which the web already shows only to editors.\n\nThe stat loop used to run on the event loop, one call per library row over a\nNAS mount, on a single-worker server — so a full library made every other\nrequest wait, `/api/health` included. It now runs in a worker thread, and\neach list stops at `VERIFY_MAX_RESULTS` with `truncated` set (issue #208).",
         "operationId": "verify_files_api_library_verify_get",
         "responses": {
           "200": {
@@ -8546,7 +8568,7 @@
     },
     "/api/stats/disk_usage": {
       "get": {
-        "description": "Get disk usage statistics for configured directories.",
+        "description": "Get disk usage statistics for configured directories.\n\nThe scan itself is synchronous `os.scandir` recursion over a NAS mount. It\nused to run on the event loop, where — single uvicorn worker — it stalled\nevery other request for its duration, `/api/health` included. It now runs in\na worker thread and its result is cached (issue #208).",
         "operationId": "get_disk_usage_api_stats_disk_usage_get",
         "responses": {
           "200": {
@@ -8689,11 +8711,15 @@
             }
           },
           {
+            "description": "Page size",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "description": "Page size",
+              "maximum": 200,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
@@ -9230,21 +9256,28 @@
         "operationId": "get_queue_history_api_transcription_queue_history_get",
         "parameters": [
           {
+            "description": "Page size",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
+              "description": "Page size",
+              "maximum": 200,
+              "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip",
             "in": "query",
             "name": "offset",
             "required": false,
             "schema": {
               "default": 0,
+              "description": "Rows to skip",
+              "minimum": 0,
               "title": "Offset",
               "type": "integer"
             }

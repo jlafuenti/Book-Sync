@@ -34,7 +34,9 @@ import tempfile
 from typing import Optional, Tuple
 
 from services.audio_duration import probe_duration_seconds
+from config import settings
 from services.audio_integrity import stderr_indicates_corruption
+from services.cache import TTLMemo
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,36 @@ def check_chapter_encoding(filepath: str) -> Tuple[bool, Optional[str]]:
             return False, str(e)
         return True, None
     return True, None
+
+
+#: Verdicts from :func:`check_chapter_encoding`, one entry per audiobook file
+#: (issue #208). "Cheap" above is relative: it still opens and parses atom
+#: headers over a NAS mount, and Troubleshoot runs it for *every* audiobook on
+#: every page load.
+encoding_check_cache = TTLMemo(lambda: settings.chapter_encoding_cache_seconds)
+
+
+def check_chapter_encoding_cached(filepath: str) -> Tuple[bool, Optional[str]]:
+    """:func:`check_chapter_encoding`, memoized on ``(path, mtime, size)``.
+
+    Keyed on content and not on the path alone, deliberately: `repair_chapter_
+    encoding` rewrites the file in place, and a path-keyed memo would keep
+    reporting a problem that no longer exists until the TTL happened to lapse.
+    Conversely an untouched library re-parses nothing, so two page loads inside
+    the TTL cost one parse per file rather than two.
+
+    A file that cannot be stat'ed is not cached at all — it is about to be
+    reported as missing anyway, and a stat failure is not a verdict worth
+    remembering.
+    """
+    try:
+        st = os.stat(filepath)
+    except OSError:
+        return check_chapter_encoding(filepath)
+    key = (filepath, st.st_mtime_ns, st.st_size)
+    # Resolved through the module global on every miss, so tests (and any future
+    # wrapper) that replace `check_chapter_encoding` are still honoured.
+    return encoding_check_cache.get(key, lambda: check_chapter_encoding(filepath))
 
 
 def _patch_chpl_fourcc(filepath: str) -> Optional[Tuple[int, bytes]]:
