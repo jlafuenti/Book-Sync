@@ -332,3 +332,18 @@ def test_no_service_mounts_two_sources_on_one_target(path):
             f"than one source on {duplicates}. Exactly one may win; the rest are "
             "invisible copies."
         )
+
+
+def test_root_template_does_not_publish_the_api_port_on_the_lan():
+    """Issue #179: the API must not be reachable around the proxy. The web
+    container's nginx already proxies `/api/` to the `server` service by name,
+    so a fresh install never needs the API port published at all; if it is
+    published for debugging it must bind loopback only."""
+    services = _services(COMPOSE_TEMPLATES[0])
+    for entry in services["server"].get("ports") or []:
+        assert str(entry).startswith("127.0.0.1:"), (
+            f"docker-compose.example.yml publishes the API on every interface: {entry!r}. "
+            "Bind it to 127.0.0.1 or drop the mapping — nginx in the web image reaches "
+            "the server by container name (issue #179)."
+        )
+
