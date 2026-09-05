@@ -109,8 +109,8 @@ _ACSM_REQUIRED_FILES = ("devicesalt", "device.xml", "activation.xml")
 
 # --- Adobe authorization persistence ---------------------------------------
 # The DeACSM plugin keeps its device cert / keys in three small files under
-# `_adobe_id_path()`. That path lives inside the
-# container fs, so a `docker compose up --build` wipes it. We serialize the
+# `_adobe_id_path()`. That path lives inside the container fs, so a
+# `docker compose up --build` wipes it. We serialize the
 # three files into one JSON blob and store it in the encrypted
 # import_source_credentials table (same store Audible's auth blob uses) so
 # the authorization survives rebuilds. Files are written back to disk at
