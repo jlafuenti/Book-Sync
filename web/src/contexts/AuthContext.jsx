@@ -1,13 +1,14 @@
 import React, { createContext, useContext } from 'react'
-
-const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+import { roleMeets } from '../roles'
 
 const AuthContext = createContext({ user: null, hasMinRole: () => false })
 
 export function AuthProvider({ user, children }) {
+    // The ladder itself lives in `src/roles.js` so the page tests can mock
+    // `useAuth` with the real comparison instead of a copy of it (issue #359).
     function hasMinRole(minRole) {
         if (!user) return false
-        return (ROLE_HIERARCHY[user.role] || 0) >= (ROLE_HIERARCHY[minRole] || 0)
+        return roleMeets(user.role, minRole)
     }
 
     return (
