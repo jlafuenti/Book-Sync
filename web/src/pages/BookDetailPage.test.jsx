@@ -170,6 +170,26 @@ describe('BookDetailPage enrich from ABS', () => {
         const toast = await screen.findByText(/written back to file/)
         expect(toast.getAttribute('style')).toContain('var(--success)')
     })
+
+    // Issue #263: below admin, GET /api/settings/ returns only the allow-list
+    // { abs_enabled, hardcover_configured } — the ABS *URL*, the worker URL, the
+    // filename patterns and the backup schedule are gone. The page must decide
+    // from that payload alone, because a reader account is exactly who opens a
+    // book detail page.
+    it('still offers the ABS action to a plain user, from the trimmed settings payload', async () => {
+        getSettingsMock.mockResolvedValue({ abs_enabled: true, hardcover_configured: false })
+        renderPage()
+
+        expect(await screen.findByRole('button', { name: /Enrich from ABS/ })).toBeInTheDocument()
+    })
+
+    it('hides the ABS action when the trimmed payload says it is off', async () => {
+        getSettingsMock.mockResolvedValue({ abs_enabled: false, hardcover_configured: false })
+        renderPage()
+
+        await waitFor(() => expect(getSettingsMock).toHaveBeenCalled())
+        expect(screen.queryByRole('button', { name: /Enrich from ABS/ })).not.toBeInTheDocument()
+    })
 })
 
 describe('BookDetailPage progress actions (issue #54 device attribution)', () => {
