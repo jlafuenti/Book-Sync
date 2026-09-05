@@ -66,18 +66,26 @@ export default defineConfig({
             include: ['src/**/*.{js,jsx}'],
             exclude: ['src/main.jsx', 'src/test/**', '**/*.test.{js,jsx}'],
             // Global floor (anti-backslide), mirroring the server policy in
-            // docs/testing.md: floor = total - 3. Totals when this was added:
-            // 31 stmts / 67.47 branches / 31.32 funcs / 31 lines. Raise these after
-            // any PR that increases the total. The other web gate is PATCH coverage
+            // docs/testing.md: floor = total - 3. Raise these after any PR that
+            // increases the total. The other web gate is PATCH coverage
             // (diff-cover >=80% on changed lines, PRs only, in web-tests.yml).
+            //
+            // These sat at 28/28/28/64 long after the suite had grown past them
+            // — the doc called them "the furthest behind" and quoted a measured
+            // 66/75/48/66 from 2026-09-04. Ratcheted on 2026-09-05 (issue #389)
+            // against a measured 78.97 stmts / 78.16 branches / 56.28 funcs /
+            // 78.97 lines. Branches is the tightest of the four; the rest carry
+            // more slack, which is deliberate — the point of a floor is to
+            // catch a backslide, not to fail on noise.
+            //
             // NOTE: thresholds apply to whatever ran, so a filtered run
             // (`npx vitest run one.test.jsx --coverage`) will fail them spuriously.
             // Only the full `npm run coverage` is the gate.
             thresholds: {
-                lines: 28,
-                statements: 28,
-                functions: 28,
-                branches: 64,
+                lines: 65,
+                statements: 65,
+                functions: 50,
+                branches: 75,
             },
         },
     },
