@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
 import asyncio
+import contextlib
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Query
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func, delete, literal, null, cast, Integer, String, exists, union_all
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from rapidfuzz import fuzz
@@ -61,6 +63,8 @@ from services.position_service import (
     repoint_standalone_positions_to_ebook,
 )
 from services import multi_file_audiobooks
+from services import library_jobs
+from services.library_jobs import LibraryJobBusy
 from services.uploads import stream_upload_to_path
 from utils import resolve_cover_url, safe_join, utcnow
 
@@ -248,44 +252,21 @@ async def parse_filename_metadata_with_settings(
     return meta
 
 
-async def extract_metadata(
-    filepath: str, file_type: str, db: AsyncSession,
-    library_root: str = None
-) -> Dict[str, Any]:
+def _read_embedded_metadata(filepath: str, file_type: str) -> Dict[str, Any]:
+    """Read the tags embedded in the file itself. Blocking; call it on a thread.
+
+    Split out of :func:`extract_metadata` so the whole of it runs off the event
+    loop (issue #203). Everything here is synchronous file work — unzipping and
+    XML-parsing the EPUB, opening the audio container with mutagen, and shelling
+    out to ffprobe for the runtime — and one uvicorn worker serves every request,
+    so doing it inline stalled position sync, audio streaming, login and
+    ``/api/health`` for the length of a library scan.
+
+    Returns whatever it could read; a file with no readable tags returns ``{}``.
+    Failures are logged and swallowed on purpose: an unreadable EPUB or a
+    truncated container must fall back to the filename, not fail the scan.
     """
-    Extract metadata with priority:
-    1. Embedded Metadata (EPUB/ID3/M4B tags)
-    2. Regex on Filename (including directory-path patterns)
-    3. Fallback to simple filename parsing
-    
-    Args:
-        filepath: Absolute path to the file
-        file_type: 'ebook' or 'audiobook'
-        db: Database session
-        library_root: Root directory of the library for computing relative paths
-    """
-    filename = os.path.basename(filepath)
-    parent_dir = os.path.basename(os.path.dirname(filepath))
-    
-    # Compute relative path from the library root for directory-based patterns
-    relative_path = None
-    if library_root:
-        try:
-            relative_path = os.path.relpath(filepath, library_root)
-            relative_path = relative_path.replace('\\', '/')
-        except ValueError:
-            pass  # Different drives on Windows, etc.
-    
-    logger.debug(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
-    logger.debug(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
-    
-    # 1. Filename/path metadata (Regex/Settings) - Default priority as requested:
-    filename_meta = await parse_filename_metadata_with_settings(
-        filename, db, parent_dir, file_type, relative_path=relative_path
-    )
-    
-    # 2. Try embedded metadata
-    file_meta = {}
+    file_meta: Dict[str, Any] = {}
     try:
         if file_type == "ebook" and filepath.lower().endswith(".epub"):
             book = epub.read_epub(filepath, options={'ignore_ncx': True})
@@ -356,7 +337,7 @@ async def extract_metadata(
             # supply one; callers take "no key" as "leave whatever is stored
             # alone", and an unknown length cleanly disables the audio end zone
             # while a wrong one would silently finish the book.
-            duration = await asyncio.to_thread(probe_duration_seconds, filepath)
+            duration = probe_duration_seconds(filepath)
 
             try:
                 audio = mutagen.File(filepath)
@@ -500,6 +481,50 @@ async def extract_metadata(
                 
     except Exception as e:
         logger.warning(f"[extract_metadata]   Embedded metadata read failed: {e}")
+
+    return file_meta
+
+
+async def extract_metadata(
+    filepath: str, file_type: str, db: AsyncSession,
+    library_root: str = None
+) -> Dict[str, Any]:
+    """
+    Extract metadata with priority:
+    1. Embedded Metadata (EPUB/ID3/M4B tags)
+    2. Regex on Filename (including directory-path patterns)
+    3. Fallback to simple filename parsing
+    
+    Args:
+        filepath: Absolute path to the file
+        file_type: 'ebook' or 'audiobook'
+        db: Database session
+        library_root: Root directory of the library for computing relative paths
+    """
+    filename = os.path.basename(filepath)
+    parent_dir = os.path.basename(os.path.dirname(filepath))
+    
+    # Compute relative path from the library root for directory-based patterns
+    relative_path = None
+    if library_root:
+        try:
+            relative_path = os.path.relpath(filepath, library_root)
+            relative_path = relative_path.replace('\\', '/')
+        except ValueError:
+            pass  # Different drives on Windows, etc.
+    
+    logger.debug(f"[extract_metadata] Processing '{filepath}' (type={file_type})")
+    logger.debug(f"[extract_metadata]   library_root='{library_root}', relative_path='{relative_path}'")
+    
+    # 1. Filename/path metadata (Regex/Settings) - Default priority as requested:
+    filename_meta = await parse_filename_metadata_with_settings(
+        filename, db, parent_dir, file_type, relative_path=relative_path
+    )
+    
+    # 2. Embedded metadata, off the event loop (issue #203). This unzips and
+    #    XML-parses the EPUB, or opens the audio container and probes its
+    #    runtime — seconds of blocking file work per book on a single worker.
+    file_meta = await asyncio.to_thread(_read_embedded_metadata, filepath, file_type)
         
     # Merge: Prefer embedded if exists, but keep filename/path data as fallback
     meta = filename_meta.copy()
@@ -690,6 +715,59 @@ async def _load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
     return enabled, url, token, prefix
 
 
+def _hash_and_size(filepath: str) -> Tuple[str, int]:
+    """Composite hash and byte size of one file. Blocking; call it on a thread.
+
+    Both read the file, so they ride in one helper and cross to a worker thread
+    together (issue #203) rather than blocking the loop per book — the same shape
+    `hash_file` already had at the rehash endpoint.
+    """
+    return compute_file_hash(filepath), os.path.getsize(filepath)
+
+
+async def _find_by_path(db: AsyncSession, model, filepath: str):
+    """The row for `filepath`, or None.
+
+    `file_path` is the library's identity key and is unique per table (issue
+    #256), so `scalar_one_or_none` is safe. Factored out because both ingest
+    helpers use it twice — once to decide insert-vs-enrich, and once more to
+    recover the losing side of a race (see :func:`_insert_or_reread`).
+    """
+    result = await db.execute(select(model).where(model.file_path == filepath))
+    return result.scalar_one_or_none()
+
+
+async def _insert_or_reread(db: AsyncSession, row, model, filepath: str):
+    """Insert `row`, or hand back whatever a racing transaction inserted first.
+
+    Ingestion is check-then-insert, which cannot be made race-free in the
+    application: two scans (or a scan and an upload) both look the path up, both
+    miss, and both insert. The unique index on `file_path` means only one lands
+    — and without this the loser's `IntegrityError` would poison the whole
+    transaction, taking every book already ingested in this batch with it.
+
+    So the insert happens inside a savepoint; the loser rolls back just that far
+    and re-reads the winner's row. Same pattern, and the same reasoning, as
+    `position_service._insert_or_reread` (issue #64).
+
+    Returns `(row_now_in_the_database, created)`.
+    """
+    savepoint = await db.begin_nested()
+    try:
+        db.add(row)
+        await db.flush()
+    except IntegrityError:
+        # The rollback detaches `row` from the session for us.
+        await savepoint.rollback()
+        won = await _find_by_path(db, model, filepath)
+        if won is None:
+            # The conflict wasn't the one we're recovering from; don't swallow it.
+            raise
+        logger.info(f"[scan] Lost the insert race for {filepath}; using row {won.id}")
+        return won, False
+    return row, True
+
+
 async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> bool:
     """
     Process a single ebook file: enrich an existing row, or create a new
@@ -698,8 +776,7 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
     filename = os.path.basename(filepath)
     ext = Path(filename).suffix.lower()
 
-    result = await db.execute(select(EBook).where(EBook.file_path == filepath))
-    existing_ebook = result.scalar_one_or_none()
+    existing_ebook = await _find_by_path(db, EBook, filepath)
 
     if existing_ebook:
         meta = await extract_metadata(filepath, "ebook", db, library_root=ebook_dir)
@@ -738,8 +815,7 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
         return False
 
     try:
-        file_hash = compute_file_hash(filepath)
-        file_size = os.path.getsize(filepath)
+        file_hash, file_size = await asyncio.to_thread(_hash_and_size, filepath)
     except OSError:
         return False
 
@@ -766,20 +842,20 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
         file_size=file_size,
         format=ext.lstrip("."),
     )
-    db.add(ebook)
-    await db.flush()
+    ebook, created = await _insert_or_reread(db, ebook, EBook, filepath)
 
-    try:
-        cover_path = await asyncio.to_thread(
-            _extract_and_save_cover, filepath, "ebook", ebook.id, ebook.title
-        )
-        if cover_path:
-            ebook.cover_path = cover_path
-            db.add(ebook)
-    except Exception as e:
-        logger.error(f"Error extracting cover for new ebook {ebook.id}: {e}")
+    if not ebook.cover_path:
+        try:
+            cover_path = await asyncio.to_thread(
+                _extract_and_save_cover, filepath, "ebook", ebook.id, ebook.title
+            )
+            if cover_path:
+                ebook.cover_path = cover_path
+                db.add(ebook)
+        except Exception as e:
+            logger.error(f"Error extracting cover for new ebook {ebook.id}: {e}")
 
-    return True
+    return created
 
 
 async def _ingest_one_audiobook(
@@ -792,8 +868,7 @@ async def _ingest_one_audiobook(
     filename = os.path.basename(filepath)
     ext = Path(filename).suffix.lower()
 
-    result = await db.execute(select(AudioBook).where(AudioBook.file_path == filepath))
-    existing_audiobook = result.scalar_one_or_none()
+    existing_audiobook = await _find_by_path(db, AudioBook, filepath)
 
     if existing_audiobook:
         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
@@ -850,8 +925,7 @@ async def _ingest_one_audiobook(
         return False
 
     try:
-        file_hash = compute_file_hash(filepath)
-        file_size = os.path.getsize(filepath)
+        file_hash, file_size = await asyncio.to_thread(_hash_and_size, filepath)
     except OSError:
         return False
 
@@ -887,20 +961,20 @@ async def _ingest_one_audiobook(
         file_size=file_size,
         format=ext.lstrip("."),
     )
-    db.add(audiobook)
-    await db.flush()
+    audiobook, created = await _insert_or_reread(db, audiobook, AudioBook, filepath)
 
-    try:
-        cover_path = await asyncio.to_thread(
-            _extract_and_save_cover, filepath, "audiobook", audiobook.id
-        )
-        if cover_path:
-            audiobook.cover_path = cover_path
-            db.add(audiobook)
-    except Exception as e:
-        logger.error(f"Error extracting cover for new audiobook {audiobook.id}: {e}")
+    if not audiobook.cover_path:
+        try:
+            cover_path = await asyncio.to_thread(
+                _extract_and_save_cover, filepath, "audiobook", audiobook.id
+            )
+            if cover_path:
+                audiobook.cover_path = cover_path
+                db.add(audiobook)
+        except Exception as e:
+            logger.error(f"Error extracting cover for new audiobook {audiobook.id}: {e}")
 
-    return True
+    return created
 
 
 async def _maybe_load_abs_index(db: AsyncSession) -> dict:
@@ -957,7 +1031,8 @@ async def scan_files_impl(
     # about the rest of the library, so it never prunes.
     flagged_groups = {}
     for folder in {os.path.dirname(p) for p in audiobook_paths}:
-        for group in _multi_file_groups(folder, audiobook_dir):
+        # Lists the folder and reads every sibling's tags — off the loop (#203).
+        for group in await asyncio.to_thread(_multi_file_groups, folder, audiobook_dir):
             flagged_groups[(group.folder_path, group.extension)] = group
     skip = {p for g in flagged_groups.values() for p in g.paths}
     if flagged_groups:
@@ -987,7 +1062,11 @@ async def scan_files_impl(
 
 
 def _multi_file_groups(folder: str, audiobook_dir: str):
-    """The multi-file audiobook groups in one folder (issue #63)."""
+    """The multi-file audiobook groups in one folder (issue #63).
+
+    Blocking: it lists the folder and reads every file's tags. Callers inside an
+    `async def` must reach it through `asyncio.to_thread` (issue #203).
+    """
     try:
         names = [n for n in os.listdir(folder)
                  if os.path.isfile(os.path.join(folder, n))]
@@ -998,22 +1077,95 @@ def _multi_file_groups(folder: str, audiobook_dir: str):
     )
 
 
+def _walk_tree(root: str) -> List[Tuple[str, List[str]]]:
+    """`(directory, filenames)` for every directory under `root`; `[]` if absent.
+
+    `os.walk` stats every entry it returns, so on a library of a few thousand
+    files the walk alone is seconds of blocking work. Materialising it in one
+    sync helper lets the caller cross to a worker thread once (issue #203) —
+    iterating the generator from the event loop would run those stat calls back
+    on the loop, one directory at a time, which is the same bug in disguise.
+    """
+    if not os.path.isdir(root):
+        return []
+    return [(directory, files) for directory, _dirs, files in os.walk(root)]
+
+
+def _classify_tree(tree: List[Tuple[str, List[str]]], audiobook_dir: str) -> list:
+    """Multi-file audiobook groups across a whole walked tree (issue #63).
+
+    Blocking — it reads the embedded tags of every audio file it considers — so
+    the whole tree is classified in one hop to a worker thread rather than one
+    hop per folder.
+    """
+    groups = []
+    for directory, files in tree:
+        groups.extend(multi_file_audiobooks.classify_folder(
+            directory, files, multi_file_audiobooks.read_audio_tags,
+            library_root=audiobook_dir,
+        ))
+    return groups
+
+
+# Files ingested between commits during a full scan (issue #202). The scan used
+# to be one transaction for the whole library: every write was a `flush()` and
+# the only `commit()` was `get_db`'s at the end of the request, so a crash, a
+# container restart or one unreadable file threw away everything the walk had
+# done — minutes of work on the production library — while Postgres held a write
+# transaction open for the duration.
+#
+# 50 is chosen for the crash window, not for throughput: small enough that a scan
+# that dies has lost at most a handful of books (the next scan re-ingests them),
+# large enough that the commit is a rounding error next to the per-file hashing
+# and tag parsing around it.
+SCAN_COMMIT_BATCH = 50
+
+
+class _Batch:
+    """Commit every `size` items, so a long job leaves its progress behind.
+
+    Shared by the four library jobs (issue #202). All of them used to run as one
+    request-long transaction and commit — if at all — only at the very end, which
+    meant a crash discarded every row they had touched and Postgres held a write
+    transaction open for the whole walk.
+
+    `tick()` is called once per item, whether or not that item changed anything,
+    so the commit interval tracks work done rather than rows written.
+    """
+
+    def __init__(self, db: AsyncSession, size: Optional[int] = None):
+        self._db = db
+        self._size = size if size is not None else SCAN_COMMIT_BATCH
+        self._pending = 0
+
+    async def tick(self) -> None:
+        self._pending += 1
+        if self._pending >= self._size:
+            await self._db.commit()
+            self._pending = 0
+
+
 async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
     """
     Full library scan: walk both library directories and ingest every
     supported file. The body of POST /api/library/scan minus auth.
+
+    Commits every `SCAN_COMMIT_BATCH` files, so partial progress survives a crash
+    and no single transaction stays open for the length of the walk. The response
+    shape is unchanged; only the durability is.
     """
     new_ebooks = 0
     new_audiobooks = 0
+    batch = _Batch(db)
 
-    if os.path.isdir(settings.ebook_dir):
-        for root, _, files in os.walk(settings.ebook_dir):
-            for filename in files:
-                if Path(filename).suffix.lower() not in EBOOK_EXTENSIONS:
-                    continue
-                filepath = os.path.join(root, filename)
-                if await _ingest_one_ebook(db, filepath, settings.ebook_dir):
-                    new_ebooks += 1
+    for root, files in await asyncio.to_thread(_walk_tree, settings.ebook_dir):
+        for filename in files:
+            if Path(filename).suffix.lower() not in EBOOK_EXTENSIONS:
+                continue
+            filepath = os.path.join(root, filename)
+            if await _ingest_one_ebook(db, filepath, settings.ebook_dir):
+                new_ebooks += 1
+            await batch.tick()
 
     abs_index = await _maybe_load_abs_index(db)
 
@@ -1022,15 +1174,14 @@ async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
     # `AudioBook` has one `file_path`, and one row per track polluted the
     # library and auto-pairing. The flags are reconciled after the walk so a
     # folder that stops qualifying (merged .m4b, tracks removed) clears.
+    audio_tree = await asyncio.to_thread(_walk_tree, settings.audiobook_dir)
     flagged_groups = []
-    if os.path.isdir(settings.audiobook_dir):
-        for root, _, files in os.walk(settings.audiobook_dir):
-            groups = multi_file_audiobooks.classify_folder(
-                root, files, multi_file_audiobooks.read_audio_tags,
-                library_root=settings.audiobook_dir,
-            )
-            flagged_groups.extend(groups)
-            skip = {p for g in groups for p in g.paths}
+    if audio_tree:
+        flagged_groups = await asyncio.to_thread(
+            _classify_tree, audio_tree, settings.audiobook_dir
+        )
+        skip = {p for g in flagged_groups for p in g.paths}
+        for root, files in audio_tree:
             for filename in files:
                 if Path(filename).suffix.lower() not in AUDIOBOOK_EXTENSIONS:
                     continue
@@ -1039,10 +1190,17 @@ async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
                     continue
                 if await _ingest_one_audiobook(db, filepath, settings.audiobook_dir, abs_index):
                     new_audiobooks += 1
+                await batch.tick()
         await multi_file_audiobooks.sync_folder_flags(db, flagged_groups, prune=True)
 
     await db.flush()
     auto_matched = await auto_match_books(db)
+
+    # The tail of the walk, the folder flags and the auto-matched pairs are all
+    # still uncommitted here. `get_db` would commit them at the end of the
+    # request, but the short final batch has to land the same way every other
+    # batch did, and the import-scheduler caller has no request around it.
+    await db.commit()
 
     return LibraryScanResponse(
         new_ebooks=new_ebooks,
@@ -1056,6 +1214,35 @@ async def scan_library_impl(db: AsyncSession) -> LibraryScanResponse:
     )
 
 
+@contextlib.asynccontextmanager
+async def _library_job(name: str):
+    """Hold the library-job guard for the length of this request, or 409.
+
+    `/scan`, `/rescan-all`, `/rehash` and `/enrich-abs` all walk the whole
+    library, rewrite the same rows, and (for the audiobook paths) rewrite the
+    same embedded tags on disk. Two of them at once interleave: both read "this
+    path is not in the database yet" for every file the other has not committed,
+    which the unique index on `file_path` then turns into an `IntegrityError` on
+    every second insert (issue #202).
+
+    That happens by accident, not by malice — nginx times the request out after a
+    minute while the scan keeps running, so the operator sees an error on a live
+    scan and clicks again. Refusing the second one with 409 is the honest answer;
+    queueing it would just park it behind the same timeout.
+
+    See `services/library_jobs.py` for why a flag rather than a lock.
+    """
+    busy = library_jobs.running_job()
+    if busy is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A library {busy} is already running. Wait for it to finish "
+                   f"before starting another one.",
+        )
+    async with library_jobs.exclusive(name):
+        yield
+
+
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
     db: AsyncSession = Depends(get_db),
@@ -1066,8 +1253,11 @@ async def scan_library(
     Recursively searches subdirectories.
     Extracts metadata from filenames and tags.
     Adds any undiscovered files to the database and attempts auto-matching.
+
+    Refuses with 409 while another library job is running (issue #202).
     """
-    return await scan_library_impl(db)
+    async with _library_job("scan"):
+        return await scan_library_impl(db)
 
 
 @router.post("/rescan-all")
@@ -1078,9 +1268,23 @@ async def rescan_all_files(
     """
     Force a rescan of EVERY file in the library to extract metadata.
     Overrides all DB metadata fields with whatever is extracted from the files.
+
+    Refuses with 409 while another library job is running (issue #202).
+    """
+    async with _library_job("rescan-all"):
+        return await _rescan_all_impl(db)
+
+
+async def _rescan_all_impl(db: AsyncSession) -> dict:
+    """The body of POST /rescan-all minus auth and the job guard.
+
+    Commits in batches like the scan does: this re-reads and rewrites every row
+    in the library, and losing all of it to one unreadable file at the far end is
+    the same bug in a different endpoint (issue #202).
     """
     updated_ebooks = 0
     updated_audiobooks = 0
+    batch = _Batch(db)
     
     # Ebooks
     result = await db.execute(select(EBook))
@@ -1123,6 +1327,7 @@ async def rescan_all_files(
             updated_ebooks += 1
         except Exception as e:
             logger.error(f"[global-rescan] Error on ebook {book.id}: {e}")
+        await batch.tick()
 
     # Audiobooks
     result = await db.execute(select(AudioBook))
@@ -1165,6 +1370,7 @@ async def rescan_all_files(
             updated_audiobooks += 1
         except Exception as e:
             logger.error(f"[global-rescan] Error on audiobook {book.id}: {e}")
+        await batch.tick()
 
     await db.commit()
     
@@ -1178,6 +1384,12 @@ async def rehash_library(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_editor_user),
 ):
+    """Rehash the library; refuses with 409 while another job runs (issue #202)."""
+    async with _library_job("rehash"):
+        return await _rehash_impl(db)
+
+
+async def _rehash_impl(db: AsyncSession) -> dict:
     """One-time migration to the composite hash scheme (issue #45).
 
     Recomputes file_hash for every row whose file exists on disk, then remaps
@@ -1185,6 +1397,15 @@ async def rehash_library(
     stores raw hash values, so without the remap every existing exclusion
     would silently stop matching. Rows whose file is missing keep their stale
     hash (harmless: it can no longer collide with a composite hash).
+
+    Deliberately *not* batched, unlike the other three library jobs (issue
+    #202): the second pass remaps `auto_pair_excluded_hashes` through the
+    old→new mapping the first pass builds, so committing part-way would leave
+    rows rehashed with their exclusions still pointing at the old values — every
+    unpair the user has ever recorded silently stops matching, and the next scan
+    re-pairs what they broke apart. The two passes have to land together. It
+    takes the job guard like the others, which is what stops it overlapping a
+    scan; a crash mid-rehash costs a re-run, not correctness.
     """
     from services.file_hash import hash_file
 
@@ -3276,7 +3497,17 @@ async def enrich_library_from_abs(
     Force re-enrich all audiobooks from Audiobookshelf metadata.
     Overwrites existing values (unlike the normal scan which only fills gaps).
     Also writes enriched metadata back into each audio file's embedded tags.
+
+    Refuses with 409 while another library job is running (issue #202): this one
+    rewrites tags on disk as it goes, so overlapping it with a scan means two
+    writers on the same files as well as the same rows.
     """
+    async with _library_job("enrich-abs"):
+        return await _enrich_abs_impl(db)
+
+
+async def _enrich_abs_impl(db: AsyncSession) -> dict:
+    """The body of POST /enrich-abs minus auth and the job guard."""
     abs_enabled, abs_url, abs_token, abs_prefix = await _load_abs_settings(db)
     if not abs_url or not abs_token:
         raise HTTPException(
@@ -3295,6 +3526,7 @@ async def enrich_library_from_abs(
     audiobooks = result.scalars().all()
     updated_count = 0
     tag_write_failures: list[dict] = []
+    batch = _Batch(db)
 
     for ab in audiobooks:
         file_meta = {
@@ -3332,6 +3564,11 @@ async def enrich_library_from_abs(
                     {"id": ab.id, "title": ab.title, "error": tag_write_error}
                 )
             updated_count += 1
+        # Batched *outside* the `if changed`, and deliberately close behind the
+        # tag write above: this endpoint edits files on disk inside the
+        # transaction, so the longer the transaction the wider the window where a
+        # rollback leaves the file changed and the row not (issue #202).
+        await batch.tick()
 
     await db.commit()
     message = f"Enriched {updated_count} audiobook(s) from Audiobookshelf"
@@ -3520,13 +3757,11 @@ class UnsupportedFileResponse(BaseModel):
 
 async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSession) -> EBook:
     """Add the converted EPUB as a new EBook record (inheriting source metadata). No-op if already registered."""
-    existing = await db.execute(select(EBook).where(EBook.file_path == epub_path))
-    existing_eb = existing.scalar_one_or_none()
+    existing_eb = await _find_by_path(db, EBook, epub_path)
     if existing_eb:
         return existing_eb
 
-    file_size = Path(epub_path).stat().st_size
-    file_hash = compute_file_hash(epub_path)
+    file_hash, file_size = await asyncio.to_thread(_hash_and_size, epub_path)
 
     epub_eb = EBook(
         title=source_eb.title,
@@ -3540,8 +3775,7 @@ async def _register_epub_in_db(epub_path: str, source_eb: EBook, db: AsyncSessio
         format="epub",
         metadata_source=source_eb.metadata_source,
     )
-    db.add(epub_eb)
-    await db.flush()
+    epub_eb, _created = await _insert_or_reread(db, epub_eb, EBook, epub_path)
     return epub_eb
 
 
