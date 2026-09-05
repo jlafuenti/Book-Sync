@@ -67,7 +67,34 @@ def _ensure_dirs() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
 
-_ADOBE_ID_PATH = Path("/root/.config/calibre/plugins/DeACSM/account")
+# Where Calibre keeps its configuration, and with it the DeACSM plugin's
+# device keys. This used to be hardcoded to /root/.config/calibre; the server
+# container no longer runs as root (issue #180), so that path is neither
+# writable nor where `calibre-customize` installed the plugin at build time —
+# the startup restore of the stored Adobe authorization would fail with EACCES
+# and `is_adobe_id_authorized()` would report "not authorized" forever.
+#
+# Resolve it the way Calibre itself does: CALIBRE_CONFIG_DIRECTORY if set,
+# otherwise $HOME/.config/calibre. The old root path is kept as a last resort so
+# a container built before this change still finds its existing files.
+_LEGACY_CALIBRE_CONFIG_DIR = Path("/root/.config/calibre")
+
+
+def _calibre_config_dir() -> Path:
+    override = os.environ.get("CALIBRE_CONFIG_DIRECTORY")
+    if override:
+        return Path(override)
+    candidate = Path(os.path.expanduser("~")) / ".config" / "calibre"
+    if not candidate.exists() and _LEGACY_CALIBRE_CONFIG_DIR.exists():
+        return _LEGACY_CALIBRE_CONFIG_DIR
+    return candidate
+
+
+def _adobe_id_path() -> Path:
+    """The DeACSM plugin's account directory (devicesalt + the two XML files)."""
+    return _calibre_config_dir() / "plugins" / "DeACSM" / "account"
+
+
 _AUTHORIZE_SCRIPT = Path(__file__).parent / "_acsm_authorize.py"
 _FULFILL_SCRIPT = Path(__file__).parent / "_acsm_fulfill.py"
 
@@ -82,7 +109,7 @@ _ACSM_REQUIRED_FILES = ("devicesalt", "device.xml", "activation.xml")
 
 # --- Adobe authorization persistence ---------------------------------------
 # The DeACSM plugin keeps its device cert / keys in three small files under
-# /root/.config/calibre/plugins/DeACSM/account/. That path lives inside the
+# `_adobe_id_path()`. That path lives inside the
 # container fs, so a `docker compose up --build` wipes it. We serialize the
 # three files into one JSON blob and store it in the encrypted
 # import_source_credentials table (same store Audible's auth blob uses) so
@@ -94,11 +121,11 @@ def _read_account_files_from_disk() -> Optional[dict]:
     Returns None if any file is missing."""
     import base64
 
-    if not _ADOBE_ID_PATH.exists():
+    if not _adobe_id_path().exists():
         return None
     out: dict = {}
     for name in _ACSM_REQUIRED_FILES:
-        path = _ADOBE_ID_PATH / name
+        path = _adobe_id_path() / name
         if not path.is_file():
             return None
         data = path.read_bytes()
@@ -113,11 +140,11 @@ def _write_account_files_to_disk(blob: dict) -> None:
     """Write the three account files back to the plugin's on-disk dir."""
     import base64
 
-    _ADOBE_ID_PATH.mkdir(parents=True, exist_ok=True)
+    _adobe_id_path().mkdir(parents=True, exist_ok=True)
     for name in _ACSM_REQUIRED_FILES:
         if name not in blob:
             raise RuntimeError(f"acsm credential blob missing '{name}'")
-        (_ADOBE_ID_PATH / name).write_bytes(base64.b64decode(blob[name]))
+        (_adobe_id_path() / name).write_bytes(base64.b64decode(blob[name]))
 
 
 async def persist_adobe_account_to_credentials(db) -> None:
@@ -170,10 +197,10 @@ def is_adobe_id_authorized() -> bool:
     fulfillment time — which is much more confusing than just saying
     "not authorized" up front.
     """
-    if not _ADOBE_ID_PATH.exists():
+    if not _adobe_id_path().exists():
         return False
     required = ("devicesalt", "device.xml", "activation.xml")
-    return all((_ADOBE_ID_PATH / name).is_file() for name in required)
+    return all((_adobe_id_path() / name).is_file() for name in required)
 
 
 def authorize_adobe_id(mode: str = "anonymous", email: str = "", password: str = "") -> None:
@@ -228,9 +255,9 @@ def authorize_adobe_id(mode: str = "anonymous", email: str = "", password: str =
 def deauthorize_adobe_id() -> None:
     """Wipe the plugin's account dir so the user can re-authorize with a
     different account (or anonymously)."""
-    if not _ADOBE_ID_PATH.exists():
+    if not _adobe_id_path().exists():
         return
-    for child in _ADOBE_ID_PATH.iterdir():
+    for child in _adobe_id_path().iterdir():
         try:
             if child.is_file() or child.is_symlink():
                 child.unlink()
