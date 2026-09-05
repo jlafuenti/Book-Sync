@@ -526,6 +526,91 @@ class BookSyncRepository @Inject constructor(
     /** Get a single audiobook by ID. */
     suspend fun getAudiobookById(audiobookId: Int): AudioBookEntity? = audioBookDao.getAudioBookById(audiobookId)
 
+    // ---- Cache first, server second (issue #338) --------------------------
+    //
+    // Search results come from the server, so a fresh install can offer to
+    // download an id Room has never seen. `DownloadWorker` read Room and only
+    // Room, so the tap died as `Result.failure("Audiobook not found in DB")`
+    // before a single request was issued — visible in logcat and nowhere else.
+    // Opening the Library tab and refreshing fixed it, which is not something a
+    // user can be expected to guess.
+    //
+    // The two failure modes stay distinguishable on purpose:
+    //   - null  — the server answered, and does not have this book. Final; the
+    //             caller says so and stops.
+    //   - throw — we could not ask (offline, 5xx, expired session). The
+    //             worker's `classifyDownloadFailure` still gets to retry, and
+    //             the message names the network rather than blaming the book.
+
+    /** Room's copy of an ebook, fetching and caching it from the server if absent. */
+    suspend fun resolveEbookById(ebookId: Int): EBookEntity? =
+        eBookDao.getEBookById(ebookId) ?: fetchEbookIntoCache(ebookId)
+
+    /** Room's copy of an audiobook, fetching and caching it from the server if absent. */
+    suspend fun resolveAudiobookById(audiobookId: Int): AudioBookEntity? =
+        audioBookDao.getAudioBookById(audiobookId) ?: fetchAudiobookIntoCache(audiobookId)
+
+    /**
+     * Room's copy of a pair, refreshing the whole pair list if absent.
+     *
+     * There is no single-pair endpoint on the server, so this reuses the
+     * refresh a Library pull already runs rather than inventing a second
+     * mapping of `BookPairResponse` that would drift from [refreshPairs].
+     */
+    suspend fun resolvePairById(pairId: Int): BookPairEntity? =
+        bookPairDao.getPairById(pairId) ?: run {
+            log("resolvePairById — pair $pairId not cached; refreshing pairs")
+            refreshPairs()
+            bookPairDao.getPairById(pairId)
+        }
+
+    private suspend fun fetchEbookIntoCache(ebookId: Int): EBookEntity? {
+        log("resolveEbookById — ebook $ebookId not cached; asking the server")
+        val remote = getOrNullOn404 { api.getEbook(ebookId) } ?: return null
+        val entity = EBookEntity(
+            id = remote.id,
+            title = remote.title,
+            author = remote.author,
+            filename = remote.filename,
+            fileSize = remote.file_size,
+            format = remote.format,
+            series = remote.series,
+            seriesIndex = remote.series_index,
+            uploadedAt = remote.uploaded_at,
+            isDownloaded = false,
+        )
+        eBookDao.upsertEBooks(listOf(entity))
+        return entity
+    }
+
+    private suspend fun fetchAudiobookIntoCache(audiobookId: Int): AudioBookEntity? {
+        log("resolveAudiobookById — audiobook $audiobookId not cached; asking the server")
+        val remote = getOrNullOn404 { api.getAudiobook(audiobookId) } ?: return null
+        val entity = AudioBookEntity(
+            id = remote.id,
+            title = remote.title,
+            author = remote.author,
+            filename = remote.filename,
+            durationSeconds = remote.duration_seconds,
+            format = remote.format,
+            series = remote.series,
+            seriesIndex = remote.series_index,
+            uploadedAt = remote.uploaded_at,
+            isDownloaded = false,
+            coverFilename = remote.cover_path,
+        )
+        audioBookDao.upsertAudioBooks(listOf(entity))
+        return entity
+    }
+
+    /** 404 is an answer ("gone"); every other failure is a question we could not ask. */
+    private suspend fun <T> getOrNullOn404(fetch: suspend () -> T): T? =
+        try {
+            fetch()
+        } catch (e: retrofit2.HttpException) {
+            if (e.code() == 404) null else throw e
+        }
+
     /** Reactive single-pair flow for the details screen. */
     fun getPairByIdFlow(pairId: Int): Flow<BookPairEntity?> = bookPairDao.getPairByIdFlow(pairId)
 
