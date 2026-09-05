@@ -528,6 +528,7 @@ _PERSONAL_DATA_ALLOWLIST = {
     ("docker-compose.example.yml", "private_ip"): "example subnet in a template",
     ("docs/android.md", "private_ip"): "documented example LAN address",
     ("docs/operations.md", "private_ip"): "documented example subnet",
+    ("docs/demo-server.md", "private_ip"): "documented example subnet in the Caddy/compose sample",
     # -- Production code whose subject *is* the address ranges.
     ("server/services/url_safety.py", "private_ip"): (
         "the SSRF blocklist: these ranges are the thing it refuses to fetch"
