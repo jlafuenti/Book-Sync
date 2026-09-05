@@ -1702,6 +1702,117 @@ describe('register() — error bodies', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Registration modes and invites (issue #210)
+// ---------------------------------------------------------------------------
+
+describe('register() — invite codes', () => {
+    const okResponse = () => ({ ok: true, status: 201, json: async () => ({ message: 'ok' }) })
+
+    it('omits invite_code entirely when there is none', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(okResponse())
+        vi.stubGlobal('fetch', fetchMock)
+        const { register } = await import('./api')
+
+        await register('alice', 'a@example.com', 'hunter22')
+
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+        expect(body).toEqual({ username: 'alice', email: 'a@example.com', password: 'hunter22' })
+    })
+
+    it('sends it when one was typed', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(okResponse())
+        vi.stubGlobal('fetch', fetchMock)
+        const { register } = await import('./api')
+
+        await register('alice', 'a@example.com', 'hunter22', 'CODE-1')
+
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body).invite_code).toBe('CODE-1')
+    })
+})
+
+describe('getRegistrationMode()', () => {
+    const modeResponse = (mode) => ({ ok: true, status: 200, json: async () => ({ mode }) })
+
+    it('returns the mode the server reports', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(modeResponse('invite')))
+        const { getRegistrationMode } = await import('./api')
+
+        expect(await getRegistrationMode()).toBe('invite')
+    })
+
+    it('sends no Authorization header — it is asked before anyone signs in', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(modeResponse('closed'))
+        vi.stubGlobal('fetch', fetchMock)
+        const { getRegistrationMode } = await import('./api')
+
+        await getRegistrationMode()
+
+        const init = fetchMock.mock.calls[0][1]
+        expect(init === undefined || !('headers' in (init || {}))).toBe(true)
+    })
+
+    it('falls back to open on an error status', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonErrorResponse(404, 'Not Found')))
+        const { getRegistrationMode } = await import('./api')
+
+        expect(await getRegistrationMode()).toBe('open')
+    })
+
+    it('falls back to open when the network is down', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+        const { getRegistrationMode } = await import('./api')
+
+        expect(await getRegistrationMode()).toBe('open')
+    })
+
+    it('falls back to open on a mode it does not recognise', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(modeResponse('semi-open')))
+        const { getRegistrationMode } = await import('./api')
+
+        expect(await getRegistrationMode()).toBe('open')
+    })
+})
+
+describe('invite endpoints', () => {
+    beforeEach(() => localStorage.setItem('tandem_token', 'access-1'))
+
+    it('createInvite returns the code the server minted', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 201, json: async () => ({ id: 3, code: 'CODE-3' }),
+        }))
+        const { createInvite } = await import('./api')
+
+        expect((await createInvite()).code).toBe('CODE-3')
+    })
+
+    it('getInvites surfaces the server detail on a refusal', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            jsonErrorResponse(403, 'Requires admin role or higher')))
+        const { getInvites } = await import('./api')
+
+        await expect(getInvites()).rejects.toThrow('Requires admin role or higher')
+    })
+
+    it('revokeInvite DELETEs the id and tolerates the empty 204', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204, json: async () => { throw new Error('no body') } })
+        vi.stubGlobal('fetch', fetchMock)
+        const { revokeInvite } = await import('./api')
+
+        await revokeInvite(9)
+
+        expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/auth\/invites\/9$/)
+        expect(fetchMock.mock.calls[0][1].method).toBe('DELETE')
+    })
+
+    it('revokeInvite throws with the server detail', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonErrorResponse(404, 'Invite not found')))
+        const { revokeInvite } = await import('./api')
+
+        await expect(revokeInvite(9)).rejects.toThrow('Invite not found')
+    })
+})
+
+// ---------------------------------------------------------------------------
 // The error contract (issue #275)
 //
 // `_jsonOrThrow` existed and fixed exactly this, but only the functions added

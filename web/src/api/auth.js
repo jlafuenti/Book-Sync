@@ -24,14 +24,63 @@ export async function login(username, password) {
     return data;
 }
 
-export async function register(username, email, password) {
+export async function register(username, email, password, inviteCode) {
     const resp = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password }),
+        // The code only travels when the server is in `invite` mode and the user
+        // typed one (issue #210). Omitted rather than sent empty, so an `open`
+        // server sees exactly the body it always saw.
+        body: JSON.stringify(
+            inviteCode ? { username, email, password, invite_code: inviteCode }
+                : { username, email, password },
+        ),
     });
     if (!resp.ok) throw new Error(await errorMessage(resp, 'Registration failed'));
     return resp.json();
+}
+
+/**
+ * How this server treats a stranger: 'open' | 'invite' | 'closed' (issue #210).
+ *
+ * Unauthenticated — the login page asks before anyone has a token, to decide
+ * whether to offer a request form, a request form with an invite-code field, or
+ * a line telling the visitor to ask their administrator.
+ *
+ * Falls back to 'open' on anything unexpected: an older server with no such
+ * endpoint, a 502 from the proxy, a body this build does not recognise. Failing
+ * closed here would hide the request form from a whole deployment over a
+ * transient error, which is a worse outcome than briefly offering a form whose
+ * submit the server then refuses.
+ */
+export async function getRegistrationMode() {
+    try {
+        const resp = await fetch(`${API_BASE}/auth/registration`);
+        if (!resp.ok) return 'open';
+        const data = await resp.json();
+        return ['open', 'invite', 'closed'].includes(data?.mode) ? data.mode : 'open';
+    } catch {
+        return 'open';
+    }
+}
+
+/**
+ * Invites (issue #210) — admin only. `createInvite` is the one and only time a
+ * code is returned; nothing stores it and it cannot be read back.
+ */
+export async function createInvite() {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/invites`, { method: 'POST' });
+    return jsonOrThrow(resp, 'Failed to create invite');
+}
+
+export async function getInvites() {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/invites`);
+    return jsonOrThrow(resp, 'Failed to load invites');
+}
+
+export async function revokeInvite(id) {
+    const resp = await fetchWithAuth(`${API_BASE}/auth/invites/${id}`, { method: 'DELETE' });
+    if (!resp.ok) throw new Error(await errorMessage(resp, 'Failed to revoke invite'));
 }
 
 export async function getMe() {

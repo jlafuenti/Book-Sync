@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
     getUsers, createUser, updateUser, approveUser,
-    resetUserPassword, deleteUser, getAuditLog
+    resetUserPassword, deleteUser, getAuditLog,
+    createInvite, getInvites, revokeInvite
 } from '../api'
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../lib/passwordPolicy'
 import { useAuth } from '../contexts/AuthContext'
@@ -314,6 +315,137 @@ function AuditLogTab() {
 }
 
 /* ── UserManagementSection (named export for embedding) ───────────── */
+/* ── InvitesTab (issue #210) ─────────────────────────────────── */
+
+/**
+ * Invites are the whole of `registration_mode = "invite"`, and this is the only
+ * place one can be issued — there is no CLI.
+ *
+ * The code comes back exactly once, from the create call, and is held in local
+ * state until the admin navigates away. Nothing re-reads it: the server stores
+ * only a sha256, so a "show me that code again" button could not be built even
+ * if it were wanted.
+ */
+function InvitesTab() {
+    const [invites, setInvites] = useState([])
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState('')
+    const [issued, setIssued] = useState(null)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        try {
+            setInvites(await getInvites())
+        } catch (err) {
+            setError(err.message)
+        } finally {
+            setLoading(false)
+        }
+    }, [])
+
+    useEffect(() => { load() }, [load])
+
+    const handleCreate = async () => {
+        setError('')
+        try {
+            const invite = await createInvite()
+            setIssued(invite)
+            load()
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    const handleRevoke = async (invite) => {
+        if (!confirm(`Revoke invite #${invite.id}? Anyone holding the code will no longer be able to use it.`)) return
+        setError('')
+        try {
+            await revokeInvite(invite.id)
+            load()
+        } catch (err) {
+            setError(err.message)
+        }
+    }
+
+    return (
+        <div>
+            <div className="admin-toolbar">
+                <div className="admin-toolbar-left">
+                    <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        Single-use codes. They matter only while registration mode is
+                        <strong> Invite</strong>; the account they create still needs approving.
+                    </p>
+                </div>
+                <div className="admin-toolbar-right">
+                    <button className="btn btn-primary" onClick={handleCreate}>+ Create Invite</button>
+                </div>
+            </div>
+
+            {error && <div className="alert alert-error" style={{ marginBottom: 16 }}>⚠️ {error}</div>}
+
+            {issued && (
+                <div className="alert alert-success" style={{ marginBottom: 16 }}>
+                    <div>Invite code: <code>{issued.code}</code></div>
+                    <div style={{ fontSize: '0.8rem', marginTop: 4 }}>
+                        Copy it now — it will not be shown again. The server keeps only a hash.
+                    </div>
+                </div>
+            )}
+
+            {loading ? (
+                <div style={{ textAlign: 'center', padding: '40px' }}><div className="spinner"></div></div>
+            ) : (
+                <div className="admin-table-card">
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Expires</th>
+                                <th>Created by</th>
+                                <th>Used by</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {invites.length === 0 && (
+                                <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                                    No invites yet.
+                                </td></tr>
+                            )}
+                            {invites.map(inv => (
+                                <tr key={inv.id}>
+                                    <td>{inv.id}</td>
+                                    <td>{inv.status}</td>
+                                    <td>{formatDate(inv.created_at)}</td>
+                                    <td>{formatDate(inv.expires_at)}</td>
+                                    <td>{inv.created_by || '—'}</td>
+                                    <td>{inv.used_by || '—'}</td>
+                                    <td>
+                                        {/* A spent invite has nothing left to revoke, and
+                                            deleting the row would erase which account it
+                                            produced. */}
+                                        {inv.status !== 'used' && (
+                                            <button
+                                                className="btn btn-danger"
+                                                style={{ padding: '2px 8px', fontSize: '0.8rem' }}
+                                                onClick={() => handleRevoke(inv)}
+                                            >
+                                                Revoke
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    )
+}
+
 export function UserManagementSection() {
     const { user: currentUser } = useAuth()
     const [users, setUsers] = useState([])
@@ -393,6 +525,12 @@ export function UserManagementSection() {
                             {pendingCount > 0 && (
                                 <span className="badge badge-pending" style={{ marginLeft: 6 }}>{pendingCount}</span>
                             )}
+                        </button>
+                        <button
+                            className={`library-filter-pill${activeTab === 'invites' ? ' active' : ''}`}
+                            onClick={() => setActiveTab('invites')}
+                        >
+                            Invites
                         </button>
                         <button
                             className={`library-filter-pill${activeTab === 'audit' ? ' active' : ''}`}
@@ -530,6 +668,9 @@ export function UserManagementSection() {
                     )}
                 </>
             )}
+
+            {/* ── Invites tab ── */}
+            {activeTab === 'invites' && <InvitesTab />}
 
             {/* ── Audit Log tab ── */}
             {activeTab === 'audit' && <AuditLogTab />}
