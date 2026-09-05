@@ -339,9 +339,23 @@ def test_root_template_does_not_publish_the_api_port_on_the_lan():
     container's nginx already proxies `/api/` to the `server` service by name,
     so a fresh install never needs the API port published at all; if it is
     published for debugging it must bind loopback only."""
-    services = _services(COMPOSE_TEMPLATES[0])
-    for entry in services["server"].get("ports") or []:
-        assert str(entry).startswith("127.0.0.1:"), (
+    body = _services(COMPOSE_TEMPLATES[0])["server"]
+    published = []
+    in_ports = False
+    for line in body:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped == "ports:":
+            in_ports = True
+            continue
+        if in_ports:
+            if stripped.startswith("- "):
+                published.append(stripped[2:].strip().strip('"').strip("'"))
+                continue
+            in_ports = False
+    for entry in published:
+        assert entry.startswith("127.0.0.1:"), (
             f"docker-compose.example.yml publishes the API on every interface: {entry!r}. "
             "Bind it to 127.0.0.1 or drop the mapping — nginx in the web image reaches "
             "the server by container name (issue #179)."
