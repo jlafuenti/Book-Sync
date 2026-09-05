@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext'
 import useIsMobile from '../hooks/useIsMobile'
 import FilterPill from '../components/FilterPill'
 import CoverImg from '../components/CoverImg'
+import BulkMetadataEditModal from '../components/BulkMetadataEditModal'
 import './SeriesPage.css'
 
 const SORT_LABELS = { name: 'Name', count: 'Book Count', recent: 'Recently Added' }
@@ -51,7 +52,6 @@ export default function SeriesPage() {
 
     // Bulk edit
     const [bulkEditOpen, setBulkEditOpen] = useState(false)
-    const [bulkEditFields, setBulkEditFields] = useState({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
     const [bulkSaving, setBulkSaving] = useState(false)
 
     const sortRef = useRef(null)
@@ -278,14 +278,7 @@ export default function SeriesPage() {
         return items
     }, [filteredSeries])
 
-    async function handleBulkEdit() {
-        const patch = {}
-        if (bulkEditFields.author.trim()) patch.author = bulkEditFields.author.trim()
-        if (bulkEditFields.series.trim()) patch.series = bulkEditFields.series.trim()
-        if (bulkEditFields.series_index.trim()) patch.series_index = parseFloat(bulkEditFields.series_index) || null
-        if (bulkEditFields.publisher.trim()) patch.publisher = bulkEditFields.publisher.trim()
-        if (bulkEditFields.published_year.trim()) patch.published_year = parseInt(bulkEditFields.published_year) || null
-        if (Object.keys(patch).length === 0) return
+    async function handleBulkEdit(patch) {
         setBulkSaving(true)
         try {
             const selected = allVisibleItems.filter(i => selectedKeys.has(i.key))
@@ -296,7 +289,6 @@ export default function SeriesPage() {
                 return calls
             }))
             setBulkEditOpen(false)
-            setBulkEditFields({ author: '', series: '', series_index: '', publisher: '', published_year: '' })
             exitSelectMode()
             await loadAll()
         } catch (err) {
@@ -686,50 +678,17 @@ export default function SeriesPage() {
                 </div>
             )}
 
-            {/* Bulk Edit Modal */}
-            {canEdit && bulkEditOpen && (
-                <div style={{
-                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                    background: 'rgba(0,0,0,0.6)', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', zIndex: 1000
-                }}>
-                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px', maxWidth: '520px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.6)' }}>
-                        <h3 style={{ marginTop: 0 }}>Edit {selectedKeys.size} Item{selectedKeys.size !== 1 ? 's' : ''}</h3>
-                        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 0 }}>
-                            Leave fields blank to keep existing values.
-                        </p>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            {[
-                                { key: 'author', label: 'Author', type: 'text' },
-                                { key: 'series', label: 'Series', type: 'text' },
-                                { key: 'series_index', label: 'Series Index', type: 'number' },
-                                { key: 'publisher', label: 'Publisher', type: 'text' },
-                                { key: 'published_year', label: 'Published Year', type: 'number' },
-                            ].map(({ key, label, type }) => (
-                                <div key={key}>
-                                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '0.9rem', fontWeight: 500 }}>{label}</label>
-                                    <input
-                                        className="form-input"
-                                        type={type}
-                                        placeholder="Leave blank to keep unchanged"
-                                        value={bulkEditFields[key]}
-                                        onChange={e => setBulkEditFields(prev => ({ ...prev, [key]: e.target.value }))}
-                                    />
-                                </div>
-                            ))}
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '20px' }}>
-                            <button className="btn btn-secondary" onClick={() => setBulkEditOpen(false)} disabled={bulkSaving}>Cancel</button>
-                            <button
-                                className="btn btn-primary"
-                                onClick={handleBulkEdit}
-                                disabled={bulkSaving || Object.values(bulkEditFields).every(v => !v.trim())}
-                            >
-                                {bulkSaving ? <><div className="spinner"></div> Saving...</> : `Save to ${selectedKeys.size} Item${selectedKeys.size !== 1 ? 's' : ''}`}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+            {/* Bulk Edit Modal — the shared component (issue #276) */}
+            {canEdit && (
+                <BulkMetadataEditModal
+                    open={bulkEditOpen}
+                    selectionCount={selectedKeys.size}
+                    saving={bulkSaving}
+                    description="Leave fields blank to keep existing values."
+                    savingLabel={<><div className="spinner"></div> Saving...</>}
+                    onSave={handleBulkEdit}
+                    onClose={() => setBulkEditOpen(false)}
+                />
             )}
         </div>
     )

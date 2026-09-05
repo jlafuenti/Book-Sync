@@ -12,6 +12,7 @@ import {
     acsmDeauthorize,
 } from '../api'
 import { formatRelativeTime as relativeTime } from '../lib/datetime'
+import Modal from '../components/Modal'
 import './ImportSourcesPage.css'
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -563,9 +564,13 @@ function AudibleConnectDialog({ onClose, onConnected }) {
     }
 
     return (
-        <div className="import-modal-overlay" onClick={onClose}>
-            <div className="import-modal" onClick={(e) => e.stopPropagation()}>
-                <h3>Connect Audible</h3>
+        <Modal
+            onClose={onClose}
+            labelledBy="audible-login-title"
+            overlayClassName="import-modal-overlay"
+            className="import-modal"
+        >
+                <h3 id="audible-login-title">Connect Audible</h3>
                 {step === 'idle' && <p className="import-modal-step">Preparing login URL…</p>}
                 {(step === 'started' || step === 'submitting') && (
                     <>
@@ -620,8 +625,7 @@ function AudibleConnectDialog({ onClose, onConnected }) {
                         </div>
                     </>
                 )}
-            </div>
-        </div>
+        </Modal>
     )
 }
 

@@ -106,3 +106,35 @@ describe('UnsupportedFilesTab mobile layout', () => {
         expect(table.closest('.table-wrapper')).not.toBeNull()
     })
 })
+
+// Issue #279: the force-delete confirmation is the shared Modal primitive.
+describe('UnsupportedFilesTab force-delete confirmation is a dialog', () => {
+    it('is labelled, names the file, and Escape closes it with focus restored', async () => {
+        await renderTab()
+
+        const trigger = screen.getAllByRole('button', { name: 'Force Delete' })[0]
+        trigger.focus()
+        fireEvent.click(trigger)
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('Confirm Force Delete')
+        expect(dialog).toHaveTextContent('The Mad Ship.mobi')
+        expect(dialog.contains(document.activeElement)).toBe(true)
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(document.activeElement).toBe(trigger)
+    })
+
+    it('closes on a backdrop click, the way it always did', async () => {
+        const { container } = render(<UnsupportedFilesTab canAdmin={true} />)
+        await screen.findByText('The Mad Ship')
+
+        fireEvent.click(screen.getAllByRole('button', { name: 'Force Delete' })[0])
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+        fireEvent.click(container.querySelector('.modal-overlay'))
+        expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})

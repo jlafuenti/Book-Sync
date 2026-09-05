@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getMetadataDiscrepancies, resolveMetadataDiscrepancies, ignoreMetadataDiscrepancies, deletePair } from '../api';
 import CoverImg from './CoverImg';
+import Modal from './Modal';
 
 export default function MetadataCleanupModal({ onClose, onComplete }) {
     const [discrepancies, setDiscrepancies] = useState([]);
@@ -131,11 +132,10 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
     };
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-container" style={{ maxWidth: '800px' }} onClick={e => e.stopPropagation()}>
+        <Modal onClose={onClose} labelledBy="metadata-cleanup-title" className="modal-container" style={{ maxWidth: '800px' }}>
                 <div className="modal-header">
-                    <h2 className="modal-title">✨ Clean Up Metadata</h2>
-                    <button className="btn btn-secondary btn-sm" onClick={onClose}>✕</button>
+                    <h2 className="modal-title" id="metadata-cleanup-title">✨ Clean Up Metadata</h2>
+                    <button className="btn btn-secondary btn-sm" onClick={onClose} aria-label="Close">✕</button>
                 </div>
                 <div className="modal-content">
                     {loading ? (
@@ -234,7 +234,6 @@ export default function MetadataCleanupModal({ onClose, onComplete }) {
                         </button>
                     </div>
                 )}
-            </div>
-        </div>
+        </Modal>
     );
 }

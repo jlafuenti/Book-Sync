@@ -7,6 +7,7 @@ import { roleMeets } from '../roles'
 const {
     coverSrcMock, getEbooksMock, getAudiobooksMock, getPairsMock,
     updatePositionMock, resetPairProgressMock, resetPositionMock, confirmMock, authRef,
+    updateEbookMetadataMock, updateAudiobookMetadataMock,
 } = vi.hoisted(() => ({
     confirmMock: vi.fn(),
     coverSrcMock: vi.fn(),
@@ -16,6 +17,8 @@ const {
     updatePositionMock: vi.fn(),
     resetPairProgressMock: vi.fn(),
     resetPositionMock: vi.fn(),
+    updateEbookMetadataMock: vi.fn(),
+    updateAudiobookMetadataMock: vi.fn(),
     authRef: { role: 'editor' },
 }))
 
@@ -24,8 +27,8 @@ vi.mock('../api', () => ({
     getEbooks: getEbooksMock,
     getAudiobooks: getAudiobooksMock,
     getPairs: getPairsMock,
-    updateEbookMetadata: vi.fn(),
-    updateAudiobookMetadata: vi.fn(),
+    updateEbookMetadata: updateEbookMetadataMock,
+    updateAudiobookMetadata: updateAudiobookMetadataMock,
     updatePosition: updatePositionMock,
     resetPairProgress: resetPairProgressMock,
     resetPosition: resetPositionMock,
@@ -62,6 +65,8 @@ beforeEach(() => {
     updatePositionMock.mockReset().mockResolvedValue({})
     resetPairProgressMock.mockReset().mockResolvedValue({})
     resetPositionMock.mockReset().mockResolvedValue({})
+    updateEbookMetadataMock.mockReset().mockResolvedValue({})
+    updateAudiobookMetadataMock.mockReset().mockResolvedValue({})
     // Assigned rather than spied: vi.restoreAllMocks() would take the shared
     // matchMedia stub from src/test/setup.js down with it.
     confirmMock.mockReset().mockReturnValue(true)
@@ -235,5 +240,45 @@ describe('SeriesPage — series-level progress actions (issue #270)', () => {
         fireEvent.click(screen.getByRole('button', { name: /Mark Complete/i }))
 
         expect(await screen.findByText(/server said no/)).toBeInTheDocument()
+    })
+
+    // Issue #276: bulk edit was a verbatim copy of LibraryPage's and was
+    // unpinned on both pages. It is the shared BulkMetadataEditModal now, so
+    // this is the test that says the page still wires it to the right ids.
+    it('bulk-edits every selected member — one PATCH per ebook and audiobook id', async () => {
+        await renderSeriesPage()
+        await selectTheSeries()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Metadata' }))
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAccessibleName('Edit 2 Items')
+
+        fireEvent.change(screen.getAllByPlaceholderText('Leave blank to keep unchanged')[0], {
+            target: { value: 'Robin Hobb' },
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Save to 2 Items' }))
+
+        const patch = { author: 'Robin Hobb' }
+        await waitFor(() => expect(updateEbookMetadataMock).toHaveBeenCalledTimes(2))
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(1, patch)   // the pair's ebook
+        expect(updateEbookMetadataMock).toHaveBeenCalledWith(3, patch)   // the unpaired one
+        expect(updateAudiobookMetadataMock).toHaveBeenCalledWith(2, patch)
+        expect(updateAudiobookMetadataMock).toHaveBeenCalledTimes(1)
+
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    })
+
+    it('closes bulk edit on Escape without writing anything', async () => {
+        await renderSeriesPage()
+        await selectTheSeries()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Metadata' }))
+        expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(updateEbookMetadataMock).not.toHaveBeenCalled()
     })
 })

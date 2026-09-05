@@ -383,8 +383,11 @@ racing transaction won and applies on top of it.
 ## Completion
 
 `is_completed` on the canonical record (projected onto `user_progress` like
-everything else) is what puts a book on the Finished shelf and takes it off
-Continue. The **server** decides when a position write finishes a book
+everything else) is what takes a book off Continue and shows the Completed
+state on the book detail page. There is no "finished" list on either client:
+both Continue lists only *exclude* completed items, and the only place the
+state is visible is the individual book (issue #272). The **server** decides
+when a position write finishes a book
 (`position_service._auto_complete`, issue #56); clients may still send the flag
 explicitly, and an explicit value always wins.
 
