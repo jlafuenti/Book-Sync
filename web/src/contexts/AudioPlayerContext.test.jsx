@@ -408,7 +408,24 @@ describe('AudioPlayerProvider heartbeat', () => {
         await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledWith(7))
         const audio = audioInstances[0]
         await waitFor(() => expect(audio.src).toBe('/api/files/audiobook/7?token=first-token'))
-        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] })
+        // `shouldClearNativeTimers` is NOT optional here, and it is not a
+        // default we inherit: passing an options object to `useFakeTimers`
+        // *replaces* vitest's `fakeTimers` config rather than merging with it,
+        // so naming `toFake` silently drops it.
+        //
+        // Without it the heartbeat interval leaks. It is created under real
+        // timers (above), so its id is a native handle; when the provider's
+        // effect re-runs after the swap — a book change or a stop does that —
+        // the now-fake `clearInterval` cannot cancel a native handle, and a
+        // live 5s interval closed over the finished test's audio element
+        // survives into the rest of the run. It then fires on the real clock
+        // and pushes a position from the wrong book, which is a failure that
+        // only appears when the suite runs slowly enough for five real seconds
+        // to elapse mid-test — green locally, red under load.
+        vi.useFakeTimers({
+            toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'],
+            shouldClearNativeTimers: true,
+        })
         act(() => audio.dispatchEvent(new Event('canplay')))
         return audio
     }
