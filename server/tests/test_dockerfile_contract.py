@@ -26,6 +26,7 @@ the web image installs from the committed lockfile, and every image has a
 
 import json
 import os
+import re
 
 import pytest
 
@@ -221,4 +222,189 @@ def test_no_dockerfile_is_missing_from_the_contract():
     assert found == known, (
         f"Dockerfiles not covered by this contract: {sorted(found - known)}; "
         f"named here but missing from the tree: {sorted(known - found)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #180: neither shipped image ever left uid 0. `docker-compose.example.yml`
+# now sets `user: "${PUID:-1000}:${PGID:-1000}"` on both, but a compose file is
+# not the image's contract — someone running `docker run` on either image, or
+# copying the template before this change, gets whatever the Dockerfile ends on.
+# So the image drops privilege itself, and compose only *retargets* the uid.
+#
+# The consequence that keeps biting: a non-root uid can't write anywhere the
+# build left root-owned. Every runtime write path therefore has to be prepared
+# at build time, and the ones that aren't obvious are pinned below.
+#
+# `jetson/Dockerfile` is deliberately out of scope: its dustynv CUDA base image
+# expects to run as root (device nodes, the preinstalled CUDA/torch tree under
+# /root), and the worker is a LAN-only single-purpose box. See docs/operations.md.
+# ---------------------------------------------------------------------------
+
+# Where the server image parks per-user state that the build must pre-create.
+SERVER_HOME = "/home/tandem"
+# tempfile.gettempdir() honours TMPDIR, and every temp path in server/ goes
+# through tempfile — including Starlette's SpooledTemporaryFile, which is where
+# a multi-GB audiobook upload spills once it outgrows its in-memory spool.
+SERVER_TMPDIR = "/data/app/tmp"
+
+ROOT_USERS = {"root", "0", "0:0", "root:root"}
+
+
+def _final_user(path: str) -> str | None:
+    """The argument of the last `USER` instruction, or None if there is none."""
+    users = [ln.split(None, 1)[1].strip()
+             for ln in _instructions(path) if ln.upper().startswith("USER ")]
+    return users[-1] if users else None
+
+
+def _base_images(path: str) -> list[str]:
+    return [ln.split(None, 2)[1] for ln in _instructions(path)
+            if ln.upper().startswith("FROM ")]
+
+
+def test_server_image_does_not_end_as_root():
+    user = _final_user(DOCKERFILES["server"])
+    assert user is not None, (
+        "server/Dockerfile has no USER instruction, so the image runs as uid 0 "
+        "(issue #180). It is the internet-facing process and it has the whole "
+        "library, the import staging area and the backup share mounted "
+        "read-write."
+    )
+    assert user.split(":")[0] not in ROOT_USERS, f"server/Dockerfile ends as {user!r}"
+
+
+def test_web_image_does_not_end_as_root():
+    """Either an unprivileged base image or an explicit non-root USER."""
+    user = _final_user(WEB_DOCKERFILE)
+    unprivileged_base = any(
+        "nginx-unprivileged" in image for image in _base_images(WEB_DOCKERFILE)
+    )
+    assert unprivileged_base or user is not None, (
+        "web/Dockerfile neither builds on nginxinc/nginx-unprivileged nor sets "
+        "a USER — the nginx master would run as root (issue #180)."
+    )
+    if user is not None:
+        assert user.split(":")[0] not in ROOT_USERS, (
+            f"web/Dockerfile's last USER is {user!r}"
+        )
+
+
+def test_server_image_prepares_every_path_the_non_root_process_writes():
+    """A non-root uid can only write where the build made it possible.
+
+    The app writes in five places that are not bind mounts, and every one of
+    them is root-owned by default because the build runs as root:
+
+      * $HOME — Calibre's config dir. `calibre-customize` installs the DeACSM /
+        DeDRM plugins under `$HOME/.config/calibre/plugins` at build time, and
+        `services/import_sources/acsm.py` writes the Adobe account files back
+        there at runtime. Pointing HOME at a world-writable dir before the
+        plugin steps is what makes the build-time install and the runtime write
+        land in the same place whatever uid compose picks.
+      * $TMPDIR — spooled multipart uploads, chapter_repair's staging files,
+        the ACSM plugin's unpacked working copies.
+      * /data/{app,imports,ebooks,audiobooks} — mountpoints, which must exist
+        and be traversable before docker binds over them.
+
+    The mode has to be permissive rather than a fixed `chown 1000`, because
+    PUID/PGID let the operator run as any uid.
+    """
+    lines = _instructions(DOCKERFILES["server"])
+
+    assert any(ln.startswith("ENV") and f"HOME={SERVER_HOME}" in ln for ln in lines), (
+        f"server/Dockerfile must set ENV HOME={SERVER_HOME}. Left unset, HOME "
+        "is /root: the build installs the Calibre plugins into a directory the "
+        "runtime uid can neither read nor write, and the ACSM Adobe account "
+        "restore fails with a permission error at startup."
+    )
+    assert any(ln.startswith("ENV") and f"TMPDIR={SERVER_TMPDIR}" in ln for ln in lines), (
+        f"server/Dockerfile must set ENV TMPDIR={SERVER_TMPDIR}. The default "
+        "/tmp is a small tmpfs in the compose template, and a spooled "
+        "multi-GB audiobook upload would fill it."
+    )
+
+    # Written either literally or as $HOME / ${HOME} — the ENV above already
+    # pins what that expands to.
+    home_prep = [ln for ln in lines
+                 if "chmod" in ln
+                 and (SERVER_HOME in ln or "$HOME" in ln or "${HOME}" in ln)]
+    assert home_prep, (
+        f"server/Dockerfile never makes {SERVER_HOME} writable by a non-root "
+        "uid — Calibre cannot start and the ACSM account restore fails."
+    )
+
+    home_env_at = min(i for i, ln in enumerate(lines)
+                      if ln.startswith("ENV") and f"HOME={SERVER_HOME}" in ln)
+    customize_at = [i for i, ln in enumerate(lines) if "calibre-customize" in ln]
+    assert all(home_env_at < i for i in customize_at), (
+        "server/Dockerfile sets HOME after `calibre-customize` runs, so the "
+        "plugins install under /root and the runtime user never sees them."
+    )
+
+
+def test_server_entrypoint_needs_no_root_privileges():
+    """`sh entrypoint.sh` runs alembic then uvicorn — nothing that needs uid 0.
+
+    A `chown`, `chmod`, `mkdir` outside the writable set, or a `su`/`gosu` hop
+    would make the container fail to start as a non-root user, and the failure
+    would be at migration time with the database already half-upgraded.
+    """
+    path = os.path.join(_SERVER_DIR, "entrypoint.sh")
+    with open(path, encoding="utf-8") as fh:
+        body = [ln.strip() for ln in fh
+                if ln.strip() and not ln.strip().startswith("#")]
+    forbidden = ("chown", "chmod", "gosu", "su-exec", "setpriv", "usermod", "useradd")
+    offenders = [ln for ln in body
+                 if any(word in ln.split("#", 1)[0] for word in forbidden)]
+    assert not offenders, (
+        f"server/entrypoint.sh does something that needs root: {offenders}. "
+        "The container runs as an unprivileged uid (issue #180)."
+    )
+
+
+def test_web_nginx_listens_on_an_unprivileged_port_only():
+    """Binding <1024 needs CAP_NET_BIND_SERVICE, which `cap_drop: [ALL]` removes.
+
+    The unprivileged base image ships its own `listen 8080` default.conf; ours
+    overwrites it, so the only listen directive in the image is this one.
+    """
+    text = "\n".join(_instructions(WEB_DOCKERFILE))
+    listens = re.findall(r"listen\s+(\d+)", text)
+    assert listens, "web/Dockerfile's nginx config has no listen directive"
+    assert "3000" in listens, f"web nginx no longer listens on 3000 (found {listens})"
+    privileged = [port for port in listens if int(port) < 1024]
+    assert not privileged, (
+        f"web nginx listens on privileged port(s) {privileged}. The container "
+        "drops all capabilities, so it cannot bind below 1024 (issue #180)."
+    )
+
+
+def test_web_nginx_keeps_the_spa_fallback_and_the_api_proxy():
+    """The two behaviours a base-image swap is most likely to drop silently.
+
+    Without the fallback every deep link 404s; without the proxy the app has no
+    API at all, because `web/src/api.js` hardcodes the `/api` base.
+    """
+    text = "\n".join(_instructions(WEB_DOCKERFILE))
+    assert "try_files $uri /index.html" in text, (
+        "web nginx lost its SPA fallback — every route but / would 404."
+    )
+    assert "proxy_pass http://server:8000/api/" in text, (
+        "web nginx lost the /api/ proxy to the server service."
+    )
+
+
+def test_web_image_makes_the_nginx_scratch_dirs_writable_by_any_uid():
+    """`user:` in compose can name a uid the base image never chowned for.
+
+    nginxinc/nginx-unprivileged chowns its cache dirs to uid 101 group 0; a
+    compose `user: "1000:1000"` matches neither, so nginx fails on the first
+    proxied response that needs a temp file. Widening the mode is what makes
+    the PUID knob actually work.
+    """
+    text = "\n".join(_instructions(WEB_DOCKERFILE))
+    assert "/var/cache/nginx" in text and "chmod" in text, (
+        "web/Dockerfile never widens /var/cache/nginx — nginx cannot buffer a "
+        "proxied response under an arbitrary PUID."
     )

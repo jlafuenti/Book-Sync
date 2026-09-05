@@ -11,6 +11,30 @@
 services:
   server:
     build: ./server
+    # Run as an unprivileged uid (issue #180). This is the internet-facing
+    # process; it shells out to Calibre, ffmpeg, pg_restore and rsync, and every
+    # mount below is read-write. As root, one path bug reached the whole library
+    # AND the backups.
+    #
+    # PUID/PGID come from the same `.env` as POSTGRES_PASSWORD and default to
+    # 1000:1000. Set them to whatever owns your library on the host —
+    # `stat -c '%u:%g' /path/to/your/ebooks` — and read
+    # docs/operations.md, "Running as a non-root user" BEFORE the first restart:
+    # an existing install needs a one-time ownership change on its app-data and
+    # backups directories or the server will not start.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # Nothing here needs a Linux capability: uvicorn binds 8000, an unprivileged
+    # port, and the process now owns the files it writes.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Last-resort scratch space. The image sets TMPDIR to /data/app/tmp so
+    # spooled uploads and ebook conversions land on the app-data volume; this
+    # tmpfs only catches anything that ignores TMPDIR, so it is small — and
+    # sized, because an unsized tmpfs can grow to half the host's RAM.
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     # No published port on purpose (issue #179): the web container's nginx
     # proxies /api/ to this service by name, and a reverse proxy on the same
     # host does the same, so publishing 8000 here only opens a second, plain
@@ -112,6 +136,19 @@ services:
 
   db:
     image: postgres:16-alpine
+    # Deliberately NOT hardened the way `server` and `web` are (issue #180).
+    # The official postgres image's entrypoint starts as root, fixes ownership
+    # on the data directory, and drops to the `postgres` user itself — so a
+    # `user:` here skips that setup and a `cap_drop: [ALL]` takes away the
+    # CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER it needs to do it. Either one
+    # turns a working database into a boot loop.
+    #
+    # `no-new-privileges` is safe and applied: it blocks *gaining* privilege via
+    # a setuid binary, and root→postgres is the opposite direction.
+    # server/tests/test_compose_contract.py pins this exclusion, so a later
+    # "finish the hardening" pass fails a test instead of the database.
+    security_opt:
+      - no-new-privileges:true
     environment:
       - POSTGRES_USER=booksync
       # Generate with:
@@ -136,6 +173,14 @@ services:
 
   web:
     build: ./web
+    # Same unprivileged uid as `server` (issue #180). The image is built on
+    # nginxinc/nginx-unprivileged, whose master process does not need root, and
+    # port 3000 is above 1024 — so nothing here needs a capability either.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # This is the one entry point. Behind a reverse proxy on the same host,
     # bind loopback instead ("127.0.0.1:3000:3000") and let the proxy reach
     # `web:3000` by name — the production layout in docs/operations.md.

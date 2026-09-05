@@ -419,3 +419,125 @@ def test_root_template_does_not_publish_the_api_port_on_the_lan():
             "the server by container name (issue #179)."
         )
 
+
+# ---------------------------------------------------------------------------
+# Issue #180: the containers ran as uid 0 with a full capability set. `server`
+# is the internet-facing process, it shells out to Calibre/ffmpeg/pg_restore,
+# and it has the whole library, the import staging area and the backup share
+# bind-mounted read-write — so an RCE there was uid 0 over all of it.
+#
+# The template now pins three things per hardened service: a non-root `user:`
+# the operator can retarget with PUID/PGID, `cap_drop: [ALL]`, and
+# `no-new-privileges`. `db` is deliberately excluded from the first two: the
+# official postgres image starts as root and drops to `postgres` itself, which
+# needs SETUID/SETGID/CHOWN/DAC_OVERRIDE/FOWNER and a root entrypoint. Pinning
+# that exclusion matters as much as pinning the inclusion — "harden everything"
+# is exactly how someone breaks the database.
+# ---------------------------------------------------------------------------
+
+HARDENED_SERVICES = ["server", "web"]
+
+
+def _security_opts(body: list[str]) -> list[str]:
+    return _list_block(body, "security_opt:")
+
+
+@pytest.mark.parametrize("service", HARDENED_SERVICES)
+def test_hardened_services_run_as_a_configurable_non_root_user(service):
+    body = _services(COMPOSE_TEMPLATES[0])[service]
+    user_lines = [line for line in body if line.startswith("user:")]
+    assert user_lines, (
+        f"`{service}` has no `user:` — it runs as uid 0, so any code-execution "
+        "bug there owns the bind mounts (issue #180)."
+    )
+    value = user_lines[0].split(":", 1)[1].strip().strip('"').strip("'")
+    assert "PUID" in value and "PGID" in value, (
+        f"`{service}` pins a literal uid ({value!r}). It must interpolate "
+        "PUID/PGID so an operator whose library is owned by another uid can "
+        "retarget it from .env without editing the compose file."
+    )
+    assert ":-1000" in value, (
+        f"`{service}`'s user: must default to 1000 when PUID/PGID are unset "
+        f"(got {value!r}) — an unset variable would otherwise expand to the "
+        "empty string and compose would fail to start the service."
+    )
+
+
+@pytest.mark.parametrize("service", HARDENED_SERVICES)
+def test_hardened_services_drop_all_capabilities(service):
+    body = _services(COMPOSE_TEMPLATES[0])[service]
+    dropped = _list_block(body, "cap_drop:")
+    assert dropped == ["ALL"], (
+        f"`{service}` must declare `cap_drop:` with a single `- ALL` "
+        f"(got {dropped!r}). Neither process needs a capability: uvicorn binds "
+        "8000 and nginx binds 3000, both unprivileged ports, and both now run "
+        "as a non-root uid that owns its files."
+    )
+
+
+@pytest.mark.parametrize("service", ["db", "server", "web"])
+def test_every_service_sets_no_new_privileges(service):
+    """The cheapest half of the hardening, and safe even for `db`.
+
+    `no-new-privileges` blocks *gaining* privilege through a setuid binary. The
+    postgres entrypoint's root→postgres drop is the opposite direction, so this
+    one flag is applied to all three services including the one left otherwise
+    untouched.
+    """
+    body = _services(COMPOSE_TEMPLATES[0])[service]
+    assert "no-new-privileges:true" in _security_opts(body), (
+        f"`{service}` has no `security_opt: [no-new-privileges:true]`."
+    )
+
+
+def test_db_service_keeps_the_postgres_images_own_user_handling():
+    """Do NOT harden `db` the way `server` and `web` are hardened.
+
+    postgres:16-alpine's entrypoint runs as root, `chown`s the data directory
+    and `su-exec`s to the `postgres` user. Setting `user:` skips that setup, and
+    `cap_drop: [ALL]` removes the SETUID/SETGID/CHOWN/DAC_OVERRIDE/FOWNER it
+    needs to perform it — either one turns a working database into a boot loop.
+    This test exists so a later "finish the hardening" pass fails here instead
+    of in production.
+    """
+    body = _services(COMPOSE_TEMPLATES[0])["db"]
+    assert not [line for line in body if line.startswith("user:")], (
+        "`db` must not set `user:` — the postgres image switches user itself."
+    )
+    assert not _list_block(body, "cap_drop:"), (
+        "`db` must not drop capabilities — its entrypoint needs CHOWN/SETUID/"
+        "SETGID/DAC_OVERRIDE/FOWNER to initialise the data directory."
+    )
+
+
+def test_server_service_gets_a_sized_tmpfs_for_tmp():
+    """/tmp is the last-resort scratch path once the container is non-root.
+
+    Everything in the app reaches temp space through `tempfile`, which honours
+    TMPDIR — and `server/Dockerfile` points TMPDIR at the app-data volume so a
+    multi-GB spooled audiobook upload lands on disk, not in RAM. This tmpfs is
+    the fallback for anything that ignores TMPDIR, so it is deliberately small
+    and deliberately sized: an unsized tmpfs defaults to half of host RAM.
+    """
+    body = _services(COMPOSE_TEMPLATES[0])["server"]
+    entries = _list_block(body, "tmpfs:")
+    tmp = [e for e in entries if e.split(":")[0] == "/tmp"]
+    assert tmp, f"`server` declares no tmpfs for /tmp (got {entries!r})"
+    assert "size=" in tmp[0], (
+        f"`server`'s /tmp tmpfs has no size= ({tmp[0]!r}); an unsized tmpfs can "
+        "grow to half the host's RAM and OOM the box."
+    )
+
+
+def test_env_example_documents_the_puid_and_pgid_knobs():
+    """`user: "${PUID:-1000}:${PGID:-1000}"` needs a documented source.
+
+    Unlike POSTGRES_PASSWORD these have working defaults, so a missing .env
+    entry is not fatal — but an operator whose library is owned by another uid
+    has no way to discover the knob if the template never names it.
+    """
+    path = os.path.join(_REPO_ROOT, ".env.example")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    for name in ("PUID", "PGID"):
+        assert f"{name}=" in text, f".env.example does not document {name}"

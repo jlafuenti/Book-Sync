@@ -12,6 +12,28 @@
 # See docs/testing.md / the issue #53 notes.
 set -e
 
+# Scratch space (issue #180). server/Dockerfile sets TMPDIR into the app-data
+# volume so a spooled multi-GB upload doesn't land on the container's small /tmp
+# tmpfs. /data/app is a bind mount, so the directory baked into the image is
+# hidden by it and has to be created here — by the unprivileged runtime uid,
+# which makes this the earliest, clearest signal that the mount's ownership does
+# not match PUID:PGID. Falling back to /tmp keeps ordinary requests working
+# while the operator fixes it, instead of failing every upload with EACCES.
+#
+# Nothing in this script needs root: no chown, no privilege drop, just mkdir.
+TMPDIR="${TMPDIR:-/tmp}"
+if mkdir -p "$TMPDIR" 2>/dev/null && [ -w "$TMPDIR" ]; then
+    export TMPDIR
+else
+    echo "[entrypoint] WARNING: TMPDIR=$TMPDIR is not writable by uid $(id -u)."
+    echo "[entrypoint] Falling back to /tmp; large uploads and ebook conversions"
+    echo "[entrypoint] may fail. Ownership of the app-data mount must match the"
+    echo "[entrypoint] container's PUID:PGID — see docs/operations.md,"
+    echo "[entrypoint] \"Running as a non-root user\"."
+    TMPDIR=/tmp
+    export TMPDIR
+fi
+
 echo "[entrypoint] Applying database migrations (alembic upgrade head)..."
 alembic upgrade head
 

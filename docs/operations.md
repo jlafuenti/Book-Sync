@@ -432,6 +432,129 @@ while `web` restarts on its own and crash-loops against a missing `server` upstr
 docker compose ps
 ```
 
+## Running as a non-root user
+
+The `server` and `web` containers run as an unprivileged uid, not root (issue #180). `server` is
+the internet-facing process, it shells out to Calibre, ffmpeg, `pg_restore` and `rsync`, and every
+one of its mounts — both library roots, the import staging area, the backup share — is read-write.
+As uid 0 with a full capability set, one path bug there reached all of it at once.
+
+Three keys in `docker-compose.example.yml` carry this:
+
+```yaml
+user: "${PUID:-1000}:${PGID:-1000}"
+cap_drop:
+  - ALL
+security_opt:
+  - no-new-privileges:true
+```
+
+`db` gets only `no-new-privileges`. The official postgres image's entrypoint starts as root, fixes
+ownership on the data directory and drops to the `postgres` user itself, so a `user:` skips that
+setup and `cap_drop: [ALL]` takes away the `CHOWN`/`SETUID`/`SETGID`/`DAC_OVERRIDE`/`FOWNER` it
+needs to perform it — either one turns a working database into a boot loop.
+`server/tests/test_compose_contract.py` fails if someone "finishes" the hardening there.
+
+The **Jetson worker is out of scope**. Its `dustynv` CUDA base image expects to run as root — the
+preinstalled CUDA/torch tree lives under `/root` and the container needs the GPU device nodes — and
+it is a single-purpose LAN-only box (see "the LAN-only assumption" in
+`jetson/docker-compose.example.yml`). Leave `jetson/docker-compose.example.yml` alone.
+
+### PUID and PGID
+
+The uid that matters is whichever one owns your library on the host, so it is a variable rather
+than a baked-in constant. Both default to `1000`. Set them in the same `.env` that holds
+`POSTGRES_PASSWORD`:
+
+```bash
+stat -c '%u:%g' /path/to/your/ebooks     # → e.g. 1000:1000
+```
+
+```ini
+# .env, next to docker-compose.yml
+PUID=1000
+PGID=1000
+```
+
+Nothing else needs changing; the image itself already ends on a non-root `USER`, and this only
+retargets which uid that is.
+
+### The one-time ownership change on an existing install
+
+The container can only write what the *host* directory's ownership lets it write. Everything under
+`/data/app`, `/data/imports` and `/backups` was created by root while the container was root, so
+on an install that predates this change those directories must be handed to `PUID:PGID` once.
+
+Stop the stack first, then, from the directory holding your `docker-compose.yml` (substitute your
+own paths — these are the four bind mount **sources** from your compose file):
+
+```bash
+docker compose down
+
+sudo chown -R 1000:1000 ./data          # → /data/app  and /data/imports
+sudo chown -R 1000:1000 /path/to/your/backups
+# The library roots only need to be *writable*; if they are already owned by a
+# normal user, use that uid as PUID instead of re-owning them.
+sudo chown -R 1000:1000 /path/to/your/ebooks /path/to/your/audiobooks
+
+docker compose up -d --build server web
+```
+
+If your library is large, the two library `chown` lines are the slow part — check the ownership
+first (`stat -c '%u:%g'`) and skip them if they already match.
+
+### What breaks if you skip it
+
+Not everything fails the same way, and the distinction matters when you are deciding how urgent
+this is:
+
+| Directory | If it is still root-owned |
+|---|---|
+| app-data (`/data/app`) | **The server does not start.** It creates `logs/` under this path at import time; a failure there is fatal, and `docker compose logs server` shows a `PermissionError` before anything else runs. This is the one you cannot defer |
+| import staging (`/data/imports`) | ACSM inbox scanning logs an error each pass; nothing else is affected |
+| backups (`/backups`) | Backup runs fail with a permission error and are reported as failed in **System → Backups**. Existing backups stay readable, so restore still works |
+| library roots | Reads, scans, transcription and sync all work. Only the writes fail — upload, cover extraction into the ebook, metadata write-back, format conversion — one action at a time, with an error on that action |
+
+So a half-finished migration is a stack that runs and serves the library read-only, not an outage —
+except for app-data, which has to be right before the first start.
+
+Temp space is the other thing to know about. The image sets `TMPDIR=/data/app/tmp`, because
+`/tmp` in the container is a small tmpfs and a spooled multi-GB audiobook upload would fill it.
+`entrypoint.sh` creates that directory at start and logs a warning if it cannot, falling back to
+`/tmp` — which is a useful early signal that the app-data ownership is wrong, since it appears
+before the first upload does.
+
+### Verifying it took
+
+```bash
+docker compose exec server id
+docker compose exec web id
+# → uid=1000 gid=1000 ...  (or your PUID/PGID)
+
+docker inspect -f '{{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}} {{.HostConfig.Memory}}' <server container>
+# → [ALL] [no-new-privileges:true] 4294967296
+
+curl -fsS http://localhost:8000/api/health
+curl -fsSI http://localhost:3000/ | head -1
+# → {"status":"healthy",...}  and  HTTP/1.1 200 OK
+```
+
+Then exercise the writes: upload a small ebook, let it extract a cover, and run a manual backup
+from **System → Backups**. Those are the three paths that touch three different mounts.
+
+### Rolling back
+
+The hardening is entirely in the compose file, and the ownership change is harmless to leave in
+place. To go back to root containers, delete the `user:`, `cap_drop:` and `security_opt:` keys from
+the `server` and `web` services in your `docker-compose.yml` and recreate:
+
+```bash
+docker compose up -d --force-recreate server web
+```
+
+Root can write directories owned by uid 1000, so nothing has to be re-owned to roll back — and
+nothing has to be re-owned to roll forward again afterwards.
+
 ## Rotating the Postgres password
 
 `POSTGRES_PASSWORD` is only applied by Postgres on **first initialization** of the data volume.
