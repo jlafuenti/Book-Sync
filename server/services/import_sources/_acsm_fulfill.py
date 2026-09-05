@@ -42,7 +42,15 @@ import zipfile
 
 def _resolve_plugin_path():
     """Extract DeACSM.zip to a tempdir and put it on sys.path."""
+    # Calibre's own resolution order, mirrored (issue #180): the container runs
+    # as an unprivileged uid now, so `calibre-customize` installed the plugin
+    # under $HOME (or CALIBRE_CONFIG_DIRECTORY), not under /root. The root path
+    # stays last so an image built before that change still finds its plugin.
+    # This runs in Calibre's interpreter via `calibre-debug -e`, so it cannot
+    # import the resolver in acsm.py — hence the duplication.
+    config_dir = os.environ.get("CALIBRE_CONFIG_DIRECTORY")
     candidates = [
+        os.path.join(config_dir, "plugins", "DeACSM.zip") if config_dir else "",
         os.path.expanduser("~/.config/calibre/plugins/DeACSM.zip"),
         "/root/.config/calibre/plugins/DeACSM.zip",
     ]

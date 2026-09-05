@@ -192,6 +192,7 @@ Set in the `server` service's `environment:` block. Everything the server reads 
 [`server/config.py`](server/config.py). The one exception is `POSTGRES_PASSWORD`: it is a compose
 *interpolation* variable, read from a `.env` file next to `docker-compose.yml` (copy
 [`.env.example`](.env.example)) and substituted into both the `db` service and `DATABASE_URL`.
+`PUID`/`PGID` are compose interpolation variables too, and come from the same `.env`.
 
 **Mandatory** — with `APP_ENV=prod` (the default) the server *refuses to start* without these:
 
@@ -213,6 +214,7 @@ bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#rev
 
 | Variable | Default | What it does |
 |---|---|---|
+| `PUID` / `PGID` | `1000` / `1000` | uid:gid the `server` and `web` containers run as (compose interpolation, from `.env` — not read by `server/config.py`). Set them to whatever owns your library on the host: `stat -c '%u:%g' /path/to/your/ebooks`. **On an existing install, change the ownership of your app-data and backups directories before restarting** — see [docs/operations.md](docs/operations.md#running-as-a-non-root-user). `db` is unaffected; the postgres image manages its own user |
 | `APP_ENV` | `prod` | `dev` permits default secrets and wildcard CORS |
 | `EBOOK_DIR` / `AUDIOBOOK_DIR` | `/data/ebooks` / `/data/audiobooks` | Library roots (mount your real folders here) |
 | `APP_DATA_DIR` / `COVERS_DIR` | `/data/app` / `/data/app/covers` | Extracted covers, working files |
