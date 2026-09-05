@@ -52,6 +52,7 @@ import com.booksync.data.remote.termsUrl
 import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.LoginRequest
 import com.booksync.data.remote.RegisterRequest
+import com.booksync.data.remote.RegistrationMode
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
@@ -145,6 +146,18 @@ class LoginViewModel @Inject constructor(
     val connectionState = _connectionState.asStateFlow()
 
     /**
+     * What this server does with an access request (issue #210).
+     *
+     * Starts on [RegistrationMode.OPEN] and stays there unless the server says
+     * otherwise. The mode only ever *removes* something from this screen, so the
+     * optimistic default is what stops a slow lookup flashing a request form and
+     * then taking it away — and what keeps the form reachable against a server
+     * too old to answer, or one that is briefly unreachable.
+     */
+    private val _registrationMode = MutableStateFlow(RegistrationMode.OPEN)
+    val registrationMode = _registrationMode.asStateFlow()
+
+    /**
      * Version mismatch warning, or null (issue #174).
      *
      * The probe already holds the answer — `/api/health` carries the server's
@@ -179,6 +192,29 @@ class LoginViewModel @Inject constructor(
         .map { dismissed -> startedUnconfigured && !dismissed }
         .stateIn(viewModelScope, SharingStarted.Eagerly, startedUnconfigured)
 
+    init {
+        loadRegistrationMode()
+    }
+
+    /**
+     * Ask the configured server which registration mode it is in.
+     *
+     * Nothing here may throw: its input is whatever server the user has
+     * configured, at whatever version, and every failure has to end as "offer the
+     * request form" rather than as a crash on the one screen a signed-out user
+     * can reach. Skipped entirely with no server configured — there is nothing to
+     * ask, and the sign-in form is not what is on screen anyway.
+     */
+    fun loadRegistrationMode() {
+        if (serverUrlManager.currentUrl.isBlank()) return
+        viewModelScope.launch {
+            val mode = runCatching { api.getRegistrationMode() }
+                .map { RegistrationMode.fromWire(it.mode) }
+                .getOrDefault(RegistrationMode.OPEN)
+            _registrationMode.value = mode
+        }
+    }
+
     /** The user skipped the welcome screen. Stores nothing — they configure it later. */
     fun dismissFirstRun() {
         firstRunGate.dismiss()
@@ -204,6 +240,8 @@ class LoginViewModel @Inject constructor(
         val verified = (_connectionState.value as? ConnectionState.Connected) ?: return
         viewModelScope.launch {
             if (serverUrlManager.setServerUrl(verified.url)) {
+                // The sign-in form is next; it needs to know what to offer (#210).
+                loadRegistrationMode()
                 firstRunGate.dismiss()
             } else {
                 // Close to unreachable — normalizeServerUrl already passed — but
@@ -316,13 +354,27 @@ class LoginViewModel @Inject constructor(
      * from "try a different username" — `HttpException.message` is "HTTP 403
      * Forbidden", which tells the user nothing about which one they hit.
      */
-    fun register(username: String, email: String, password: String) {
+    fun register(
+        username: String,
+        email: String,
+        password: String,
+        inviteCode: String = "",
+    ) {
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             _message.value = null
             try {
-                val submitted = api.register(RegisterRequest(username, email, password))
+                // Null rather than "" when there is nothing to send: kotlinx omits
+                // a null default, so an `open` server sees the body it always saw.
+                val submitted = api.register(
+                    RegisterRequest(
+                        username,
+                        email,
+                        password,
+                        inviteCode.trim().ifBlank { null },
+                    ),
+                )
                 // The server's own sentence when it sent one, as LoginPage.jsx
                 // does, so an admin who reworded it is heard on both clients.
                 // Falling back rather than requiring it: the 201 is the fact
@@ -357,6 +409,9 @@ class LoginViewModel @Inject constructor(
             // Issue #149: only act if the URL was actually accepted.
             if (!serverUrlManager.setServerUrl(url)) {
                 _error.value = INVALID_SERVER_URL_MESSAGE
+            } else {
+                // A different server, and possibly a different answer (#210).
+                loadRegistrationMode()
             }
         }
     }
@@ -749,6 +804,8 @@ private fun SignInScreen(
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var inviteCode by remember { mutableStateOf("") }
+    val registrationMode by viewModel.registrationMode.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val message by viewModel.message.collectAsState()
@@ -758,14 +815,23 @@ private fun SignInScreen(
     var showAdvanced by remember { mutableStateOf(shouldExpandAdvanced(currentServerUrl)) }
     var serverUrlEdit by remember(currentServerUrl) { mutableStateOf(currentServerUrl) }
 
+    // Issue #210. `closed` means the server takes no requests at all, so the
+    // form and its toggle go away rather than leading someone to a 403.
+    val canRequestAccess = registrationMode != RegistrationMode.CLOSED
+    val needsInviteCode = registrationMode == RegistrationMode.INVITE
+    // A mode that arrives while the register form is open must not leave the
+    // user on a form the server will refuse.
+    val registering = isRegistering && canRequestAccess
+
     val canSubmit = username.isNotBlank() && password.isNotBlank() &&
-        (!isRegistering || email.isNotBlank()) &&
+        (!registering || email.isNotBlank()) &&
+        (!registering || !needsInviteCode || inviteCode.isNotBlank()) &&
         currentServerUrl.isNotBlank() && !isLoading
 
     fun submit() {
         if (!canSubmit) return
-        if (isRegistering) {
-            viewModel.register(username, email, password)
+        if (registering) {
+            viewModel.register(username, email, password, inviteCode)
         } else {
             viewModel.login(username, password, onLoginSuccess)
         }
@@ -858,7 +924,7 @@ private fun SignInScreen(
             )
 
             // Email — only while requesting access, mirroring LoginPage.jsx.
-            AnimatedVisibility(visible = isRegistering) {
+            AnimatedVisibility(visible = registering) {
                 OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },
@@ -875,6 +941,24 @@ private fun SignInScreen(
                 )
             }
 
+            // Invite code — `invite` mode only (issue #210). Required here and
+            // required server-side; the server's refusal is deliberately the same
+            // neutral 201 a good code gets, so nothing on this screen can be used
+            // to test codes.
+            AnimatedVisibility(visible = registering && needsInviteCode) {
+                OutlinedTextField(
+                    value = inviteCode,
+                    onValueChange = { inviteCode = it },
+                    label = { Text(stringResource(R.string.login_invite_code)) },
+                    supportingText = { Text(stringResource(R.string.login_invite_hint)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                )
+            }
+
             // Password
             OutlinedTextField(
                 value = password,
@@ -886,7 +970,7 @@ private fun SignInScreen(
                     .fillMaxWidth()
                     .padding(bottom = 24.dp)
                     .semantics {
-                        contentType = if (isRegistering) {
+                        contentType = if (registering) {
                             ContentType.NewPassword
                         } else {
                             ContentType.Password
@@ -913,7 +997,7 @@ private fun SignInScreen(
                 } else {
                     Text(
                         text = stringResource(
-                            if (isRegistering) {
+                            if (registering) {
                                 R.string.login_request_access
                             } else {
                                 R.string.login_sign_in
@@ -925,35 +1009,46 @@ private fun SignInScreen(
             }
 
             // Mode toggle (issue #221). Same gate as the button above: with no
-            // server there is nothing to request an account from.
-            TextButton(
-                onClick = { viewModel.setRegistering(!isRegistering) },
-                enabled = currentServerUrl.isNotBlank() && !isLoading,
-                modifier = Modifier.padding(top = 8.dp),
-            ) {
+            // server there is nothing to request an account from. Gone entirely
+            // on a `closed` server (issue #210), replaced by the one line below.
+            if (canRequestAccess) {
+                TextButton(
+                    onClick = { viewModel.setRegistering(!registering) },
+                    enabled = currentServerUrl.isNotBlank() && !isLoading,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (registering) {
+                                R.string.login_have_account
+                            } else {
+                                R.string.login_need_account
+                            },
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = " " + stringResource(
+                            if (registering) {
+                                R.string.login_sign_in
+                            } else {
+                                R.string.login_request_access
+                            },
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            } else {
                 Text(
-                    text = stringResource(
-                        if (isRegistering) {
-                            R.string.login_have_account
-                        } else {
-                            R.string.login_need_account
-                        },
-                    ),
+                    text = stringResource(R.string.login_registration_closed),
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = " " + stringResource(
-                        if (isRegistering) {
-                            R.string.login_sign_in
-                        } else {
-                            R.string.login_request_access
-                        },
-                    ),
-                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
 
-            AnimatedVisibility(visible = isRegistering) {
+            AnimatedVisibility(visible = registering) {
                 Text(
                     text = stringResource(R.string.login_approval_note),
                     style = MaterialTheme.typography.bodySmall,
@@ -968,7 +1063,7 @@ private fun SignInScreen(
             // before one is set. Disclosure, not a gate: `canSubmit` above does
             // not look at this, and nothing here records an acceptance.
             val termsLink = termsUrl(currentServerUrl)
-            AnimatedVisibility(visible = isRegistering && termsLink != null) {
+            AnimatedVisibility(visible = registering && termsLink != null) {
                 val context = LocalContext.current
                 TextButton(
                     onClick = {

@@ -516,15 +516,67 @@ covers, working files and logs along with the untracked build junk you meant to 
 
 ## Users
 
-The first account is the superadmin created on first boot. Additional users register themselves
-(`ALLOW_PUBLIC_REGISTRATION`, on by default) but land inactive until an admin approves them — set
-`ALLOW_PUBLIC_REGISTRATION=false` to close registration entirely. On an internet-facing
-deployment where the admin knows every user by name, `false` is the right setting: nobody waits
-for an approval that was never going to come, and no junk accounts accumulate.
+The first account is the superadmin created on first boot. How anyone else gets one is the
+**registration mode** below.
 
-While registration is open, a waiting request shows as a count badge on the **System** entry in
-the sidebar and as a "Pending User Requests" tile on the System status dashboard — both admin-only,
-because the count comes from the admin user list. Approve or reject in System → User Management.
+A waiting request shows as a count badge on the **System** entry in the sidebar and as a
+"Pending User Requests" tile on the System status dashboard — both admin-only, because the count
+comes from the admin user list. Approve or reject in System → User Management.
+
+### Registration and invites
+
+`registration_mode` is a system setting (System → Settings, or `PUT /api/settings/`), not an
+environment variable, so changing it needs no redeploy. Three values:
+
+| Mode | What a stranger at the login page gets |
+|---|---|
+| `open` | A "Request Access" form. The account is created inactive and an admin approves it. |
+| `invite` | The same form plus a required **invite code** an admin generated. |
+| `closed` | No form. One line: "Ask your administrator for an account." Admins create accounts in System → User Management. |
+
+**What your server does after upgrading.** The mode is seeded once, at first boot after the
+upgrade, from whether the database already has users: a server that already had accounts is
+seeded `open`, so nothing about its behaviour changes; a brand new install is seeded `invite`.
+Move an existing server to `invite` or `closed` yourself when you are ready — the seed never
+overwrites a choice you have made.
+
+`ALLOW_PUBLIC_REGISTRATION=false` still works and still wins: it forces `closed` whatever the
+setting says. It can only ever be *more* restrictive, so it is safe to leave set on a host where
+you want registration off no matter who edits the settings page.
+
+**Invites** (System → User Management → Invites) are single-use and expire after
+`invite_expiry_days` (7). Create one, copy the code, hand it to the person who should have an
+account. The code is shown once and once only: the database stores a SHA-256 of it, so there is
+nothing to show again and a copy of the table cannot be turned back into a working invite. Revoke
+an unused one from the same screen. An invite is spent by the request that presents it — including
+a request that collides with a username somebody already has, because leaving it usable would tell
+whoever holds it that the name is taken. Reissue one if that happens.
+
+**Why the register endpoint always says the same thing.** It answers `201 {"message": "Access
+request submitted…"}` whether the request was accepted, collided with an existing username or
+email, presented no invite code, presented a wrong or already-spent one, or arrived with the
+pending queue full. Anything else would be an oracle for which accounts exist, which is what feeds
+credential-stuffing runs against `/api/auth/login`. You see the truth: a real request appears in
+the pending list, a collision does not, and a refusal is in the audit log
+(`register_duplicate`, `invite_consumed`, `invite_created`, `invite_revoked` — never the code
+itself). `closed` is the one mode that refuses outright, with a 403 that is identical for every
+caller and so discloses nothing about accounts.
+
+**Two ceilings**, both settings:
+
+* `registration_pending_max` (20) — the number of *unapproved* accounts allowed to exist. Past it
+  the endpoint answers exactly as it does on success and stores nothing, and logs one WARNING
+  naming the count. Approve or reject the queue to clear it. This is the layer that bounds a
+  flood, because it does not depend on the client address meaning anything.
+* `registration_rate_limit` (5) per `registration_rate_window_seconds` (600) — a per-IP bucket on
+  `POST /api/auth/register`, answering 429 with `Retry-After`. Behind a reverse proxy it is only
+  as good as `FORWARDED_ALLOW_IPS` (see "Reverse proxy" above); without it the whole deployment
+  shares one bucket, which for an endpoint a real person uses once is an acceptable ceiling
+  rather than an outage.
+
+Both the web login page and the Android sign-in screen read the mode from the unauthenticated
+`GET /api/auth/registration` before showing anything, and both fall back to `open` if that call
+fails — a transient 502 must not hide the request form from everyone.
 
 Reading position, bookmarks and progress are **per user**. Two people using the same server keep
 separate positions in the same book.

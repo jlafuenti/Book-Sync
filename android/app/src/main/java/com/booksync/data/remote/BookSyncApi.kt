@@ -77,6 +77,17 @@ interface BookSyncApi {
     @POST("api/auth/register")
     suspend fun register(@Body request: RegisterRequest): RegisterResponse
 
+    /**
+     * Whether this server takes access requests, and on what terms (issue #210).
+     *
+     * Unauthenticated, like `getHealth`, and for the same reason: the sign-in
+     * screen has to decide what to offer before anyone has a credential. One
+     * field — nothing else about the operator's configuration is a stranger's
+     * business (issue #263).
+     */
+    @GET("api/auth/registration")
+    suspend fun getRegistrationMode(): RegistrationModeResponse
+
     // NOTE: /api/auth/refresh is deliberately NOT here. It lives on
     // AuthRefreshApi, which is built on a client carrying no AuthInterceptor and
     // no authenticator. Refreshing through this API is what let a rejected

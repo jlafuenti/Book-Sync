@@ -26,6 +26,10 @@
     <string name="login_need_account">Need an account?</string>
     <string name="login_have_account">Already have an account?</string>
     <string name="login_approval_note">Account requests must be approved by an admin before you can sign in.</string>
+    <!-- Registration modes and invites (issue #210) -->
+    <string name="login_invite_code">Invite code</string>
+    <string name="login_invite_hint">Paste the code your administrator sent you.</string>
+    <string name="login_registration_closed">Ask your administrator for an account.</string>
     <!-- Issue #262. Opens the configured server's own /terms page in a browser:
          the terms belong to whoever runs that server, not to the app. Disclosure
          only — there is deliberately no acceptance checkbox and no server field,
