@@ -434,9 +434,9 @@
           "author",
           "filename",
           "file_size",
-          "duration_seconds",
           "format",
-          "uploaded_at"
+          "uploaded_at",
+          "duration_seconds"
         ],
         "title": "AudioBookDetailResponse",
         "type": "object"
@@ -696,9 +696,9 @@
           "author",
           "filename",
           "file_size",
-          "duration_seconds",
           "format",
-          "uploaded_at"
+          "uploaded_at",
+          "duration_seconds"
         ],
         "title": "AudioBookResponse",
         "type": "object"

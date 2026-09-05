@@ -30,10 +30,23 @@ class PairStatus(str, enum.Enum):
     ERROR = "error"
 
 
-class EBook(Base):
-    """An uploaded or discovered EPUB/ebook file."""
+class MediaColumnsMixin:
+    """The columns `ebooks` and `audiobooks` share, declared once (issue #257).
 
-    __tablename__ = "ebooks"
+    The two tables are the same table twice — every column below was written out
+    verbatim in both classes, so every metadata feature had to be added twice and
+    nothing caught a copy that missed one. Mixing this in is **schema-neutral**:
+    SQLAlchemy copies each `mapped_column` onto the concrete class, producing the
+    same names, types, nullability and defaults as before. `tests/
+    test_media_column_parity.py` is the gate; `alembic check` is the proof.
+
+    Deliberately *not* here, because they differ per media type:
+
+    * ``format`` — defaults to ``epub`` on ebooks and ``mp3`` on audiobooks;
+    * ``__table_args__`` — the indexes carry the table name;
+    * ``pairs`` — the relationship's ``back_populates`` differs;
+    * ``duration_seconds`` — audiobooks only.
+    """
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -42,7 +55,6 @@ class EBook(Base):
     file_path: Mapped[str] = mapped_column(String(2000), nullable=False)
     file_hash: Mapped[str] = mapped_column(String(64), nullable=True)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=True)
-    format: Mapped[str] = mapped_column(String(10), default="epub")  # epub, pdf, etc.
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
     )
@@ -72,13 +84,26 @@ class EBook(Base):
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Audiobooks this ebook must not be auto-paired with (set on manual unpair).
-    # Two keys, either of which blocks the pair: the row ids — always available,
-    # so a hash-less legacy row still remembers the unpair (issue #253) — and the
-    # file hashes, which survive a delete-and-reingest at a new id and are what
-    # `POST /rehash` remaps.
+    # Hashes of the *other* media type this row must not be auto-paired with
+    # (set on manual unpair).
+    # Rows of the *other* media type this row must not be auto-paired with
+    # (set on manual unpair). Two keys, either of which blocks the pair: the
+    # row ids — always available, so a hash-less legacy row still remembers
+    # the unpair (issue #253) — and the file hashes below, which survive a
+    # delete-and-reingest at a new id and are what `POST /rehash` remaps.
     auto_pair_excluded_ids: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
+
+
+class EBook(MediaColumnsMixin, Base):
+    """An uploaded or discovered EPUB/ebook file.
+
+    Everything but the columns below comes from `MediaColumnsMixin`.
+    """
+
+    __tablename__ = "ebooks"
+
+    format: Mapped[str] = mapped_column(String(10), default="epub")  # epub, pdf, etc.
 
     # `file_path` is the identity key: the scan, the ACSM/convert path and the
     # importers all look a row up by it with `.scalar_one_or_none()`. Every
@@ -104,53 +129,17 @@ class EBook(Base):
         return f"<EBook(id={self.id}, title='{self.title}')>"
 
 
-class AudioBook(Base):
-    """An uploaded or discovered audiobook file."""
+class AudioBook(MediaColumnsMixin, Base):
+    """An uploaded or discovered audiobook file.
+
+    Everything but the columns below comes from `MediaColumnsMixin`.
+    `duration_seconds` is the only column this table has and `ebooks` does not.
+    """
 
     __tablename__ = "audiobooks"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    author: Mapped[str] = mapped_column(String(500), nullable=True)
-    filename: Mapped[str] = mapped_column(String(1000), nullable=False)
-    file_path: Mapped[str] = mapped_column(String(2000), nullable=False)
-    file_hash: Mapped[str] = mapped_column(String(64), nullable=True)
-    file_size: Mapped[int] = mapped_column(BigInteger, nullable=True)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=True)
     format: Mapped[str] = mapped_column(String(10), default="mp3")
-    series: Mapped[str] = mapped_column(String(500), nullable=True)
-    series_index: Mapped[float] = mapped_column(Float, nullable=True)
-    metadata_source: Mapped[str] = mapped_column(String(50), nullable=True)  # 'embedded', 'pattern', 'filename'
-    metadata_pattern: Mapped[str] = mapped_column(String(500), nullable=True)  # the pattern that matched, if any
-    uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime, default=utcnow, nullable=False
-    )
-
-    # Extended metadata fields
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    publisher: Mapped[str] = mapped_column(String(500), nullable=True)
-    publish_year: Mapped[int] = mapped_column(Integer, nullable=True)
-    language: Mapped[str] = mapped_column(String(50), nullable=True)
-    genres: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
-    tags: Mapped[str] = mapped_column(String(1000), nullable=True)  # comma-separated
-    isbn: Mapped[str] = mapped_column(String(100), nullable=True)
-    asin: Mapped[str] = mapped_column(String(100), nullable=True)
-    narrators: Mapped[str] = mapped_column(String(500), nullable=True)
-    is_explicit: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
-    is_abridged: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
-    cover_path: Mapped[str] = mapped_column(String(2000), nullable=True)
-
-    # Import provenance — set when this row was created via an automated import source.
-    import_source: Mapped[str] = mapped_column(String(50), nullable=True)
-    external_id: Mapped[str] = mapped_column(String(200), nullable=True)
-
-    # New-items inbox: cleared once user acknowledges or pairs this item
-    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    # Ebooks this audiobook must not be auto-paired with (set on manual unpair).
-    # Same two keys as `EBook.auto_pair_excluded_ids` above.
-    auto_pair_excluded_ids: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
-    auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # Same reasoning as `EBook` above (issue #256): `file_path` is the identity
     # key every scan lookup assumes is unique, `file_hash` is a hot read.

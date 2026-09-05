@@ -196,7 +196,17 @@ class UserPasswordReset(BaseModel):
 # Book Schemas
 # ============================================================
 
-class EBookResponse(BaseModel):
+class MediaResponseBase(BaseModel):
+    """The response fields `EBookResponse` and `AudioBookResponse` share.
+
+    Mirrors `models.book.MediaColumnsMixin` — the two responses were the same 25
+    fields written out twice (issue #257), so a field added to one and not the
+    other silently vanished from half the API. The key *sets* are pinned by
+    `tests/test_media_column_parity.py`; only the JSON key *order* changed when
+    this base landed (`duration_seconds` now serialises last on audiobooks
+    instead of seventh), which no JSON client can observe.
+    """
+
     id: int
     title: str
     author: Optional[str]
@@ -228,37 +238,12 @@ class EBookResponse(BaseModel):
         from_attributes = True
 
 
-class AudioBookResponse(BaseModel):
-    id: int
-    title: str
-    author: Optional[str]
-    filename: str
-    file_path: Optional[str] = None
-    file_size: Optional[int]
+class EBookResponse(MediaResponseBase):
+    pass
+
+
+class AudioBookResponse(MediaResponseBase):
     duration_seconds: Optional[int]
-    format: str
-    series: Optional[str] = None
-    series_index: Optional[float] = None
-    metadata_source: Optional[str] = None
-    metadata_pattern: Optional[str] = None
-    uploaded_at: datetime
-    # Extended metadata
-    description: Optional[str] = None
-    publisher: Optional[str] = None
-    publish_year: Optional[int] = None
-    language: Optional[str] = None
-    genres: Optional[str] = None
-    tags: Optional[str] = None
-    isbn: Optional[str] = None
-    asin: Optional[str] = None
-    narrators: Optional[str] = None
-    is_explicit: Optional[bool] = None
-    is_abridged: Optional[bool] = None
-    cover_path: Optional[str] = None
-    acknowledged: bool = False
-
-    class Config:
-        from_attributes = True
 
 
 class BookPairResponse(BaseModel):
