@@ -10,6 +10,7 @@ from routers.auth import get_current_user, get_admin_user
 from models.user import User
 from services import credentials as credential_store
 from services import offhours
+from services import registration
 from services.filename_patterns import PatternError, validate_patterns
 from services.url_safety import assert_safe_url, UnsafeUrlError
 
@@ -106,6 +107,12 @@ DEFAULT_SETTINGS = {
     # services/audit_retention.py. Default must match
     # audit_retention.DEFAULT_RETENTION_DAYS. 0 means keep forever.
     "audit_log_retention_days": 90,
+    # Registration and invites (issue #210) — owned by services/registration.py.
+    # Defaults must match registration.DEFAULTS. `registration_mode` is seeded
+    # per-database at first boot (`open` where users already exist, `invite` on a
+    # fresh install), so the value below is only ever the fallback for a read
+    # that happens before the seed.
+    **registration.DEFAULTS,
 }
 
 # ---------------------------------------------------------------------------
@@ -131,7 +138,16 @@ DEFAULT_SETTINGS = {
 # `tests/test_settings.py::test_settings_get_is_an_allowlist_below_admin` pins
 # the exact set, so growing it is a deliberate act.
 # ---------------------------------------------------------------------------
-PLAIN_USER_SETTING_KEYS = ("abs_enabled", "hardcover_configured")
+PLAIN_USER_SETTING_KEYS = (
+    "abs_enabled",
+    "hardcover_configured",
+    # The login screens read the mode *before* anyone signs in, through the
+    # unauthenticated `GET /api/auth/registration`. It is here as well so an
+    # already-signed-in admin console and a plain user see the same one field,
+    # and because "may strangers request an account" is not reconnaissance —
+    # it is visible from the login page of every deployment (issue #210).
+    "registration_mode",
+)
 
 # Computed on every read from the credential store; never a `system_settings`
 # row. PUT drops them so a client that echoes the GET payload back cannot
@@ -258,6 +274,14 @@ async def update_settings(
                 ),
             )
 
+    # Registration mode and its bounds (issue #210). Rejected before anything is
+    # written: an unrecognised mode would fall through to "not open" and quietly
+    # close a server nobody meant to close.
+    try:
+        registration.validate_settings(new_settings)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     # A language code Whisper doesn't know fails every chunk of every job, and
     # the failure surfaces hours later as an empty transcript rather than a
     # rejected setting. Validate (and normalise) before anything is written.
@@ -329,6 +353,10 @@ async def update_settings(
             db.add(setting)
 
     await db.commit()
+    # The per-IP register bucket reads its limit through a cache in
+    # services/registration; drop it so a change here applies to the next
+    # request rather than the one after it.
+    registration.forget_cached_settings()
     # The caller is an admin (get_admin_user above), so echo the full dict —
     # not the reader allow-list they would get from the route function.
     return await _all_settings(db)

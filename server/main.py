@@ -17,7 +17,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from rate_limit import limiter
 
-from database import bootstrap_superadmin
+from database import bootstrap_superadmin, seed_registration_mode
 from config import (
     settings,
     check_jwt_secret,
@@ -112,6 +112,12 @@ async def lifespan(app: FastAPI):
     # Schema is owned by Alembic now (issue #53): `alembic upgrade head` runs in
     # the container entrypoint before uvicorn, so the DB is already migrated by
     # the time we get here. We only seed data.
+    # Issue #210. Before bootstrap_superadmin, and that ordering is the whole
+    # point: the seed asks "does this database already have users", and the
+    # bootstrap is what creates the first one. Run after it, every fresh install
+    # would look like an upgrade and open itself to the internet.
+    await seed_registration_mode()
+
     await bootstrap_superadmin()
 
     # Reset any stale transcription jobs (legacy)

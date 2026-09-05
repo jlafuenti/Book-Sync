@@ -3,9 +3,10 @@ Authentication router: register, login, refresh tokens, get current user.
 Includes role-based access control dependencies.
 """
 
+import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, func, select, update
@@ -17,20 +18,28 @@ from fastapi.security import OAuth2PasswordBearer
 
 from database import get_db
 from config import settings
+from models.invite import Invite
 from models.refresh_token import RefreshToken
 from models.user import User, ROLE_HIERARCHY
 from schemas import (
     AccountDelete, UserCreate, UserLogin, UserResponse, UserUpdateRequest,
     TokenResponse, TokenRefresh, PasswordChange, LogoutRequest, LogoutResponse,
     MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
+    InviteCreateResponse, InviteResponse, RegistrationModeResponse,
+    RegistrationResponse,
 )
 from rate_limit import (
     failed_logins,
     failed_password_changes,
     failed_refreshes,
     limiter,
+    registration_attempts,
 )
+from services import invites as invite_service
+from services import registration
 from utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -416,37 +425,126 @@ def get_client_ip(request: Request) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+# ---------------------------------------------------------------------------
+# Self-registration (issue #210)
+#
+# One sentence, whatever happened. An accepted request, a username somebody
+# already has, an email somebody already has, a missing invite code, a wrong one,
+# a spent one, and a pending queue that is already full all produce *this*, with
+# the same 201 -- because any difference between them is an oracle for which
+# accounts exist on a host anyone can reach, and that oracle is what feeds
+# credential stuffing at /login. The admin sees the collision in the pending
+# list, which is the only place it is anybody's business.
+#
+# `closed` is the one exception, and not an exception to the rule: its 403 is
+# identical for every caller and every username, so it discloses nothing about
+# accounts -- only that this server does not take requests, which is exactly what
+# the login screens need in order to stop offering a form.
+# ---------------------------------------------------------------------------
+
+REGISTRATION_RECEIVED_MESSAGE = (
+    "Access request submitted. An admin must approve your account before you "
+    "can sign in."
+)
+
+
+def _registration_received() -> RegistrationResponse:
+    return RegistrationResponse(message=REGISTRATION_RECEIVED_MESSAGE)
+
+
+@router.get("/registration", response_model=RegistrationModeResponse)
+async def registration_mode(db: AsyncSession = Depends(get_db)):
+    """How this server treats a stranger: `open`, `invite` or `closed`.
+
+    Unauthenticated by necessity -- the web and Android login screens read it
+    before anyone has a credential, to decide whether to offer a request form, a
+    request form with an invite-code field, or a line telling the visitor to ask
+    their administrator. One field, deliberately: nothing else about the
+    configuration belongs in a reply a stranger can read (issue #263).
+    """
+    return RegistrationModeResponse(mode=await registration.effective_mode(db))
+
+
+@router.post(
+    "/register",
+    status_code=status.HTTP_201_CREATED,
+    response_model=RegistrationResponse,
+)
 @limiter.limit("5/minute")
 async def register(user_data: UserCreate, request: Request, db: AsyncSession = Depends(get_db)):
     """Submit an access request. Account must be approved by an admin before login."""
-    if not settings.allow_public_registration:
+    # Reads the registration settings and refreshes the cache the per-IP bucket's
+    # suppliers read, so the limit applied below is the one on file right now.
+    config = await registration.load(db)
+    mode = await registration.effective_mode(db)
+
+    if mode == registration.MODE_CLOSED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Public registration is disabled",
+            detail="Self-registration is disabled on this server",
         )
 
-    # Check for existing username
-    result = await db.execute(select(User).where(User.username == user_data.username))
-    if result.scalar_one_or_none():
+    client_ip = get_client_ip(request)
+    retry_after = registration_attempts.acquire(client_ip)
+    if retry_after is not None:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already taken",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many access requests -- try again later.",
+            headers={"Retry-After": str(retry_after)},
         )
 
-    # Check for existing email
-    result = await db.execute(select(User).where(User.email == user_data.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
+    # The ceiling is checked before the invite is spent: a full queue is a
+    # condition of the server, not a fault of the code, and burning somebody's
+    # one-shot invite on it would need an admin to issue another for no reason.
+    pending = (
+        await db.execute(
+            select(func.count(User.id)).where(User.is_active.is_(False))
         )
+    ).scalar() or 0
+    if pending >= int(config["registration_pending_max"]):
+        logger.warning(
+            "Refused an access request: %d unapproved account(s) already "
+            "waiting, at the registration_pending_max ceiling. Approve or "
+            "reject the queue in System -> User Management.",
+            pending,
+        )
+        return _registration_received()
 
-    # Create user as inactive (pending approval)
+    invite_id = None
+    if mode == registration.MODE_INVITE:
+        invite_id = await invite_service.consume_invite(db, user_data.invite_code)
+        if invite_id is None:
+            return _registration_received()
+
+    # Hashed before the duplicate check, and on every path, on purpose. bcrypt is
+    # essentially the whole cost of this endpoint, so a duplicate that skipped it
+    # would answer with a stopwatch the question the status code no longer
+    # answers. Same body, same status, same work.
+    hashed = hash_password(user_data.password)
+
+    taken = (
+        await db.execute(
+            select(User.id).where(
+                (User.username == user_data.username)
+                | (User.email == user_data.email)
+            )
+        )
+    ).first()
+    if taken:
+        # The invite is still spent. Leaving it usable would tell whoever holds
+        # it that the name they tried is taken -- the same oracle, moved one step
+        # back -- and a code costs an admin one click to reissue.
+        await log_audit(
+            db, "register_duplicate",
+            details="Access request refused: username or email already in use",
+            ip_address=client_ip,
+        )
+        return _registration_received()
+
     user = User(
         username=user_data.username,
         email=user_data.email,
-        hashed_password=hash_password(user_data.password),
+        hashed_password=hashed,
         role="user",
         is_active=False,
     )
@@ -457,10 +555,105 @@ async def register(user_data: UserCreate, request: Request, db: AsyncSession = D
     await log_audit(
         db, "register_request", user_id=user.id,
         details=f"Access request from '{user.username}'",
-        ip_address=get_client_ip(request),
+        ip_address=client_ip,
     )
 
-    return {"message": "Access request submitted. An admin must approve your account before you can sign in."}
+    if invite_id is not None:
+        await invite_service.attach_user(db, invite_id, user.id)
+        # Named by id. The code is never written anywhere, including here.
+        await log_audit(
+            db, "invite_consumed", user_id=user.id,
+            details=f"Invite {invite_id} redeemed by '{user.username}'",
+            ip_address=client_ip,
+        )
+
+    return _registration_received()
+
+
+# ---------------------------------------------------------------------------
+# Invites (issue #210)
+#
+# Admin-gated, so these three may say what is true -- unlike /register above.
+# The code is returned exactly once, by the create call; nothing stores it and
+# nothing logs it (see services/invites.py).
+# ---------------------------------------------------------------------------
+
+
+def _invite_view(invite: Invite, usernames: dict) -> dict:
+    return {
+        "id": invite.id,
+        "created_at": invite.created_at,
+        "expires_at": invite.expires_at,
+        "used_at": invite.used_at,
+        "status": invite_service.status_of(invite),
+        "created_by": usernames.get(invite.created_by_user_id),
+        "used_by": usernames.get(invite.used_by_user_id),
+    }
+
+
+async def _invite_usernames(db: AsyncSession, invites) -> dict:
+    """Resolve the two user ids an invite carries, in one query."""
+    ids = {i.created_by_user_id for i in invites} | {i.used_by_user_id for i in invites}
+    ids.discard(None)
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(select(User.id, User.username).where(User.id.in_(ids)))
+    ).all()
+    return {row.id: row.username for row in rows}
+
+
+@router.post(
+    "/invites",
+    status_code=status.HTTP_201_CREATED,
+    response_model=InviteCreateResponse,
+)
+async def create_invite(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
+):
+    """Mint a single-use invite and return its code -- the only time it exists
+    outside the admin's clipboard. Expires after `invite_expiry_days`."""
+    await registration.load(db)
+    invite, code = await invite_service.create_invite(db, created_by_user_id=admin.id)
+    await log_audit(
+        db, "invite_created", user_id=admin.id,
+        details=f"Invite {invite.id} created, expires {invite.expires_at:%Y-%m-%d}",
+    )
+    usernames = await _invite_usernames(db, [invite])
+    return InviteCreateResponse(code=code, **_invite_view(invite, usernames))
+
+
+@router.get("/invites", response_model=List[InviteResponse])
+async def list_invites(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """Every invite, newest first, without codes."""
+    invites = await invite_service.list_invites(db)
+    usernames = await _invite_usernames(db, invites)
+    return [InviteResponse(**_invite_view(i, usernames)) for i in invites]
+
+
+@router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_invite(
+    invite_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
+):
+    """Revoke an invite. Deleted rather than flagged: an unspent code that must
+    not work again has no history worth keeping, and the audit row records that
+    it was revoked."""
+    invite = (
+        await db.execute(select(Invite).where(Invite.id == invite_id))
+    ).scalar_one_or_none()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    await db.delete(invite)
+    await log_audit(
+        db, "invite_revoked", user_id=admin.id, details=f"Invite {invite_id} revoked"
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -2048,6 +2048,141 @@
         "title": "IgnoreDiscrepancyRequest",
         "type": "object"
       },
+      "InviteCreateResponse": {
+        "description": "The create response, and the only place a code is ever returned.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used At"
+          },
+          "used_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used By"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "expires_at",
+          "status",
+          "code"
+        ],
+        "title": "InviteCreateResponse",
+        "type": "object"
+      },
+      "InviteResponse": {
+        "description": "One invite, as the admin list shows it. **No code** — the row does not\nhold one (only its hash), and the plaintext existed for exactly one\nresponse.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used At"
+          },
+          "used_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used By"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "expires_at",
+          "status"
+        ],
+        "title": "InviteResponse",
+        "type": "object"
+      },
       "LibraryCounts": {
         "properties": {
           "audiobooks": {
@@ -3727,6 +3862,34 @@
         "title": "QueuePriorityUpdate",
         "type": "object"
       },
+      "RegistrationModeResponse": {
+        "description": "`GET /api/auth/registration` — unauthenticated, and deliberately one\nfield. The login screens need to know whether to show a request form, an\ninvite-code box, or nothing at all, and they ask before anyone has a token.\nNothing else about the server's configuration belongs in a reply a stranger\ncan read.",
+        "properties": {
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RegistrationModeResponse",
+        "type": "object"
+      },
+      "RegistrationResponse": {
+        "description": "The one answer `POST /api/auth/register` ever gives (issue #210).\n\nAccepted, duplicate username, duplicate email, missing invite code, wrong\ninvite code, spent invite code, pending queue full — all of them return this\nsame body with the same 201, because anything else is an oracle for which\naccounts exist. The admin sees the truth in the pending list; the caller\nsees only that a request was received.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "RegistrationResponse",
+        "type": "object"
+      },
       "ResolveDiscrepancyRequest": {
         "properties": {
           "audiobook_updates": {
@@ -4293,6 +4456,18 @@
             "title": "Email",
             "type": "string"
           },
+          "invite_code": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Code"
+          },
           "password": {
             "description": "Password must be between 8 and 128 characters.",
             "maxLength": 128,
@@ -4612,6 +4787,103 @@
           }
         ],
         "summary": "Change Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/invites": {
+      "get": {
+        "description": "Every invite, newest first, without codes.",
+        "operationId": "list_invites_api_auth_invites_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InviteResponse"
+                  },
+                  "title": "Response List Invites Api Auth Invites Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List Invites",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Mint a single-use invite and return its code -- the only time it exists\noutside the admin's clipboard. Expires after `invite_expiry_days`.",
+        "operationId": "create_invite_api_auth_invites_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteCreateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Create Invite",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/invites/{invite_id}": {
+      "delete": {
+        "description": "Revoke an invite. Deleted rather than flagged: an unspent code that must\nnot work again has no history worth keeping, and the audit row records that\nit was revoked.",
+        "operationId": "revoke_invite_api_auth_invites__invite_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invite_id",
+            "required": true,
+            "schema": {
+              "title": "Invite Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Revoke Invite",
         "tags": [
           "auth"
         ]
@@ -5014,7 +5286,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5031,6 +5305,28 @@
           }
         },
         "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/registration": {
+      "get": {
+        "description": "How this server treats a stranger: `open`, `invite` or `closed`.\n\nUnauthenticated by necessity -- the web and Android login screens read it\nbefore anyone has a credential, to decide whether to offer a request form, a\nrequest form with an invite-code field, or a line telling the visitor to ask\ntheir administrator. One field, deliberately: nothing else about the\nconfiguration belongs in a reply a stranger can read (issue #263).",
+        "operationId": "registration_mode_api_auth_registration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationModeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registration Mode",
         "tags": [
           "auth"
         ]

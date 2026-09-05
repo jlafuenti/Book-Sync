@@ -336,6 +336,46 @@ external_metadata_searches = UserRateLimiter(
     window_supplier=lambda: settings.external_metadata_search_window_seconds,
 )
 
+#: ``POST /api/auth/register`` — the one bucket here keyed on the **client
+#: address** rather than a user id, for the only reason that could justify it:
+#: there is no user yet. Everything above deliberately avoids IP keying because
+#: behind Caddy and docker NAT every caller shares the proxy's address (#294);
+#: that is still true here, and it is why the limit is a ceiling on the endpoint
+#: rather than a defence of one account. Two things make it useful anyway:
+#:
+#: * with ``FORWARDED_ALLOW_IPS`` set (docs/operations.md, "Reverse proxy")
+#:   uvicorn rewrites the peer from ``X-Forwarded-For``, so ``get_client_ip``
+#:   *is* the real client and the bucket is genuinely per-caller;
+#: * without it the whole deployment shares one bucket — which for an endpoint
+#:   real people use once, ever, is an acceptable ceiling rather than a denial
+#:   of service. The pending cap (issue #210) is the layer that does not depend
+#:   on the address being meaningful.
+#:
+#: Its limit and window come from ``system_settings`` through
+#: ``services.registration``'s cache: the register route loads them from the
+#: database before it spends from the bucket, so the values in force are the
+#: ones on file at the start of the request being metered.
+registration_attempts = UserRateLimiter(
+    limit_supplier=lambda: _registration().current("registration_rate_limit"),
+    window_supplier=lambda: _registration().current(
+        "registration_rate_window_seconds"
+    ),
+)
+
+
+def _registration():
+    """Imported lazily: ``services.registration`` reaches the ORM models, and
+    this module is imported from ``main`` before the model modules are."""
+    from services import registration
+
+    return registration
+
+
 #: Every shipped bucket, so tests and future introspection can reach them all
 #: without naming each one (and forgetting the next one added).
-USER_RATE_LIMITERS = (expensive_reads, search_reads, external_metadata_searches)
+USER_RATE_LIMITERS = (
+    expensive_reads,
+    search_reads,
+    external_metadata_searches,
+    registration_attempts,
+)
