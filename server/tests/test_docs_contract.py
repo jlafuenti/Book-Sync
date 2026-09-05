@@ -702,3 +702,52 @@ def test_readme_links_at_the_non_root_runbook():
         "README.md does not link at the non-root runbook, so the one-time "
         "ownership change an existing install needs is undiscoverable from it."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #180, second half: the secrets runbook.
+#
+# Moving JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS and the Postgres password out of
+# `environment:` and into files is a change an operator performs on a live
+# install, and the two ways it goes wrong are both silent-looking: a changed
+# CREDENTIAL_ENC_KEYS means every stored import-source credential stops
+# decrypting, and a changed JWT_SECRET_KEY signs every existing session out.
+# The migration therefore has to say, in the doc, that the values are copied
+# rather than regenerated — and it has to have a rollback.
+# ---------------------------------------------------------------------------
+
+_SECRETS_HEADING = "## Secrets"
+
+
+def test_operations_doc_has_the_secrets_runbook():
+    text = _read(_OPERATIONS_DOC)
+    assert _SECRETS_HEADING in text, (
+        "docs/operations.md has no '## Secrets' section, and README.md's "
+        "#secrets link now points at nothing."
+    )
+    section = text.split(_SECRETS_HEADING, 1)[1].split("\n## ", 1)[0]
+    for needle in (
+        "umask 077",
+        "/run/secrets/",
+        "_FILE",
+        "docker inspect",
+        "roll back",
+    ):
+        assert needle.lower() in section.lower(), (
+            f"docs/operations.md's secrets runbook never mentions {needle!r}."
+        )
+    for phrase in ("same value", "re-encrypt"):
+        assert phrase.lower() in section.lower(), (
+            "docs/operations.md's secrets runbook does not say that migrating "
+            "an existing install copies the existing values rather than "
+            f"generating new ones (looked for {phrase!r}). A regenerated "
+            "CREDENTIAL_ENC_KEYS silently orphans every stored credential."
+        )
+
+
+def test_readme_links_at_the_secrets_runbook():
+    readme = _read(os.path.join(_REPO_ROOT, "README.md"))
+    assert "operations.md#secrets" in readme, (
+        "README.md does not link at the secrets runbook, so an operator "
+        "meeting `JWT_SECRET_KEY_FILE` in the env table has nowhere to go."
+    )

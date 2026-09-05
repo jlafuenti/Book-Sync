@@ -138,10 +138,24 @@ cp docker-compose.example.yml docker-compose.yml
 cp .env.example .env
 ```
 
+Then create the three secret files. They are not environment variables: anything in a container's
+environment is printed by `docker inspect` and readable in `/proc/1/environ`, so the JWT signing
+key, the Postgres password and the credential encryption keys live one-per-file under `secrets/`
+and compose mounts them at `/run/secrets/`. `secrets/` is gitignored; `secrets/README.md` explains
+each file.
+
+```bash
+cd secrets
+umask 077
+python3 -c "import secrets; print(secrets.token_urlsafe(64))" > jwt_secret_key
+python3 -c "import secrets; print(secrets.token_urlsafe(32))" > postgres_password
+python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' > credential_enc_keys
+cd ..
+```
+
 Edit `docker-compose.yml`: the ebook/audiobook/backup volume mounts, and the mandatory variables in
-the table below. Edit `.env`: set `POSTGRES_PASSWORD` — compose interpolates it into both the `db`
-service and the server's `DATABASE_URL`, and Postgres refuses to initialise if it is empty. Both
-files are gitignored. Then:
+the table below. `.env` only carries `PUID`/`PGID` now — compose has to resolve those before any
+container exists, so they cannot come from a secret. Both files are gitignored. Then:
 
 ```bash
 docker compose up --build
