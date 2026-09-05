@@ -30,6 +30,37 @@ RUN install -d /usr/share/postgresql-common/pgdg && \
     apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 && \
     rm -rf /var/lib/apt/lists/*
 
+# ---------------------------------------------------------------------------
+# Non-root runtime (issue #180).
+#
+# This is the internet-facing process; it shells out to Calibre, ffmpeg,
+# pg_restore and rsync, and it has the whole ebook/audiobook library, the import
+# staging area and the backup share bind-mounted read-write. As uid 0 with a
+# full capability set, one path bug there was "encrypt the library and the
+# backups", so the image drops privilege itself rather than trusting the
+# operator's compose file to do it.
+#
+# `docker-compose.example.yml` then *retargets* the uid with
+# `user: "${PUID:-1000}:${PGID:-1000}"`, because the uid that has to match is
+# whichever one owns the library on the host. That is why nothing below is
+# chowned to a fixed uid: the writable paths are made world-writable instead, so
+# any PUID works without rebuilding the image.
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+# HOME is the subtle one. Calibre resolves its config directory as
+# `$HOME/.config/calibre`; `calibre-customize` installs the DeACSM/DeDRM plugins
+# into it at BUILD time and services/import_sources/acsm.py writes the Adobe
+# device keys back into it at RUN time. Left at the default `/root` those are
+# the same directory only while the container is root — so it is set here,
+# before the plugin steps below, and made writable by any uid.
+ENV HOME=/home/tandem
+RUN set -eux; \
+    groupadd -g "${APP_GID}" tandem 2>/dev/null || true; \
+    useradd -u "${APP_UID}" -g "${APP_GID}" -d "${HOME}" -M -s /usr/sbin/nologin tandem 2>/dev/null || true; \
+    mkdir -p "${HOME}"; \
+    chmod 0777 "${HOME}"
+
 WORKDIR /app
 
 # Install Python dependencies (includes audible + audible-cli for the
@@ -116,15 +147,47 @@ RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; 
         echo "Skipping DeDRM plugin — default image ships no DRM tooling." ; \
     fi
 
+# The plugin installs above ran as root but wrote into $HOME, so re-open the
+# tree to whatever uid the container ends up as (issue #180). `a+rwX` — capital
+# X — adds execute only where it already exists, so directories stay traversable
+# without marking every plugin file executable.
+RUN chmod -R a+rwX "${HOME}"
+
 # Copy application code
 COPY . .
 
 # Create data directories. /data/imports is the staging area for the ACSM
 # watched-folder workflow (inbox/, processed/, failed/ subdirs are created
 # at runtime by services/import_sources/acsm.py).
-RUN mkdir -p /data/ebooks /data/audiobooks /data/app /data/imports
+#
+# These are mountpoints — compose binds host directories over all of them — so
+# the modes here only matter for a run that mounts nothing (a smoke test, or a
+# `docker run` of the image on its own). The mount's own ownership is what
+# governs in production; see docs/operations.md, "Running as a non-root user".
+RUN mkdir -p /data/ebooks /data/audiobooks /data/app /data/app/tmp /data/imports && \
+    chmod 0777 /data/ebooks /data/audiobooks /data/app /data/app/tmp /data/imports
+
+# Byte-compile as root. A non-root uid cannot write __pycache__ into /app, and
+# CPython swallows that failure silently — so without this every container start
+# re-parses every module and the app just boots slower for no visible reason.
+RUN python -m compileall -q /app > /dev/null 2>&1 || true
+
+# Everything in server/ reaches scratch space through `tempfile`, which honours
+# TMPDIR: Starlette's SpooledTemporaryFile (where a multi-GB audiobook upload
+# spills once it outgrows its in-memory spool), chapter_repair's staging files,
+# the ACSM helpers' unpacked plugin copies, and Calibre's own conversion temp.
+# The compose template gives /tmp a small tmpfs, which none of those would fit,
+# so point TMPDIR at the app-data volume instead. entrypoint.sh creates the
+# directory at start — /data/app is a bind mount, so the one made above is
+# hidden by it — and falls back to /tmp if the mount is not writable.
+ENV TMPDIR=/data/app/tmp
 
 EXPOSE 8000
+
+# Drop privilege. `docker-compose.example.yml` overrides this with a numeric
+# `user:` built from PUID/PGID; this line is what protects a plain
+# `docker run` of the image, and what tests/test_dockerfile_contract.py pins.
+USER tandem
 
 # Run migrations (alembic upgrade head) then uvicorn. Invoked via `sh` so it
 # doesn't depend on the file's executable bit surviving a Windows checkout.

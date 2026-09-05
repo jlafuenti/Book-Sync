@@ -8,7 +8,20 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
+# nginxinc/nginx-unprivileged, not nginx:alpine (issue #180). The stock image's
+# master process runs as root — it needs to, because its default config binds
+# port 80 — and then forks workers as `nginx`. This variant runs the master as
+# an ordinary uid too, keeps its pid file and every scratch path under /tmp, and
+# listens above 1024, which is what lets the compose service carry
+# `cap_drop: [ALL]`: with no CAP_NET_BIND_SERVICE a privileged port is
+# unbindable, and the container has no capabilities left to bind one with.
+#
+# Port 3000 is unchanged — the published port, the `web` service's healthcheck
+# and every reverse-proxy example still point at it. The base image's own
+# default.conf (which listens on 8080) is overwritten below.
+FROM nginxinc/nginx-unprivileged:alpine
+# The COPY and the config write need root; USER drops back at the end.
+USER root
 COPY --from=build /app/dist /usr/share/nginx/html
 # SPA routing + API proxy + PWA cache headers (issue #62, docs/web-pwa.md).
 #
@@ -56,5 +69,28 @@ RUN echo 'server { \
     proxy_set_header X-Forwarded-Proto $scheme; \
     } \
     }' > /etc/nginx/conf.d/default.conf
+
+# The base image chowns its scratch directories to its own uid (101) with group
+# 0. The compose service overrides the uid with `user: "${PUID:-1000}:${PGID:-1000}"`
+# so it can match the rest of the stack, and that uid is in neither — nginx
+# would then fail on the first proxied response big enough to need a temp file,
+# which is a confusing intermittent 502 rather than a startup error. Widening
+# the mode (rather than chowning to a fixed uid) is what makes the PUID knob
+# work for any value. `a+rwX` adds execute only where it already exists.
+#
+# /usr/share/nginx/html and /etc/nginx are read-only at runtime, so they only
+# need to stay world-*readable*, which they already are.
+RUN chmod -R a+rwX /var/cache/nginx /tmp
+
 EXPOSE 3000
+
+# uid 101 is the base image's `nginx` user and the default it would use anyway;
+# naming it explicitly is what tests/test_dockerfile_contract.py pins, and what
+# protects a plain `docker run` of this image without the compose `user:`.
+USER 101
+
+# Unchanged from the stock image, and deliberately so: the pid path is a
+# main-context directive that the base image already points at /tmp, and adding
+# `pid` to `-g` here would collide with it ("directive is duplicate") and stop
+# nginx from starting at all.
 CMD ["nginx", "-g", "daemon off;"]
