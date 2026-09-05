@@ -11,8 +11,13 @@
 services:
   server:
     build: ./server
-    ports:
-      - "8000:8000"
+    # No published port on purpose (issue #179): the web container's nginx
+    # proxies /api/ to this service by name, and a reverse proxy on the same
+    # host does the same, so publishing 8000 here only opens a second, plain
+    # HTTP path around whatever fronts the site. For local debugging bind
+    # loopback only:
+    #   ports:
+    #     - "127.0.0.1:8000:8000"
     volumes:
       - /path/to/your/ebooks:/data/ebooks # ← REPLACE with your ebook folder
       - /path/to/your/audiobooks:/data/audiobooks # ← REPLACE with your audiobook folder
@@ -131,6 +136,9 @@ services:
 
   web:
     build: ./web
+    # This is the one entry point. Behind a reverse proxy on the same host,
+    # bind loopback instead ("127.0.0.1:3000:3000") and let the proxy reach
+    # `web:3000` by name — the production layout in docs/operations.md.
     ports:
       - "3000:3000"
     # No API URL is configured here: the web container's nginx proxies /api/ to
