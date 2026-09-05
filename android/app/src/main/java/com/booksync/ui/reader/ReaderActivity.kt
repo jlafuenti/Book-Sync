@@ -332,7 +332,7 @@ class ReaderActivity : AppCompatActivity() {
      * self-closing `<head/>` rewritten on the way out — issue #373.
      *
      * Readium 3.1.2 has no public "resource transformer" registry. What it does
-     * have is `PublicationOpener(onCreatePublication = ...)`, which hands over
+     * have is `PublicationOpener.open(onCreatePublication = ...)`, which hands over
      * the `Publication.Builder` after parsing and before building, and a
      * `TransformingContainer` in readium-shared that decorates every entry a
      * container hands out. Replacing `builder.container` with one is therefore
@@ -439,11 +439,23 @@ class ReaderActivity : AppCompatActivity() {
                 // wrapper. There is no separate "resource transformer"
                 // registry in this version — `TransformingContainer` IS the
                 // supported way to interpose. See [normalizeHeads].
-                val pub = PublicationOpener(
-                    publicationParser = parser,
-                    onCreatePublication = { container = normalizeHeads(container) },
-                )
-                    .open(asset, allowUserInteraction = false)
+                //
+                // The hook MUST be passed to `open(...)`, not to the
+                // `PublicationOpener(...)` constructor. Both accept an
+                // `onCreatePublication`, but in 3.1.2 (and upstream `develop`
+                // at the time of writing) `open()` invokes its own parameter
+                // twice and never calls the constructor's copy — the parameter
+                // shadows the property inside `builder.apply { }`. Wired
+                // through the constructor, the container swap silently never
+                // happens and every `<head/>` book still fails; verified on an
+                // emulator with a Calibre EPUB. `ReaderActivityReadiumHookTest`
+                // pins the call shape.
+                val pub = PublicationOpener(publicationParser = parser)
+                    .open(
+                        asset,
+                        allowUserInteraction = false,
+                        onCreatePublication = { container = normalizeHeads(container) },
+                    )
                     .getOrNull()
                     ?: run { Log.e(TAG, "Failed to open publication"); finish(); return@launch }
 
