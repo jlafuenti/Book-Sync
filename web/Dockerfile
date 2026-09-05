@@ -16,9 +16,9 @@ RUN npm run build
 # `cap_drop: [ALL]`: with no CAP_NET_BIND_SERVICE a privileged port is
 # unbindable, and the container has no capabilities left to bind one with.
 #
-# Port 3000 is unchanged — the published port, the `web` service's healthcheck
-# and every reverse-proxy example still point at it. The base image's own
-# default.conf (which listens on 8080) is overwritten below.
+# Port 3000 is unchanged — the compose `ports:` mapping, Caddyfile.example and
+# docs/operations.md all still point at it. The base image's own default.conf
+# (which listens on 8080) is overwritten below.
 FROM nginxinc/nginx-unprivileged:alpine
 # The COPY and the config write need root; USER drops back at the end.
 USER root
