@@ -67,6 +67,22 @@ interface BookSyncApi {
     @POST("api/auth/logout")
     suspend fun logout(): Response<Unit>
 
+    /**
+     * Delete the signed-in account and everything belonging to it (issue #146) —
+     * the in-app deletion path Google Play requires of any app that can create
+     * an account, which Tandem's `register` above can.
+     *
+     * `@HTTP(hasBody = true)` rather than `@DELETE`: Retrofit's `@DELETE` takes
+     * no `@Body`, and the password has to travel in one — a query string would
+     * land it in the server's access log and in any proxy in between.
+     *
+     * 204 on success. 403 means the password was wrong, 409 that the caller is
+     * the last active superadmin; both carry a `detail` worth showing
+     * ([com.booksync.data.remote.serverDetail]).
+     */
+    @HTTP(method = "DELETE", path = "api/auth/me", hasBody = true)
+    suspend fun deleteAccount(@Body request: AccountDeleteRequest): Response<Unit>
+
     // ============ Library ============
 
     // The list endpoints are paginated (issue #48): `{items,total,page,limit}`,

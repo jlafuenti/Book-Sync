@@ -7,8 +7,8 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, select, update
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import jwt
 from jwt import PyJWTError as JWTError
@@ -20,8 +20,8 @@ from config import settings
 from models.refresh_token import RefreshToken
 from models.user import User, ROLE_HIERARCHY
 from schemas import (
-    UserCreate, UserLogin, UserResponse, UserUpdateRequest, TokenResponse, TokenRefresh,
-    PasswordChange, LogoutRequest, LogoutResponse,
+    AccountDelete, UserCreate, UserLogin, UserResponse, UserUpdateRequest,
+    TokenResponse, TokenRefresh, PasswordChange, LogoutRequest, LogoutResponse,
     MediaTokenResponse, MediaTokenBatchRequest, MediaTokenBatchResponse,
 )
 from rate_limit import (
@@ -712,6 +712,114 @@ async def change_password(
     )
 
     return {"message": "Password changed successfully"}
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_me(
+    body: AccountDelete,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the caller's own account and everything belonging to it (#146).
+
+    Google Play requires an in-app deletion path for any app that can create an
+    account. The only delete before this was ``DELETE /api/users/{id}``, which
+    is admin-gated and refuses the caller's own row — so on a self-hosted
+    server the only way out was to ask the operator.
+
+    What goes: the user, their bookmarks (and each bookmark's log rows and
+    per-device position hints), their progress rows, and every one of their
+    ``refresh_tokens`` sessions (#250) — so the phone still holding a 30-day
+    refresh token cannot go on minting access tokens for an account that no
+    longer exists. That is the ``all, delete-orphan`` ORM cascades on ``User``
+    and ``Bookmark``, backed by ``ON DELETE CASCADE`` on the FKs themselves
+    (migrations 0011 and 0014); ``refresh_tokens`` has no ORM relationship at
+    all and is deleted by the database alone, which is why the test asserts the
+    count rather than trusting the handler.
+
+    What stays: the audit trail. ``audit_logs.user_id`` is ``ON DELETE SET
+    NULL``, so the row written just below outlives the account with its actor
+    redacted, while ``target_user_id`` — which carries no FK — keeps the number
+    an operator needs to make sense of it.
+
+    Refusals:
+
+    * wrong password -> 403. Rate-limited through the same per-user bucket as
+      change-password (#264): both verify the current password, so both are the
+      same bcrypt oracle for anyone holding a stolen access token, and here the
+      payoff is destruction rather than takeover.
+    * last active superadmin -> 409. Not a permission problem — the caller is
+      the most privileged account there is — but a deployment with no active
+      superadmin cannot approve a registration, promote anyone or open the
+      admin console, and nothing in the app can undo it.
+    """
+    user_key = str(current_user.id)
+    retry_after = failed_password_changes.retry_after(user_key)
+    if retry_after is not None:
+        await log_audit(
+            db, "account_delete_locked", user_id=current_user.id,
+            details="Account deletion temporarily locked after repeated failures",
+            ip_address=get_client_ip(request),
+        )
+        # Commit explicitly: the raise unwinds through get_db, which rolls the
+        # session back, and the audit row would silently never persist (#156).
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    if not verify_password(body.password, current_user.hashed_password):
+        failed_password_changes.record_failure(user_key)
+        await log_audit(
+            db, "account_delete_failed", user_id=current_user.id,
+            details="Failed account deletion: password incorrect",
+            ip_address=get_client_ip(request),
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password is incorrect",
+        )
+
+    failed_password_changes.clear(user_key)
+
+    if current_user.role == "superadmin":
+        remaining = (await db.execute(
+            select(func.count()).select_from(User).where(
+                User.role == "superadmin",
+                User.is_active.is_(True),
+                User.id != current_user.id,
+            )
+        )).scalar_one()
+        if remaining == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "You are the last active superadmin. Promote another user to "
+                    "superadmin first, or this server would be left with nobody "
+                    "who can approve accounts or reach the admin console."
+                ),
+            )
+
+    user_id = current_user.id
+    username = current_user.username
+
+    # Written *before* the delete on purpose: the FK's ON DELETE SET NULL is
+    # what redacts `user_id`, so the row records the event and then stops
+    # naming an account that no longer exists.
+    await log_audit(
+        db, "account_self_deleted", user_id=user_id, target_user_id=user_id,
+        details=f"User '{username}' deleted their own account",
+        ip_address=get_client_ip(request),
+    )
+
+    await db.delete(current_user)
+    await db.flush()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/logout", response_model=LogoutResponse)

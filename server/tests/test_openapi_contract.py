@@ -66,9 +66,8 @@ UNTYPED_ALLOWLIST = {
     "POST /api/import/sources/{source_key}/sync",
     "PUT /api/import/sources/{source_key}/config",
     # --- library -----------------------------------------------------------
-    "DELETE /api/library/audiobooks/{audiobook_id}",
-    "DELETE /api/library/ebooks/{ebook_id}",
-    "DELETE /api/library/pairs/{pair_id}",
+    # (the three 204 DELETEs that used to sit here are exempt now — see
+    # _needs_a_response_model)
     "DELETE /api/library/unsupported/force-all",
     "DELETE /api/library/unsupported/{ebook_id}/force",
     "DELETE /api/library/unsupported/{ebook_id}/source",
@@ -151,9 +150,19 @@ def _api_routes() -> list[APIRoute]:
     return routes
 
 
+def _needs_a_response_model(route: APIRoute) -> bool:
+    """204 routes are exempt: there is no body, so there is no shape to declare.
+
+    FastAPI refuses a ``response_model`` on a 204 outright, so allow-listing one
+    would be recording debt that cannot be paid off — unlike the entries above,
+    which are hand-built dicts waiting for a schema.
+    """
+    return route.response_model is None and route.status_code != 204
+
+
 def test_no_new_untyped_routes():
     """Every /api route declares a response_model, or is grandfathered in."""
-    untyped = {_route_key(r) for r in _api_routes() if r.response_model is None}
+    untyped = {_route_key(r) for r in _api_routes() if _needs_a_response_model(r)}
     new = sorted(untyped - UNTYPED_ALLOWLIST)
     assert not new, (
         "These /api routes declare no response_model. Add one (see "
@@ -165,7 +174,7 @@ def test_no_new_untyped_routes():
 def test_allowlist_has_no_stale_entries():
     """Typing a route means deleting its allow-list entry, so the list shrinks."""
     routes = _api_routes()
-    untyped = {_route_key(r) for r in routes if r.response_model is None}
+    untyped = {_route_key(r) for r in routes if _needs_a_response_model(r)}
     known = {_route_key(r) for r in routes}
 
     stale = sorted(UNTYPED_ALLOWLIST - untyped)
