@@ -555,6 +555,205 @@ docker compose up -d --force-recreate server web
 Root can write directories owned by uid 1000, so nothing has to be re-owned to roll back — and
 nothing has to be re-owned to roll forward again afterwards.
 
+## Secrets
+
+Secrets are passed to the containers as **files**, not as environment variables (issue #180).
+Anything in a container's `environment:` is printed in full by `docker inspect`, is readable in
+`/proc/1/environ`, and is therefore available to every member of the `docker` group on the host and
+to anything that reaches code execution inside the container. That covered the JWT signing key, the
+credential encryption keys, and the Postgres password embedded in `DATABASE_URL` — the three values
+that between them are the whole deployment.
+
+`docker-compose.example.yml` declares a top-level `secrets:` block; compose mounts each file
+read-only at `/run/secrets/<name>` inside the services that list it, and the environment carries
+only the path:
+
+```yaml
+secrets:
+  jwt_secret_key:
+    file: ./secrets/jwt_secret_key
+```
+
+```yaml
+    environment:
+      - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
+```
+
+### How `<NAME>_FILE` behaves
+
+`server/config.py` reads every secret setting from either form, with these rules — all pinned by
+`server/tests/test_secret_files.py`:
+
+- **`<NAME>_FILE` wins** over a plain `<NAME>` that is also set. It is a settings source placed
+  ahead of the environment source, so precedence is structural rather than an `if`.
+- **A `<NAME>_FILE` that cannot be resolved is a startup error naming the variable.** Missing file,
+  unreadable file, empty file — the server refuses to boot rather than fall back to the plain
+  variable. A silent fallback is how a deployment ends up running on the shipped default secret and
+  looking healthy. Empty counts as an error because an empty JWT key is not one of the known
+  defaults and would sail straight past the startup guard.
+- **One trailing newline (or CRLF) is stripped**, and nothing else. Every way of writing a secret to
+  a file adds one; leading and interior whitespace could be part of the value, so it is left alone.
+
+Compose mounts secret files mode `0444`, owned by root — readable by the unprivileged uid the
+`server` container runs as (see "Running as a non-root user" above), which is what makes the two
+changes compatible.
+
+### What ships
+
+| Secret | Services | Environment variable |
+|---|---|---|
+| `jwt_secret_key` | `server` | `JWT_SECRET_KEY_FILE` |
+| `postgres_password` | `server`, `db` | `POSTGRES_PASSWORD_FILE` |
+| `credential_enc_keys` | `server` | `CREDENTIAL_ENC_KEYS_FILE` |
+| `database_url` *(optional, commented out)* | `server` | `DATABASE_URL_FILE` |
+
+The Postgres password is one file read by two containers. The official `postgres` image supports
+the `_FILE` convention natively, and the server no longer receives a `DATABASE_URL` at all: it
+assembles `postgresql+asyncpg://booksync:<password>@db:5432/booksync` from that same secret, using
+`POSTGRES_USER`/`POSTGRES_HOST`/`POSTGRES_PORT`/`POSTGRES_DB` (defaults matching the `db` service).
+So the two can no longer drift apart. Set `DATABASE_URL` or `DATABASE_URL_FILE` explicitly only for
+an external database — an explicit URL always wins over the assembled one.
+
+`GOOGLE_BOOKS_API_KEY_FILE` and `ABS_API_TOKEN_FILE` exist too, for the same reason; neither ships
+wired up because both are optional and the runtime Audiobookshelf token lives encrypted in the
+database rather than in the environment.
+
+### Creating the files on a new install
+
+From the directory holding your `docker-compose.yml`. `umask 077` in the same shell as the
+redirects is what makes each file readable only by you:
+
+```bash
+mkdir -p secrets && cd secrets
+umask 077
+
+python3 -c "import secrets; print(secrets.token_urlsafe(64))" > jwt_secret_key
+python3 -c "import secrets; print(secrets.token_urlsafe(32))" > postgres_password
+python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' > credential_enc_keys
+
+ls -l   # → -rw------- on all three
+cd ..
+```
+
+No `cryptography` on the host? Generate the Fernet key inside the server image, which has it:
+
+```bash
+umask 077
+docker compose run --rm --no-deps --entrypoint python server \
+  -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' \
+  > secrets/credential_enc_keys
+```
+
+`secrets/` is gitignored (`/secrets/*`, with a `!/secrets/README.md` negation); `secrets/README.md`
+is the tracked description of what belongs there.
+
+### Migrating an existing install
+
+**Copy the existing values. Do not generate new ones.** Every file must end up holding the *same
+value* the environment holds today:
+
+- A new `credential_enc_keys` cannot decrypt what the old one encrypted. Every stored import-source
+  credential — the Audible auth blob, the Audiobookshelf API token — becomes unreadable, and there
+  is no way to re-encrypt them without the old key. Keeping the value means nothing is
+  re-encrypted and nothing has to be re-entered.
+- A new `jwt_secret_key` invalidates every access and refresh token in existence: every browser and
+  every phone is signed out. Phones are usually the devices holding unsynced reading positions
+  (`docs/position-sync-contract.md`), so this is worth avoiding, not just tidier.
+- A new `postgres_password` does not reach the database at all — `POSTGRES_PASSWORD` is only
+  applied on the first init of the data volume — so the server simply fails to authenticate.
+
+The commands below read each value straight out of the running container into a file. Nothing is
+printed to the terminal, so nothing lands in your shell history or scrollback.
+
+```bash
+# From the directory holding docker-compose.yml, with the stack still running.
+mkdir -p secrets && cd secrets
+umask 077
+
+docker compose exec -T server printenv JWT_SECRET_KEY       > jwt_secret_key
+docker compose exec -T server printenv CREDENTIAL_ENC_KEYS  > credential_enc_keys
+docker compose exec -T db     printenv POSTGRES_PASSWORD    > postgres_password
+
+# Sanity: three non-empty files, owner-only.
+ls -l
+wc -c jwt_secret_key credential_enc_keys postgres_password
+cd ..
+```
+
+Confirm each file matches its live value without printing either:
+
+```bash
+docker compose exec -T server printenv JWT_SECRET_KEY      | diff -q - secrets/jwt_secret_key
+docker compose exec -T server printenv CREDENTIAL_ENC_KEYS | diff -q - secrets/credential_enc_keys
+docker compose exec -T db     printenv POSTGRES_PASSWORD   | diff -q - secrets/postgres_password
+# no output from any of the three = identical
+```
+
+Then edit `docker-compose.yml` to match the template — the whole diff is:
+
+1. **`server`**: delete the `DATABASE_URL=`, `JWT_SECRET_KEY=` and `CREDENTIAL_ENC_KEYS=` lines from
+   `environment:`; add `JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key`,
+   `CREDENTIAL_ENC_KEYS_FILE=/run/secrets/credential_enc_keys` and
+   `POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password`; add a `secrets:` list naming all three.
+2. **`db`**: replace `POSTGRES_PASSWORD=...` with
+   `POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password`; add a `secrets:` list naming
+   `postgres_password`.
+3. **Top level**: add the `secrets:` block with the three `file: ./secrets/<name>` entries.
+
+Recreate both services:
+
+```bash
+docker compose up -d --force-recreate server db
+```
+
+Recreating `db` is safe and does not touch the data. `POSTGRES_PASSWORD` and
+`POSTGRES_PASSWORD_FILE` are both read only when the image initialises an *empty* data directory;
+on an existing `booksync_db` volume the entrypoint skips initialisation entirely and the stored
+password is whatever `ALTER ROLE` last set it to. Switching to `POSTGRES_PASSWORD_FILE` therefore
+cannot change the password — but the file still has to hold the same value, because the *server*
+builds its connection URL from it. That is what the `diff -q` above verifies.
+
+### Verifying
+
+```bash
+# 1. Health. The API port is not published, so ask through the web container.
+curl -fsS http://localhost:3000/api/health
+# → {"status":"healthy",...}
+
+# 2. No secret left in the environment. Both should print 0.
+docker inspect -f '{{json .Config.Env}}' <server container> | grep -c -E 'JWT_SECRET_KEY=|CREDENTIAL_ENC_KEYS=|DATABASE_URL=.*:.*@'
+docker inspect -f '{{json .Config.Env}}' <db container>     | grep -c 'POSTGRES_PASSWORD='
+
+# 3. The files are where the containers expect them.
+docker compose exec server ls -l /run/secrets/
+```
+
+Then, in the web UI:
+
+- **Log in.** A session that was already open must still work — that is the JWT key and the database
+  password both proving themselves.
+- **Open System → Import Sources.** An existing Audible or Audiobookshelf source that still shows as
+  configured, and a "Test connection" that still succeeds, is the credential encryption key proving
+  itself: that token was decrypted with the key from the file.
+
+If the encryption key is wrong the symptom is specific and quiet — the source is still listed, but
+its stored credential fails to decrypt and the server logs a decryption error on use. Check it
+before you walk away.
+
+### Rolling back
+
+The change is entirely in `docker-compose.yml`; the secret files can stay where they are.
+To roll back: put the three plain values back under `environment:` (they are the same values
+the files hold), delete the `*_FILE` lines, the per-service `secrets:` lists and the top-level
+`secrets:` block, and recreate:
+
+```bash
+docker compose up -d --force-recreate server db
+```
+
+Nothing is re-encrypted and no session is invalidated in either direction, precisely because the
+values never changed. Delete `secrets/` only once you are sure you are not going forward again.
+
 ## Rotating the Postgres password
 
 `POSTGRES_PASSWORD` is only applied by Postgres on **first initialization** of the data volume.

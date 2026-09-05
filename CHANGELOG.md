@@ -16,6 +16,17 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Secrets move out of compose `environment:` and into files.** An existing install has to create
+  `secrets/jwt_secret_key`, `secrets/postgres_password` and `secrets/credential_enc_keys` holding
+  **the values it already uses** — not new ones — and switch the compose file to the `*_FILE`
+  variables. A regenerated `credential_enc_keys` makes every stored import-source credential
+  undecryptable; a regenerated `jwt_secret_key` signs every device out. The step-by-step migration
+  (copying the values without printing them), the verification and the rollback are in
+  [docs/operations.md](docs/operations.md#secrets). The plain-`environment:` path still works if
+  you prefer it (#180).
+
 ### Added
 
 - API-version handshake: the server reports `app_version`/`api_version` from `/api/health`, and the
@@ -66,6 +77,12 @@ operator must do by hand rather than read about afterwards.
 
 ### Security
 
+- Secrets are read from files instead of the container environment. `JWT_SECRET_KEY`,
+  `CREDENTIAL_ENC_KEYS` and the Postgres password were visible to `docker inspect` and in
+  `/proc/1/environ`; every secret setting now also accepts `<NAME>_FILE`, which wins over the plain
+  variable and is a startup error rather than a silent fallback when the file is missing,
+  unreadable or empty. The compose template ships file-backed `secrets:`, and the server assembles
+  `DATABASE_URL` from the Postgres password so one secret feeds both containers (#180).
 - Editor-only pair actions are gated by role, and the two overlapping delete controls collapsed
   into one (#360).
 - Allow-listed GHSA-6gmq-8vp8-gcm6 (xmldom, via epubjs) so the web audit gate reflects a real
