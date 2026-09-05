@@ -83,6 +83,15 @@ interface BookSyncApi {
     @HTTP(method = "DELETE", path = "api/auth/me", hasBody = true)
     suspend fun deleteAccount(@Body request: AccountDeleteRequest): Response<Unit>
 
+    // Signs out every device on the account, not just this one (issue #250).
+    // `logout` above revokes only this device's session — which is what you
+    // want when you put the phone down, and useless when you have lost it.
+    // This is the account-wide revoke: it bumps `token_version` server-side,
+    // so every access, refresh and media token the account holds dies at once.
+    // Takes no body: there is no session to name when all of them are ending.
+    @POST("api/auth/logout-all")
+    suspend fun logoutAll(): Response<Unit>
+
     // ============ Library ============
 
     // The list endpoints are paginated (issue #48): `{items,total,page,limit}`,

@@ -36,6 +36,7 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [terms.md](terms.md) | Terms of use for a hosted Tandem server — served at `/terms` and linked from both registration forms |
 | [releasing.md](releasing.md) | Cutting a release: version bump, tag, GitHub Release, deploy, and the rollback runbook |
 | [privacy.md](privacy.md) | The privacy policy, published from here via GitHub Pages — what leaves the device, and who holds it |
 | [play-listing.md](play-listing.md) | Draft Play Store listing text, the Data safety form answers (including the `/account-deletion` link Play requires) and the content-rating notes — kept in the repo so they are reviewable |

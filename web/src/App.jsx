@@ -10,6 +10,7 @@ import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import AccountPage from './pages/AccountPage'
 import AccountDeletionPage from './pages/AccountDeletionPage'
+import TermsPage from './pages/TermsPage'
 import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
 import SeriesPage from './pages/SeriesPage'
@@ -24,6 +25,7 @@ import useIsMobile from './hooks/useIsMobile'
 import BottomNavBar from './components/BottomNavBar'
 import MobileTopBar from './components/MobileTopBar'
 import MobileDrawer from './components/MobileDrawer'
+import SignOutEverywhere from './components/SignOutEverywhere'
 import { switchToEbook } from './lib/handoff'
 
 // Route-level code splitting (issue #281).
@@ -230,6 +232,7 @@ export function AppShell({ user, setUser }) {
                         onClose={() => setDrawerOpen(false)}
                         user={user}
                         onLogout={handleLogout}
+                        onSignedOutEverywhere={() => setUser(null)}
                     />
                     <BottomNavBar />
                 </>
@@ -341,6 +344,14 @@ export function AppShell({ user, setUser }) {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
                         </button>
                     </div>
+                    {/* Issue #250: the account-wide revoke, for a lost device.
+                        Separate from the icon above, which now ends only this
+                        browser's session. Hidden while the sidebar is collapsed,
+                        the same as the Logout button's own label. */}
+                    <SignOutEverywhere
+                        className="sidebar-signout-all"
+                        onSignedOut={() => setUser(null)}
+                    />
                     <ThemePicker />
                 </div>
             </aside>
@@ -415,12 +426,15 @@ export function AppShell({ user, setUser }) {
     )
 }
 
-// Paths that render before anyone is asked to sign in. There is exactly one,
-// and it exists because Google Play requires a publicly reachable page
-// explaining account deletion for any app that can create an account — its
-// audience is people who have already uninstalled and have no session at all
-// (issue #146). Everything else in this app is behind the gate in App().
-const PUBLIC_PATHS = { '/account-deletion': <AccountDeletionPage /> }
+// Paths that render before anyone is asked to sign in. Two exist, both for
+// people with no session: the account-deletion page Google Play requires for
+// any app that can create an account (issue #146), and the terms of use the
+// registration form links to (issue #262). Everything else in this app is
+// behind the gate in App().
+const PUBLIC_PATHS = {
+    '/account-deletion': <AccountDeletionPage />,
+    '/terms': <TermsPage />,
+}
 
 function App() {
     const [user, setUser] = useState(null)
@@ -455,7 +469,7 @@ function App() {
         })
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Not on a public path: the deletion page is for people with no session, and
+    // Not on a public path: the public pages are for people with no session, and
     // asking the server who they are would only produce a 401 in the console.
     useEffect(() => { if (!publicPage) bootstrap() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -484,9 +498,9 @@ function App() {
         return () => window.removeEventListener('tandem:unauthorized', onUnauthorized)
     }, [])
 
-    // Before the auth gate on purpose (issue #146). Play's account-deletion
-    // requirement is for a page that works after the app is uninstalled, so it
-    // must not be reachable only through a login form.
+    // Before the auth gate on purpose (issues #146, #262). Play's account-deletion
+    // page must work after the app is uninstalled, and the terms page is linked
+    // from a registration form whose account does not exist yet.
     if (publicPage) return publicPage
 
     if (loading) {

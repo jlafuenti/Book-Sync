@@ -123,3 +123,36 @@ describe('LoginPage — request access', () => {
         expect(screen.queryByText(/Invalid username or password/)).toBeNull()
     })
 })
+
+describe('LoginPage — terms of use (issue #262)', () => {
+    it('renders a terms link on the register form', () => {
+        render(<LoginPage onLogin={vi.fn()} />)
+        fireEvent.click(screen.getByText('Request Access'))
+
+        const link = screen.getByRole('link', { name: /terms/i })
+        expect(link.getAttribute('href')).toBe('/terms')
+        // A new tab, so a half-filled account request survives reading them.
+        expect(link.getAttribute('target')).toBe('_blank')
+        expect(link.getAttribute('rel')).toMatch(/noopener/)
+    })
+
+    it('does not show it on the sign-in form', () => {
+        render(<LoginPage onLogin={vi.fn()} />)
+
+        expect(screen.queryByRole('link', { name: /terms/i })).toBeNull()
+    })
+
+    it('is disclosure, not a gate — registration submits with nothing to accept', async () => {
+        // The decision on #262 was explicitly no acceptance checkbox and no
+        // server-side field. A future "you must agree" control would break this.
+        registerMock.mockResolvedValue({ message: 'Access request submitted.' })
+
+        render(<LoginPage onLogin={vi.fn()} />)
+        fireEvent.click(screen.getByText('Request Access'))
+        fillAndSubmit({ email: 'alice@example.com' })
+
+        await waitFor(() => expect(registerMock).toHaveBeenCalledWith(
+            'alice', 'alice@example.com', 'hunter2',
+        ))
+    })
+})

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ThemePicker } from './ThemePicker'
+import SignOutEverywhere from './SignOutEverywhere'
 
 const DRAWER_NAV = [
     { path: '/continue', label: 'Home', exact: true,
@@ -20,7 +21,7 @@ const DRAWER_NAV = [
     },
 ]
 
-export default function MobileDrawer({ open, onClose, user, onLogout }) {
+export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOutEverywhere }) {
     const location = useLocation()
     const drawerRef = useRef(null)
     const startXRef = useRef(null)
@@ -110,6 +111,12 @@ export default function MobileDrawer({ open, onClose, user, onLogout }) {
                         </svg>
                         <span>Logout</span>
                     </button>
+                    {/* Issue #250: Logout above ends this browser's session
+                        only. This is the account-wide one, for a lost device. */}
+                    <SignOutEverywhere
+                        className="drawer-logout"
+                        onSignedOut={onSignedOutEverywhere}
+                    />
                 </div>
             </div>
         </div>

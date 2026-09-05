@@ -26,6 +26,11 @@
     <string name="login_need_account">Need an account?</string>
     <string name="login_have_account">Already have an account?</string>
     <string name="login_approval_note">Account requests must be approved by an admin before you can sign in.</string>
+    <!-- Issue #262. Opens the configured server's own /terms page in a browser:
+         the terms belong to whoever runs that server, not to the app. Disclosure
+         only — there is deliberately no acceptance checkbox and no server field,
+         so this must never become a condition of submitting the request. -->
+    <string name="login_terms_link">Terms of use</string>
 
     <!-- ============ Server URL (Advanced) ============ -->
     <string name="login_advanced">Advanced</string>
