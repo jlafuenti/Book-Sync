@@ -165,4 +165,26 @@ class ServerUrlPolicyTest {
         // A scheme-less value — the exact string #149 was filed about.
         assertEquals("https://tandem.example.com/", retrofitBaseUrl("tandem.example.com"))
     }
+
+    // --- termsUrl (issue #262) --------------------------------------------
+
+    @Test
+    fun `termsUrl points at the configured server's own terms page`() {
+        assertEquals("https://tandem.example.com/terms", termsUrl("https://tandem.example.com"))
+        // A stored trailing slash must not produce a double one.
+        assertEquals("https://tandem.example.com/terms", termsUrl("https://tandem.example.com/"))
+        // Scheme-less, the way someone types it into the Advanced field.
+        assertEquals("https://tandem.example.com/terms", termsUrl("tandem.example.com"))
+        // Sub-path reverse proxy: the path is kept, so /terms hangs off it.
+        assertEquals("https://host/tandem/terms", termsUrl("https://host/tandem"))
+    }
+
+    @Test
+    fun `termsUrl is null when there is no usable server`() {
+        // No server means no operator, so there are no terms to show — better
+        // than opening "https:///terms".
+        assertNull(termsUrl(""))
+        assertNull(termsUrl("   "))
+        assertNull(termsUrl("javascript:alert(1)"))
+    }
 }

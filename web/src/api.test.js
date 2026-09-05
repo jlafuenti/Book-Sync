@@ -149,6 +149,90 @@ describe('per-device sessions (issue #250)', () => {
     })
 })
 
+describe('logoutAll() (issue #250)', () => {
+    // The other half of per-device sign-out: since `logout` stopped signing out
+    // the phone, losing a device needed something that still does. The server
+    // has had `POST /api/auth/logout-all` since #250; this is the client that
+    // finally calls it.
+
+    it('calls the account-wide endpoint, not the per-device one', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ message: 'Signed out on all devices', scope: 'all' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { logoutAll } = await import('./api')
+        await logoutAll()
+
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(String(fetchMock.mock.calls[0][0])).toContain('/auth/logout-all')
+    })
+
+    it('clears the local tokens', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({}),
+        }))
+
+        const { logoutAll, isLoggedIn } = await import('./api')
+        expect(isLoggedIn()).toBe(true)
+
+        await logoutAll()
+
+        expect(isLoggedIn()).toBe(false)
+        expect(localStorage.getItem('tandem_token')).toBeNull()
+        expect(localStorage.getItem('tandem_refresh')).toBeNull()
+    })
+
+    it('still clears them when the server call fails', async () => {
+        // Same rule as logout(): the browser must not be stuck signed in
+        // because the network was down when the button was pressed.
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+
+        const { logoutAll, isLoggedIn } = await import('./api')
+        await logoutAll()
+
+        expect(isLoggedIn()).toBe(false)
+    })
+
+    it('drops cached media tokens, which the token_version bump just killed', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        let minted = 0
+        const fetchMock = vi.fn().mockImplementation(async (url) => {
+            if (String(url).includes('/auth/media-token')) {
+                minted += 1
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ token: `media-${minted}`, expires_in: 900 }),
+                }
+            }
+            return { ok: true, status: 200, json: async () => ({}) }
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc, logoutAll } = await import('./api')
+
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(1)
+
+        await logoutAll()
+
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(2)
+    })
+})
+
 describe('testHardcoverConnection()', () => {
     it('sends the token in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({

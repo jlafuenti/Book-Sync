@@ -15,12 +15,26 @@
   whatever nobody remembered.
 
   So this keeps:
-    database   — Room: reading progress, the library cache
     sharedpref — reader and player settings (font size, theme, speed)
 
   and therefore leaves behind: files/datastore (tokens, server URL, device id),
   files/ebooks and files/audiobooks (also far past the 25 MB backup quota), and
   the diagnostic logs at the filesDir root.
+
+  The `database` domain used to be included here too and is gone (issue #364).
+  Room runs SQLite in WAL mode, so the durable state at any instant is spread across
+  booksync.db and its -wal sidecar. A backup or transfer that copies the .db
+  alone — or copies both without a checkpoint — restores a file that fails
+  `PRAGMA journal_mode` with SQLITE_NOTADB, and the platform's default handler
+  responds by DELETING it: every unsynced position, the offline `pending_sync`
+  queue and the acknowledged-items table gone, silently, on first launch. That is
+  the same silent wipe #168 removed `fallbackToDestructiveMigration` to stop.
+  Reading positions are server-synced anyway, so what a restore now loses is the
+  local cache, which refills on the next sign-in. Excluding the database is one
+  line; the alternative is a BackupAgent that checkpoints and switches to
+  TRUNCATE journalling before every backup, which is a lot of machinery to make
+  a cache survive. `DiagnosticDatabaseErrorHandler` logs any corruption that does
+  happen, so the remaining paths are at least visible.
 
   A restored device mints a new device id, which is correct: it is a different
   device, and position hints are per-device by design (docs/position-sync-contract.md).
@@ -31,11 +45,9 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="database" path="." />
         <include domain="sharedpref" path="." />
     </cloud-backup>
     <device-transfer>
-        <include domain="database" path="." />
         <include domain="sharedpref" path="." />
     </device-transfer>
 </data-extraction-rules>

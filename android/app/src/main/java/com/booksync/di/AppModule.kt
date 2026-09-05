@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.booksync.data.local.BookSyncDatabase
+import com.booksync.data.local.corruptionLoggingOpenHelperFactory
 import com.booksync.data.local.MIGRATION_12_13
 import com.booksync.data.local.dao.*
 import com.booksync.BuildConfig
@@ -14,6 +15,8 @@ import com.booksync.data.remote.DictionaryApi
 import com.booksync.data.remote.httpLoggingLevel
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
+import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.diagnostics.LogChannel
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
 import dagger.Provides
@@ -214,12 +217,28 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): BookSyncDatabase =
+    fun provideDatabase(
+        @ApplicationContext context: Context,
+        diagnosticLogger: DiagnosticLogger,
+    ): BookSyncDatabase =
         Room.databaseBuilder(
             context,
             BookSyncDatabase::class.java,
             "booksync.db"
-        ).addMigrations(
+        )
+         // Issue #364: when SQLite reports corruption the platform deletes the
+         // file and Room opens an empty one, taking every unsynced position and
+         // the whole offline queue with it and saying nothing. This does not
+         // stop the deletion — refusing it would leave the app unable to open
+         // its own database — it writes one line to the app diagnostics log so
+         // the loss is explainable afterwards. Unconditional on purpose: nobody
+         // has diagnostics capture running when this fires.
+         .openHelperFactory(
+             corruptionLoggingOpenHelperFactory(
+                 onCorruption = { line -> diagnosticLogger.recordAlways(LogChannel.APP, line) },
+             ),
+         )
+         .addMigrations(
             com.booksync.data.local.MIGRATION_12_13,
             com.booksync.data.local.MIGRATION_13_14,
             com.booksync.data.local.MIGRATION_14_15,

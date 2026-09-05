@@ -93,19 +93,56 @@ class ManifestBackupRulesTest {
     }
 
     @Test
-    fun `local progress still survives a restore`() {
+    fun `reader and player settings still survive a restore`() {
         // The point of an include-list over allowBackup="false": the user comes
-        // back logged out but keeps reading progress and reader preferences.
+        // back logged out but keeps their reader and player preferences.
         for (name in listOf("data_extraction_rules.xml", "backup_rules.xml")) {
             val rules = appFile("src/main/res/xml/$name").readText()
-            assertTrue(
-                "$name should keep the Room database so reading progress survives",
-                rules.contains("domain=\"database\""),
-            )
             assertTrue(
                 "$name should keep shared prefs so reader/player settings survive",
                 rules.contains("domain=\"sharedpref\""),
             )
+        }
+    }
+
+    @Test
+    fun `the Room database is not backed up or transferred`() {
+        // Issue #364. Room runs SQLite in WAL mode, so what is durable at any
+        // instant is split between booksync.db and its -wal sidecar. A copy
+        // taken without a checkpoint — or restored without the sidecar — fails
+        // `PRAGMA journal_mode` with SQLITE_NOTADB, and the platform's default
+        // corruption handler DELETES the file. The next launch starts from an
+        // empty database with no message: every unsynced position, the
+        // `pending_sync` offline queue and the acknowledged-items table gone.
+        // #168 took out `fallbackToDestructiveMigration` to stop exactly that.
+        //
+        // Positions are server-synced, so the database is a cache that refills
+        // on the next sign-in. Keeping it would mean a BackupAgent that
+        // checkpoints and switches to TRUNCATE journalling before each backup;
+        // this is the one-line version, and it fails safe.
+        //
+        // Asserted on both files and for both API generations, because the
+        // include is what makes the file eligible in the first place.
+        for (name in listOf("data_extraction_rules.xml", "backup_rules.xml")) {
+            val rules = appFile("src/main/res/xml/$name").readText()
+            assertFalse(
+                "$name still includes domain=\"database\" — a WAL database restored " +
+                    "without its sidecar opens as SQLITE_NOTADB and is silently " +
+                    "deleted (issue #364). If it must come back, add a BackupAgent " +
+                    "that checkpoints first and exclude the -wal/-shm sidecars.",
+                rules.contains("domain=\"database\""),
+            )
+        }
+    }
+
+    @Test
+    fun `something still leaves the device, so the rules are not vacuous`() {
+        // Guards the test above from passing for the wrong reason: an empty
+        // include-list would satisfy it and would mean allowBackup is on with
+        // nothing behind it, which is a worse thing to ship than either choice.
+        for (name in listOf("data_extraction_rules.xml", "backup_rules.xml")) {
+            val rules = appFile("src/main/res/xml/$name").readText()
+            assertTrue("$name has no <include> at all", rules.contains("<include"))
         }
     }
 }

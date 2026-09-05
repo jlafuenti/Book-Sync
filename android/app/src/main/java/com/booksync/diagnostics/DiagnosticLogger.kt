@@ -122,6 +122,21 @@ class DiagnosticLogger @Inject constructor(
         writeRaw(channel, line)
     }
 
+    /**
+     * Append a line whether or not [channel] is currently capturing (issue #364).
+     *
+     * Reserved for events that destroy user data and cannot be asked to happen
+     * again: database corruption is the only one today. Everything else goes
+     * through [i]/[w]/[e], which respect the capture window — if this became the
+     * ordinary path the log would grow forever with nobody having asked for it.
+     *
+     * The rotation in [writeRaw] still applies, so it cannot fill the disk.
+     */
+    fun recordAlways(channel: LogChannel, line: String) {
+        Log.w(TAG, line)
+        writeRaw(channel, line)
+    }
+
     // ----------------------------------------------------------------
     // File access
     // ----------------------------------------------------------------

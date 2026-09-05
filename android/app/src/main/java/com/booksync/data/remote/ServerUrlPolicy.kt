@@ -63,6 +63,22 @@ fun shouldShowFirstRun(serverUrl: String): Boolean = serverUrl.isBlank()
  */
 const val TANDEM_REPO_URL = "https://github.com/jlafuenti/Book-Sync"
 
+/**
+ * The terms-of-use page on whichever server the app is pointed at (issue #262).
+ *
+ * There is no central Tandem, so there are no central terms: they belong to the
+ * operator whose server you are asking for an account on, and the web app serves
+ * them at `/terms`. Null when no server is configured — the register form is
+ * unreachable in that state anyway (`canSubmit` requires a server), and a link
+ * that opened `https:///terms` would be worse than no link.
+ *
+ * Goes through [normalizeServerUrl] rather than string-concatenating, so a stored
+ * value with a trailing slash, a sub-path reverse proxy, or a missing scheme all
+ * produce one usable URL.
+ */
+fun termsUrl(serverUrl: String): String? =
+    normalizeServerUrl(serverUrl)?.plus("/terms")
+
 /** Shown when the user types something that is not a usable server address. */
 const val INVALID_SERVER_URL_MESSAGE =
     "Enter a server address like https://tandem.example.com"

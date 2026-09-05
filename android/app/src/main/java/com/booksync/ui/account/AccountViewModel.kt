@@ -299,4 +299,29 @@ class AccountViewModel @Inject constructor(
             tokenManager.clearTokens()
         }
     }
+
+    /**
+     * Sign out on every device (issue #250) — `POST /api/auth/logout-all`.
+     *
+     * [logout] ends this device's session only, which is right for putting the
+     * phone down and no use at all when the phone is the thing that was lost.
+     * This is the account-wide revoke, and it is the one normal user action that
+     * still bumps `token_version`: every token the account holds dies, on every
+     * device, immediately.
+     *
+     * Same shape as [logout] deliberately, and the same reasons: revoke first so
+     * AuthInterceptor still has a bearer token to send, and clear locally no
+     * matter what came back. A device that stays "signed in" because the request
+     * failed is the exact failure this button exists to prevent.
+     */
+    fun logoutAll() {
+        viewModelScope.launch {
+            try {
+                api.logoutAll()
+            } catch (_: Exception) {
+                // ignore — the local half must still happen
+            }
+            tokenManager.clearTokens()
+        }
+    }
 }

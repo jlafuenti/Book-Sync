@@ -174,6 +174,39 @@ drained when connectivity returns — on app start, when the network comes back,
 library screen loads. The drain is serialized behind a mutex so two triggers can't replay the same
 write twice.
 
+## Backup and device transfer
+
+The manifest opts into Auto Backup and Android 12+ device-to-device transfer, and both are
+governed by an **include-list**: `res/xml/data_extraction_rules.xml` (API 31+) and
+`res/xml/backup_rules.xml` (API 26-30), kept in step and pinned by `ManifestBackupRulesTest`.
+Anything not named there never leaves the device. That is deliberate — an exclude-list has to be
+updated every time a file is added and silently leaks whatever nobody remembered (issue #176).
+
+What leaves: **shared preferences only** — reader and player settings. What stays: the DataStore
+holding the access and refresh tokens, the server URL and the device id; the downloaded books; the
+diagnostic logs.
+
+**The Room database is excluded too, as of issue #364.** Room runs SQLite in WAL mode, so the
+durable state at any instant is split between `booksync.db` and its `-wal` sidecar. A backup or
+transfer taken without a checkpoint — or restored without the sidecar — produces a file that fails
+`PRAGMA journal_mode` with `SQLITE_NOTADB`, and Android's default corruption handler responds by
+**deleting it**. The next launch then starts from an empty database with nothing on screen to say
+so: every unsynced position, the `pending_sync` offline queue and the acknowledged-items table
+gone. That is the same silent wipe issue #168 removed `fallbackToDestructiveMigration` to stop.
+
+Positions are server-synced, so what a restore now loses is a cache that refills on the next
+sign-in. Putting the database back would mean a `BackupAgent` that checkpoints and switches to
+`TRUNCATE` journalling before every backup, and that explicitly excludes the `-wal`/`-shm`
+sidecars — a lot of machinery to make a cache survive. If you ever add one, update
+`ManifestBackupRulesTest` in the same change; it currently fails if the `database` domain comes
+back.
+
+Corruption from any other cause is now at least visible: `corruptionLoggingOpenHelperFactory`
+(`data/local/DatabaseCorruptionLogging.kt`) wraps Room's open-helper callback and appends one line
+to the app diagnostics log before the platform deletes the file. It does **not** prevent the
+deletion — refusing it would leave the app unable to open its own database — and it writes whether
+or not a diagnostics capture is running, because nobody has one running when this fires.
+
 ## Android Auto
 
 The app exposes a media browse tree to Android Auto: the browse root is titled **Tandem**, and
