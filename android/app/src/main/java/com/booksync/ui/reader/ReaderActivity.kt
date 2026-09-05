@@ -25,6 +25,7 @@ import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
@@ -43,8 +44,15 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.util.AbsoluteUrl
+import org.readium.r2.shared.util.Try
+import org.readium.r2.shared.util.Url
 import org.readium.r2.shared.util.asset.AssetRetriever
+import org.readium.r2.shared.util.data.Container
+import org.readium.r2.shared.util.data.ReadError
 import org.readium.r2.shared.util.http.DefaultHttpClient
+import org.readium.r2.shared.util.resource.Resource
+import org.readium.r2.shared.util.resource.TransformingContainer
+import org.readium.r2.shared.util.resource.TransformingResource
 import org.readium.r2.shared.util.toAbsoluteUrl
 import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.DefaultPublicationParser
@@ -175,6 +183,12 @@ class ReaderActivity : AppCompatActivity() {
 
     /** Drops the redundant second write every reader exit used to make. */
     private val duplicatePositionFilter = DuplicatePositionFilter()
+
+    /**
+     * The escape hatch's decision half (issue #373) — see
+     * [ResourceFailurePolicy] and [handleResourceLoadFailed].
+     */
+    private val resourceFailurePolicy = ResourceFailurePolicy()
 
     /**
      * The href + progression of the last locator the code displayed
@@ -313,6 +327,48 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Wraps a publication's container so every XHTML/HTML entry gets its
+     * self-closing `<head/>` rewritten on the way out — issue #373.
+     *
+     * Readium 3.1.2 has no public "resource transformer" registry. What it does
+     * have is `PublicationOpener(onCreatePublication = ...)`, which hands over
+     * the `Publication.Builder` after parsing and before building, and a
+     * `TransformingContainer` in readium-shared that decorates every entry a
+     * container hands out. Replacing `builder.container` with one is therefore
+     * the supported interposition point, and it sits *below* the navigator's
+     * `WebViewServer`, so the injector sees the rewritten bytes.
+     *
+     * Non-HTML entries are returned untouched — the transform is not even
+     * constructed for them — so images, CSS and fonts stream exactly as before.
+     * See [normalizeEpubHead] for what the rewrite does and why it is this
+     * narrow.
+     */
+    private fun normalizeHeads(container: Container<Resource>): Container<Resource> =
+        TransformingContainer(container) { url: Url, resource: Resource ->
+            if (isHtmlLikeExtension(url.extension?.value)) {
+                HeadNormalizingResource(resource)
+            } else {
+                resource
+            }
+        }
+
+    /**
+     * One XHTML entry, with its `<head/>` rewritten.
+     *
+     * `cacheBytes` is stated rather than left to its default because it is
+     * load-bearing here: `WebViewServer` streams the response through
+     * `asInputStream`, which asks for the length and then reads in chunks, and
+     * an uncached `TransformingResource` would re-read and re-transform the
+     * whole resource for every one of those calls.
+     */
+    private class HeadNormalizingResource(resource: Resource) :
+        TransformingResource(resource, cacheBytes = true) {
+        override suspend fun transform(
+            data: Try<ByteArray, ReadError>,
+        ): Try<ByteArray, ReadError> = data.map { normalizeEpubHeadBytes(it) }
+    }
+
     private fun loadPublication() {
         lifecycleScope.launch {
             try {
@@ -377,7 +433,16 @@ class ReaderActivity : AppCompatActivity() {
                     pdfFactory = null,
                 )
 
-                val pub = PublicationOpener(parser)
+                // `onCreatePublication` is the one hook Readium 3.1.2 gives us
+                // between parsing and building: it hands over the
+                // `Publication.Builder`, whose `container` can be swapped for a
+                // wrapper. There is no separate "resource transformer"
+                // registry in this version — `TransformingContainer` IS the
+                // supported way to interpose. See [normalizeHeads].
+                val pub = PublicationOpener(
+                    publicationParser = parser,
+                    onCreatePublication = { container = normalizeHeads(container) },
+                )
                     .open(asset, allowUserInteraction = false)
                     .getOrNull()
                     ?: run { Log.e(TAG, "Failed to open publication"); finish(); return@launch }
@@ -553,8 +618,12 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun toggleBars() {
-        isBarVisible = !isBarVisible
-        val visibility = if (isBarVisible) View.VISIBLE else View.GONE
+        setBarsVisible(!isBarVisible)
+    }
+
+    private fun setBarsVisible(visible: Boolean) {
+        isBarVisible = visible
+        val visibility = if (visible) View.VISIBLE else View.GONE
         topBar.visibility = visibility
         bottomBar.visibility = visibility
     }
@@ -573,6 +642,67 @@ class ReaderActivity : AppCompatActivity() {
                 startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url.toString())))
             } catch (_: Exception) {}
         }
+
+        /**
+         * The escape hatch (issue #373). A resource that fails to load leaves
+         * the WebView on Chromium's error page, which runs none of Readium's
+         * injected JavaScript — so the tap that normally reveals the toolbar
+         * and the swipe that normally turns the page both do nothing, and the
+         * reader is a dead end with only the system Back button.
+         *
+         * Readium calls this from `WebViewServer` on a background thread, so
+         * everything the response touches is posted to the UI thread.
+         */
+        override fun onResourceLoadFailed(href: Url, error: ReadError) {
+            Log.e(TAG, "Resource failed to load: $href ($error)")
+            runOnUiThread { handleResourceLoadFailed(href) }
+        }
+    }
+
+    private fun handleResourceLoadFailed(href: Url) {
+        val pub = publication
+        val spineHrefs = pub?.readingOrder?.map { it.href.toString() }.orEmpty()
+        // Prefer the failing href's own spine index; fall back to wherever the
+        // navigator thinks it is, for an href that is not in the reading order
+        // at all (a resource reached from a link, say).
+        val spineIndex = spineIndexForHref(spineHrefs, href.toString())
+            .takeIf { it >= 0 }
+            ?: navigator?.currentLocator?.value
+                ?.let { spineIndexForHref(spineHrefs, it.href.toString()) }
+            ?: -1
+        val action = resourceFailurePolicy.onResourceLoadFailed(
+            href = href.toString(),
+            barsVisible = isBarVisible,
+            hasNextResource = hasNextResource(spineIndex, spineHrefs.size),
+        ) ?: return
+
+        // Bars first: even with no next chapter to skip to, the user needs the
+        // toolbar back to leave the book or open display settings.
+        if (action.revealBars) setBarsVisible(true)
+
+        val label = action.nextChapterLabel
+        // Anchored inside the layout rather than at android.R.id.content so
+        // Snackbar walks up to the CoordinatorLayout that is activity_reader's
+        // root and gets its normal placement and swipe-to-dismiss.
+        val snackbar = Snackbar.make(
+            findViewById(R.id.navigator_container),
+            action.message,
+            if (label != null) Snackbar.LENGTH_INDEFINITE else Snackbar.LENGTH_LONG,
+        )
+        if (label != null) {
+            snackbar.setAction(label) {
+                val next = pub?.readingOrder?.getOrNull(spineIndex + 1)
+                    ?: pub?.readingOrder?.firstOrNull()
+                if (next != null) {
+                    // go(Link) is the public go-forward-to-next-resource in
+                    // Readium 3.1.2; goForward() would have to run inside the
+                    // error page's (absent) JavaScript to do anything.
+                    programmaticTarget = pub?.locatorFromLink(next)
+                    navigator?.go(next, animated = false)
+                }
+            }
+        }
+        snackbar.show()
     }
 
     // ============ Progress tracking ============
@@ -601,6 +731,12 @@ class ReaderActivity : AppCompatActivity() {
             // overwrite a real position from another device with chapter 0.
             var lastSaveTime = System.currentTimeMillis()
             nav.currentLocator.collect { locator ->
+                // A locator emission means a resource actually rendered (an
+                // error page runs no Readium JavaScript and emits nothing), so
+                // clear the "already told the user about this one" latch —
+                // issue #373.
+                resourceFailurePolicy.onResourceDisplayed()
+
                 // Update progress UI
                 updateProgressUI(locator)
 
