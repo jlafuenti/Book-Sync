@@ -660,3 +660,40 @@ def test_ci_installs_requirements_without_filtering_them():
         "live in requirements-local.txt and are not installed by default, so the "
         "filter matches nothing — see docs/testing.md."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #180: the non-root switch is the one change in this repo that can stop
+# an *existing* install from booting — the server creates `logs/` under the
+# app-data mount at import time, so a mount still owned by root is a fatal
+# PermissionError before anything else runs. The runbook for that is the whole
+# mitigation, and README.md links straight at its anchor.
+# ---------------------------------------------------------------------------
+
+_OPERATIONS_DOC = os.path.join(_REPO_ROOT, "docs", "operations.md")
+_NON_ROOT_HEADING = "## Running as a non-root user"
+
+
+def test_operations_doc_has_the_non_root_runbook():
+    text = _read(_OPERATIONS_DOC)
+    assert _NON_ROOT_HEADING in text, (
+        "docs/operations.md lost its non-root section, and README.md's "
+        "#running-as-a-non-root-user link now points at nothing."
+    )
+    section = text.split(_NON_ROOT_HEADING, 1)[1].split("\n## ", 1)[0]
+    for needle in ("PUID", "PGID", "chown", "jetson", "roll back"):
+        assert needle.lower() in section.lower(), (
+            f"docs/operations.md's non-root runbook never mentions {needle!r}."
+        )
+
+
+def test_readme_links_at_the_non_root_runbook():
+    """The env table's PUID/PGID row is where an operator meets this first."""
+    readme = _read(os.path.join(_REPO_ROOT, "README.md"))
+    assert "PUID" in readme and "PGID" in readme, (
+        "README.md's environment table does not document PUID/PGID."
+    )
+    assert "operations.md#running-as-a-non-root-user" in readme, (
+        "README.md does not link at the non-root runbook, so the one-time "
+        "ownership change an existing install needs is undiscoverable from it."
+    )
