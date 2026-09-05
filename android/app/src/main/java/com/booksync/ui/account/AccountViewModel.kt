@@ -1,5 +1,12 @@
 package com.booksync.ui.account
 
+import com.booksync.diagnostics.buildProblemReport
+import com.booksync.diagnostics.LogChannel
+import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.deviceCrashContext
+import com.booksync.R
+import androidx.core.content.FileProvider
+import android.content.Intent
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -72,6 +79,8 @@ class AccountViewModel @Inject constructor(
     private val deviceIdManager: DeviceIdManager,
     private val passwordResetGate: PasswordResetGate,
     networkMonitor: NetworkMonitor,
+    private val diagnosticLogger: DiagnosticLogger,
+    @param:dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     val serverUrl = serverUrlManager.serverUrlFlow
@@ -323,5 +332,49 @@ class AccountViewModel @Inject constructor(
             }
             tokenManager.clearTokens()
         }
+    }
+
+    // ---- Report a problem --------------------------------------------------
+
+    /**
+     * Bundle the app diagnostics log, the app version and the device into a
+     * share intent (issue #230).
+     *
+     * This is the whole crash-reporting story before launch: no SDK, no
+     * third-party processor, and Play Vitals only sees users who share usage
+     * data. The log already contains any crash the uncaught-exception handler
+     * caught ([com.booksync.diagnostics.CrashLogHandler]), so this reaches the
+     * traces even from someone who never turned diagnostics on.
+     *
+     * The version and device are repeated in the message body, not only in the
+     * attached log: some share targets drop attachments without saying so, and a
+     * text-only report should still be triageable. The subject and body are built
+     * by [buildProblemReport], which is unit-tested; everything below it is
+     * Android plumbing with nothing to assert on the JVM.
+     */
+    fun shareProblemReport(onIntent: (Intent) -> Unit) {
+        val file = diagnosticLogger.getLogFile(LogChannel.APP)
+        val logText = if (file.exists()) runCatching { file.readText() }.getOrDefault("") else ""
+        val report = buildProblemReport(deviceCrashContext(), logText)
+
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, report.subject)
+            putExtra(Intent.EXTRA_TEXT, report.body)
+            if (report.hasLog) {
+                putExtra(
+                    Intent.EXTRA_STREAM,
+                    FileProvider.getUriForFile(
+                        appContext,
+                        "${appContext.packageName}.fileprovider",
+                        file,
+                    ),
+                )
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        onIntent(
+            Intent.createChooser(send, appContext.getString(R.string.report_problem_chooser))
+        )
     }
 }

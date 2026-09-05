@@ -43,6 +43,20 @@ private const val LIBRARY_PAGE_SIZE = 500
 /** Where a tap on a paired book should land. */
 enum class PairOpenTarget { Reader, Player, Details }
 
+/**
+ * Last-opened moments, epoch millis, split by what the id refers to (issue #223).
+ *
+ * Three maps rather than one because the ids are not unique across kinds: pair 7,
+ * ebook 7 and audiobook 7 are three different books. Absent means never opened;
+ * a stored `0L` means the timestamp could not be parsed and is treated the same
+ * way by [com.booksync.ui.library.lastOpenedFor].
+ */
+data class LastOpenedTimes(
+    val pairs: Map<Int, Long> = emptyMap(),
+    val ebooks: Map<Int, Long> = emptyMap(),
+    val audiobooks: Map<Int, Long> = emptyMap(),
+)
+
 @Singleton
 class BookSyncRepository @Inject constructor(
     private val api: BookSyncApi,
@@ -290,6 +304,38 @@ class BookSyncRepository @Inject constructor(
                 .map { it.mediaId }
                 .toSet()
             ebooks.filter { it.id !in completedIds }
+        }
+
+    /**
+     * When each library item was last opened, epoch millis, for the library's
+     * "Recently opened" sort (issue #223).
+     *
+     * Two tables, because the app writes a position to different places
+     * depending on what is being read: a pair's write lands in `bookmarks`
+     * (`updatedAt` / `capturedAt`, ISO-8601 strings, keyed by `bookPairId`),
+     * a standalone ebook's or audiobook's in `user_progress` (`updatedAt`,
+     * epoch millis, keyed by `mediaType`/`mediaId`). Reading one table would
+     * leave half the library looking never-opened, which is close to what the
+     * old id-descending "proxy" comparator did.
+     *
+     * `capturedAt` wins over `updatedAt` where present, the same preference the
+     * sync conflict resolution uses (issue #54): it is when the position was
+     * really recorded, as opposed to when a row was last touched.
+     */
+    fun lastOpenedTimesFlow(): Flow<LastOpenedTimes> =
+        combine(
+            bookmarkDao.getAllBookmarksFlow(scope),
+            userProgressDao.getAllProgressFlow(scope),
+        ) { bookmarks, progress ->
+            LastOpenedTimes(
+                pairs = bookmarks.associate {
+                    it.bookPairId to parseSyncTimestamp(preferCapturedAt(it.capturedAt, it.updatedAt))
+                },
+                ebooks = progress.filter { it.mediaType == "ebook" }
+                    .associate { it.mediaId to it.updatedAt },
+                audiobooks = progress.filter { it.mediaType == "audiobook" }
+                    .associate { it.mediaId to it.updatedAt },
+            )
         }
 
     /** Mark a *standalone* media item as completed. Pairs go through [markPairComplete]. */

@@ -295,6 +295,29 @@ checklist item that used to be advertised in the manifest without being implemen
 If Auto ever becomes not worth the review dimension, **opting out is a Play Console listing change,
 not a code change** — the browse tree keeps working for sideloaded users either way.
 
+## Crash reporting
+
+There is no crash SDK — no Crashlytics, no Sentry, nothing that ships data to a third party
+(issue #230). What exists instead is two pieces:
+
+- **Uncaught exceptions are written to the app diagnostics log.** `BookSyncApp.onCreate`
+  installs `CrashLogHandler` as the process-wide default handler. It appends the stack trace
+  plus app version/build, device model and Android version to `files/app_diagnostics.log` and
+  then delegates to the handler it replaced, so the process still dies the way Android expects
+  and Play Vitals still sees the crash. The write is **not** gated on diagnostics being
+  enabled: nobody turns diagnostics on before a crash they did not know was coming.
+- **Account → Report a problem** shares that log, with the same version/device facts repeated
+  in the message body (share targets are free to drop attachments, and several do silently).
+
+To see it work on a debug build: `adb shell am crash com.booksync`, then
+`adb shell run-as com.booksync cat files/app_diagnostics.log` — the report is delimited by
+`=== Tandem crash ===` / `=== end of crash ===`.
+
+**Release builds are minified, so a trace is only readable with that release's `mapping.txt`.**
+Upload `app/build/outputs/mapping/release/mapping.txt` to Play for every release you ship, and
+keep a copy: it is what turns both a Vitals report and a user-shared log into named frames. A
+report from a version whose mapping was never kept is close to unusable.
+
 ## Casting
 
 Audio can be cast to a Chromecast. Because a cast receiver fetches media over plain HTTP with no

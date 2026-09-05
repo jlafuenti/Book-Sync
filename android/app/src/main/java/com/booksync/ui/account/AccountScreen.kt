@@ -351,6 +351,20 @@ fun AccountScreen(
                         description = "Capture in-app events for support.",
                         onClick = onDiagnosticsApp,
                     )
+                    Divider()
+                    // Issue #230. The only route by which a stack trace reaches
+                    // the person who can fix it: there is no crash SDK, and Play
+                    // Vitals only reports users who share usage data.
+                    val reportContext = LocalContext.current
+                    ActionRow(
+                        title = stringResource(R.string.account_report_problem),
+                        description = stringResource(R.string.account_report_problem_desc),
+                        onClick = {
+                            viewModel.shareProblemReport { intent ->
+                                reportContext.startActivity(intent)
+                            }
+                        },
+                    )
                 }
             }
 

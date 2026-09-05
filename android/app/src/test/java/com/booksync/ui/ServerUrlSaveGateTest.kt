@@ -106,6 +106,8 @@ class ServerUrlSaveGateTest {
         return AccountViewModel(
             dataStore, api, tokenManager,
             serverUrlManager, deviceIdManager, PasswordResetGate(), networkMonitor,
+            // "Report a problem" (issue #230) is not what this gate is about.
+            mockk(relaxed = true), mockk(relaxed = true),
         )
     }
 
