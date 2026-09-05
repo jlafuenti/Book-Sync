@@ -226,6 +226,24 @@ external-metadata bucket is metering an API quota you pay for, not server CPU.
 The `chapter_encoding` cache is keyed on `(path, mtime, size)`, so repairing a file makes the next
 Troubleshoot load re-check it immediately regardless of the TTL.
 
+**Who may ask at all** is the fourth layer, and the cheapest one: all four expensive reads are
+curation or operator views, so none of them is open to a plain `user` (issue #208).
+
+| Endpoint | Minimum role |
+|---|---|
+| `/api/stats/disk_usage` | admin |
+| `/api/troubleshoot/issues` | editor |
+| `/api/library/verify` | editor |
+| `/api/library/calibre-status` | editor |
+
+The role check runs **before** the bucket (`routers.auth.rate_limited` wraps the role dependency
+rather than sitting beside it), so a caller who may not use the endpoint gets 401/403 and spends
+nothing -- otherwise any account could drain an editor-only bucket and deny it to the editors.
+
+The web hides the matching navigation and route behind `RequireRole` so a below-role account is
+never shown a console it cannot use, but that is presentation only. The dependency above is the
+boundary; the role travels in a JWT the client cannot be trusted to police.
+
 ### Page-size caps
 
 Every list endpoint has a ceiling, and a `limit` over it is refused with **422** rather than

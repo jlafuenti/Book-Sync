@@ -4,6 +4,16 @@ import { MemoryRouter } from 'react-router-dom'
 import MobileDrawer from './MobileDrawer'
 import { ThemeProvider } from '../ThemeContext'
 
+// The drawer filters its nav on the signed-in role (issue #208), which comes
+// from AuthContext rather than the `user` prop; mirror the prop's role here.
+const ROLES = ['user', 'editor', 'admin', 'superadmin']
+let currentRole = 'admin'
+vi.mock('../contexts/AuthContext', () => ({
+    useAuth: () => ({
+        hasMinRole: (min) => ROLES.indexOf(currentRole) >= ROLES.indexOf(min),
+    }),
+}))
+
 /**
  * On a phone the drawer's user block is the *only* way into Account — the
  * bottom nav is full and the desktop sidebar does not exist (issue #146). Play
@@ -12,6 +22,7 @@ import { ThemeProvider } from '../ThemeContext'
  * strip the deletion route from every mobile user.
  */
 function renderDrawer(user = { username: 'alice', role: 'admin' }, onLogout = vi.fn()) {
+    currentRole = user?.role ?? 'user'
     render(
         <MemoryRouter>
             <ThemeProvider>

@@ -6147,7 +6147,7 @@
     },
     "/api/library/calibre-status": {
       "get": {
-        "description": "Check whether calibre's ebook-convert is available in the server container.\n\n`subprocess.run` with a 10 s timeout used to run inline on the event loop, so\none wedged `ebook-convert` blocked every other request for those ten seconds\n— on a single-worker server, with a System page tile calling this on load.\nNow: worker thread, cached (issue #208).",
+        "description": "Check whether calibre's ebook-convert is available in the server container.\n\n`subprocess.run` with a 10 s timeout used to run inline on the event loop, so\none wedged `ebook-convert` blocked every other request for those ten seconds\n— on a single-worker server, with a System page tile calling this on load.\nNow: worker thread, cached, and editor-gated (issue #208) -- whether the\nconversion binary is installed is an operator's question, and a read-only\naccount can convert nothing. The role check runs before the bucket, so a\nrefused caller starts no subprocess.",
         "operationId": "get_calibre_status_api_library_calibre_status_get",
         "responses": {
           "200": {
@@ -8045,7 +8045,7 @@
     },
     "/api/library/verify": {
       "get": {
-        "description": "Check every ebook and audiobook file_path against the filesystem.\nReturns lists of entries whose source files no longer exist.\n\nEditor-gated (issue #263): the report lists the absolute `file_path` of\nevery orphaned row, and it drives the Maintenance menu's \"Verify Files\"\naction, which the web already shows only to editors.\n\nThe stat loop used to run on the event loop, one call per library row over a\nNAS mount, on a single-worker server — so a full library made every other\nrequest wait, `/api/health` included. It now runs in a worker thread, and\neach list stops at `VERIFY_MAX_RESULTS` with `truncated` set (issue #208).",
+        "description": "Check every ebook and audiobook file_path against the filesystem.\nReturns lists of entries whose source files no longer exist.\n\nEditor-gated (issue #263): the report lists the absolute `file_path` of\nevery orphaned row, and it drives the Maintenance menu's \"Verify Files\"\naction, which the web already shows only to editors.\n\nThe stat loop used to run on the event loop, one call per library row over a\nNAS mount, on a single-worker server — so a full library made every other\nrequest wait, `/api/health` included. It now runs in a worker thread, and\neach list stops at `VERIFY_MAX_RESULTS` with `truncated` set (issue #208).\n\nEditor and up: this is a curation view. Nothing here is actionable without\nthe edit and re-scan controls, which are already editor-gated, so opening it\nto every account only bought anyone a full pass over every row on demand.\nThe web hides the entry point to match (`RequireRole`), but that is cosmetic\n-- this dependency is the boundary.",
         "operationId": "verify_files_api_library_verify_get",
         "responses": {
           "200": {

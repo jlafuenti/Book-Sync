@@ -117,6 +117,22 @@ async def test_verify_is_rate_limited(
     assert int(over.headers["Retry-After"]) > 0
 
 
+async def test_verify_requires_editor(db, make_client, make_user, auth_header):
+    """A plain reader may not stat the whole library (issue #208).
+
+    `verify` is a curation view: it exists to tell whoever maintains the shelves
+    which rows have lost their file. A read-only account can act on none of it,
+    and letting it ask means any account can spend a full pass over every row on
+    a NAS mount.
+    """
+    user = await make_user(username="v5", role="user")
+    await _orphans(db, 1, prefix="gated")
+
+    async with make_client(library.router) as c:
+        resp = await c.get("/api/library/verify", headers=auth_header(user))
+
+    assert resp.status_code == 403
+
 # ---------------------------------------------------------------------------
 # /api/library/calibre-status
 # ---------------------------------------------------------------------------
@@ -218,3 +234,28 @@ async def test_calibre_status_is_rate_limited(
 
     assert codes == [200, 200, 429]
     assert int(over.headers["Retry-After"]) > 0
+
+
+async def test_calibre_status_requires_editor(
+    make_client, make_user, auth_header, monkeypatch
+):
+    """Same gate on the same reasoning, and the subprocess never starts.
+
+    Whether calibre is installed is an operator's question -- a read-only
+    account cannot convert anything -- and the answer costs a `subprocess.run`
+    with a 10 s timeout. The 403 lands before the probe: `rate_limited` runs the
+    role dependency first, so a refused caller neither shells out nor spends
+    from the bucket.
+    """
+    user = await make_user(username="c6", role="user")
+    calls = []
+    monkeypatch.setattr(
+        library.subprocess, "run",
+        lambda *a, **k: (calls.append(1), _FakeCompleted())[1],
+    )
+
+    async with make_client(library.router) as c:
+        resp = await c.get("/api/library/calibre-status", headers=auth_header(user))
+
+    assert resp.status_code == 403
+    assert calls == []
