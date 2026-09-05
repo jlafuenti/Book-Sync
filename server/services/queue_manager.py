@@ -215,6 +215,7 @@ async def cancel_item(item_id: int) -> bool:
     open, or paused mid-transcription, can always be cancelled.
     """
     was_paused = False
+    was_running = False
     pair_id = None
 
     async with async_session() as db:
@@ -229,6 +230,7 @@ async def cancel_item(item_id: int) -> bool:
 
         if item.status == "in_progress":
             _cancel_requested.add(item_id)
+            was_running = True
             item.status = "cancelled"
             item.message = "Cancellation requested"
             await db.commit()
@@ -241,6 +243,22 @@ async def cancel_item(item_id: int) -> bool:
             await db.commit()
         else:
             return False
+
+    # Tell the worker to stop (issue #196). Flipping the DB row used to be the
+    # whole of "cancel": the worker kept the GPU for the remaining hours of the
+    # book, starving the off-hours pipeline the window exists to protect.
+    # `request_pause` is the stop we have — the worker halts at its next chunk
+    # boundary and checkpoints — and the pipeline's TranscriptionPaused then
+    # lands on the cancelled branch of `_process_next_item`, which discards
+    # that checkpoint.
+    #
+    # Best effort by design: an unreachable worker must not turn a successful
+    # cancel into an error. Its own 48h sweep collects whatever is left.
+    if was_running and _active_item_id == item_id and _active_provider is not None:
+        try:
+            await _active_provider.request_pause()
+        except Exception as e:
+            logger.debug(f"Could not ask the worker to stop cancelled item {item_id}: {e}")
 
     # A paused item left a checkpoint — and the retained audio for it — on the
     # transcription worker. Nothing will ever resume it now, so reclaim that
@@ -603,7 +621,15 @@ async def _process_next_item():
             ProviderUnavailableError,
             TranscriptionPaused,
         )
-        if isinstance(e, TranscriptionPaused):
+        if item_id in _cancel_requested:
+            # The user cancelled, and this exception is the job unwinding —
+            # most often the pause we asked the worker for (issue #196).
+            # Whatever it is, a cancelled item must not be re-pended by
+            # `_mark_item_paused`, re-queued by the retry ladder, or flipped to
+            # `failed` with the pair in ERROR. It stays cancelled.
+            logger.info(f"Queue item {item_id} was cancelled; unwound with: {e}")
+            await _finalize_cancelled(item_id, pair_id)
+        elif isinstance(e, TranscriptionPaused):
             # Not a failure — the provider stopped at a checkpoint because the
             # window closed. Re-pend with progress intact and no retry burned.
             await _mark_item_paused(item_id, e, config)
@@ -686,6 +712,29 @@ async def _process_next_item():
         _active_provider = None
 
     return True  # We processed something
+
+
+async def _finalize_cancelled(item_id: int, pair_id: int) -> None:
+    """Settle a cancelled item and reclaim what it left on the worker (#196).
+
+    Called when a job the user cancelled unwinds by raising — usually the pause
+    the cancel asked for. Clears ``paused_at`` so nothing treats the row as
+    resumable, and drops the worker's checkpoint plus the audio parked beside
+    it, which nothing will ever resume now.
+    """
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
+        )
+        item = result.scalar_one_or_none()
+        if item:
+            item.status = "cancelled"
+            item.message = "Cancelled by user"
+            item.paused_at = None
+            item.completed_at = utcnow()
+            await db.commit()
+
+    await _discard_remote_checkpoint(pair_id)
 
 
 async def _mark_item_paused(item_id: int, exc, config) -> None:
@@ -908,13 +957,10 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             progress_callback=on_whisper_progress,
         )
 
-        # Check cancellation
-        if item_id in _cancel_requested:
-            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                      completed_at=utcnow())
-            return
-
-        # Persist transcript immediately — before any EPUB work — so it is never lost
+        # Persist the transcript before anything else — including before the
+        # cancellation check below (issue #196). The worker has already spent
+        # the hours; cancelling the *sync* must not throw away the
+        # *transcription*, or a re-queue starts the whole book again.
         sentences_data = [
             {"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
             for s in whisper_sentences
@@ -954,6 +1000,12 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 ))
             await db.commit()
         logger.info(f"Pair {pair_id}: transcript saved ({len(whisper_sentences)} sentences)")
+
+        # Check cancellation — now that the transcript is banked.
+        if item_id in _cancel_requested:
+            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
+                                      completed_at=utcnow())
+            return
 
         await _update_queue_item(
             item_id,
