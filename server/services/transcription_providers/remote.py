@@ -11,6 +11,7 @@ from typing import List, Optional, Callable
 import os
 import asyncio
 import logging
+import time
 from typing import List, Optional, Callable
 
 from services.transcription_providers.base import (
@@ -24,6 +25,29 @@ from services.transcription import TranscribedSentence
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Bounds on the two "poll the worker until it says the right thing" loops
+# (issue #195)
+#
+# Both loops used to be `while True:` with every transport error swallowed at
+# DEBUG. If the worker died — or stayed busy forever — while we were inside
+# one, the queue item stayed `in_progress` with no error recorded, and because
+# the queue is strictly serial nothing else was ever dispatched. Only a restart
+# cleared it, and `reset_stale_items` then walked straight back in.
+#
+# Each loop now has two exits: a wall-clock deadline (`self.timeout`, the same
+# budget the blocking upload gets) and a consecutive-transport-error cap. Both
+# raise ProviderUnavailableError so the queue's retry ladder takes over.
+#
+# The caps are deliberately generous enough to ride out a poll blip: the tests
+# pin both the giving-up and the surviving-a-blip halves.
+# ---------------------------------------------------------------------------
+REATTACH_POLL_INTERVAL_SEC = 10
+REATTACH_MAX_POLL_ERRORS = 6            # ~1 min unreachable at 10 s
+
+WAIT_FOR_IDLE_POLL_INTERVAL_SEC = 30
+WAIT_FOR_IDLE_MAX_POLL_ERRORS = 10      # ~5 min unreachable at 30 s
 
 
 class RemoteWhisperProvider(TranscriptionProvider):
@@ -84,18 +108,31 @@ class RemoteWhisperProvider(TranscriptionProvider):
     async def _wait_for_server_idle(
         self, blocking_file: str, progress_callback: Optional[Callable]
     ) -> None:
-        """Poll /v1/status until the remote server is no longer active."""
+        """Poll /v1/status until the remote server is no longer active.
+
+        Bounded on both axes (issue #195): a deadline for "busy forever" and a
+        consecutive-error cap for "went away mid-wait". Either raises
+        ProviderUnavailableError, which unblocks the serial queue.
+        """
         logger.info(
             f"Remote server busy with '{blocking_file}'. "
             f"Waiting for it to finish before retrying..."
         )
+        deadline = time.monotonic() + self.timeout
+        consecutive_errors = 0
         async with httpx.AsyncClient() as client:
             while True:
-                await asyncio.sleep(30)
+                if time.monotonic() >= deadline:
+                    raise ProviderUnavailableError(
+                        f"Gave up waiting for the worker to finish '{blocking_file}' "
+                        f"after {self.timeout}s — will retry."
+                    )
+                await asyncio.sleep(WAIT_FOR_IDLE_POLL_INTERVAL_SEC)
                 try:
                     resp = await client.get(
                         f"{self.remote_url}/v1/status", timeout=10.0, headers=self._headers
                     )
+                    consecutive_errors = 0
                     if resp.status_code == 200:
                         data = resp.json()
                         if progress_callback:
@@ -108,7 +145,17 @@ class RemoteWhisperProvider(TranscriptionProvider):
                             logger.info("Remote server is now free. Retrying upload.")
                             return
                 except httpx.RequestError as e:
-                    logger.debug(f"Status poll error while waiting: {e}")
+                    consecutive_errors += 1
+                    logger.warning(
+                        f"Status poll error while waiting for '{blocking_file}' "
+                        f"({consecutive_errors}/{WAIT_FOR_IDLE_MAX_POLL_ERRORS}): {e}"
+                    )
+                    if consecutive_errors >= WAIT_FOR_IDLE_MAX_POLL_ERRORS:
+                        raise ProviderUnavailableError(
+                            f"Remote worker became unreachable while waiting for "
+                            f"'{blocking_file}' to finish ({consecutive_errors} "
+                            f"consecutive poll failures) — will retry."
+                        )
 
     def _checkpoint_params(self, audio_path: str) -> dict:
         """Identity of a job on the worker: original filename + byte size.
@@ -183,10 +230,19 @@ class RemoteWhisperProvider(TranscriptionProvider):
         # Check if the Orin already has a cached result for this file (e.g. after a server
         # restart where the previous upload completed but the result was never received).
         # This avoids re-uploading and re-transcribing a multi-hour job unnecessarily.
+        #
+        # Identified by filename *and* byte size (issue #181). On the basename
+        # alone, a second book called `audiobook.m4b` was served the first
+        # one's transcript, which then aligned against the wrong EPUB and was
+        # marked SYNCED with no error anywhere. An older worker ignores the
+        # extra query parameters, so this is safe to send at any version.
         try:
             async with httpx.AsyncClient() as check_client:
                 cached_check = await check_client.get(
-                    f"{self.remote_url}/v1/result/{filename}", timeout=10.0, headers=self._headers
+                    f"{self.remote_url}/v1/result/{filename}",
+                    params=self._checkpoint_params(audio_path),
+                    timeout=10.0,
+                    headers=self._headers,
                 )
             if cached_check.status_code == 200:
                 logger.info(f"Found cached result for {filename} on remote server — skipping upload.")
@@ -274,11 +330,31 @@ class RemoteWhisperProvider(TranscriptionProvider):
                     # race against state changes between the 409 and the follow-up GET.
                     try:
                         conflict_data = response.json()
-                        current_file_on_orin = conflict_data.get("current_job", {}).get("file")
+                        current_job = conflict_data.get("current_job", {})
+                        current_file_on_orin = current_job.get("file")
+                        current_size_on_orin = current_job.get("size")
                     except Exception:
                         current_file_on_orin = None
+                        current_size_on_orin = None
 
-                    if current_file_on_orin == filename:
+                    # Same basename is not the same book (issue #181). The
+                    # worker reports the size of the job holding the slot; only
+                    # re-attach when it matches ours. `None` means an older
+                    # worker that doesn't send it — keep the legacy behaviour
+                    # rather than breaking a mixed deploy.
+                    is_our_job = current_file_on_orin == filename and (
+                        current_size_on_orin is None
+                        or current_size_on_orin == os.path.getsize(audio_path)
+                    )
+                    if current_file_on_orin == filename and not is_our_job:
+                        logger.warning(
+                            f"Remote worker is busy with a different {filename} "
+                            f"({current_size_on_orin} bytes, ours is "
+                            f"{os.path.getsize(audio_path)}) — waiting for it rather "
+                            f"than claiming its transcript."
+                        )
+
+                    if is_our_job:
                         # Orin is already transcribing OUR file (e.g. after a server restart).
                         # Re-attach by polling until it finishes, then fetch the cached result.
                         logger.info(
@@ -290,14 +366,28 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         seen_instance_id = conflict_data.get("instance_id") if isinstance(conflict_data, dict) else None
                         restarted = False
 
+                        # Bounded the same way as _wait_for_server_idle (#195):
+                        # a deadline and a consecutive-error cap, because a
+                        # worker that dies here is invisible to the exit
+                        # conditions below — neither "active: false" nor an
+                        # instance-id change is observable while it is silent.
+                        reattach_deadline = time.monotonic() + self.timeout
+                        poll_errors = 0
+
                         # Use a fresh client for polling so the upload client's state doesn't matter.
                         async with httpx.AsyncClient() as poll_client:
                             while True:
-                                await asyncio.sleep(10)
+                                if time.monotonic() >= reattach_deadline:
+                                    raise ProviderUnavailableError(
+                                        f"Gave up trying to re-attach to {filename} on the "
+                                        f"remote worker after {self.timeout}s — will retry."
+                                    )
+                                await asyncio.sleep(REATTACH_POLL_INTERVAL_SEC)
                                 try:
                                     status_resp = await poll_client.get(
                                         f"{self.remote_url}/v1/status", timeout=10.0, headers=self._headers
                                     )
+                                    poll_errors = 0
                                     if status_resp.status_code == 200:
                                         status_data = status_resp.json()
                                         current_instance_id = status_data.get("instance_id")
@@ -320,7 +410,17 @@ class RemoteWhisperProvider(TranscriptionProvider):
                                         if not status_data.get("active"):
                                             break
                                 except httpx.RequestError as e:
-                                    logger.debug(f"Status poll error (retrying): {e}")
+                                    poll_errors += 1
+                                    logger.warning(
+                                        f"Status poll error while re-attached to {filename} "
+                                        f"({poll_errors}/{REATTACH_MAX_POLL_ERRORS}): {e}"
+                                    )
+                                    if poll_errors >= REATTACH_MAX_POLL_ERRORS:
+                                        raise ProviderUnavailableError(
+                                            f"Remote worker became unreachable while we were "
+                                            f"re-attached to {filename} ({poll_errors} "
+                                            f"consecutive poll failures) — will retry."
+                                        )
 
                         if restarted:
                             # The Orin process crashed and restarted mid-job — its in-memory
@@ -335,7 +435,10 @@ class RemoteWhisperProvider(TranscriptionProvider):
                         logger.info(f"Transcription of {filename} complete on remote. Fetching result...")
                         async with httpx.AsyncClient() as result_client:
                             result_resp = await result_client.get(
-                                f"{self.remote_url}/v1/result/{filename}", timeout=60.0, headers=self._headers
+                                f"{self.remote_url}/v1/result/{filename}",
+                                params=self._checkpoint_params(audio_path),
+                                timeout=60.0,
+                                headers=self._headers,
                             )
                         if result_resp.status_code == 200:
                             data = result_resp.json()

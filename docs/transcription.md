@@ -41,9 +41,17 @@ multi-GB, so they're opt-in at build time:
 docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
 ```
 
-Without that, `remote_with_fallback` has nothing to fall back *to* — it just errors when the
-remote is down. On a remote-only image prefer `TRANSCRIPTION_PROVIDER=remote`, so the failure
-says what it is.
+Without that, `remote_with_fallback` has nothing to fall back *to*, so it behaves as `remote`:
+a remote outage is **retried** on the ladder below and, only if the ladder runs out, fails the
+item with an error naming the remote worker. It does not enter the local leg — doing so raised
+"Local Whisper isn't installed in this image", which failed the book on the first blip and named
+the wrong component (issue #191). The server logs one warning at startup of each job when the
+fallback leg is missing. Setting `TRANSCRIPTION_PROVIDER=remote` on a remote-only image is still
+clearer, but it is no longer the difference between a retry and a dead book.
+
+One remote failure is deliberately **not** retried: audio the worker cannot decode. That is a
+corrupt or truncated source file, so the item fails immediately with "re-import required" rather
+than re-uploading the same bytes five more times.
 
 The remote worker requires a shared API key on every request. Generate it from
 **System → Transcription Settings → Remote Server API Key** (the value is shown once) and paste
@@ -75,10 +83,21 @@ language rather than re-detecting from wherever the resume happens to start.
 
 ## Queue behavior
 
-- **Strictly serial.** One job runs at a time; the rest sit `pending`.
-- **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled;
-  cancelling an in-progress job also tells the worker to drop its partial work. An in-progress
-  item can't be *deleted* — cancel it first.
+- **Strictly serial.** One job runs at a time; the rest sit `pending`. Because of that, every
+  wait the server does on the worker is bounded (#195): when a `409` says the worker is already
+  running our file the server re-attaches and polls, and when it says a *different* file is
+  running the server waits for it to go idle — both give up on the remote timeout, or after
+  6 (re-attach) / 10 (wait-for-idle) consecutive unreachable polls, and hand the item to the
+  retry ladder. Those poll failures are logged at WARNING with a counter. Before that, a worker
+  that died inside either loop left the item `in_progress` forever and nothing else dispatched.
+- **Cancellable at any point.** Pending, in-progress and paused items can all be cancelled. An
+  in-progress item can't be *deleted* — cancel it first. Cancelling an in-progress job asks the
+  worker to stop at its next chunk boundary and then discards the checkpoint and the audio it
+  retained, so the GPU is handed back within one chunk instead of at the end of the book (#196).
+  A transcription that finished anyway is **kept**: cancelling the sync does not throw away the
+  transcript, and a later re-queue picks it up from the cache instead of re-transcribing.
+  The stop is best effort — an unreachable worker still leaves the item cancelled, and the
+  worker's own 48h sweep collects the leftovers.
 - **Retries with a ceiling, on a backoff ladder.** A provider-unavailable failure re-pends the item
   and burns a retry; after the ceiling is reached the item is marked permanently failed with the
   error attached. The wait doubles each time — 30s, 60s, 120s, 240s, 480s — capped at 15 minutes,

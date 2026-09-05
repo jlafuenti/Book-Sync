@@ -6,7 +6,7 @@ based on the current system settings.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from services.transcription_providers.base import (
     TranscriptionProvider,
@@ -142,6 +142,16 @@ async def get_transcription_provider() -> "TranscriptionProvider":
 
     else:  # "remote_with_fallback" (default)
         logger.info(f"Using Remote-with-Fallback provider: {remote_url}")
+        # Say once, at construction, that the fallback leg is imaginary on this
+        # image (issue #191). Without it the only clue is a "will retry the
+        # remote" message hours later, which reads like the setting is doing
+        # something it isn't.
+        if not await LocalWhisperProvider().is_available():
+            logger.warning(
+                "Local Whisper is not installed in this image, so the fallback "
+                "leg does not exist — 'remote_with_fallback' behaves as 'remote' "
+                "(remote failures are retried, never run locally)."
+            )
         return FallbackProvider(
             remote_url=remote_url,
             remote_timeout=remote_timeout,
@@ -175,6 +185,11 @@ class FallbackProvider(TranscriptionProvider):
         self._selected = None
 
     async def transcribe(self, audio_path, progress_callback=None):
+        # Why the remote leg gave up, or None if there was no remote to try.
+        # Carried into the error below so the operator reads the real cause
+        # rather than a message about a component that isn't even installed.
+        remote_failure: Optional[str] = None
+
         # Try remote first (if configured)
         if self._remote:
             try:
@@ -184,18 +199,43 @@ class FallbackProvider(TranscriptionProvider):
                     self._selected = self._remote
                     return await self._remote.transcribe(audio_path, progress_callback)
                 else:
+                    remote_failure = "health check failed"
                     logger.warning("Remote provider health check failed — falling back to local")
             except TranscriptionPaused:
                 # Not a failure. The remote stopped at a checkpoint because the
                 # off-hours window closed; falling back to local here would redo
                 # hours of already-completed work. Let the queue re-pend it.
                 raise
+            except TranscriptionError:
+                # `base.py` defines TranscriptionError as non-recoverable, and
+                # the remote raises it for exactly one thing worth saying out
+                # loud: the audio can't be decoded, re-import the file. A local
+                # attempt would fail on the same bytes and replace that with a
+                # message about the wrong component (issue #191).
+                raise
             except ProviderUnavailableError as e:
+                remote_failure = str(e)
                 logger.warning(f"Remote provider unavailable: {e} — falling back to local")
             except Exception as e:
+                remote_failure = str(e)
                 logger.warning(f"Remote provider error: {e} — falling back to local")
         else:
             logger.info("No remote URL configured — using local provider")
+
+        # The remote failed and there is nothing to fall back *to*. The stock
+        # image ships without local Whisper, so entering that leg raises a
+        # TranscriptionError, which the queue treats as permanent: one worker
+        # reboot would fail the book with `retry_count=0` and an error naming
+        # local Whisper. Re-raising as unavailable hands it to the retry ladder
+        # instead (issue #191).
+        #
+        # With no remote configured at all there is nothing to retry, so the
+        # local leg's own error is the honest answer and we let it through.
+        if remote_failure is not None and not await self._local.is_available():
+            raise ProviderUnavailableError(
+                f"Remote transcription unavailable ({remote_failure}) and local "
+                f"Whisper is not installed in this image — will retry the remote"
+            )
 
         # Fallback to local
         logger.info("Using local Whisper as fallback")
