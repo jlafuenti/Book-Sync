@@ -16,8 +16,10 @@ upload endpoint, not by a metadata PATCH) and so is not exercised here.
 
 import pytest
 
+from config import settings
 from models.book import AudioBook, EBook
-from services.metadata_utils import MEDIA_METADATA_FIELDS
+import routers.library as library
+from services.metadata_utils import MEDIA_DESCRIPTIVE_FIELDS, MEDIA_METADATA_FIELDS
 
 # One representative value per field, typed the way the column is.
 SAMPLE_VALUES = {
@@ -135,3 +137,97 @@ async def test_omitted_fields_are_left_alone(db, editor_client, no_file_writebac
     detail = (await c.get(f"/api/library/{media}s/{row.id}", headers=headers)).json()
     assert detail["publisher"] == "Kept Publisher"
     assert detail["tags"] == "changed"
+
+
+# ---------------------------------------------------------------------------
+# The rescan paths share one loop over MEDIA_DESCRIPTIVE_FIELDS
+# ---------------------------------------------------------------------------
+#
+# `rescan_all_files` had the same six `book.x = meta.get("x") or book.x` lines
+# written out twice (ebook branch, audiobook branch), and `rescan_book_file` a
+# third time. They are one loop now, and the `or` is load-bearing: an empty read
+# must keep what is stored rather than null it.
+
+
+@pytest.fixture
+def rescan_library(monkeypatch, tmp_path):
+    """Real files under `settings.{ebook,audiobook}_dir`, with a stubbed extract.
+
+    `rescan_all_files` skips any row whose `file_path` is not on disk, so the
+    files have to exist; their contents never matter because `extract_metadata`
+    is stubbed.
+    """
+    ebook_dir = tmp_path / "ebooks"
+    audio_dir = tmp_path / "audiobooks"
+    ebook_dir.mkdir()
+    audio_dir.mkdir()
+    monkeypatch.setattr(settings, "ebook_dir", str(ebook_dir))
+    monkeypatch.setattr(settings, "audiobook_dir", str(audio_dir))
+    monkeypatch.setattr(library, "_extract_and_save_cover", lambda *a, **kw: None)
+
+    epub = ebook_dir / "b.epub"
+    epub.write_bytes(b"not really an epub")
+    m4b = audio_dir / "b.m4b"
+    m4b.write_bytes(b"not really audio")
+
+    def _stub_extract(meta):
+        async def _fake(path, book_type, db, library_root=None):
+            return dict(meta)
+
+        monkeypatch.setattr(library, "extract_metadata", _fake)
+
+    return epub, m4b, _stub_extract
+
+
+def _descriptive_values(prefix):
+    return {
+        f: 1999 if f == "publish_year" else f"{prefix}-{f}"
+        for f in MEDIA_DESCRIPTIVE_FIELDS
+    }
+
+
+@pytest.mark.parametrize("media", ["ebook", "audiobook"])
+async def test_rescan_fills_every_descriptive_field(db, editor_client, rescan_library, media):
+    epub, m4b, stub_extract = rescan_library
+    c, headers = editor_client
+    stub_extract(_descriptive_values("from-file"))
+
+    if media == "ebook":
+        row = EBook(title="Before", filename=epub.name, file_path=str(epub))
+    else:
+        row = AudioBook(title="Before", filename=m4b.name, file_path=str(m4b))
+    db.add(row)
+    await db.commit()
+
+    resp = await c.post("/api/library/rescan-all", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    await db.refresh(row)
+    for f, value in _descriptive_values("from-file").items():
+        assert getattr(row, f) == value, f
+
+
+@pytest.mark.parametrize("media", ["ebook", "audiobook"])
+async def test_rescan_keeps_a_stored_value_the_file_cannot_supply(
+    db, editor_client, rescan_library, media
+):
+    """The `or` fallback: a rescan of a file with no embedded metadata must not
+    wipe what the user (or Audiobookshelf) put there."""
+    epub, m4b, stub_extract = rescan_library
+    c, headers = editor_client
+    stub_extract({})
+
+    stored = _descriptive_values("stored")
+    if media == "ebook":
+        row = EBook(title="Before", filename=epub.name, file_path=str(epub), **stored)
+    else:
+        row = AudioBook(title="Before", filename=m4b.name, file_path=str(m4b), **stored)
+    db.add(row)
+    await db.commit()
+
+    resp = await c.post("/api/library/rescan-all", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    await db.refresh(row)
+    for f, value in stored.items():
+        assert getattr(row, f) == value, f
