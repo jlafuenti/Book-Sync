@@ -212,11 +212,6 @@ _README_ENV_NOT_SETTINGS = {
         "services (issue #180); the server process never reads it"
     ),
     "PGID": "compose interpolation only, the group half of PUID (issue #180)",
-    "POSTGRES_PASSWORD": (
-        "compose interpolation, read from .env beside docker-compose.yml and "
-        "substituted into the db service and DATABASE_URL — the server process "
-        "never reads it"
-    ),
 }
 
 # Settings fields the README may leave undocumented, with the reason. Empty on
@@ -254,12 +249,17 @@ def _settings_env_names() -> set[str]:
     the (case-insensitive) field name when it does not, so `jwt_algorithm` is
     genuinely settable as `JWT_ALGORITHM` even with no alias declared.
     """
-    from config import Settings
+    from config import SECRET_FILE_ENV_VARS, SECRET_FILE_SUFFIX, Settings
 
-    return {
+    names = {
         (field.alias or name).upper()
         for name, field in Settings.model_fields.items()
     }
+    # The `<NAME>_FILE` variants are read by config.SecretFileSettingsSource
+    # rather than declared as fields (issue #180), and they are the *preferred*
+    # way to pass a secret — so they need rows of their own just as much.
+    names |= {name + SECRET_FILE_SUFFIX for name in SECRET_FILE_ENV_VARS}
+    return names
 
 
 def test_readme_env_parser_finds_the_tables():
