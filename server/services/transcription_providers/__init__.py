@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_REMOTE_TIMEOUT_SEC = 86400
 MIN_REMOTE_TIMEOUT_SEC = 60
 
+# Whisper language codes offered by the `transcription_language` setting
+# (issue #246). `""` means auto: detect once on the first chunk of a file and
+# pin that answer for the rest of it, rather than re-detecting per chunk.
+#
+# Deliberately a short list rather than all ~99 Whisper languages: it is a
+# validation allow-list and a UI dropdown, and an unvalidated free-text code
+# fails every chunk of every job with nothing on screen explaining why. Adding
+# a code here is a one-line change — `routers.settings` validates against this
+# tuple and `web/src/pages/SystemPage.jsx` mirrors it.
+SUPPORTED_LANGUAGES = (
+    "",      # auto-detect (once per file, then pinned)
+    "ar", "cs", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "hu",
+    "id", "it", "ja", "ko", "nl", "no", "pl", "pt", "ro", "ru", "sv", "tr",
+    "uk", "vi", "zh",
+)
+
 __all__ = [
     "TranscriptionProvider",
     "ProviderUnavailableError",
@@ -38,6 +54,7 @@ __all__ = [
     "get_transcription_provider",
     "DEFAULT_REMOTE_TIMEOUT_SEC",
     "MIN_REMOTE_TIMEOUT_SEC",
+    "SUPPORTED_LANGUAGES",
 ]
 
 
@@ -102,9 +119,15 @@ async def get_transcription_provider() -> "TranscriptionProvider":
     )
     logger.info(f"Remote transcription timeout in effect: {remote_timeout}s")
 
+    # "" = auto-detect. Both providers detect once per file and pin that for
+    # the rest of it; a value here skips detection entirely (issue #246).
+    language = str(db_settings.get("transcription_language", "") or "").strip().lower()
+    if language:
+        logger.info(f"Transcription language pinned to '{language}'")
+
     if provider_mode == "local":
         logger.info("Using Local Whisper provider")
-        return LocalWhisperProvider()
+        return LocalWhisperProvider(language=language)
 
     elif provider_mode == "remote":
         logger.info(f"Using Remote Whisper provider: {remote_url}")
@@ -113,7 +136,9 @@ async def get_transcription_provider() -> "TranscriptionProvider":
                 "Remote transcription URL is not configured. "
                 "Set it in Settings → Transcription."
             )
-        return RemoteWhisperProvider(remote_url, timeout=remote_timeout, api_key=remote_key)
+        return RemoteWhisperProvider(
+            remote_url, timeout=remote_timeout, api_key=remote_key, language=language
+        )
 
     else:  # "remote_with_fallback" (default)
         logger.info(f"Using Remote-with-Fallback provider: {remote_url}")
@@ -121,6 +146,7 @@ async def get_transcription_provider() -> "TranscriptionProvider":
             remote_url=remote_url,
             remote_timeout=remote_timeout,
             remote_key=remote_key,
+            language=language,
         )
 
 
@@ -130,12 +156,20 @@ class FallbackProvider(TranscriptionProvider):
     ``ProviderUnavailableError``, falls back to local Whisper.
     """
 
-    def __init__(self, remote_url: str, remote_timeout: int = 7200, remote_key: str = ""):
+    def __init__(
+        self,
+        remote_url: str,
+        remote_timeout: int = 7200,
+        remote_key: str = "",
+        language: str = "",
+    ):
         self._remote = (
-            RemoteWhisperProvider(remote_url, timeout=remote_timeout, api_key=remote_key)
+            RemoteWhisperProvider(
+                remote_url, timeout=remote_timeout, api_key=remote_key, language=language
+            )
             if remote_url else None
         )
-        self._local = LocalWhisperProvider()
+        self._local = LocalWhisperProvider(language=language)
         # Which provider actually ran the current job. Pause/unload requests
         # have to reach *that* one, not whichever we'd pick if asked afresh.
         self._selected = None

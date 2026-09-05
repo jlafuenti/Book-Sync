@@ -63,6 +63,7 @@ function baseSettings(overrides = {}) {
         transcription_remote_timeout: 86400,
         auto_transcribe_enabled: false,
         whisper_model: 'medium',
+        transcription_language: '',
         abs_enabled: false,
         abs_url: '',
         abs_api_token: '',
@@ -119,6 +120,31 @@ describe('TranscriptionSettingsSection', () => {
 
         await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
             expect.objectContaining({ transcription_remote_timeout: 86400 })
+        ))
+    })
+
+    // Issue #246: without a pin, Whisper re-detects the language from the first
+    // seconds of every chunk, so one chunk opening on music or a foreign
+    // epigraph comes back as transliterated garbage for that whole span.
+    it('loads the saved transcription language and defaults to auto-detect', async () => {
+        getSettingsMock.mockResolvedValue(baseSettings({ transcription_language: 'de' }))
+        render(<TranscriptionSettingsSection />)
+
+        const select = await screen.findByLabelText('Transcription Language')
+        await waitFor(() => expect(select).toHaveValue('de'))
+        expect(screen.getByRole('option', { name: 'Auto-detect (per book)' })).toBeInTheDocument()
+    })
+
+    it('saves the chosen transcription language', async () => {
+        render(<TranscriptionSettingsSection />)
+        const select = await screen.findByLabelText('Transcription Language')
+        await waitFor(() => expect(select).toHaveValue(''))
+
+        fireEvent.change(select, { target: { value: 'es' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith(
+            expect.objectContaining({ transcription_language: 'es' })
         ))
     })
 

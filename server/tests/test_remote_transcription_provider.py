@@ -92,7 +92,7 @@ async def test_reattach_detects_restart_and_raises_retriable_error(tmp_path):
     )
 
 
-def _mock_transport_provider(remote_url: str, api_key: str, handler):
+def _mock_transport_provider(remote_url: str, api_key: str, handler, language: str = ""):
     """Build a RemoteWhisperProvider whose httpx.AsyncClient is patched to `handler`."""
     transport = httpx.MockTransport(handler)
     real_async_client = httpx.AsyncClient
@@ -101,7 +101,10 @@ def _mock_transport_provider(remote_url: str, api_key: str, handler):
         kwargs.pop("timeout", None)
         return real_async_client(*args, transport=transport, **kwargs)
 
-    return RemoteWhisperProvider(remote_url=remote_url, api_key=api_key), fake_async_client
+    provider = RemoteWhisperProvider(
+        remote_url=remote_url, api_key=api_key, language=language
+    )
+    return provider, fake_async_client
 
 
 @pytest.mark.asyncio
@@ -430,3 +433,145 @@ async def test_poll_progress_skips_callback_when_status_unchanged():
         (0.10, "Transcribing: 1:00 / 20:00 (5%)"),
         (0.11, "Transcribing: 1:07 / 20:00 (5%)"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Language pinning (#246) and the worker's disk/size refusals (#238)
+# ---------------------------------------------------------------------------
+
+def _idle_worker_handler(on_transcribe, checkpoint=None):
+    """Handler where nothing is cached and nothing is running, so `transcribe`
+    goes straight to the upload — `on_transcribe` answers that POST."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/v1/result/"):
+            return _json_response(404, {"detail": "Result not found or expired"})
+        if request.url.path == "/v1/checkpoint":
+            return _json_response(200, checkpoint or {"exists": False})
+        if request.url.path in ("/v1/transcribe", "/v1/transcribe/resume"):
+            return on_transcribe(request)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_transcribe_sends_the_configured_language(tmp_path):
+    """The pin is useless if it stops at the server — it has to reach the
+    worker, as a form field alongside the upload."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    bodies = []
+
+    def on_transcribe(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        return _json_response(200, {"sentences": [], "language": "de"})
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _idle_worker_handler(on_transcribe), language="de"
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.transcribe(str(audio_file))
+
+    assert len(bodies) == 1
+    body = bodies[0]
+    assert b'name="language"' in body, "no language part in the multipart upload"
+    assert b"de" in body.split(b'name="language"', 1)[1][:64]
+
+
+@pytest.mark.asyncio
+async def test_transcribe_sends_no_language_field_when_auto(tmp_path):
+    """Empty means auto — the worker must be free to detect, not handed ''."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    bodies = []
+
+    def on_transcribe(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        return _json_response(200, {"sentences": []})
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _idle_worker_handler(on_transcribe)
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.transcribe(str(audio_file))
+
+    assert b'name="language"' not in bodies[0]
+
+
+@pytest.mark.asyncio
+async def test_resume_sends_the_configured_language(tmp_path):
+    """A resume is a small JSON call, not an upload — it needs the pin too."""
+    import json
+
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    bodies = []
+
+    def on_transcribe(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/transcribe/resume"
+        bodies.append(json.loads(request.content))
+        return _json_response(200, {"sentences": []})
+
+    handler = _idle_worker_handler(
+        on_transcribe,
+        checkpoint={"exists": True, "completed_through_sec": 900, "audio_retained": True},
+    )
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", handler, language="fr"
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        await provider.transcribe(str(audio_file))
+
+    assert bodies == [{"filename": "book.m4b", "size": 16, "language": "fr"}]
+
+
+@pytest.mark.asyncio
+async def test_507_from_the_worker_raises_with_an_out_of_disk_message(tmp_path):
+    """507 is the worker refusing an upload it has no room for (#238). It is
+    retriable — the disk may be freed — but the message has to say *disk*, or
+    the operator sees five identical multi-GB retries and no explanation."""
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    posts = []
+
+    def on_transcribe(request: httpx.Request) -> httpx.Response:
+        posts.append(request.url.path)
+        return _json_response(507, {"detail": "Worker is out of disk: 8 bytes free"})
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _idle_worker_handler(on_transcribe)
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(ProviderUnavailableError, match="(?i)disk"):
+            await provider.transcribe(str(audio_file))
+
+    assert len(posts) == 1, "507 must not be retried inside the provider's own loop"
+
+
+@pytest.mark.asyncio
+async def test_413_from_the_worker_is_not_retried(tmp_path):
+    """The file will be exactly as large on the seventh attempt. Fail fast with
+    a message naming the worker's cap instead of re-uploading it five times."""
+    from services.transcription_providers.base import TranscriptionError
+
+    audio_file = tmp_path / "book.m4b"
+    audio_file.write_bytes(b"fake audio bytes")
+    posts = []
+
+    def on_transcribe(request: httpx.Request) -> httpx.Response:
+        posts.append(request.url.path)
+        return _json_response(413, {"detail": "Upload is larger than this worker accepts"})
+
+    provider, fake_async_client = _mock_transport_provider(
+        "http://fake-orin:9000", "k", _idle_worker_handler(on_transcribe)
+    )
+
+    with patch("services.transcription_providers.remote.httpx.AsyncClient", side_effect=fake_async_client):
+        with pytest.raises(TranscriptionError, match="MAX_UPLOAD_BYTES"):
+            await provider.transcribe(str(audio_file))
+
+    assert len(posts) == 1

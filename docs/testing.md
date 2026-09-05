@@ -400,7 +400,11 @@ will fail it spuriously. Only the full `koverVerifyDebug` is the gate.
 `jetson/test_server.py` covers the shared-secret auth guard, the oversized-chunk
 decision logic (`_is_chunk_oversized` / `_shrink_chunk_size` in `jetson/server.py`),
 and the off-hours control surface from #106: lazy model load, the idle-unload decision
-table, and the pause → checkpoint → resume cycle. It **is wired into CI**
+table, and the pause → checkpoint → resume cycle. It also covers the single-job claim
+(#236 — including a two-thread race on `_try_claim_job`), the upload cap and disk guard
+(#238 — 413 on an oversized `Content-Length`, 413 on an over-cap chunked body, 507 when
+the temp dir is nearly full), and the language pin (#246 — configured, detected-once, and
+carried across a resume). It **is wired into CI**
 (`.github/workflows/jetson-tests.yml`, path-filtered to `jetson/**`) —
 `jetson/conftest.py` stubs `nltk` and `faster_whisper` in `sys.modules` so the suite
 runs with only `fastapi`/`uvicorn`/`httpx`/`pytest` installed, no GPU or network access

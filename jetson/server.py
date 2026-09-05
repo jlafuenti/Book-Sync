@@ -29,7 +29,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, Header, UploadFile, File, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, Header, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
@@ -50,6 +50,24 @@ WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 VAD_FILTER = os.environ.get("VAD_FILTER", "true").lower() in ("true", "1", "yes")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))
+
+# Language code (ISO 639-1, e.g. "en") forced on every chunk. Unset = auto,
+# which means "detect on the first chunk of a file and pin that answer for the
+# rest of it" — never per-chunk re-detection (#246). A chunk that opens on
+# music, silence or a foreign-language epigraph otherwise gets detected as
+# another language and comes back as transliterated garbage for that whole
+# 15-minute span, which alignment then silently interpolates across.
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "").strip() or None
+
+# Largest request body accepted on POST /v1/transcribe, in bytes (#238). The
+# upload costs roughly twice the file size in temp space — Starlette spools the
+# multipart body to disk before the endpoint runs, and the endpoint copies it
+# again — so an unbounded body fills the Jetson's disk. 0 disables the cap.
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(4 * 1024 ** 3)))
+
+# Free space (as a multiple of the declared body size) required before an upload
+# is accepted: the spooled body plus the endpoint's copy.
+UPLOAD_DISK_HEADROOM = 2
 
 # Minutes of inactivity after which the Whisper weights (~4GB of unified memory
 # on an Orin Nano 8GB) are released. The model reloads on the next job, which
@@ -117,6 +135,8 @@ class JobStatus:
     message: str = "Idle"
     started_at: Optional[float] = None  # time.time()
     current_file: Optional[str] = None  # filename being transcribed
+    current_size: Optional[int] = None  # byte size the client declared
+    language: Optional[str] = None      # pinned/configured Whisper language (#246)
 
 
 class PausedAtCheckpoint(Exception):
@@ -390,14 +410,21 @@ def _save_checkpoint(
     completed_through_sec: int,
     current_chunk_size: int,
     sentences: List[TranscribedSentence],
+    language: Optional[str] = None,
 ) -> None:
-    """Atomically save transcription progress to a checkpoint file."""
+    """Atomically save transcription progress to a checkpoint file.
+
+    `language` is the answer the first chunk detected (or the configured pin).
+    Storing it is what lets a resumed job carry on in the same language rather
+    than re-detecting from whatever the resume happens to start on (#246).
+    """
     data = {
         "version": 1,
         "total_duration": total_duration,
         "completed_through_sec": completed_through_sec,
         "current_chunk_size": current_chunk_size,
         "sentences": [asdict(s) for s in sentences],
+        "language": language,
         "saved_at": time.time(),
     }
     tmp_path = ckpt_path + ".tmp"
@@ -451,6 +478,43 @@ def _retain_audio(ckpt_path: str, audio_path: str) -> bool:
     except OSError as e:
         logger.warning(f"  Could not retain audio for resume (will need re-upload): {e}")
         return False
+
+
+def _upload_tmp_is_on_the_checkpoint_volume() -> bool:
+    """True when TMPDIR sits inside CHECKPOINT_DIR, as the compose template
+    configures it (#238) — i.e. when the upload temp dir is ours to sweep."""
+    tmp = os.path.abspath(tempfile.gettempdir())
+    ckpt = os.path.abspath(CHECKPOINT_DIR)
+    return tmp == ckpt or tmp.startswith(ckpt + os.sep)
+
+
+def _cleanup_stale_uploads(max_age_hours: int = 48) -> None:
+    """
+    Remove abandoned upload temp files from the checkpoint volume.
+
+    The endpoint deletes its own temp file, so these only appear after a hard
+    stop mid-upload (an OoM-kill, a power cut). One left behind is multiple GB
+    on the volume the free-space guard measures, which then refuses every later
+    job — the disk cap defeating itself.
+
+    Deliberately a no-op unless TMPDIR is inside CHECKPOINT_DIR: on a dev box
+    or in CI, `tempfile.gettempdir()` is the system temp directory shared with
+    every other process, and sweeping that would delete other people's files.
+    """
+    if not _upload_tmp_is_on_the_checkpoint_volume():
+        return
+    upload_tmp = tempfile.gettempdir()
+    if not os.path.isdir(upload_tmp):
+        return
+    cutoff = time.time() - max_age_hours * 3600
+    for name in os.listdir(upload_tmp):
+        path = os.path.join(upload_tmp, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.unlink(path)
+                logger.info(f"  Cleaned up abandoned upload temp file: {name}")
+        except OSError:
+            pass
 
 
 def _cleanup_old_checkpoints(max_age_hours: int = 48) -> None:
@@ -584,7 +648,11 @@ def _get_audio_duration(file: str) -> float:
         )
 
 
-def _transcribe_file(audio_path: str, original_filename: str) -> dict:
+def _transcribe_file(
+    audio_path: str,
+    original_filename: str,
+    language: Optional[str] = None,
+) -> dict:
     """
     Run faster-whisper on the given audio file with adaptive chunking.
 
@@ -592,17 +660,26 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
     - Adaptive chunk sizing: halves chunk size on OoM, scales back up after recovery
     - Checkpoint system: saves progress after each chunk for resume on failure
     - Preemptive memory management: reloads CT2 model when memory is low
+    - One language per file: `language` (per job) beats WHISPER_LANGUAGE (per
+      worker) beats the checkpoint's pin beats detecting once on chunk 1 (#246)
     """
     global _job_status
 
     start_time = time.time()
 
-    # Capture current_file before the job starts to avoid race conditions
-    with _job_lock:
-        captured_filename = _job_status.current_file
+    # The filename is an argument, deliberately not `_job_status.current_file`:
+    # a second request that claimed the slot after this one started used to
+    # overwrite that global, and the finished transcript got cached under the
+    # other job's name (#236).
+    captured_filename = original_filename
+
+    # An explicit per-job language wins over the worker-wide default; a
+    # checkpoint's pin (read below) fills in when neither is set.
+    pinned_language = language or WHISPER_LANGUAGE
 
     logger.info(f"Starting transcription: {audio_path}")
     logger.info(f"  Model: {WHISPER_MODEL}, Compute: {WHISPER_COMPUTE_TYPE}, VAD: {VAD_FILTER}")
+    logger.info(f"  Language: {pinned_language or 'auto (detect once, then pin)'}")
     mem = _read_sys_mem_mb()
     logger.info(
         f"  [mem start] sys total={mem.get('MemTotal', '?')}MB  "
@@ -615,6 +692,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
         _job_status.progress = 0.0
         _job_status.message = "Initializing..."
         _job_status.started_at = start_time
+        _job_status.language = pinned_language
 
     # A pause request that arrived while nothing was running must not stop the
     # job we're about to start.
@@ -646,6 +724,13 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
             ]
             start_sec = ckpt["completed_through_sec"]
             current_chunk_size = ckpt.get("current_chunk_size", DEFAULT_CHUNK_SIZE_SEC)
+            # Carry the language the paused half was transcribed in, unless
+            # this job was given one explicitly.
+            if not pinned_language and ckpt.get("language"):
+                pinned_language = ckpt["language"]
+                with _job_lock:
+                    _job_status.language = pinned_language
+                logger.info(f"  Resuming in the checkpointed language: {pinned_language}")
             logger.info(
                 f"  Resuming from checkpoint: {start_sec}s, "
                 f"{len(all_sentences)} sentences already completed"
@@ -668,6 +753,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                 _save_checkpoint(
                     ckpt_path, total_duration, start_sec,
                     current_chunk_size, all_sentences,
+                    language=pinned_language,
                 )
                 raise PausedAtCheckpoint(start_sec)
 
@@ -713,7 +799,22 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                     audio_array,
                     vad_filter=VAD_FILTER,
                     condition_on_previous_text=False,
+                    language=pinned_language,
                 )
+
+                # Detect once, then pin. `info` is populated as soon as
+                # transcribe() returns (the segments themselves are lazy), so
+                # read the answer here, before `info` is released below.
+                if not pinned_language:
+                    detected = getattr(info, "language", None)
+                    if detected:
+                        pinned_language = detected
+                        logger.info(
+                            f"  Detected language '{detected}' — pinning it for the "
+                            f"rest of this file"
+                        )
+                        with _job_lock:
+                            _job_status.language = pinned_language
 
                 chunk_segments = []
                 for segment in segments_gen:
@@ -767,6 +868,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
                 _save_checkpoint(
                     ckpt_path, total_duration, start_sec,
                     current_chunk_size, all_sentences,
+                    language=pinned_language,
                 )
 
                 # Detect last chunk: if audio returned was shorter than expected
@@ -845,6 +947,9 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
             "sentences": [asdict(s) for s in all_sentences],
             "duration_seconds": round(total_duration, 2),
             "model": WHISPER_MODEL,
+            # The language every chunk of this file was transcribed in —
+            # configured, or detected on chunk 1 and pinned from there (#246).
+            "language": pinned_language,
             "processing_time_seconds": round(processing_time, 2),
         }
 
@@ -897,6 +1002,7 @@ def _transcribe_file(audio_path: str, original_filename: str) -> dict:
             "sentences_so_far": len(all_sentences),
             "duration_seconds": round(total_duration, 2),
             "audio_retained": audio_retained,
+            "language": pinned_language,
         }
 
     except Exception as e:
@@ -944,6 +1050,133 @@ app = FastAPI(
 # is server-to-server httpx (not subject to CORS).
 
 
+async def _send_json_response(send, status_code: int, payload: dict) -> None:
+    """Emit a complete JSON response straight onto the ASGI channel."""
+    body = json.dumps(payload).encode()
+    await send({
+        "type": "http.response.start",
+        "status": status_code,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+class UploadLimitMiddleware:
+    """
+    Bound the size of a `POST /v1/transcribe` body before it is parsed (#238).
+
+    This has to be pure ASGI, outside the FastAPI app: Starlette parses the
+    whole multipart body into a spooled temp file *before* the endpoint
+    function runs, so a check inside the endpoint is far too late to stop a
+    huge upload from filling the disk. The peak cost is roughly twice the file
+    size — the spooled body plus the endpoint's own copy — which is why the
+    free-space check asks for `UPLOAD_DISK_HEADROOM x` the declared length.
+
+    Three guards:
+      * `Content-Length` over `MAX_UPLOAD_BYTES` -> 413, nothing read.
+      * not enough free space in the temp dir      -> 507, nothing read.
+      * a body with no length that runs over       -> 413, cut off mid-stream.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope.get("type") != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/v1/transcribe"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        cap = MAX_UPLOAD_BYTES
+        declared = None
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None
+                break
+
+        if declared is not None:
+            if cap > 0 and declared > cap:
+                logger.warning(
+                    f"413: upload of {declared} bytes exceeds MAX_UPLOAD_BYTES ({cap})"
+                )
+                await _send_json_response(send, 413, {
+                    "detail": (
+                        f"Upload is larger than this worker accepts "
+                        f"({declared} bytes > MAX_UPLOAD_BYTES={cap}). Raise "
+                        f"MAX_UPLOAD_BYTES if the file is legitimate."
+                    ),
+                })
+                return
+
+            needed = declared * UPLOAD_DISK_HEADROOM
+            try:
+                free = shutil.disk_usage(tempfile.gettempdir()).free
+            except OSError:
+                free = None
+            if free is not None and free < needed:
+                logger.error(
+                    f"507: {free} bytes free in {tempfile.gettempdir()}, need "
+                    f"{needed} for a {declared}-byte upload"
+                )
+                await _send_json_response(send, 507, {
+                    "detail": (
+                        f"Worker is out of disk: {free} bytes free where "
+                        f"{needed} are needed for a {declared}-byte upload. "
+                        f"Free {CHECKPOINT_DIR} or grow the volume behind it."
+                    ),
+                })
+                return
+
+        # No Content-Length (or a chunked body): count as it arrives and cut it
+        # off at the cap. Truncating the stream makes the multipart parse fail
+        # inside the app; we discard whatever it answers and send the 413.
+        state = {"read": 0, "over": False}
+
+        async def counting_receive():
+            if state["over"]:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            message = await receive()
+            if message.get("type") == "http.request":
+                state["read"] += len(message.get("body") or b"")
+                if cap > 0 and state["read"] > cap:
+                    state["over"] = True
+                    logger.warning(
+                        f"413: streamed upload passed MAX_UPLOAD_BYTES ({cap}) — cutting it off"
+                    )
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def guarded_send(message):
+            if state["over"]:
+                return  # the app's answer is moot — ours is the 413 below
+            await send(message)
+
+        try:
+            await self.app(scope, counting_receive, guarded_send)
+        except Exception:
+            if not state["over"]:
+                raise
+        if state["over"]:
+            await _send_json_response(send, 413, {
+                "detail": (
+                    f"Upload exceeded MAX_UPLOAD_BYTES ({cap} bytes) and was "
+                    f"cut off. Raise MAX_UPLOAD_BYTES if the file is legitimate."
+                ),
+            })
+
+
+app.add_middleware(UploadLimitMiddleware)
+
+
 def verify_api_key(authorization: str = Header(default="")) -> None:
     """Require `Authorization: Bearer <TRANSCRIPTION_API_KEY>` on every /v1/* route."""
     scheme, _, token = authorization.partition(" ")
@@ -959,6 +1192,27 @@ def startup_event():
     MODEL_IDLE_UNLOAD_MIN, so an idle server leaves the GPU to whatever else
     shares it.
     """
+    # TMPDIR points at the sized checkpoint volume in the compose template
+    # (#238), so both the spooled request body and the endpoint's copy land on
+    # storage the operator was told to size — not the container's default /tmp.
+    # Compose can't create the directory, so do it here — from the raw
+    # environment value, not from tempfile.gettempdir(): that call silently
+    # drops a TMPDIR that does not exist yet and answers /tmp, so on a fresh
+    # volume "create whatever gettempdir says" creates /tmp and the cap
+    # measures the wrong disk. It also caches its answer, hence the reset.
+    wanted = os.environ.get("TMPDIR")
+    if wanted:
+        try:
+            os.makedirs(wanted, exist_ok=True)
+            tempfile.tempdir = None
+        except OSError as e:
+            logger.warning(f"Could not create the upload temp dir {wanted}: {e}")
+    upload_tmp = tempfile.gettempdir()
+    if wanted and os.path.realpath(upload_tmp) != os.path.realpath(wanted):
+        logger.warning(f"TMPDIR={wanted} is not usable; uploads will spool in {upload_tmp}")
+    logger.info(f"Upload temp dir: {upload_tmp} (cap {MAX_UPLOAD_BYTES} bytes)")
+
+    _cleanup_stale_uploads()
     _cleanup_old_checkpoints()
     if MODEL_IDLE_UNLOAD_MIN > 0:
         threading.Thread(target=_idle_unload_loop, daemon=True).start()
@@ -1011,21 +1265,63 @@ def get_status():
             "progress": _job_status.progress,
             "message": _job_status.message,
             "current_file": _job_status.current_file,
+            # Configured, or detected on the first chunk and pinned (#246).
+            "language": _job_status.language,
             "instance_id": INSTANCE_ID,
         }
 
+def _try_claim_job(
+    filename: Optional[str],
+    size: Optional[int] = None,
+    language: Optional[str] = None,
+) -> bool:
+    """
+    Take the single job slot, or report that someone else already has it.
+
+    Check and claim happen under one `_job_lock` acquisition (#236). Splitting
+    them — as the old "is anything active?" check did — let two requests whose
+    bodies landed within a few seconds of each other both pass the guard and
+    both start a job: two faster-whisper processes is an OoM on an 8 GB Orin,
+    and the second one's `current_file` overwrote the first's, filing the first
+    job's transcript under the wrong name.
+    """
+    with _job_lock:
+        if _job_status.active:
+            return False
+        _job_status.active = True
+        _job_status.progress = 0.0
+        _job_status.message = "Queued"
+        _job_status.started_at = time.time()
+        _job_status.current_file = filename
+        _job_status.current_size = size
+        _job_status.language = language
+        return True
+
+
+def _release_job() -> None:
+    """Hand the slot back after a failure between the claim and the handoff.
+
+    `_transcribe_file` clears `active` itself on all three of its exit paths,
+    so this is only for the window before it is entered (a failed copy, say) —
+    otherwise a wedged slot would reject every later request with a 409.
+    """
+    with _job_lock:
+        _job_status.active = False
+        _job_status.progress = 0.0
+        _job_status.message = "Idle"
+        _job_status.started_at = None
+
+
 def _active_job_conflict(requested_file: str, client_ip: str = "unknown"):
     """
-    Return a 409 JSONResponse if another transcription is already running.
+    Build the 409 JSONResponse describing the job that holds the slot.
 
     Shared by /v1/transcribe and /v1/transcribe/resume — only one job may run
     at a time, and the body tells the client exactly what is holding the slot
-    so it can decide between waiting and re-attaching.
+    so it can decide between waiting and re-attaching. Called only after
+    `_try_claim_job` has already refused, so the answer is never None.
     """
     with _job_lock:
-        if not _job_status.active:
-            return None
-
         running_for = ""
         if _job_status.started_at:
             elapsed = time.time() - _job_status.started_at
@@ -1079,10 +1375,15 @@ def get_result(filename: str):
 # ---------------------------------------------------------------------------
 
 class ResumeRequest(BaseModel):
-    """Identity of a paused job: the original filename and its byte size."""
+    """Identity of a paused job: the original filename and its byte size.
+
+    `language` overrides the worker default for the resumed run; leaving it
+    unset keeps whatever the checkpoint pinned (#246).
+    """
 
     filename: str
     size: int
+    language: Optional[str] = None
 
 
 @app.post("/v1/pause", dependencies=[Depends(verify_api_key)])
@@ -1164,34 +1465,49 @@ async def transcribe_resume(body: ResumeRequest):
             detail="No retained audio for this file — upload it again.",
         )
 
-    conflict = _active_job_conflict(body.filename)
-    if conflict is not None:
-        return conflict
-
-    with _job_lock:
-        _job_status.current_file = body.filename
+    # Check-and-claim in one lock acquisition (#236) — the resume path starts
+    # the same single job slot the upload path does.
+    if not _try_claim_job(body.filename, body.size, body.language):
+        return _active_job_conflict(body.filename)
 
     logger.info(f"Resuming {body.filename} from retained audio at {audio_path}")
+    handed_off = False
     try:
         # Note: no temp-file cleanup here. The audio belongs to the checkpoint
         # and is removed by _delete_checkpoint on completion (or by the 48h
         # sweep if this job never finishes).
-        result = await asyncio.to_thread(_transcribe_file, audio_path, body.filename)
+        handed_off = True
+        result = await asyncio.to_thread(
+            _transcribe_file, audio_path, body.filename, body.language
+        )
         return JSONResponse(content=result)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Resume endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # _transcribe_file clears the slot on every one of its exit paths; this
+        # only covers a failure before it was ever entered.
+        if not handed_off:
+            _release_job()
 
 
 @app.post("/v1/transcribe", dependencies=[Depends(verify_api_key)])
-async def transcribe(request: Request, audio_file: UploadFile = File(...)):
+async def transcribe(
+    request: Request,
+    audio_file: UploadFile = File(...),
+    language: Optional[str] = Form(default=None),
+):
     """
     Transcribe an uploaded audio file.
 
     Accepts any audio format supported by ffmpeg (mp3, m4a, m4b, flac, wav, ogg, etc).
     Returns a list of sentences with start_ms and end_ms timestamps.
+
+    `language` (optional form field) forces an ISO 639-1 language code for this
+    job, overriding the worker's WHISPER_LANGUAGE; omitting it detects once on
+    the first chunk and pins that for the rest of the file (#246).
 
     Only one transcription can run at a time. If a transcription is already
     in progress, this endpoint returns HTTP 409.
@@ -1200,32 +1516,35 @@ async def transcribe(request: Request, audio_file: UploadFile = File(...)):
     # The model is loaded on demand inside _transcribe_file (#106): an unloaded
     # model is the idle resting state, not a reason to reject work.
     client_ip = request.client.host if request and request.client else "unknown"
-    conflict = _active_job_conflict(audio_file.filename, client_ip)
-    if conflict is not None:
-        return conflict
+    job_language = (language or "").strip() or None
+
+    # Check and claim in one lock acquisition (#236). Everything below runs
+    # with the slot already held, so a second request that arrives during the
+    # copy gets a 409 rather than starting a second job.
+    if not _try_claim_job(audio_file.filename, None, job_language):
+        return _active_job_conflict(audio_file.filename, client_ip)
 
     # Save uploaded file to a temp location
     suffix = os.path.splitext(audio_file.filename or "audio.mp3")[1]
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    handed_off = False
     try:
         shutil.copyfileobj(audio_file.file, tmp)
         tmp.close()
 
-        client_ip = request.client.host if request and request.client else "unknown"
-        file_size_mb = os.path.getsize(tmp.name) / (1024 * 1024)
+        file_size = os.path.getsize(tmp.name)
+        with _job_lock:
+            _job_status.current_size = file_size
         logger.info(
-            f"Received file: {audio_file.filename} ({file_size_mb:.1f} MB) "
+            f"Received file: {audio_file.filename} ({file_size / (1024 * 1024):.1f} MB) "
             f"from {client_ip}"
         )
 
-        # Track current filename for 409 details
-        with _job_lock:
-            _job_status.current_file = audio_file.filename
-
         # Run transcription in a background thread so the event loop
         # stays free for /v1/status polling requests
+        handed_off = True
         result = await asyncio.to_thread(
-            _transcribe_file, tmp.name, audio_file.filename
+            _transcribe_file, tmp.name, audio_file.filename, job_language
         )
         return JSONResponse(content=result)
 
@@ -1235,6 +1554,10 @@ async def transcribe(request: Request, audio_file: UploadFile = File(...)):
         logger.error(f"Transcription endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        # A failure before the handoff (a failed copy, a full disk) would
+        # otherwise leave the slot claimed and 409 every later request.
+        if not handed_off:
+            _release_job()
         # Clean up temp file
         try:
             os.unlink(tmp.name)

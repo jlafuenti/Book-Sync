@@ -199,9 +199,16 @@ def load_audio_chunk(file: str, start_sec: int, duration_sec: int, sr: int = 160
 def transcribe_audiobook(
     audio_path: str,
     progress_callback: Optional[Callable] = None,
+    language: Optional[str] = None,
 ) -> List[TranscribedSentence]:
     """
     Transcribe an audiobook file using Whisper, processing in chunks to avoid OOM.
+
+    `language` is an ISO 639-1 code forced on every chunk. Leaving it None
+    detects the language on the first chunk and pins that answer for the rest
+    of the file — never per-chunk re-detection (issue #246), which turns an
+    hour that opens on music or a foreign epigraph into transliterated garbage
+    that alignment then silently interpolates across.
     """
     # Step 1: Get audio duration for progress reporting
     total_duration = _get_audio_duration(audio_path)
@@ -236,6 +243,8 @@ def transcribe_audiobook(
 
     CHUNK_SIZE_SEC = 3600  # 1 hour chunks
     all_sentences = []
+    pinned_language = language or None
+    logger.info(f"Language: {pinned_language or 'auto (detect once, then pin)'}")
     
     # We use a wrapper function for the chunk's progress callback to map it
     # accurately to the overall file's progress.
@@ -271,11 +280,21 @@ def transcribe_audiobook(
                 audio_array,
                 word_timestamps=True,
                 verbose=False,
+                language=pinned_language,
             )
         finally:
             tqdm_module.tqdm = original_tqdm_class
             _progress_callback_local.callback = None
             _progress_callback_local.total_duration = None
+
+        # Detect once, then pin: chunk 1's answer governs the rest of the file.
+        if not pinned_language:
+            detected = result.get("language")
+            if detected:
+                pinned_language = detected
+                logger.info(
+                    f"Detected language '{detected}' — pinning it for the rest of this file"
+                )
 
         segments = result.get("segments", [])
         logger.info(f"Chunk produced {len(segments)} segments")

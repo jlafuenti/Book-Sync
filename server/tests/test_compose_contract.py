@@ -12,6 +12,7 @@ anchors or flow mappings at the service level, which a line scan handles fine.
 """
 
 import os
+import re
 
 import pytest
 
@@ -181,6 +182,47 @@ def test_caddyfile_template_caps_request_bodies():
         assert needle in text, f"Caddyfile.example missing {needle!r}"
 
 
+def test_jetson_template_states_the_lan_only_assumption_above_its_ports():
+    """The worker's whole security model is "nobody outside the LAN can reach
+    it" (issue #238): plaintext HTTP, one shared bearer token, every request
+    carrying it in the clear. `ports: - "9000:9000"` publishes on every
+    interface, so the assumption has to be stated where it is acted on — a
+    cheap guard against the comment being dropped on the next template edit.
+    """
+    path = COMPOSE_TEMPLATES[1]
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    ports_line = next(
+        (i for i, line in enumerate(lines) if line.strip() == "ports:"), None
+    )
+    assert ports_line is not None, "jetson template declares no ports:"
+
+    preamble = "\n".join(lines[max(0, ports_line - 12):ports_line]).lower()
+    for needle in ("lan", "must not", "internet"):
+        assert needle in preamble, (
+            f"jetson/docker-compose.example.yml: no comment above `ports:` "
+            f"mentioning {needle!r} — the LAN-only assumption is unstated."
+        )
+
+
+def test_jetson_template_sizes_and_places_the_upload_temp_dir():
+    """Uploads cost twice the file size in temp space, and the container's
+    default /tmp is not the volume the README tells you to size (#238)."""
+    body = _services(COMPOSE_TEMPLATES[1])["transcriber"]
+    env = _env_vars(body)
+
+    assert "TMPDIR" in env, (
+        "jetson/docker-compose.example.yml does not set TMPDIR — the spooled "
+        "upload and its copy would land on the container's unsized /tmp."
+    )
+    mounted = [m.split(":")[1] for m in _mounts(body) if ":" in m]
+    assert any(env["TMPDIR"].startswith(target) for target in mounted), (
+        f"TMPDIR={env['TMPDIR']} is not inside any mounted volume."
+    )
+    assert "MAX_UPLOAD_BYTES" in env, "no MAX_UPLOAD_BYTES cap in the jetson template"
+
+
 def test_parser_finds_the_expected_services():
     """Guard the hand-rolled parser itself: a silently-empty parse would pass above."""
     main = _services(COMPOSE_TEMPLATES[0])
@@ -332,3 +374,19 @@ def test_no_service_mounts_two_sources_on_one_target(path):
             f"than one source on {duplicates}. Exactly one may win; the rest are "
             "invisible copies."
         )
+
+
+def test_jetson_template_points_the_model_cache_at_the_persisted_volume():
+    """Issue #374: the dustynv base image sets HF_HOME=/data/models/huggingface,
+    so a volume mounted at /root/.cache/huggingface/hub is never used and every
+    container recreate downloads the model again. The template must set HF_HOME
+    to the parent of the mount so the hub cache *is* the volume."""
+    path = os.path.join(_REPO_ROOT, "jetson", "docker-compose.example.yml")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    mount = re.search(r"whisper_models:(\S+)/hub\b", text)
+    assert mount, "jetson/docker-compose.example.yml: whisper_models must be mounted at <HF_HOME>/hub"
+    assert f"HF_HOME={mount.group(1)}" in text, (
+        "jetson/docker-compose.example.yml: HF_HOME must equal the parent of the "
+        "whisper_models mount, or the base image's default cache is used instead (issue #374)"
+    )

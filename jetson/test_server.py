@@ -45,16 +45,33 @@ class _FakeCT2:
         pass
 
 
+class _FakeInfo:
+    """Stands in for faster-whisper's TranscriptionInfo (#246 needs .language)."""
+
+    def __init__(self, language="en"):
+        self.language = language
+
+
 class _FakeWhisper:
     """Stands in for faster_whisper.WhisperModel."""
 
-    def __init__(self):
+    def __init__(self, detected_language="en"):
         self.model = _FakeCT2()
         self.calls = 0
+        # One dict per transcribe() call, so a test can assert what language
+        # each chunk was given (#246).
+        self.kwargs = []
+        self._detected_language = detected_language
+
+    @property
+    def languages(self):
+        """The `language=` kwarg each chunk was transcribed with, in order."""
+        return [kw.get("language") for kw in self.kwargs]
 
     def transcribe(self, audio_array, **kwargs):
         self.calls += 1
-        return iter([_FakeSegment("Hello there.", 0.0, 1.0)]), object()
+        self.kwargs.append(kwargs)
+        return iter([_FakeSegment("Hello there.", 0.0, 1.0)]), _FakeInfo(self._detected_language)
 
 
 @pytest.fixture
@@ -64,8 +81,12 @@ def clean_state(monkeypatch, tmp_path):
     monkeypatch.setattr(jetson_server, "model", None)
     monkeypatch.setattr(jetson_server, "_model_state", "unloaded")
     monkeypatch.setattr(jetson_server, "_job_status", jetson_server.JobStatus())
+    # The result cache is a module global with a 24h TTL, so a finished job in
+    # one test would otherwise still be served in the next one.
+    jetson_server._recent_results.clear()
     jetson_server._pause_event.clear()
     yield
+    jetson_server._recent_results.clear()
     jetson_server._pause_event.clear()
 
 
@@ -252,10 +273,11 @@ def test_unload_endpoint_releases_when_idle(clean_state, client, monkeypatch):
 # Pause / resume (#106)
 # ---------------------------------------------------------------------------
 
-def _run_job(monkeypatch, tmp_path, filename="book.m4b", body=b"audio-bytes"):
+def _run_job(monkeypatch, tmp_path, filename="book.m4b", body=b"audio-bytes",
+             detected_language="en"):
     audio = tmp_path / filename
     audio.write_bytes(body)
-    fake = _FakeWhisper()
+    fake = _FakeWhisper(detected_language=detected_language)
     monkeypatch.setattr(jetson_server, "model", fake)
     monkeypatch.setattr(jetson_server, "_model_state", "loaded")
     return audio, fake
@@ -442,4 +464,384 @@ def test_a_stale_pause_flag_does_not_stop_the_next_job(
     result = jetson_server._transcribe_file(str(audio), "book.m4b")
 
     assert "status" not in result
+    assert fake.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Whisper language: env default, detect-once-and-pin, per-job override (#246)
+# ---------------------------------------------------------------------------
+
+def test_configured_language_is_passed_to_the_model(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path
+):
+    """WHISPER_LANGUAGE pins every chunk — no per-chunk re-detection at all."""
+    monkeypatch.setattr(jetson_server, "WHISPER_LANGUAGE", "en")
+    audio, fake = _run_job(monkeypatch, tmp_path, detected_language="de")
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert fake.calls == 2
+    assert fake.languages == ["en", "en"]
+
+
+def test_detected_language_is_reused_for_later_chunks(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path
+):
+    """Unconfigured: chunk 1 auto-detects, and its answer pins the rest.
+
+    A later chunk that opens on music or a foreign epigraph would otherwise be
+    detected independently and transliterated into garbage.
+    """
+    monkeypatch.setattr(jetson_server, "WHISPER_LANGUAGE", None)
+    audio, fake = _run_job(monkeypatch, tmp_path, detected_language="fr")
+
+    result = jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert fake.languages == [None, "fr"]
+    assert result["language"] == "fr"
+
+
+def test_a_per_job_language_overrides_the_env_default(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(jetson_server, "WHISPER_LANGUAGE", "en")
+    audio, fake = _run_job(monkeypatch, tmp_path)
+
+    jetson_server._transcribe_file(str(audio), "book.m4b", language="es")
+
+    assert fake.languages == ["es", "es"]
+
+
+def test_the_transcribe_endpoint_accepts_a_language_form_field(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    monkeypatch.setattr(jetson_server, "WHISPER_LANGUAGE", "en")
+    _, fake = _run_job(monkeypatch, tmp_path)
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"audio-bytes", "audio/mpeg")},
+        data={"language": "it"},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["language"] == "it"
+    assert fake.languages == ["it", "it"]
+
+
+def test_resume_keeps_the_pinned_language(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """The language detected before a pause is carried in the checkpoint, so
+    the second half of the book isn't re-detected (possibly differently)."""
+    monkeypatch.setattr(jetson_server, "WHISPER_LANGUAGE", None)
+    audio, first_fake = _run_job(monkeypatch, tmp_path, detected_language="de")
+    size = audio.stat().st_size
+    real_save = jetson_server._save_checkpoint
+    pause_once = {"done": False}
+
+    def _save_then_pause(*args, **kwargs):
+        real_save(*args, **kwargs)
+        if not pause_once["done"]:
+            pause_once["done"] = True
+            jetson_server._pause_event.set()
+
+    monkeypatch.setattr(jetson_server, "_save_checkpoint", _save_then_pause)
+    assert jetson_server._transcribe_file(str(audio), "book.m4b")["status"] == "paused"
+    assert first_fake.languages == [None]
+
+    # Second window. This model would "detect" something else if asked.
+    second_fake = _FakeWhisper(detected_language="fr")
+    monkeypatch.setattr(jetson_server, "model", second_fake)
+    monkeypatch.setattr(jetson_server, "_model_state", "loaded")
+
+    r = client.post(
+        "/v1/transcribe/resume", json={"filename": "book.m4b", "size": size}, headers=AUTH
+    )
+
+    assert r.status_code == 200, r.text
+    assert second_fake.languages == ["de"], "the resumed chunk must reuse the pinned language"
+    assert r.json()["language"] == "de"
+
+
+# ---------------------------------------------------------------------------
+# One-job guard: check and claim under a single lock (#236)
+# ---------------------------------------------------------------------------
+
+def test_a_second_transcribe_request_is_rejected_once_the_slot_is_claimed(
+    clean_state, client, monkeypatch
+):
+    monkeypatch.setattr(
+        jetson_server, "_transcribe_file",
+        lambda *a, **k: pytest.fail("the second request must never start a job"),
+    )
+    assert jetson_server._try_claim_job("first.m4b", 1) is True
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("second.m4b", b"audio-bytes", "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 409
+    assert r.json()["current_job"]["file"] == "first.m4b"
+
+
+def test_a_second_resume_request_is_rejected_once_the_slot_is_claimed(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """Resume has to go through the same claim — it starts the same job slot."""
+    audio, _ = _run_job(monkeypatch, tmp_path)
+    size = audio.stat().st_size
+    real_save = jetson_server._save_checkpoint
+
+    def _save_then_pause(*args, **kwargs):
+        real_save(*args, **kwargs)
+        jetson_server._pause_event.set()
+
+    monkeypatch.setattr(jetson_server, "_save_checkpoint", _save_then_pause)
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert jetson_server._try_claim_job("other.m4b", 1) is True
+    monkeypatch.setattr(
+        jetson_server, "_transcribe_file",
+        lambda *a, **k: pytest.fail("the second request must never start a job"),
+    )
+
+    r = client.post(
+        "/v1/transcribe/resume", json={"filename": "book.m4b", "size": size}, headers=AUTH
+    )
+
+    assert r.status_code == 409
+    assert r.json()["current_job"]["file"] == "other.m4b"
+
+
+def test_try_claim_job_is_atomic(clean_state):
+    """Two threads racing the claim: exactly one may win, every round."""
+    import threading
+
+    for round_no in range(200):
+        jetson_server._release_job()
+        barrier = threading.Barrier(2)
+        results = []
+        results_lock = threading.Lock()
+
+        def _claim():
+            barrier.wait()
+            won = jetson_server._try_claim_job("book.m4b", 1)
+            with results_lock:
+                results.append(won)
+
+        threads = [threading.Thread(target=_claim) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert results.count(True) == 1, f"round {round_no}: {results}"
+
+
+def test_the_job_slot_is_released_when_the_copy_fails(clean_state, client, monkeypatch):
+    """A failure between the claim and the handoff must not wedge the worker."""
+    def _boom(*args, **kwargs):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(jetson_server.shutil, "copyfileobj", _boom)
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"audio-bytes", "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 500
+    assert jetson_server._job_status.active is False
+
+
+def test_slot_is_released_after_transcription_raises(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    def _boom(path):
+        raise RuntimeError("Could not determine audio duration")
+
+    monkeypatch.setattr(jetson_server, "_get_audio_duration", _boom)
+    _run_job(monkeypatch, tmp_path)
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"audio-bytes", "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 500
+    assert jetson_server._job_status.active is False
+
+
+def test_the_result_is_cached_under_the_filename_the_job_was_given(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    """_transcribe_file must use its own argument, not the global slot — a
+    second request overwriting current_file used to file the first job's
+    transcript under the second job's name."""
+    audio, _ = _run_job(monkeypatch, tmp_path)
+    jetson_server._job_status.current_file = "someone-elses.m4b"
+
+    jetson_server._transcribe_file(str(audio), "book.m4b")
+
+    assert client.get("/v1/result/book.m4b", headers=AUTH).status_code == 200
+    assert client.get("/v1/result/someone-elses.m4b", headers=AUTH).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Upload cap and disk guard (#238)
+# ---------------------------------------------------------------------------
+
+def test_upload_over_the_size_limit_is_rejected_with_413_before_the_body_is_read(
+    clean_state, client, monkeypatch
+):
+    monkeypatch.setattr(jetson_server, "MAX_UPLOAD_BYTES", 16)
+    monkeypatch.setattr(
+        jetson_server, "_transcribe_file",
+        lambda *a, **k: pytest.fail("the endpoint must not be entered at all"),
+    )
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"x" * 4096, "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 413
+    assert jetson_server._job_status.active is False
+
+
+def test_chunked_upload_over_the_limit_is_cut_off_with_413(clean_state, client, monkeypatch):
+    """A body with no Content-Length still has to be bounded — otherwise the
+    header check is trivially bypassed."""
+    monkeypatch.setattr(jetson_server, "MAX_UPLOAD_BYTES", 64)
+    monkeypatch.setattr(
+        jetson_server, "_transcribe_file",
+        lambda *a, **k: pytest.fail("the endpoint must not be entered at all"),
+    )
+
+    def _chunks():
+        for _ in range(8):
+            yield b"x" * 256
+
+    r = client.post(
+        "/v1/transcribe",
+        content=_chunks(),
+        headers={**AUTH, "Content-Type": "multipart/form-data; boundary=abc123"},
+    )
+
+    assert r.status_code == 413
+
+
+def test_upload_is_refused_with_507_when_the_disk_is_nearly_full(
+    clean_state, client, monkeypatch, tmp_path
+):
+    """The upload costs twice its size in temp space (spooled body + copy), so
+    a job that cannot fit is refused up front instead of ENOSPC-ing halfway."""
+    import collections
+    import tempfile as _tempfile
+
+    # A private temp dir, so "nothing was written" is an assertion about this
+    # request rather than about whatever else is using the system temp.
+    upload_tmp = tmp_path / "uploads"
+    upload_tmp.mkdir()
+    monkeypatch.setattr(_tempfile, "gettempdir", lambda: str(upload_tmp))
+
+    usage = collections.namedtuple("usage", "total used free")
+    monkeypatch.setattr(jetson_server.shutil, "disk_usage", lambda path: usage(100, 92, 8))
+    monkeypatch.setattr(
+        jetson_server, "_transcribe_file",
+        lambda *a, **k: pytest.fail("the endpoint must not be entered at all"),
+    )
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"x" * 512, "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 507
+    assert "disk" in r.json()["detail"].lower()
+    assert list(upload_tmp.iterdir()) == [], "left a temp file behind"
+    assert jetson_server._job_status.active is False
+
+
+def test_abandoned_upload_temp_files_are_swept_from_the_checkpoint_volume(
+    clean_state, monkeypatch, tmp_path
+):
+    """An OoM-kill mid-upload leaves multiple GB on the volume the free-space
+    guard measures — which would then refuse every later job."""
+    import tempfile as _tempfile
+
+    upload_tmp = tmp_path / "ckpt" / "tmp"
+    upload_tmp.mkdir(parents=True)
+    monkeypatch.setattr(_tempfile, "gettempdir", lambda: str(upload_tmp))
+
+    stale = upload_tmp / "tmpabc123.m4b"
+    stale.write_bytes(b"abandoned")
+    os.utime(stale, (0, 0))
+    fresh = upload_tmp / "tmpdef456.m4b"
+    fresh.write_bytes(b"in flight")
+
+    jetson_server._cleanup_stale_uploads()
+
+    assert not stale.exists()
+    assert fresh.exists()
+
+
+def test_startup_creates_the_tmpdir_named_by_the_environment(clean_state, monkeypatch, tmp_path):
+    """On a fresh checkpoint volume the directory TMPDIR names does not exist
+    yet. Python's tempfile.gettempdir() silently drops a TMPDIR that does not
+    exist and answers /tmp instead — so creating "whatever gettempdir says"
+    creates /tmp and leaves uploads on the container's own filesystem, which is
+    exactly what #238 set out to stop. The directory must come from the raw
+    environment value, and tempfile's cached answer must be reset afterwards."""
+    import tempfile as _tempfile
+
+    wanted = tmp_path / "volume" / "tmp"
+    assert not wanted.exists()
+    monkeypatch.setenv("TMPDIR", str(wanted))
+    monkeypatch.setattr(_tempfile, "tempdir", None)
+    monkeypatch.setattr(jetson_server, "MODEL_IDLE_UNLOAD_MIN", 0)
+
+    jetson_server.startup_event()
+
+    assert wanted.is_dir()
+    assert os.path.realpath(_tempfile.gettempdir()) == os.path.realpath(str(wanted))
+
+
+def test_a_shared_system_temp_dir_is_never_swept(clean_state, monkeypatch, tmp_path):
+    """On a dev box TMPDIR is the system temp, shared with every other process."""
+    import tempfile as _tempfile
+
+    elsewhere = tmp_path / "system-temp"
+    elsewhere.mkdir()
+    monkeypatch.setattr(_tempfile, "gettempdir", lambda: str(elsewhere))
+    someone_elses = elsewhere / "not-ours.dat"
+    someone_elses.write_bytes(b"x")
+    os.utime(someone_elses, (0, 0))
+
+    jetson_server._cleanup_stale_uploads()
+
+    assert someone_elses.exists()
+
+
+def test_upload_under_the_limit_still_transcribes(
+    clean_state, fake_audio_pipeline, monkeypatch, tmp_path, client
+):
+    _, fake = _run_job(monkeypatch, tmp_path)
+
+    r = client.post(
+        "/v1/transcribe",
+        files={"audio_file": ("book.m4b", b"audio-bytes", "audio/mpeg")},
+        headers=AUTH,
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["sentences"]
     assert fake.calls == 2

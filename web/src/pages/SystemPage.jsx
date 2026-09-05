@@ -277,6 +277,21 @@ function browserTimezone() {
     }
 }
 
+/* Mirrors SUPPORTED_LANGUAGES in server/services/transcription_providers/__init__.py,
+   which the PUT validates against — a code missing there is rejected with a 422.
+   '' is auto: the transcriber detects the language once on the first chunk of a
+   file and pins it for the rest, rather than re-detecting per chunk (#246). */
+const TRANSCRIPTION_LANGUAGES = [
+    ['', 'Auto-detect (per book)'],
+    ['ar', 'Arabic'], ['cs', 'Czech'], ['da', 'Danish'], ['de', 'German'],
+    ['el', 'Greek'], ['en', 'English'], ['es', 'Spanish'], ['fi', 'Finnish'],
+    ['fr', 'French'], ['he', 'Hebrew'], ['hi', 'Hindi'], ['hu', 'Hungarian'],
+    ['id', 'Indonesian'], ['it', 'Italian'], ['ja', 'Japanese'], ['ko', 'Korean'],
+    ['nl', 'Dutch'], ['no', 'Norwegian'], ['pl', 'Polish'], ['pt', 'Portuguese'],
+    ['ro', 'Romanian'], ['ru', 'Russian'], ['sv', 'Swedish'], ['tr', 'Turkish'],
+    ['uk', 'Ukrainian'], ['vi', 'Vietnamese'], ['zh', 'Chinese'],
+]
+
 /* ── TranscriptionSettingsSection ─────────────────────────────────── */
 export function TranscriptionSettingsSection() {
     const [provider, setProvider] = useState('remote_with_fallback')
@@ -285,6 +300,7 @@ export function TranscriptionSettingsSection() {
     const [remoteTimeout, setRemoteTimeout] = useState(86400)
     const [autoTranscribe, setAutoTranscribe] = useState(false)
     const [whisperModel, setWhisperModel] = useState('medium')
+    const [language, setLanguage] = useState('')
     const [offhoursEnabled, setOffhoursEnabled] = useState(false)
     const [offhoursStart, setOffhoursStart] = useState('01:00')
     const [offhoursEnd, setOffhoursEnd] = useState('07:00')
@@ -309,6 +325,7 @@ export function TranscriptionSettingsSection() {
             if (s.transcription_remote_timeout !== undefined) setRemoteTimeout(s.transcription_remote_timeout)
             if (s.auto_transcribe_enabled !== undefined) setAutoTranscribe(s.auto_transcribe_enabled)
             if (s.whisper_model) setWhisperModel(s.whisper_model)
+            if (s.transcription_language !== undefined) setLanguage(s.transcription_language || '')
             if (s.transcription_offhours_enabled !== undefined) setOffhoursEnabled(s.transcription_offhours_enabled)
             if (s.transcription_offhours_start) setOffhoursStart(s.transcription_offhours_start)
             if (s.transcription_offhours_end) setOffhoursEnd(s.transcription_offhours_end)
@@ -332,6 +349,7 @@ export function TranscriptionSettingsSection() {
                 transcription_remote_timeout: parseInt(remoteTimeout) || 86400,
                 auto_transcribe_enabled: autoTranscribe,
                 whisper_model: whisperModel,
+                transcription_language: language,
                 transcription_offhours_enabled: offhoursEnabled,
                 transcription_offhours_start: offhoursStart,
                 transcription_offhours_end: offhoursEnd,
@@ -450,6 +468,21 @@ export function TranscriptionSettingsSection() {
                     <option value="medium">Medium (Recommended)</option>
                     <option value="large-v3">Large v3 (Most Accurate)</option>
                 </select>
+            </div>
+            <div className="system-form-row">
+                <label className="system-form-label" htmlFor="transcriptionLanguage">Transcription Language</label>
+                <select id="transcriptionLanguage" className="input" value={language}
+                    onChange={e => setLanguage(e.target.value)} style={{ maxWidth: 240 }}>
+                    {TRANSCRIPTION_LANGUAGES.map(([code, label]) => (
+                        <option key={code} value={code}>{label}</option>
+                    ))}
+                </select>
+                <p className="system-form-hint">
+                    Applies to both the remote worker and local Whisper. Auto-detect reads the
+                    language from the start of each book and keeps it for the whole file; pin it
+                    if your library is single-language, so a chapter that opens on music or a
+                    foreign-language epigraph can't be misread as another language.
+                </p>
             </div>
             <div className="system-form-toggle">
                 <input type="checkbox" id="autoTranscribeToggle" checked={autoTranscribe}
