@@ -577,3 +577,113 @@ async def test_chapter_change_is_projected_onto_user_progress(db):
         )
     )).scalar_one()
     assert row.epub_chapter == 1
+
+
+# ---------------------------------------------------------------------------
+# Audio that precedes the new map (issue #200)
+#
+# `audio_to_epub` returned (0, 0) for any position earlier than every point,
+# and `resolve_on_map` handed that back as a successful match — indistinguishable
+# from a genuine hit on the first sentence. So a listener parked in unaligned
+# front matter, or a prologue the aligner dropped, was moved to the start of the
+# book, `anchor_revision` bumped (every device's hint stale at once) and
+# `user_progress` rewritten. The contract says a record holding any anchor never
+# resolves to start of book (docs/position-sync-contract.md).
+#
+# A map whose first point is at 9 s, so anything under that precedes it.
+LATE_START_POINTS = [
+    ("a wizard job is to vex chumps quickly in fog", 0, 0, 9_000),
+    ("the quick brown fox jumps over the lazy dog", 0, 1, 12_000),
+    ("how vexingly quick daft zebras jump", 1, 0, 20_000),
+]
+
+
+async def test_stale_audiobook_write_before_the_map_keeps_its_coordinates(db):
+    """The same rule on the write path (issue #116 + #200). A version-mismatched
+    audiobook write whose audio precedes every point on the live map keeps the
+    coordinates it sent and stamps the *attested* version, so the row visibly
+    trails — it must not be silently relocated to the start of the book."""
+    from schemas import PositionUpdate
+    from services.position_service import apply_position
+
+    pair = await make_book_pair(db)
+    await save_sync_map(db, pair.id, _aligned(OLD_POINTS))
+    await _retranscribe(db, pair.id, points=LATE_START_POINTS)  # v2 starts at 9 s
+
+    from schemas import PositionScope
+    from services.position_service import ScopeRef
+    ref = ScopeRef(PositionScope.PAIR, book_pair_id=pair.id,
+                   ebook_id=pair.ebook_id, audiobook_id=pair.audiobook_id)
+
+    record, accepted = await apply_position(db, 1, ref, PositionUpdate(
+        source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=3, epub_sentence_index=2, sync_map_version=1,
+        audio_position_ms=1_000,
+    ))
+
+    assert accepted
+    assert (record.epub_chapter, record.epub_sentence_index) == (3, 2)
+    assert record.audio_position_ms == 1_000
+    assert record.sync_map_version == 1
+
+
+async def test_audiobook_bookmark_before_the_first_point_is_left_untouched(db):
+    """Nothing to translate from: no point covers the position and there is no
+    usable text anchor. The coordinates stand and the stale version stays
+    visible, exactly as an unmatchable ebook bookmark does."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=3, epub_sentence_index=2,
+        epub_text_preview=None,
+        audio_position_ms=1_000,
+        with_hint=True,
+    )
+
+    await _retranscribe(db, pair.id, points=LATE_START_POINTS)
+
+    await db.refresh(bookmark)
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (3, 2)
+    assert bookmark.audio_position_ms == 1_000
+    assert bookmark.sync_map_version == 1, "the drift must stay visible"
+    assert bookmark.anchor_revision == 7, "no chapter move, so no hint invalidation"
+
+    hint = (await db.execute(
+        select(PositionHint).where(PositionHint.bookmark_id == bookmark.id)
+    )).scalar_one()
+    assert hint.anchor_revision == bookmark.anchor_revision, "hint stays current"
+
+
+async def test_audiobook_bookmark_before_the_first_point_falls_back_to_its_text(db):
+    """A bookmark that *does* carry a preview is re-anchored by text rather
+    than abandoned — better than either (0, 0) or giving up."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=1, epub_sentence_index=0,
+        epub_text_preview="how vexingly quick daft zebras jump",
+        audio_position_ms=1_000,
+    )
+
+    sm = await _retranscribe(db, pair.id, points=LATE_START_POINTS)
+
+    await db.refresh(bookmark)
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (1, 0)
+    assert bookmark.sync_map_version == sm.version == 2
+    # The text rung refreshes the derived audio position to the matched point.
+    assert bookmark.audio_position_ms == 20_000
+
+
+async def test_audiobook_bookmark_exactly_at_the_first_point_resolves_to_it(db):
+    """The boundary is a hit, not a miss."""
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.AUDIOBOOK,
+        epub_chapter=3, epub_sentence_index=2,
+        epub_text_preview=None,
+        audio_position_ms=9_000,
+    )
+
+    sm = await _retranscribe(db, pair.id, points=LATE_START_POINTS)
+
+    await db.refresh(bookmark)
+    assert (bookmark.epub_chapter, bookmark.epub_sentence_index) == (0, 0)
+    assert bookmark.sync_map_version == sm.version == 2
+    assert bookmark.audio_position_ms == 9_000, "the audio file did not change"

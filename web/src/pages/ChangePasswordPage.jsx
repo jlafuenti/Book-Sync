@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { changePassword, getMe } from '../api'
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, passwordError } from '../lib/passwordPolicy'
 
 function ChangePasswordPage({ onPasswordChanged }) {
     const [oldPassword, setOldPassword] = useState('')
@@ -16,8 +17,11 @@ function ChangePasswordPage({ onPasswordChanged }) {
             setError('New passwords do not match')
             return
         }
-        if (newPassword.length < 6) {
-            setError('Password must be at least 6 characters')
+        // Issue #205: the same 8..128 bound the server enforces, checked here
+        // so the user sees it without a round trip.
+        const policyError = passwordError(newPassword)
+        if (policyError) {
+            setError(policyError)
             return
         }
 
@@ -70,6 +74,9 @@ function ChangePasswordPage({ onPasswordChanged }) {
                             onChange={e => setNewPassword(e.target.value)}
                             required
                         />
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                            {PASSWORD_MIN_LENGTH}–{PASSWORD_MAX_LENGTH} characters.
+                        </p>
                     </div>
                     <div className="form-group">
                         <label htmlFor="confirm-password">Confirm New Password</label>

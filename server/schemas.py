@@ -4,7 +4,7 @@ Pydantic schemas for API request/response validation.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Generic, Optional, List, TypeVar
+from typing import Any, Generic, Optional, List, TypeVar
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from models.book import PairStatus
 from models.bookmark import BookmarkSource
@@ -32,10 +32,51 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
 # Auth Schemas
 # ============================================================
 
+# ============================================================
+# Password policy (issue #205)
+# ============================================================
+
+#: One policy, shared by every schema that accepts a *new* password, so the
+#: web form, the Android sheet and the API cannot disagree about what is
+#: acceptable — they used to say 6, 8 and 6 respectively.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 128
+
+#: The exact wording the clients mirror (`web/src/lib/passwordPolicy.js`,
+#: `android/.../ui/account/PasswordPolicy.kt`). Keep the three in step.
+PASSWORD_POLICY_MESSAGE = (
+    f"Password must be between {PASSWORD_MIN_LENGTH} and "
+    f"{PASSWORD_MAX_LENGTH} characters."
+)
+
+
+def password_field(**kwargs) -> Any:
+    """A `str` field carrying the shared password policy.
+
+    Note on the ceiling: bcrypt only hashes the first 72 *bytes* of its input,
+    so anything past that is not actually checked at login. The bound here is
+    a denial-of-service guard on the hash rather than a security boundary —
+    bcrypt's cost is paid on whatever we hand it — and 128 characters is
+    deliberately roomy enough for a real passphrase.
+
+    `UserLogin.password` deliberately does **not** use this: an account created
+    under the old 6-character floor must still be able to sign in (and then
+    change its password), and a 422 on login would lock those users out of the
+    only endpoint that could fix them.
+    """
+    return Field(
+        ...,
+        min_length=PASSWORD_MIN_LENGTH,
+        max_length=PASSWORD_MAX_LENGTH,
+        description=PASSWORD_POLICY_MESSAGE,
+        **kwargs,
+    )
+
+
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str = password_field()
 
 
 class UserLogin(BaseModel):
@@ -121,7 +162,7 @@ class MediaTokenBatchResponse(BaseModel):
 
 class PasswordChange(BaseModel):
     old_password: str
-    new_password: str = Field(..., min_length=6)
+    new_password: str = password_field()
 
 
 class AccountDelete(BaseModel):
@@ -138,7 +179,7 @@ class AccountDelete(BaseModel):
 class UserCreateAdmin(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    password: str = password_field()
     role: str = Field(default="user")
 
 
@@ -148,7 +189,7 @@ class UserUpdateAdmin(BaseModel):
 
 
 class UserPasswordReset(BaseModel):
-    new_password: str = Field(..., min_length=6)
+    new_password: str = password_field()
 
 
 # ============================================================

@@ -6,8 +6,6 @@ import os
 import json
 import logging
 import asyncio
-import tempfile
-import shutil
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -100,103 +98,36 @@ async def update_audiobook_chapters(
     _: User = Depends(get_editor_user),
 ):
     """
-    Update chapters in an audiobook file using ffmpeg meta injection.
+    Update chapters in an audiobook file.
+
+    The remux itself lives in `services.chapter_repair.remux_with_chapters`,
+    shared with the chapter-encoding repair (issue #192): this is the user's
+    only copy of a purchased audiobook, and the two paths that rewrite it must
+    not be able to drift apart on how carefully they do it — preserving the
+    iTunes freeform atoms ffmpeg cannot write, staging next to the target so
+    the install is an atomic rename, and checking the output before it replaces
+    the source. It is synchronous and shells out to ffmpeg, so it runs in a
+    worker thread rather than on the event loop, exactly as the repair endpoint
+    calls it.
     """
     result = await db.execute(select(AudioBook).where(AudioBook.id == book_id))
     book = result.scalar_one_or_none()
     if not book:
         raise HTTPException(status_code=404, detail="Audiobook not found")
-        
+
     filepath = book.file_path
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
 
-    try:
-        # 1. Export existing metadata
-        fd_meta, temp_meta_path = tempfile.mkstemp(suffix=".txt")
-        os.close(fd_meta)
-        
-        cmd_export = [
-            "ffmpeg", "-y", "-i", filepath, "-f", "ffmetadata", temp_meta_path
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_export, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        await proc.communicate()
-        if proc.returncode != 0:
-            raise Exception("Failed to export metadata from file")
+    ok, error = await asyncio.to_thread(
+        chapter_repair.remux_with_chapters,
+        filepath,
+        [{"start": ch.start_time, "end": ch.end_time, "title": ch.title}
+         for ch in chapters],
+    )
+    if not ok:
+        logger.error(f"Error updating chapters on {filepath}: {error}")
+        raise HTTPException(status_code=500, detail=error)
 
-        # 2. Parse metadata text to remove existing [CHAPTER] blocks but keep everything else.
-        # ffmpeg copies chapter title bytes through opaquely without validating
-        # encoding, so a title written in Windows-1252/Latin-1 by another tool
-        # would crash a hard-coded utf-8 text read here — decode leniently instead.
-        with open(temp_meta_path, 'rb') as f:
-            raw = f.read()
-        lines = chapter_repair.decode_lenient(raw).splitlines(keepends=True)
-            
-        new_lines = []
-        in_chapter_block = False
-        for line in lines:
-            if line.strip() == "[CHAPTER]":
-                in_chapter_block = True
-                continue
-            elif in_chapter_block and line.startswith("["):
-                # End of chapter block, start of a new section (e.g. [STREAM])
-                in_chapter_block = False
-                
-            if not in_chapter_block:
-                new_lines.append(line)
-                
-        # 3. Append new chapters
-        timebase = 1000  # ms precision
-        for ch in chapters:
-            start_pts = int(ch.start_time * timebase)
-            end_pts = int(ch.end_time * timebase)
-            
-            new_lines.append("[CHAPTER]\n")
-            new_lines.append(f"TIMEBASE=1/{timebase}\n")
-            new_lines.append(f"START={start_pts}\n")
-            new_lines.append(f"END={end_pts}\n")
-            new_lines.append(f"title={chapter_repair.ffmetadata_escape(ch.title)}\n")
-            
-        with open(temp_meta_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
-            
-        # 4. Write metadata back to a new file using codec copy
-        fd_out, temp_out_path = tempfile.mkstemp(suffix=os.path.splitext(filepath)[1])
-        os.close(fd_out)
-        
-        cmd_inject = [
-            "ffmpeg", "-y",
-            "-i", filepath,
-            "-i", temp_meta_path,
-            "-map_metadata", "1",
-            # -map_metadata alone does NOT map chapters; without
-            # -map_chapters ffmpeg defaults to input 0 (the original file),
-            # silently discarding the edited chapters below.
-            "-map_chapters", "1",
-            "-codec", "copy",
-            temp_out_path
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_inject, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0:
-            raise Exception(f"Failed to inject metadata: {err.decode()}")
-            
-        # 5. Move new file over old file
-        shutil.move(temp_out_path, filepath)
-        logger.info(f"Successfully wrote {len(chapters)} chapters to {filepath}")
-        
-    except Exception as e:
-        logger.error(f"Error updating chapters: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # Cleanup
-        if 'temp_meta_path' in locals() and os.path.exists(temp_meta_path):
-            os.remove(temp_meta_path)
-        if 'temp_out_path' in locals() and os.path.exists(temp_out_path):
-            os.remove(temp_out_path)
-            
+    logger.info(f"Successfully wrote {len(chapters)} chapters to {filepath}")
     return chapters

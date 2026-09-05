@@ -9,6 +9,7 @@ matcher that is hand-duplicated between the Python server and the Android client
 | `match_cases.json` | `services/sync_matcher.py::match_text_to_sync_points` | `SyncMatcher.match` |
 | `restore_cases.json` | `services/position_resolver.py::plan_restore` | `PositionResolver.planRestore` |
 | `pair_open_target.json` | — (client-side rule) | `BookSyncRepository.resolvePairOpenTarget` |
+| `audio_to_epub_cases.json` | `services/sync_engine.py::audio_to_epub` | `SyncMatcher.pointForAudioPosition` (via `BookSyncRepository.audioToEpubText`) |
 
 Because the two implementations are maintained by hand, they can drift silently (this is
 exactly what issues #46 and #41 call out). Both sides are now enforced: the Python suite
@@ -36,6 +37,16 @@ unbreakable. (Phase 2 — the Android `match_cases.json` half — landed with #4
   pair* on the web. The web keyed on the two `user_progress` rows' `updated_at` until
   issue #215; a pair-scoped write stamps both in one loop, so that comparison always tied
   and every pair opened in the reader.
+- `audio_to_epub_cases.json`: `[{ "name", "why", "points": [{chapter, sentence_index,
+  audio_start_ms}], "audio_position_ms", "expected_point_index": int|null }]`. Which point an
+  audio position lands on — `expected_point_index` indexes `points` **as written**, so a case can
+  deliberately list them out of audio order. `null` means "no point at all", which is only ever
+  correct for an empty `points`; each platform expresses that in its own shape (Python falls back
+  to `(0, 0)`, Kotlin returns `null`).
+  **A position earlier than every point resolves to the *first* point, never to chapter 0**
+  (issue #200): a map may legitimately start well into the audio, and a silent origin is
+  indistinguishable from a real hit on the opening sentence — which is how a re-map used to
+  relocate a bookmark to the start of the book.
 - `normalize_cases.json`: `[{ "input": str, "expected": str }]`.
 - `match_cases.json`: `[{ "name", "sync_points": [{chapter, sentence_index, preview,
   confidence?}], "epub_text", "chapter_hint", "expected_chapter": int|null,

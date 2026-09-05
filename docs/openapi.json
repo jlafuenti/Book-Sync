@@ -2994,7 +2994,9 @@
       "PasswordChange": {
         "properties": {
           "new_password": {
-            "minLength": 6,
+            "description": "Password must be between 8 and 128 characters.",
+            "maxLength": 128,
+            "minLength": 8,
             "title": "New Password",
             "type": "string"
           },
@@ -4287,7 +4289,9 @@
             "type": "string"
           },
           "password": {
-            "minLength": 6,
+            "description": "Password must be between 8 and 128 characters.",
+            "maxLength": 128,
+            "minLength": 8,
             "title": "Password",
             "type": "string"
           },
@@ -4314,7 +4318,9 @@
             "type": "string"
           },
           "password": {
-            "minLength": 6,
+            "description": "Password must be between 8 and 128 characters.",
+            "maxLength": 128,
+            "minLength": 8,
             "title": "Password",
             "type": "string"
           },
@@ -4372,7 +4378,9 @@
       "UserPasswordReset": {
         "properties": {
           "new_password": {
-            "minLength": 6,
+            "description": "Password must be between 8 and 128 characters.",
+            "maxLength": 128,
+            "minLength": 8,
             "title": "New Password",
             "type": "string"
           }
@@ -5993,7 +6001,7 @@
         ]
       },
       "put": {
-        "description": "Update chapters in an audiobook file using ffmpeg meta injection.",
+        "description": "Update chapters in an audiobook file.\n\nThe remux itself lives in `services.chapter_repair.remux_with_chapters`,\nshared with the chapter-encoding repair (issue #192): this is the user's\nonly copy of a purchased audiobook, and the two paths that rewrite it must\nnot be able to drift apart on how carefully they do it — preserving the\niTunes freeform atoms ffmpeg cannot write, staging next to the target so\nthe install is an atomic rename, and checking the output before it replaces\nthe source. It is synchronous and shells out to ffmpeg, so it runs in a\nworker thread rather than on the event loop, exactly as the repair endpoint\ncalls it.",
         "operationId": "update_audiobook_chapters_api_library_audiobooks__book_id__chapters_put",
         "parameters": [
           {
