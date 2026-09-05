@@ -207,6 +207,11 @@ _ENV_NAME_RE = re.compile(r"`([A-Z][A-Z0-9_]{2,})`")
 # README-documented names that are deliberately NOT fields on config.Settings.
 # One line of reason each; anything else is a typo or a stale row.
 _README_ENV_NOT_SETTINGS = {
+    "PUID": (
+        "compose interpolation only: fills the `user:` key of the server and web "
+        "services (issue #180); the server process never reads it"
+    ),
+    "PGID": "compose interpolation only, the group half of PUID (issue #180)",
     "POSTGRES_PASSWORD": (
         "compose interpolation, read from .env beside docker-compose.yml and "
         "substituted into the db service and DATABASE_URL — the server process "
