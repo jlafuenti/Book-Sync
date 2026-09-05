@@ -183,6 +183,84 @@ class BuildConfigPinsTest {
         )
     }
 
+    // -----------------------------------------------------------------------
+    // The public demo account (issue #147).
+    //
+    // Play's reviewer cannot use Tandem without a server and an account, so the
+    // first-run screen offers a "Try the demo" button — but only in a build that
+    // was given a demo to point at. The three values are machine-local build
+    // settings, defaulting to empty exactly like `tandem.defaultServerUrl`
+    // (issue #58), so a clean clone ships no hostname, no username, no password,
+    // and therefore no button.
+    //
+    // A hardcoded literal here would be all three of those things at once, in a
+    // public repository, in the one file nobody re-reads. Hence the assertion is
+    // not "the default is empty" (a build with a local.properties would fail it)
+    // but "the value comes from tandemSetting(), whose default is empty".
+    // -----------------------------------------------------------------------
+
+    /** Gradle property name → BuildConfig field, for the demo credentials. */
+    private val demoSettings = mapOf(
+        "tandem.demoUrl" to "DEMO_URL",
+        "tandem.demoUser" to "DEMO_USER",
+        "tandem.demoPassword" to "DEMO_PASSWORD",
+    )
+
+    /** The `buildConfigField` value expression declared for [field], or null. */
+    private fun buildConfigValue(field: String): String? =
+        Regex(""""$field"\s*,\s*(.+)""")
+            .find(buildScript())
+            ?.groupValues
+            ?.get(1)
+            ?.trim()
+            ?.trimEnd(',')
+
+    @Test
+    fun `the demo account is read from build settings, never hardcoded`() {
+        for ((property, field) in demoSettings) {
+            val value = buildConfigValue(field)
+            assertTrue(
+                "app/build.gradle.kts declares no BuildConfig.$field. The " +
+                    "first-run demo button (#147) needs all three of " +
+                    "${demoSettings.values}.",
+                value != null,
+            )
+            assertTrue(
+                "BuildConfig.$field is declared as `$value`. It must come from " +
+                    "tandemSetting(\"$property\"), whose default is empty — a " +
+                    "clean clone then ships no demo host and no demo " +
+                    "credentials, and the first-run screen shows no demo " +
+                    "button (#147, #58).",
+                value!!.contains("""tandemSetting("$property")"""),
+            )
+        }
+    }
+
+    @Test
+    fun `no demo credential is written into the build script as a literal`() {
+        // The failure this guards against is a developer "just for now" pasting
+        // the live demo password in to try the button out. The repository is
+        // public: a password in a committed file is published the moment it is
+        // pushed, and stays in the history after it is deleted.
+        //
+        // Take the interpolation out and only the quoting may remain, so a
+        // spliced-in fallback ("...tandemSetting(x) ?: "demo123"...") fails here
+        // rather than shipping.
+        for ((property, field) in demoSettings) {
+            val stripped = buildConfigValue(field)
+                .orEmpty()
+                .replace("""${'$'}{tandemSetting("$property")}""", "")
+            assertTrue(
+                "BuildConfig.$field is declared as more than the " +
+                    "tandemSetting(\"$property\") interpolation — `$stripped` is " +
+                    "left over once it is removed. Put the value in " +
+                    "android/local.properties (gitignored), never in the build " +
+                    "script.",
+                stripped.isNotEmpty() && stripped.all { it == '"' || it == '\\' },
+            )
+        }
+    }
+
     @Test
     fun `CI compiles the release variant`() {
         // The release path rotted precisely because nothing ever built it: no

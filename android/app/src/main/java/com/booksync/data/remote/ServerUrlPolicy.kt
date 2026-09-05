@@ -94,6 +94,46 @@ const val REGISTRATION_PENDING_MESSAGE =
     "Request submitted — an admin must approve it before you can sign in"
 
 /**
+ * The public demo server a build was pointed at, or nothing (issue #147).
+ *
+ * Tandem is useless without a server, and Play's reviewer has none: they install
+ * the app, meet an empty address field, and mark it non-functional. So a build
+ * can carry one read-only demo login, offered on the first-run screen as a
+ * single tap — the pattern Grocy uses for the same problem.
+ *
+ * All three values are machine-local build settings (`tandem.demoUrl`,
+ * `tandem.demoUser`, `tandem.demoPassword`) that default to empty, exactly like
+ * `tandem.defaultServerUrl` (issue #58). A clean clone therefore has no demo
+ * host and no demo credentials in it, and shows no button.
+ */
+data class DemoAccount(
+    /** Normalized by [demoAccountOrNull]; never the raw build setting. */
+    val url: String,
+    val username: String,
+    val password: String,
+)
+
+/** Shown when the demo server itself is not answering. */
+const val DEMO_UNREACHABLE_MESSAGE =
+    "The demo server is not answering right now. Try again in a moment, or " +
+        "enter your own Tandem server address above."
+
+/**
+ * The build's demo login, or null if this build has no complete one.
+ *
+ * **All three or nothing.** A URL with no password produces a button that cannot
+ * finish what it starts, on the one screen a brand-new install can reach —
+ * strictly worse than no button. The URL goes through [normalizeServerUrl] like
+ * every other address in the app, so a typo in a build setting is caught here
+ * rather than becoming a stored server nobody typed.
+ */
+fun demoAccountOrNull(url: String, username: String, password: String): DemoAccount? {
+    if (username.isBlank() || password.isBlank()) return null
+    val normalized = normalizeServerUrl(url) ?: return null
+    return DemoAccount(normalized, username, password)
+}
+
+/**
  * Anything that looks like it was *trying* to name a scheme but isn't `http://`
  * or `https://`. Two shapes: a scheme word followed by a colon that is not the
  * start of a port number (`https:/host`, `https:host`, `ftp://x`,

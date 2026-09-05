@@ -52,6 +52,8 @@
     <string name="first_run_checking">Checking…</string>
     <string name="first_run_connected">Connected — this is a Tandem server.</string>
     <string name="first_run_continue">Continue to sign in</string>
+    <string name="first_run_try_demo">Try the demo</string>
+    <string name="first_run_demo_hint">Signs in to a public demo server with a few public-domain books, so you can see what Tandem does before setting one up.</string>
     <string name="first_run_skip">I already have a server — skip</string>
 
     <!-- ============ Server version handshake (issue #174) ============ -->

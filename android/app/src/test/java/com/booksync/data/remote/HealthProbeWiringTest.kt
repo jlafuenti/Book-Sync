@@ -12,6 +12,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import retrofit2.Retrofit
@@ -154,5 +155,81 @@ class HealthProbeWiringTest {
         }
 
         assertNull(health.status)
+    }
+
+    // -- The demo sign-in travels the same way (issue #147) -----------------
+    //
+    // `LoginViewModelDemoTest` mocks BookSyncApi, so it cannot see either of the
+    // things that only break against a real Retrofit: @Headers is parsed when the
+    // service method is built, and @POST with @Url has to actually leave the base
+    // URL behind. Both would first fail on the one screen a fresh install can
+    // reach, on the tap that exists because the user has no server of their own.
+
+    @Test
+    fun `the demo sign-in posts to the demo server, not the configured one`() {
+        typedServer.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"access_token":"a","refresh_token":"r","token_type":"bearer"}"""),
+        )
+
+        val tokens = runBlocking {
+            api.loginAt(
+                typedServer.url("/api/auth/login").toString(),
+                LoginRequest("playreview", "demo-password"),
+            )
+        }
+
+        assertEquals("a", tokens.access_token)
+        val request = typedServer.takeRequest()
+        assertEquals("/api/auth/login", request.path)
+        assertEquals("POST", request.method)
+        // The address is not stored until this answers, so the configured server
+        // is still whatever it was — and must not have been asked anything.
+        assertEquals(0, configuredServer.requestCount)
+        assertNull(request.getHeader(BYPASS_BASE_URL_HEADER))
+    }
+
+    @Test
+    fun `the demo credentials are what actually go on the wire`() {
+        // A field renamed on either side would otherwise surface as a 422 on the
+        // demo button and nowhere else.
+        typedServer.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"access_token":"a","refresh_token":"r","token_type":"bearer"}"""),
+        )
+
+        runBlocking {
+            api.loginAt(
+                typedServer.url("/api/auth/login").toString(),
+                LoginRequest("playreview", "demo-password"),
+            )
+        }
+
+        val body = typedServer.takeRequest().body.readUtf8()
+        assertTrue(body, body.contains(""""username":"playreview""""))
+        assertTrue(body, body.contains(""""password":"demo-password""""))
+    }
+
+    @Test
+    fun `the role lookup follows the demo address too`() {
+        // Called after the tokens are saved but before the URL is stored, so
+        // routing it through the interceptor would send it to nothing at all.
+        typedServer.enqueue(
+            MockResponse().setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"id":7,"username":"playreview","email":"d@example.com",""" +
+                        """"role":"user","is_admin":false,"is_active":true,""" +
+                        """"created_at":"2026-01-01T00:00:00Z"}""",
+                ),
+        )
+
+        val me = runBlocking { api.getMeAt(typedServer.url("/api/auth/me").toString()) }
+
+        assertEquals("user", me.role)
+        assertEquals("/api/auth/me", typedServer.takeRequest().path)
+        assertEquals(0, configuredServer.requestCount)
     }
 }
