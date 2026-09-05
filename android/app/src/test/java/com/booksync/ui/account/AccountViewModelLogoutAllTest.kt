@@ -100,6 +100,10 @@ class AccountViewModelLogoutAllTest {
             deviceIdManager = deviceIdManager,
             passwordResetGate = PasswordResetGate(),
             networkMonitor = networkMonitor,
+            // Issue #230's share action needs a real Android context and is not
+            // what this test is about.
+            diagnosticLogger = mockk(relaxed = true),
+            appContext = mockk(relaxed = true),
         )
     }
 

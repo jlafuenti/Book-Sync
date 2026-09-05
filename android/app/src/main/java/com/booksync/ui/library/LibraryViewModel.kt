@@ -1,6 +1,7 @@
 package com.booksync.ui.library
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import com.booksync.data.auth.hasMinRole
 import androidx.lifecycle.viewModelScope
@@ -12,7 +13,9 @@ import androidx.work.workDataOf
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
+import com.booksync.R
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.LastOpenedTimes
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -42,14 +45,37 @@ import kotlinx.coroutines.flow.map
 /** Top-level media filter chosen from the pill row. */
 enum class LibraryFilter { ALL, PAIRS, EBOOKS, AUDIOBOOKS, NEW }
 
-/** Sort order. Series-only values (SeriesCount) are valid only in series mode. */
-enum class LibrarySort(val label: String) {
-    RecentlyAdded("Recently added"),
-    RecentlyOpened("Recently opened"),
-    TitleAsc("Title A–Z"),
-    AuthorAsc("Author A–Z"),
-    SeriesOrder("Series order"),
-    SeriesCount("Most books"),
+/**
+ * Sort order. Labels live in `strings.xml` and match the web's
+ * `LIBRARY_SORT_LABELS` where the two clients offer the same order (issue #223);
+ * [SeriesOrder] and [SeriesCount] have no web equivalent and are only offered
+ * inside series mode — see [sortOptionsFor].
+ */
+enum class LibrarySort(@StringRes val labelRes: Int) {
+    RecentlyAdded(R.string.library_sort_date_added),
+    RecentlyOpened(R.string.library_sort_recently_opened),
+    TitleAsc(R.string.library_sort_title_asc),
+    AuthorAsc(R.string.library_sort_author_asc),
+    SeriesOrder(R.string.library_sort_series_order),
+    SeriesCount(R.string.library_sort_series_count),
+}
+
+/**
+ * The sorts worth offering in [state]'s mode.
+ *
+ * "Series order" orders books *within* one series, so it only means anything
+ * once the user has drilled into one; "Most books" counts books per series, so
+ * it only means anything while series are grouped into stacks. Offering both
+ * from the flat library gave two menu entries that silently did nothing —
+ * `seriesStacks` falls through to name-ascending for either.
+ */
+fun sortOptionsFor(state: LibraryUiState): List<LibrarySort> = buildList {
+    add(LibrarySort.RecentlyAdded)
+    add(LibrarySort.RecentlyOpened)
+    add(LibrarySort.TitleAsc)
+    add(LibrarySort.AuthorAsc)
+    if (state.seriesFilter != null) add(LibrarySort.SeriesOrder)
+    if (state.groupBySeries) add(LibrarySort.SeriesCount)
 }
 
 /** Immutable snapshot of the library filter / sort / series state. */
@@ -71,6 +97,12 @@ data class LibraryItem(
     val pair: BookPairEntity? = null,
     val ebook: EBookEntity? = null,
     val audiobook: AudioBookEntity? = null,
+    /**
+     * When this book's position was last written, epoch millis, or null if it has
+     * never been opened on any device (issue #223). Filled in from
+     * [LastOpenedTimes]; only [LibrarySort.RecentlyOpened] reads it.
+     */
+    val lastOpenedAt: Long? = null,
 ) {
     val title: String
         get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: "Untitled"
@@ -223,8 +255,13 @@ class LibraryViewModel @Inject constructor(
     private val allSources = combine(pairsFlow, ebooksFlow, audiobooksFlow) { p, e, a -> AllSources(p, e, a) }
     private val newSources = combine(newPairsFlow, newEbooksFlow, newAudiobooksFlow) { p, e, a -> NewSources(p, e, a) }
 
+    /** When each book was last opened, for [LibrarySort.RecentlyOpened] (issue #223). */
+    private val lastOpened = repository.lastOpenedTimesFlow()
+
     /** The filtered + sorted list of items (flat grid mode). */
-    val items: StateFlow<List<LibraryItem>> = combine(_uiState, allSources, newSources) { ui, all, new ->
+    val items: StateFlow<List<LibraryItem>> = combine(
+        _uiState, allSources, newSources, lastOpened,
+    ) { ui, all, new, opened ->
         val pairs      = all.pairs
         val ebooks     = all.ebooks
         val audiobooks = all.audios
@@ -268,8 +305,12 @@ class LibraryViewModel @Inject constructor(
             transcribedFiltered.filter { it.series.equals(name, ignoreCase = true) }
         } ?: transcribedFiltered
 
-        // Step 4 — sort
-        val sorted = seriesFiltered.sortedWith(comparatorFor(ui.sort))
+        // Step 4 — sort. lastOpenedAt is stamped on here rather than at each
+        // construction site above: it comes from a different pair of tables than
+        // the entity does, and only this one comparator reads it.
+        val sorted = seriesFiltered
+            .map { it.copy(lastOpenedAt = lastOpenedFor(it, opened)) }
+            .sortedWith(comparatorFor(ui.sort))
 
         // Step 5 — text search filter (title / author / series)
         if (ui.searchQuery.isBlank()) sorted
@@ -522,12 +563,55 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun comparatorFor(sort: LibrarySort): Comparator<LibraryItem> = when (sort) {
-        LibrarySort.RecentlyAdded  -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 }
-        LibrarySort.RecentlyOpened -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 } // proxy — UI reads progress flows for true ordering
-        LibrarySort.TitleAsc       -> compareBy { it.title.lowercase() }
-        LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
-        LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
-        LibrarySort.SeriesCount    -> compareBy { it.title.lowercase() } // only meaningful in series mode
+}
+
+// ============================================================================
+// Sorting (issue #223)
+// ============================================================================
+
+/**
+ * How each [LibrarySort] orders the grid.
+ *
+ * Top-level and not private so the orders can be asserted directly
+ * (`LibrarySortTest`) — the reason "Recently opened" shipped as a copy of
+ * "Recently added" for as long as it did is that nothing could see it.
+ */
+internal fun comparatorFor(sort: LibrarySort): Comparator<LibraryItem> = when (sort) {
+    LibrarySort.RecentlyAdded  -> compareByDescending { it.pair?.id ?: it.ebook?.id ?: it.audiobook?.id ?: 0 }
+    // Never-opened books sink to the bottom rather than sorting as "opened at the
+    // epoch", and tie-break by title so an untouched library is not in arbitrary
+    // order. Long.MIN_VALUE rather than nullsLast(): reversing a null-ordering
+    // comparator flips where the nulls land, which is easy to get backwards.
+    LibrarySort.RecentlyOpened -> compareByDescending<LibraryItem> { it.lastOpenedAt ?: Long.MIN_VALUE }
+        .thenBy { it.title.lowercase() }
+    // lowercase() throughout, matching the server's `_browse_order`
+    // (server/routers/library.py) — otherwise "Zebra" sorts ahead of "aardvark".
+    LibrarySort.TitleAsc       -> compareBy { it.title.lowercase() }
+    LibrarySort.AuthorAsc      -> compareBy(nullsLast()) { it.author?.lowercase() }
+    LibrarySort.SeriesOrder    -> compareBy(nullsLast()) { it.seriesIndex }
+    LibrarySort.SeriesCount    -> compareBy { it.title.lowercase() } // only meaningful in series mode
+}
+
+/**
+ * This item's last-opened moment, or null if it has never been opened.
+ *
+ * A pair is the interesting case: its own position lives in `bookmarks`, but the
+ * server projects a pair-scoped write onto the underlying ebook and audiobook
+ * rows too, and a pull can populate those independently — so take whichever of
+ * the three is newest. `0L` means [com.booksync.data.repository.parseSyncTimestamp]
+ * could not read the stored timestamp; that is "unknown", not "January 1970",
+ * and must not sort above a book with no timestamp at all.
+ */
+internal fun lastOpenedFor(item: LibraryItem, times: LastOpenedTimes): Long? {
+    val candidates = when {
+        item.pair != null -> listOfNotNull(
+            times.pairs[item.pair.id],
+            times.ebooks[item.pair.ebookId],
+            times.audiobooks[item.pair.audiobookId],
+        )
+        item.ebook != null      -> listOfNotNull(times.ebooks[item.ebook.id])
+        item.audiobook != null  -> listOfNotNull(times.audiobooks[item.audiobook.id])
+        else                    -> emptyList()
     }
+    return candidates.filter { it > 0L }.maxOrNull()
 }

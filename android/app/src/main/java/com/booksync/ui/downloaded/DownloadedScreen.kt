@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import java.io.File
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,8 @@ import com.booksync.ui.components.FilterPill
 import com.booksync.ui.components.OverflowActions
 import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.library.LibrarySort
+import com.booksync.ui.library.LibraryUiState
+import com.booksync.ui.library.sortOptionsFor
 import com.booksync.ui.theme.Tandem
 
 /**
@@ -119,9 +122,12 @@ fun DownloadedScreen(
                             Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
                         }
                         DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                            LibrarySort.values().forEach { sort ->
+                            // This tab has no series mode at all, so it gets the
+                            // flat option set — "Series order" and "Most books"
+                            // did nothing here (issue #223).
+                            sortOptionsFor(LibraryUiState()).forEach { sort ->
                                 DropdownMenuItem(
-                                    text = { Text(sort.label) },
+                                    text = { Text(stringResource(sort.labelRes)) },
                                     trailingIcon = {
                                         if (ui.sort == sort) {
                                             Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
