@@ -50,9 +50,23 @@ Authorization: Bearer <access_token>
   single-flight their refreshes (`web/src/api.js`, Android's `TokenAuthenticator`) so concurrent
   401s produce one refresh, not a stampede.
 
-- `POST /api/auth/register` — self-registration. New accounts land inactive; an admin approves
-  them (`POST /api/users/{id}/approve`). Logging in before approval returns
+- `GET /api/auth/registration` — **unauthenticated.** `{"mode": "open" | "invite" | "closed"}`.
+  The login screens read it before anyone has a credential, to decide whether to offer a request
+  form, a form with an invite-code field, or nothing. One field on purpose.
+- `POST /api/auth/register` — self-registration. Body takes an optional `invite_code`, required by
+  a server in `invite` mode. New accounts land inactive; an admin approves them
+  (`POST /api/users/{id}/approve`). Logging in before approval returns
   `403 "Your account is pending admin approval"`.
+
+  **The response is deliberately uninformative** (issue #210). Accepted, duplicate username,
+  duplicate email, missing/wrong/spent invite code, and a full pending queue all return the same
+  `201 {"message": "Access request submitted…"}` — anything else would tell a caller which
+  accounts exist. The endpoint pays for the bcrypt hash on every path, so timing does not answer
+  it either. `closed` is the exception and refuses with a 403 that is the same for everyone.
+  See docs/operations.md, "Registration and invites".
+- `POST /api/auth/invites`, `GET /api/auth/invites`, `DELETE /api/auth/invites/{id}` — **admin.**
+  Create returns the code once; the list never carries one (only a SHA-256 is stored). Invites are
+  single-use and expire after `invite_expiry_days`.
 - `GET /api/auth/me`, `PUT /api/auth/me` — the current user's profile.
 - `POST /api/auth/change-password`.
 
@@ -103,6 +117,11 @@ This is enforced server-side, so it holds for `curl` exactly as it does for the 
 failures for one username lock that username briefly: `429` with a `Retry-After` header, refused
 before the password is even checked so it cannot be used as a password oracle.
 
+`/api/auth/register` carries a second, configurable per-IP bucket — `registration_rate_limit`
+(5) per `registration_rate_window_seconds` (600) — and a ceiling on unapproved accounts,
+`registration_pending_max` (20). Over the bucket is `429` with `Retry-After`; over the ceiling is
+the same neutral `201` as everything else, with nothing stored.
+
 ## Roles
 
 Four roles, strictly ordered:
@@ -125,8 +144,9 @@ A route below your role answers `403 {"detail": "Requires <role> role or higher"
 Two role-scoped responses are worth knowing about because they are not simply allow/deny:
 
 - **`GET /api/settings/`** returns the full configuration to an admin, and to everyone else only
-  `{"abs_enabled": bool, "hardcover_configured": bool}` — the two facts the reader UI actually
-  needs. Secrets are masked as `"********"` in the admin payload and never appear in the trimmed
+  `{"abs_enabled": bool, "hardcover_configured": bool, "registration_mode": str}` — the facts the
+  reader UI actually needs. `registration_mode` is there because the login screens need it; it is
+  also readable without any token at `GET /api/auth/registration`. Secrets are masked as `"********"` in the admin payload and never appear in the trimmed
   one; `hardcover_configured` is a derived boolean, not the token (issue #263).
 - **Positions** are always scoped to the calling user. There is no route that reads another user's
   position.

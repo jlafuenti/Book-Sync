@@ -28,8 +28,46 @@ data class LoginRequest(
 data class RegisterRequest(
     val username: String,
     val email: String,
-    val password: String
+    val password: String,
+    /**
+     * An admin-issued single-use code (issue #210). Required only by a server in
+     * `invite` mode, and null-defaulted so kotlinx omits it entirely otherwise —
+     * an `open` server sees exactly the body it has always seen.
+     */
+    val invite_code: String? = null,
 )
+
+/**
+ * How a server treats a stranger: `open`, `invite` or `closed` (issue #210).
+ *
+ * Read from `GET /api/auth/registration` before anyone has a credential, which
+ * is why the wire form is a bare string and why [RegistrationMode.fromWire]
+ * treats anything it does not recognise as [RegistrationMode.OPEN]: this app has
+ * to keep working against servers older and newer than itself, and the failure
+ * that matters is hiding the request form from someone who needs it.
+ */
+@Serializable
+data class RegistrationModeResponse(
+    val mode: String? = null,
+)
+
+enum class RegistrationMode {
+    OPEN,
+    INVITE,
+    CLOSED,
+    ;
+
+    companion object {
+        fun fromWire(mode: String?): RegistrationMode = when (mode?.trim()?.lowercase()) {
+            "invite" -> INVITE
+            "closed" -> CLOSED
+            // Includes null, "open", and any mode a future server grows that
+            // this build has never heard of. Falling back to OPEN keeps the
+            // request form on screen; the server refuses the submit if it must.
+            else -> OPEN
+        }
+    }
+}
 
 /**
  * `POST /api/auth/register` (issue #221).
