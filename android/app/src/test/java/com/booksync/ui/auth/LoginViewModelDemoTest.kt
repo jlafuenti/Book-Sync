@@ -136,6 +136,7 @@ class LoginViewModelDemoTest {
         userScopeProvider = userScopeProvider,
         firstRunGate = gate,
         serverVersionGate = ServerVersionGate(api, serverUrlManager),
+        deviceIdManager = mockk(relaxed = true),
         demoAccount = demoAccount,
         demoSignIn = demoAccount?.let { newDemoSignIn(gate, scope) },
     )
@@ -304,6 +305,7 @@ class LoginViewModelDemoTest {
             userScopeProvider = userScopeProvider,
             firstRunGate = gate,
             serverVersionGate = ServerVersionGate(api, serverUrlManager),
+            deviceIdManager = mockk(relaxed = true),
             demoAccount = demo,
             demoSignIn = signIn,
         ).signInToDemo()
@@ -315,6 +317,7 @@ class LoginViewModelDemoTest {
             userScopeProvider = userScopeProvider,
             firstRunGate = gate,
             serverVersionGate = ServerVersionGate(api, serverUrlManager),
+            deviceIdManager = mockk(relaxed = true),
             demoAccount = demo,
             demoSignIn = signIn,
         )
