@@ -227,6 +227,16 @@ bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#rev
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` (uvicorn default) | Reverse-proxy peer(s) whose `X-Forwarded-For` uvicorn trusts. **Required behind any proxy** — unset, all clients share the proxy's IP, so the login rate limit is one global bucket and audit logs record the proxy. Never `*`. See [docs/operations.md](docs/operations.md#reverse-proxy) |
 | `GOOGLE_BOOKS_API_KEY` | — | Raises the rate limit on the manual Google Books metadata search |
 | `ABS_URL` / `ABS_API_TOKEN` / `ABS_AUDIOBOOKS_PREFIX` | — | Audiobookshelf metadata enrichment |
+| `EXPENSIVE_READ_LIMIT` | `30` | Per-user requests per window on the heavy read endpoints (troubleshoot issues, verify, disk usage, Calibre status); 429 with `Retry-After` past it (#208) |
+| `EXPENSIVE_READ_WINDOW_SECONDS` | `60` | Window for `EXPENSIVE_READ_LIMIT` |
+| `SEARCH_READ_LIMIT` | `60` | Per-user requests per window on library search and queue history |
+| `SEARCH_READ_WINDOW_SECONDS` | `60` | Window for `SEARCH_READ_LIMIT` |
+| `EXTERNAL_METADATA_SEARCH_LIMIT` | `20` | Per-user requests per window on external metadata search (spends the operator's provider quota) |
+| `EXTERNAL_METADATA_SEARCH_WINDOW_SECONDS` | `60` | Window for `EXTERNAL_METADATA_SEARCH_LIMIT` |
+| `DISK_USAGE_CACHE_SECONDS` | `300` | How long the disk-usage figure is cached |
+| `CALIBRE_STATUS_CACHE_SECONDS` | `300` | How long the Calibre availability check is cached |
+| `CHAPTER_ENCODING_CACHE_SECONDS` | `300` | How long a per-audiobook chapter-encoding check is cached (keyed on path, mtime, size) |
+| `BACKUP_PROBE_CACHE_SECONDS` | `60` | How long `GET /api/health/backup` caches its answer (#233) |
 
 **Tokens and auth throttles** — sensible as they are; listed because they are settable, not
 because you should set them:
