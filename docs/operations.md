@@ -756,16 +756,25 @@ values never changed. Delete `secrets/` only once you are sure you are not going
 
 ## Rotating the Postgres password
 
-`POSTGRES_PASSWORD` is only applied by Postgres on **first initialization** of the data volume.
-On an existing deployment, editing `docker-compose.yml` alone won't rotate the stored password —
-the `server` container will just fail to authenticate. Rotate it in place first:
+The password is only applied by Postgres on **first initialization** of the data volume — that is
+true of `POSTGRES_PASSWORD` and `POSTGRES_PASSWORD_FILE` alike. On an existing deployment, editing
+the secret file alone won't rotate the stored password; the `server` container will just fail to
+authenticate. Rotate it in the database first:
 
 ```bash
 docker compose exec db psql -U booksync -d booksync -c "ALTER ROLE booksync WITH PASSWORD 'your-new-generated-password';"
 ```
 
-Then update `POSTGRES_PASSWORD` and `DATABASE_URL` in `docker-compose.yml` to match, and restart
-the `server` service. This does not touch or wipe any data in the `booksync_db` volume.
+Then write the same new value into `secrets/postgres_password` (`umask 077` first, as in "Secrets"
+above) and recreate the `server` service so it picks the file up:
+
+```bash
+docker compose up -d --force-recreate server
+```
+
+On the plain-`environment:` path this is instead "update `POSTGRES_PASSWORD` and `DATABASE_URL` in
+`docker-compose.yml` to match". Either way it does not touch or wipe any data in the `booksync_db`
+volume.
 
 ## Rotating credential encryption keys
 
@@ -778,6 +787,10 @@ Generate a new key with:
 ```bash
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
+
+The list lives in `secrets/credential_enc_keys` (see "Secrets" above): prepend the new key,
+comma-separated, keep the old ones, and recreate the server —
+`docker compose up -d --force-recreate server`.
 
 Keep every key you've ever used until you're certain no stored credential still needs it. Losing
 them means the encrypted Audible/ABS credentials in your backups can't be decrypted.
