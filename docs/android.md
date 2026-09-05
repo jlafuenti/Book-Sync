@@ -81,6 +81,10 @@ you fill it in. Enter your server's origin — e.g. `https://tandem.example.com`
 **Save**. It takes effect on the next request — no restart (issue #228; the base
 URL is read per request by `BaseUrlInterceptor`).
 
+A build made with the `tandem.demo*` settings below also offers **Try the demo** on that first
+screen — one tap to a public demo server, for anyone who has not set one up yet. See
+[demo-server.md](demo-server.md).
+
 You can change it later from **Account → Server URL**. Doing so **signs you out**:
 the previous server's tokens are cleared rather than sent to the new host. Your
 downloaded library is kept — it is stored per server and per user, so switching
@@ -95,13 +99,17 @@ by name or address.
 
 ## Machine-local build settings
 
-Nothing that identifies your machine — a server hostname, a LAN address — is committed. Two build
-settings cover it, both defaulting to empty so a clean clone builds something generic:
+Nothing that identifies your machine — a server hostname, a LAN address, a password — is
+committed. These build settings cover it, all defaulting to empty so a clean clone builds
+something generic:
 
 | Setting | Effect |
 |---|---|
 | `tandem.defaultServerUrl` | Server the app starts on before one is configured. Becomes `BuildConfig.DEFAULT_SERVER_URL`. |
 | `tandem.cleartextHosts` | Comma-separated extra hosts allowed to serve plain HTTP, on top of the loopback/emulator entries. |
+| `tandem.demoUrl` | Public demo server offered by the first-run screen's **Try the demo** button. Becomes `BuildConfig.DEMO_URL`. |
+| `tandem.demoUser` | Demo account username. `BuildConfig.DEMO_USER`. |
+| `tandem.demoPassword` | Demo account password. `BuildConfig.DEMO_PASSWORD`. |
 
 Put them in **`android/local.properties`** — gitignored, and the conventional Android home for
 machine-specific config:
@@ -131,6 +139,17 @@ cd android && ./gradlew :app:generateNetworkSecurityConfig && cat app/build/gene
 
 `server/tests/test_android_no_personal_hosts.py` guards this: it fails if a private-network address
 or a personal hostname reappears in the committed Android sources.
+
+The three `tandem.demo*` settings are all-or-nothing (issue #147): set all three and the first-run
+screen grows a **Try the demo** button that connects to that server and signs in with that account
+in one tap; leave any of them blank — as a clean clone does — and no button is rendered at all.
+`BuildConfigPinsTest` fails the build if any of the three is ever written into `build.gradle.kts`
+as a literal instead of being read from a setting. Standing up the server they point at, and the
+reason a *public* demo exists, are in [demo-server.md](demo-server.md).
+
+**The demo password ships inside the APK**, where anyone can read it. That is accepted: the account
+is `role=user` on a server holding nothing but public-domain books. Never point these settings at a
+server whose contents matter.
 
 ## Streaming, downloads and offline use
 

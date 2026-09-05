@@ -38,6 +38,9 @@ import androidx.lifecycle.viewModelScope
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.BYPASS_BASE_URL_HEADER
+import com.booksync.data.remote.DemoAccount
+import com.booksync.data.remote.DemoSignIn
+import com.booksync.data.remote.DemoSignInState
 import com.booksync.data.remote.FirstRunGate
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
 import com.booksync.data.remote.REGISTRATION_PENDING_MESSAGE
@@ -102,6 +105,27 @@ class LoginViewModel @Inject constructor(
     private val firstRunGate: FirstRunGate,
     private val serverVersionGate: ServerVersionGate,
     private val deviceIdManager: DeviceIdManager,
+    /**
+     * The public demo login this build carries, or null (issue #147). Null in a
+     * clean clone, and then the first-run screen offers no demo button.
+     *
+     * Defaulted so the existing test call sites, which are about a build with no
+     * demo, keep constructing this the way they always did. Hilt ignores the
+     * default and injects the binding in [com.booksync.di.AppModule].
+     */
+    val demoAccount: DemoAccount? = null,
+    /**
+     * Runs the demo sign-in, and outlives this ViewModel on purpose — see
+     * [DemoSignIn].
+     *
+     * Injected unconditionally, even in a build with no demo: it is inert
+     * without an account, because [signInToDemo] returns before touching it.
+     * Making it optional in the graph instead is what crashed every launch with
+     * a `StackOverflowError` — see `provideDemoAccount` in
+     * [com.booksync.di.AppModule]. Nullable and defaulted only so the tests that
+     * predate the demo can keep constructing this without it.
+     */
+    private val demoSignIn: DemoSignIn? = null,
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading = _isLoading.asStateFlow()
@@ -188,6 +212,44 @@ class LoginViewModel @Inject constructor(
                 _connectionState.value = ConnectionState.Failed(INVALID_SERVER_URL_MESSAGE)
             }
         }
+    }
+
+    /**
+     * Where a "Try the demo" tap has got to, straight from the singleton that is
+     * running it (issue #147).
+     *
+     * A pass-through, deliberately: no `stateIn(viewModelScope, …)` in between,
+     * because the point of [DemoSignIn] is that the flow outlives this ViewModel.
+     * A ViewModel rebuilt while the sign-in is in flight re-reads the same
+     * StateFlow and sees the result when it lands.
+     */
+    val demoState: StateFlow<DemoSignInState> =
+        demoSignIn?.state ?: MutableStateFlow(DemoSignInState.Idle).asStateFlow()
+
+    /**
+     * "Try the demo" — one tap from a fresh install to a working library
+     * (issue #147).
+     *
+     * Play's reviewer installs the app, finds an empty address field, and has
+     * nothing to type: Tandem is a client for a server they do not have. That is
+     * an "app not functional" rejection, and it is the same wall the twelve
+     * closed-test testers hit (issue #173). This is the Grocy answer — the build
+     * carries one read-only demo login and offers it as a button.
+     *
+     * Everything the tap does happens in [DemoSignIn], on an application-scoped
+     * coroutine, and **not here**. Running it in `viewModelScope` is what broke it
+     * on a device: the sign-in stored the server URL, that re-created the login
+     * destination, and the rest of the flow — tokens, dismissal, navigation — was
+     * cancelled along with this ViewModel while the screen sat there unchanged.
+     */
+    fun signInToDemo() {
+        val demo = demoAccount ?: return
+        demoSignIn?.start(demo)
+    }
+
+    /** The screen has navigated on, or shown the failure; clear the result. */
+    fun consumeDemoResult() {
+        demoSignIn?.consume()
     }
 
     /** The error Card is shared with login failures; editing either field clears it. */
@@ -386,6 +448,21 @@ fun LoginScreen(
     // scoped to it) with it. See FirstRunGate.
     val showFirstRun by viewModel.showFirstRun.collectAsState()
 
+    // Watched **here**, not inside FirstRunScreen, and that placement is the whole
+    // fix for a bug seen on a device (issue #147): the demo sign-in ends by
+    // dismissing the welcome screen, which swaps FirstRunScreen for SignInScreen
+    // below — taking any LaunchedEffect inside FirstRunScreen with it. The
+    // success arrived at a composable that no longer existed, so the app sat on
+    // the sign-in form holding a perfectly good session. This composable is alive
+    // in both branches, so it cannot be torn down by the thing it is waiting for.
+    val demoState by viewModel.demoState.collectAsState()
+    LaunchedEffect(demoState) {
+        if (demoState is DemoSignInState.Succeeded) {
+            viewModel.consumeDemoResult()
+            onLoginSuccess()
+        }
+    }
+
     if (showFirstRun) {
         FirstRunScreen(viewModel = viewModel)
     } else {
@@ -410,8 +487,15 @@ fun LoginScreen(
 @Composable
 private fun FirstRunScreen(viewModel: LoginViewModel) {
     val connection by viewModel.connectionState.collectAsState()
+    val error by viewModel.error.collectAsState()
+    // Rendering only. Acting on DemoSignInState.Succeeded belongs to LoginScreen,
+    // which outlives this composable — see the note there.
+    val demoState by viewModel.demoState.collectAsState()
     var serverUrlEdit by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
+
+    val demoRunning = demoState is DemoSignInState.Running
+    val demoFailure = (demoState as? DemoSignInState.Failed)?.message
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -529,6 +613,65 @@ private fun FirstRunScreen(viewModel: LoginViewModel) {
                     Text(
                         stringResource(R.string.first_run_check_connection),
                         fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            // "Try the demo" (issue #147). Only in a build that was given all
+            // three demo settings — a clean clone has none of them, so nothing
+            // is rendered here and the screen is exactly what it was.
+            //
+            // Under "Check connection" on purpose: someone who has a server is
+            // one field and one tap from being done, and the demo is the answer
+            // to the *other* question — what a Play reviewer, or anyone who has
+            // never run a server, is supposed to do on this screen.
+            viewModel.demoAccount?.let {
+                OutlinedButton(
+                    onClick = viewModel::signInToDemo,
+                    enabled = !demoRunning && connection !is ConnectionState.Checking,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .height(52.dp),
+                ) {
+                    if (demoRunning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(
+                            stringResource(R.string.first_run_try_demo),
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.first_run_demo_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+
+            // Demo failures land here rather than in the address field's
+            // supporting text: nothing is wrong with what the user typed — they
+            // typed nothing — so marking that field as the error would be a lie.
+            (demoFailure ?: error)?.let { msg ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                ) {
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
