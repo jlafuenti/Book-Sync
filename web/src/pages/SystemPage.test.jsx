@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TranscriptionSettingsSection, ABSSettingsSection, HardcoverSettingsSection, BackupSection, DetailedBreakdown } from './SystemPage'
+import { roleMeets } from '../roles'
 
 // TranscriptionSettingsSection/ABSSettingsSection talk to the API directly
 // (no props), so mock the module they import from rather than mounting the
@@ -48,10 +49,13 @@ vi.mock('../api', async (importOriginal) => {
     }
 })
 
-const ROLE_HIERARCHY = { superadmin: 4, admin: 3, editor: 2, user: 1 }
+// The real comparison, not a copy of it: these mocks used to reimplement
+// `(ROLE_HIERARCHY[role] || 0) >= (ROLE_HIERARCHY[min] || 0)`, which is the
+// fail-open form, so a typo'd minimum behaved the same here as in the app
+// and the suite stayed green either way (issue #359).
 vi.mock('../contexts/AuthContext', () => ({
     useAuth: () => ({
-        hasMinRole: (min) => (ROLE_HIERARCHY[authRef.role] || 0) >= (ROLE_HIERARCHY[min] || 0),
+        hasMinRole: (min) => roleMeets(authRef.role, min),
     }),
 }))
 

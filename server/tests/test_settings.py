@@ -336,6 +336,73 @@ async def test_update_serializes_list_patterns(make_client, make_user, auth_head
     assert get.json()["ebook_filename_patterns"] == patterns
 
 
+# ---------------------------------------------------------------------------
+# Filename patterns are validated on save, not once per file at scan time
+# (issue #354).
+# ---------------------------------------------------------------------------
+
+async def test_a_repeated_placeholder_pattern_saves(make_client, make_user, auth_header):
+    """`<Author>/<Title>/<Title>` is an ordinary layout and used to throw on
+    every file. It is now a back-reference, and saving it is unremarkable."""
+    admin = await make_user(username="admin1", role="admin")
+    patterns = ["<Author>/<Title>/<Title>", "<Title>"]
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"ebook_filename_patterns": patterns})
+        assert put.status_code == 200
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+    assert get.json()["ebook_filename_patterns"] == patterns
+
+
+async def test_a_pattern_with_an_unknown_placeholder_is_refused(make_client, make_user, auth_header):
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"ebook_filename_patterns": ["<Author>/<Titel>"]})
+        assert put.status_code == 422
+        detail = put.json()["detail"]
+        assert "<Titel>" in detail
+        assert "ebook_filename_patterns" in detail
+
+        # And nothing was written: a rejected PUT is a no-op.
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+    assert get.json()["ebook_filename_patterns"] == settings_router.DEFAULT_SETTINGS[
+        "ebook_filename_patterns"
+    ]
+
+
+async def test_a_bad_audiobook_pattern_is_refused_too(make_client, make_user, auth_header):
+    """Both keys, not just the one that happened to be tested."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"audiobook_filename_patterns": ["<Narrator>/<Title>"]})
+    assert put.status_code == 422
+    assert "<Narrator>" in put.json()["detail"]
+
+
+async def test_a_bad_pattern_takes_the_rest_of_the_put_with_it(make_client, make_user, auth_header):
+    """Same rule as the off-hours window and the remote timeout above: reject
+    before writing, so the operator does not end up with half an edit."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"whisper_model": "large",
+                                "ebook_filename_patterns": ["<Nope>"]})
+        assert put.status_code == 422
+        get = await c.get("/api/settings/", headers=auth_header(admin))
+    assert get.json()["whisper_model"] == "medium"
+
+
+async def test_blank_lines_in_the_pattern_list_are_not_an_error(make_client, make_user, auth_header):
+    """The UI keeps patterns in one textarea; a trailing newline is a blank."""
+    admin = await make_user(username="admin1", role="admin")
+    async with make_client(settings_router.router) as c:
+        put = await c.put("/api/settings/", headers=auth_header(admin),
+                          json={"ebook_filename_patterns": ["<Title>", "", "<Author>/<Title>"]})
+    assert put.status_code == 200
+
+
 async def test_abs_api_token_routed_to_credential_store(make_client, make_user, auth_header, enc_key):
     admin = await make_user(username="admin1", role="admin")
     async with make_client(settings_router.router) as c:

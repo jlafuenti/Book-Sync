@@ -38,12 +38,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install the app deps EXCEPT the heavy transcription stack (torch,
-          # openai-whisper). The test suite is import-light: routers import those
-          # lazily, and the alignment tests only need numpy (pinned in
-          # requirements-dev.txt). This keeps CI fast.
-          grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
-          pip install -r /tmp/req-ci.txt -r requirements-dev.txt
+          # The heavy transcription stack (torch, openai-whisper) is not in
+          # requirements.txt — it lives in requirements-local.txt and is an
+          # opt-in build. The suite is import-light besides: routers import
+          # those lazily, and the alignment tests only need numpy (pinned in
+          # requirements-dev.txt). This used to filter requirements.txt through
+          # grep, which had been a no-op since the split (issue #240).
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
         # conftest points DATABASE_URL at a throwaway SQLite DB, so no Postgres
@@ -161,8 +162,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          grep -viE '^(torch|openai-whisper)' requirements.txt > /tmp/req-ci.txt
-          pip install -r /tmp/req-ci.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run migration tests (upgrade / downgrade / drift)
         env:

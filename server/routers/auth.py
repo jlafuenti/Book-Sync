@@ -297,10 +297,25 @@ async def get_current_user(
 
 
 def require_role(minimum_role: str):
-    """Factory that returns a FastAPI dependency requiring at least `minimum_role`."""
+    """Factory that returns a FastAPI dependency requiring at least `minimum_role`.
+
+    Raises `ValueError` for a floor that is not a real role (issue #359). The
+    check is here, in the factory, rather than in the dependency: the three
+    aliases below are built at import, so a typo is a startup crash the deploy
+    cannot get past. The old `ROLE_HIERARCHY.get(minimum_role, 0)` scored an
+    unrecognised floor as 0 and everybody clears 0 — `require_role("editorr")`
+    returned a working dependency that admitted plain users, with no log line
+    and no 500 to notice it by.
+    """
+    if minimum_role not in ROLE_HIERARCHY:
+        raise ValueError(
+            f"unknown role floor {minimum_role!r}; expected one of "
+            f"{sorted(ROLE_HIERARCHY)}"
+        )
+
     async def dependency(current_user: User = Depends(get_current_user)) -> User:
         user_level = ROLE_HIERARCHY.get(current_user.role, 0)
-        required_level = ROLE_HIERARCHY.get(minimum_role, 0)
+        required_level = ROLE_HIERARCHY[minimum_role]
         if user_level < required_level:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

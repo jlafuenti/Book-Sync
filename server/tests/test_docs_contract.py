@@ -494,3 +494,169 @@ def test_privacy_policy_names_no_real_host_or_private_address():
         + ". Write `<your-server>` or an example.com host — this file is "
         "published publicly and outlives any single deployment."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #240: docs/testing.md quoted coverage numbers that had drifted from the
+# files that enforce them.
+#
+# The Android floor was documented as 7% while the gradle file enforced 29 — a
+# contributor bumping the ratchet after a PR would have set the next floor far
+# below where it already was. It drifted again before this test existed (40 in
+# the doc, 45 in gradle). Prose that restates a number in a config file will
+# always drift; the fix is to make the drift fail the build.
+#
+# Each test below reads the enforcing file, not a constant, so the doc has to
+# follow the gate rather than the other way round.
+# ---------------------------------------------------------------------------
+
+_TESTING_DOC = os.path.join(_REPO_ROOT, "docs", "testing.md")
+_WORKFLOW = os.path.join(_REPO_ROOT, ".github", "workflows", "tests.yml")
+_ANDROID_GRADLE = os.path.join(_REPO_ROOT, "android", "app", "build.gradle.kts")
+_VITE_CONFIG = os.path.join(_REPO_ROOT, "web", "vite.config.js")
+
+
+def _read(path: str) -> str:
+    assert os.path.isfile(path), f"{path} is missing — repoint this test or restore the file"
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _testing_doc() -> str:
+    return _read(_TESTING_DOC)
+
+
+def test_testing_doc_quotes_current_android_floor():
+    """The Kover `minValue` and the "currently **N% lines**" in the doc agree."""
+    gradle = _read(_ANDROID_GRADLE)
+    match = re.search(r"minValue\s*=\s*(\d+)", gradle)
+    assert match, (
+        "no `minValue = N` in android/app/build.gradle.kts. If the Kover verify "
+        "block moved or was renamed, point this test at it."
+    )
+    floor = match.group(1)
+
+    quoted = re.findall(r"\*\*(\d+)% lines\*\*", _testing_doc())
+    assert quoted, (
+        "docs/testing.md no longer states the Android floor as `**N% lines**`. "
+        "Keep that spelling or update this test with the new one."
+    )
+    assert floor in quoted, (
+        f"android/app/build.gradle.kts enforces a {floor}% line floor, but "
+        f"docs/testing.md quotes {quoted}. Update the Android 'Coverage floor' "
+        "section — a contributor ratcheting from the documented number sets the "
+        "next floor below where it already is, which is how this was found."
+    )
+
+
+def test_testing_doc_quotes_current_web_thresholds():
+    """All four vitest thresholds, not just lines."""
+    config = _read(_VITE_CONFIG)
+    thresholds = {}
+    for metric in ("lines", "statements", "functions", "branches"):
+        match = re.search(rf"\b{metric}\s*:\s*(\d+)\s*,", config)
+        assert match, f"no `{metric}: N` threshold found in web/vite.config.js"
+        thresholds[metric] = match.group(1)
+
+    doc = _testing_doc()
+    for metric, value in thresholds.items():
+        assert f"{value}% {metric}" in doc, (
+            f"web/vite.config.js enforces {value}% {metric}, which docs/testing.md "
+            f"does not quote. The doc states the four thresholds as "
+            f"'N% lines / N% statements / N% functions / N% branches'."
+        )
+
+
+def test_testing_doc_quotes_the_server_coverage_floor():
+    workflow = _read(_WORKFLOW)
+    match = re.search(r"--cov-fail-under=(\d+)", workflow)
+    assert match, "no `--cov-fail-under=N` in .github/workflows/tests.yml"
+    floor = match.group(1)
+    assert f"**{floor}%**" in _testing_doc(), (
+        f"CI fails the build under {floor}% total coverage; docs/testing.md does "
+        f"not quote that number as `**{floor}%**`."
+    )
+
+
+# --- the diff-cover exclude list ------------------------------------------
+
+_DOC_EXCLUDE_HEADING = "### diff-cover exclude list"
+
+
+def _exclude_key(entry: str) -> str:
+    """Canonical form for one exclude glob, comparable across the two spellings.
+
+    The workflow writes `*/routers/files.py` (fnmatch against a full path) and
+    the doc writes `server/routers/files.py`, so neither prefix is common. The
+    trailing filename is, except for directory globs, where it is the directory
+    plus the `*`.
+    """
+    parts = [p for p in entry.strip().split("/") if p]
+    assert parts, f"empty exclude entry {entry!r}"
+    if parts[-1] == "*" and len(parts) >= 2:
+        return "/".join(parts[-2:])
+    return parts[-1]
+
+
+def _workflow_exclude_globs() -> set:
+    workflow = _read(_WORKFLOW)
+    # `--exclude` followed by a quote: the step's own comment mentions the flag
+    # by name a few lines earlier, and that prose contains quoted `'*'`.
+    flag = re.search(r"--exclude\s+'", workflow)
+    assert flag, "no `--exclude '…'` in the diff-cover step of tests.yml"
+    start = flag.start()
+    # The globs run to the `|| diff_exit=$?` that ends the diff-cover command.
+    end = workflow.find("|| diff_exit", start)
+    assert end != -1, "could not find the end of the diff-cover command"
+    return {
+        _exclude_key(g) for g in re.findall(r"'([^']+)'", workflow[start:end])
+    }
+
+
+def _doc_exclude_globs() -> set:
+    doc = _testing_doc()
+    start = doc.find(_DOC_EXCLUDE_HEADING)
+    assert start != -1, (
+        f"docs/testing.md no longer has a '{_DOC_EXCLUDE_HEADING}' section."
+    )
+    fence = doc.find("```", start)
+    assert fence != -1, "no fenced list under the diff-cover exclude heading"
+    body_start = doc.find("\n", fence) + 1
+    body_end = doc.find("```", body_start)
+    entries = set()
+    for line in doc[body_start:body_end].splitlines():
+        # Trailing `# why this is excluded` comments are documentation, not glob.
+        line = line.split("#", 1)[0].strip()
+        if line:
+            entries.add(_exclude_key(line))
+    return entries
+
+
+def test_diff_cover_exclude_list_matches_workflow():
+    """The doc says "keep this list in sync"; this is what keeps it.
+
+    Both directions matter. A module dropped from the workflow but left in the
+    doc reads as ungated when it is gated; the reverse silently exempts a module
+    from the 80% patch bar with nothing written down about why.
+    """
+    workflow = _workflow_exclude_globs()
+    doc = _doc_exclude_globs()
+    assert workflow, "parsed no globs out of the workflow — the step's shape changed"
+    assert doc == workflow, (
+        f"diff-cover exclude list drift.\n"
+        f"  only in docs/testing.md: {sorted(doc - workflow)}\n"
+        f"  only in .github/workflows/tests.yml: {sorted(workflow - doc)}"
+    )
+
+
+def test_ci_installs_requirements_without_filtering_them():
+    """Issue #240: CI filtered `torch|openai-whisper` out of requirements.txt long
+    after they moved to requirements-local.txt, while the doc called the filter a
+    no-op. One of the two had to go; the filter did. If the heavy stack ever moves
+    back into requirements.txt, this test is the reminder that the doc, the
+    workflow and the split all have to move together."""
+    assert "grep -viE" not in _read(_WORKFLOW), (
+        "tests.yml is filtering requirements.txt again. torch and openai-whisper "
+        "live in requirements-local.txt and are not installed by default, so the "
+        "filter matches nothing — see docs/testing.md."
+    )
