@@ -19,7 +19,7 @@ A complete, restorable deployment is three things:
 |------|----------------|--------------|
 | **Database** | Postgres volume `booksync_db` — positions, sync maps, pairs, users, *encrypted* credential rows | nightly `pg_dump` (custom format) |
 | **App data** | `./data` bind mount — `covers/` (regenerable but slow), `logs/`, `imports/` (throwaway) | nightly hardlink **snapshot** of `covers/` |
-| **Secrets** | `CREDENTIAL_ENC_KEYS`, `JWT_SECRET_KEY`, `POSTGRES_PASSWORD` — only in your gitignored `docker-compose.yml` | **you** (password manager — see below) |
+| **Secrets** | `credential_enc_keys`, `jwt_secret_key`, `postgres_password` — one value per file in the gitignored `secrets/` directory beside `docker-compose.yml` (see [operations.md](operations.md#secrets)) | **you** (password manager — see below) |
 
 **Not backed up (regenerable):** Whisper models, `node_modules`/build artifacts.
 
@@ -37,9 +37,13 @@ as out of scope for these backups.
 
 Store these in your password manager — they are **not** in the database dump:
 
-- [ ] `CREDENTIAL_ENC_KEYS` (all keys, in order — the first encrypts, all decrypt)
-- [ ] `JWT_SECRET_KEY`
-- [ ] `POSTGRES_PASSWORD`
+- [ ] `credential_enc_keys` (all keys, in order — the first encrypts, all decrypt)
+- [ ] `jwt_secret_key`
+- [ ] `postgres_password`
+
+The `secrets/` directory is deliberately outside the backup archive: an archive that carried both
+the encrypted rows and the key that decrypts them would not be encrypted at rest at all. Copy the
+values into your password manager by hand.
 
 ## The backup engine
 
@@ -168,8 +172,8 @@ docker compose restart server
 ## Test-restore drill (do this at least once)
 
 An untested backup is a hope, not a backup. Restore into a **scratch** compose stack (a
-copy of `docker-compose.yml` with different ports/volume names and the **same**
-`CREDENTIAL_ENC_KEYS` / `POSTGRES_PASSWORD`), then verify:
+copy of `docker-compose.yml` with different ports/volume names, pointed at a `secrets/`
+directory holding the **same** `credential_enc_keys` / `postgres_password` values), then verify:
 
 - [ ] Login works.
 - [ ] Reading/listening positions and history are intact.
