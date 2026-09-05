@@ -294,6 +294,11 @@ library conventions, transcription, Android and web-PWA guides, the operations a
 the testing policy, and the position-sync contract. Deploying the remote transcription worker is
 [jetson/README.md](jetson/README.md).
 
+**[Privacy policy](docs/privacy.md)** — what the apps send and to whom. Short version: Tandem is
+self-hosted, so the operator of the server you sign in to holds your data and we receive nothing;
+no ads, no analytics, no crash-reporting SDK. The one third party the Android app contacts is the
+dictionary service behind the reader's "Define" action, and only when you use it.
+
 ## Development & tests
 
 Tests run in CI on every push/PR. **Write a failing test first**, then make it pass.
