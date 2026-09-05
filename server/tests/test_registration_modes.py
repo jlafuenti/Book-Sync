@@ -503,3 +503,72 @@ async def test_invite_list_reports_status(client, db, make_user, auth_header):
     rows = (await client.get("/api/auth/invites", headers=auth_header(admin))).json()
     assert rows[0]["status"] == "used"
     assert rows[0]["used_by"] == "guest"
+
+
+# ---------------------------------------------------------------------------
+# 8. Settings validation and the coercion of stored rows
+#
+# Every one of these values arrives as text from a `system_settings` row that an
+# admin — or an earlier version of this app — wrote, so each has to survive
+# being wrong without taking registration down with it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "invite_expiry_days",
+        "registration_pending_max",
+        "registration_rate_limit",
+        "registration_rate_window_seconds",
+    ],
+)
+def test_validate_settings_rejects_a_non_number(key):
+    with pytest.raises(ValueError):
+        registration.validate_settings({key: "soon"})
+
+
+def test_validate_settings_rejects_a_limit_below_one():
+    with pytest.raises(ValueError):
+        registration.validate_settings({"registration_rate_limit": 0})
+
+
+def test_validate_settings_allows_a_pending_cap_of_zero():
+    """Zero is a real choice: hold the queue shut while still being `open` for
+    an invite the admin is about to issue."""
+    body = {"registration_pending_max": "0"}
+    registration.validate_settings(body)
+    assert body["registration_pending_max"] == 0
+
+
+def test_validate_settings_normalises_the_mode():
+    body = {"registration_mode": " INVITE "}
+    registration.validate_settings(body)
+    assert body["registration_mode"] == registration.MODE_INVITE
+
+
+async def test_a_garbage_mode_row_reads_as_the_default(db):
+    await _set_setting(db, "registration_mode", "sideways")
+    assert await registration.stored_mode(db) == registration.DEFAULTS["registration_mode"]
+
+
+async def test_a_garbage_number_row_reads_as_its_default(db):
+    await _set_setting(db, "registration_pending_max", "lots")
+    values = await registration.load(db)
+    assert values["registration_pending_max"] == (
+        registration.DEFAULTS["registration_pending_max"]
+    )
+
+
+async def test_seed_replaces_a_value_it_does_not_recognise(db, make_user):
+    await _set_setting(db, "registration_mode", "sideways")
+    await make_user(username="incumbent")
+    await registration.seed_mode(db)
+    assert await registration.stored_mode(db) == registration.MODE_OPEN
+
+
+async def test_invite_status_reports_expiry(db):
+    invite, _ = await _make_invite(db)
+    assert invite_service.status_of(invite) == "active"
+    invite.expires_at = utcnow() - timedelta(seconds=1)
+    assert invite_service.status_of(invite) == "expired"
+    assert "Invite" in repr(invite)
