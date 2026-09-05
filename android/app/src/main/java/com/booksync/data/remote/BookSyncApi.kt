@@ -116,6 +116,20 @@ interface BookSyncApi {
     @GET("api/library/audiobooks/{audiobookId}")
     suspend fun getAudiobookMetadata(@Path("audiobookId") audiobookId: Int): BookMetadataResponse
 
+    // ---- Single book, decoded into the same shape as the list endpoints ----
+    //
+    // Same two URLs as the metadata calls above; the server's detail schemas
+    // extend the list ones, so these decode the fields Room stores (filename,
+    // format, size, cover) rather than the description slice. Used to fill a
+    // cold cache for one book instead of walking the whole library — see
+    // BookSyncRepository.resolveAudiobookById (issue #338).
+
+    @GET("api/library/ebooks/{ebookId}")
+    suspend fun getEbook(@Path("ebookId") ebookId: Int): EBookResponse
+
+    @GET("api/library/audiobooks/{audiobookId}")
+    suspend fun getAudiobook(@Path("audiobookId") audiobookId: Int): AudioBookResponse
+
     @POST("api/library/scan")
     suspend fun scanLibrary(): Response<Unit>
 
