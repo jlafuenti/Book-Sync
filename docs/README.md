@@ -34,5 +34,6 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [releasing.md](releasing.md) | Cutting a release: version bump, tag, GitHub Release, deploy, and the rollback runbook |
 | [play-listing.md](play-listing.md) | Draft Play Store listing text — kept in the repo so it is reviewable — and the Data safety answers, including the `/account-deletion` link Play requires |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |

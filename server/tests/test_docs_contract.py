@@ -189,3 +189,212 @@ def test_claude_md_config_names_are_real_settings_aliases():
         "nothing at all and reports nothing. Use the `alias=` value from "
         "server/config.py."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #182: the README's environment tables are the only place most operators
+# look, and they had drifted from `server/config.py` in both directions — names
+# the server does not read, and settings it does read that nothing documented.
+# Same repo-contract shape as
+# `test_compose_contract.py::test_server_service_env_vars_are_settings_aliases`,
+# applied to the README instead of the compose template.
+# ---------------------------------------------------------------------------
+
+# A backticked, SCREAMING_SNAKE token — how every env var is written in the
+# first cell of the README's tables.
+_ENV_NAME_RE = re.compile(r"`([A-Z][A-Z0-9_]{2,})`")
+
+# README-documented names that are deliberately NOT fields on config.Settings.
+# One line of reason each; anything else is a typo or a stale row.
+_README_ENV_NOT_SETTINGS = {
+    "POSTGRES_PASSWORD": (
+        "compose interpolation, read from .env beside docker-compose.yml and "
+        "substituted into the db service and DATABASE_URL — the server process "
+        "never reads it"
+    ),
+}
+
+# Settings fields the README may leave undocumented, with the reason. Empty on
+# purpose: everything config.Settings reads is settable by an operator, so
+# everything belongs in a table. Adding an entry here is a decision to hide a
+# knob, not a way to skip writing a row.
+_UNDOCUMENTED_SETTINGS: dict[str, str] = {}
+
+
+def _readme_text() -> str:
+    with open(os.path.join(_REPO_ROOT, "README.md"), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _readme_table_env_names() -> set[str]:
+    """Env var names in the first cell of any markdown table row in README.md.
+
+    Only the first cell, so a variable merely *mentioned* in a description does
+    not count as documented — a row of its own is the point.
+    """
+    names: set[str] = set()
+    for line in _readme_text().splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        first_cell = stripped.strip("|").split("|")[0]
+        names.update(_ENV_NAME_RE.findall(first_cell))
+    return names
+
+
+def _settings_env_names() -> set[str]:
+    """Every env name config.Settings reads.
+
+    pydantic-settings resolves a field from its alias when it has one and from
+    the (case-insensitive) field name when it does not, so `jwt_algorithm` is
+    genuinely settable as `JWT_ALGORITHM` even with no alias declared.
+    """
+    from config import Settings
+
+    return {
+        (field.alias or name).upper()
+        for name, field in Settings.model_fields.items()
+    }
+
+
+def test_readme_env_parser_finds_the_tables():
+    """Guard the parser: a silently-empty parse makes both tests below vacuous."""
+    names = _readme_table_env_names()
+    assert {"JWT_SECRET_KEY", "CORS_ORIGINS", "BACKUPS_DIR"} <= names, (
+        f"README env-table parser found {sorted(names)} — it is not reading the "
+        "environment tables any more. Fix the parser or the table format."
+    )
+
+
+def test_readme_documents_only_variables_the_server_reads():
+    """A name in the table that is not a setting is a lie the operator acts on."""
+    unknown = sorted(
+        _readme_table_env_names()
+        - _settings_env_names()
+        - set(_README_ENV_NOT_SETTINGS)
+    )
+    assert not unknown, (
+        f"README.md documents {unknown}, but they are neither aliases nor field "
+        "names on config.Settings — the server would ignore them. Fix the name, "
+        "drop the row, or add it to _README_ENV_NOT_SETTINGS with a reason."
+    )
+
+
+def test_readme_documents_every_setting_the_server_reads():
+    """The reverse: an undocumented setting is a knob nobody can find."""
+    missing = sorted(
+        _settings_env_names()
+        - _readme_table_env_names()
+        - set(_UNDOCUMENTED_SETTINGS)
+    )
+    assert not missing, (
+        f"config.Settings reads {missing}, but README.md has no table row for "
+        "them. Add a row (name in backticks in the first cell), or delete the "
+        "setting if nothing reads it."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #186: no changelog, and the release version is written out by hand in
+# three files. Single-sourcing it would mean a build step in each of three
+# toolchains; pinning the three literals equal costs one test and fails on the
+# first unsynchronised bump, which is the whole risk.
+# ---------------------------------------------------------------------------
+
+_CHANGELOG_REL = "CHANGELOG.md"
+_VERSION_NAME_RE = re.compile(r'versionName\s*=\s*"([^"]+)"')
+
+
+def _changelog_text() -> str:
+    path = os.path.join(_REPO_ROOT, _CHANGELOG_REL)
+    assert os.path.isfile(path), (
+        "CHANGELOG.md is missing from the repo root. It is what a bug reporter "
+        "and a self-hoster read to find out what changed between two versions — "
+        "see docs/releasing.md."
+    )
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _app_version() -> str:
+    from version import APP_VERSION
+
+    return APP_VERSION
+
+
+def _web_version() -> str:
+    import json
+
+    with open(
+        os.path.join(_REPO_ROOT, "web", "package.json"), encoding="utf-8"
+    ) as fh:
+        return json.load(fh)["version"]
+
+
+def _android_version_name() -> str:
+    path = os.path.join(_REPO_ROOT, "android", "app", "build.gradle.kts")
+    with open(path, encoding="utf-8") as fh:
+        match = _VERSION_NAME_RE.search(fh.read())
+    assert match, f'no `versionName = "..."` found in {path}'
+    return match.group(1)
+
+
+def test_the_three_version_strings_agree():
+    """server/version.py, web/package.json and build.gradle.kts must match.
+
+    They are bumped by hand, in that order, per docs/releasing.md. Nothing
+    derives one from another, so this test *is* the wiring: it fails the moment
+    a release bumps two of the three, which is how a server would otherwise end
+    up reporting a version no client build ever had.
+    """
+    versions = {
+        "server/version.py APP_VERSION": _app_version(),
+        "web/package.json version": _web_version(),
+        "android/app/build.gradle.kts versionName": _android_version_name(),
+    }
+    assert len(set(versions.values())) == 1, (
+        f"Release version strings disagree: {versions}. Bump all three (see "
+        "docs/releasing.md, 'Bump the version') — they are one release number, "
+        "written out three times because no build step shares them."
+    )
+
+
+def test_changelog_has_an_unreleased_section():
+    """Keep a Changelog's `## [Unreleased]` is where work lands between tags."""
+    assert "## [Unreleased]" in _changelog_text(), (
+        "CHANGELOG.md has no `## [Unreleased]` section. Merged work is recorded "
+        "there and renamed to the version heading at release time."
+    )
+
+
+def test_changelog_records_the_current_version():
+    """The version the server advertises must have a changelog entry."""
+    version = _app_version()
+    assert f"## [{version}]" in _changelog_text(), (
+        f"CHANGELOG.md has no `## [{version}]` heading, but that is the version "
+        "server/version.py advertises. Rename the Unreleased section when you "
+        "cut the release (docs/releasing.md)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #185: the README gained a screenshots section. The images themselves are
+# pending, so this passes vacuously today and starts biting the moment someone
+# embeds one — a broken image on the front page of a public repo.
+# ---------------------------------------------------------------------------
+
+_IMAGE_EMBED_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
+
+
+def test_readme_image_embeds_resolve():
+    broken = [
+        target
+        for target in _IMAGE_EMBED_RE.findall(_readme_text())
+        if not target.startswith(("http://", "https://"))
+        and not os.path.exists(os.path.join(_REPO_ROOT, *target.split("/")))
+    ]
+    assert not broken, (
+        f"README.md embeds images that do not exist: {broken}. Commit the file "
+        "under docs/images/ (the .gitignore `*.png` rule has an exception for "
+        "that folder) or describe the screenshot instead of linking it."
+    )

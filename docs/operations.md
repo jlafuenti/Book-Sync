@@ -49,6 +49,14 @@ the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` �
 ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
 them. See [import-sources.md](import-sources.md).
 
+### Rolling back
+
+**Take a manual backup (System → Backups) before every upgrade** — it is what makes the last
+resort possible. To undo one, check out the previous tag and rebuild; if the upgrade ran a
+migration, downgrade the schema or restore the pre-upgrade dump. The full procedure, including how
+to find the Alembic revision the old code expects, is in [releasing.md](releasing.md), "Rolling
+back".
+
 ## Client support window
 
 The Android app is distributed through Play, so it updates on each user's schedule while this

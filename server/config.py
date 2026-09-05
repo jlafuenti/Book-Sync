@@ -133,9 +133,11 @@ class Settings(BaseSettings):
     # so rotation is "prepend a new key" with no migration step.
     credential_enc_keys: str = Field(default="", alias="CREDENTIAL_ENC_KEYS")
 
-    # Server
-    server_host: str = "0.0.0.0"
-    server_port: int = 8000
+    # No `server_host` / `server_port` here on purpose (issue #182): nothing
+    # outside this file ever read them. The listen address is uvicorn's, fixed
+    # on its command line in `server/entrypoint.sh`
+    # (`--host 0.0.0.0 --port 8000`) and remapped by the compose port binding,
+    # so a setting of the same name only advertised a knob that did nothing.
 
     # CORS — comma-separated list of allowed origins; defaults to wildcard for dev
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
