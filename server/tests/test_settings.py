@@ -78,7 +78,7 @@ async def test_get_settings_returns_defaults(make_client, make_user, auth_header
 # credential beyond "an admin set one".
 # ---------------------------------------------------------------------------
 
-PLAIN_USER_KEYS = {"abs_enabled", "hardcover_configured"}
+PLAIN_USER_KEYS = {"abs_enabled", "hardcover_configured", "registration_mode"}
 
 
 @pytest.mark.parametrize("role", ["user", "editor"])

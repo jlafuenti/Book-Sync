@@ -71,6 +71,19 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
+async def seed_registration_mode():
+    """Give a database its first `registration_mode` (issue #210).
+
+    Thin wrapper so the lifespan has one import site for both seeds. The rule —
+    `open` where users already exist, `invite` on a fresh install — and the
+    reasoning live in services/registration.seed_mode.
+    """
+    from services.registration import seed_mode
+
+    async with async_session() as session:
+        return await seed_mode(session)
+
+
 async def bootstrap_superadmin():
     """Create default superadmin account if no users exist, or promote first admin."""
     import logging

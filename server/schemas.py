@@ -77,6 +77,57 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: EmailStr
     password: str = password_field()
+    # Issue #210. Optional in the schema and required only by the *server's*
+    # mode: a client that predates invites still submits a valid body against an
+    # `open` server, and one that sends a code to an `open` server is not an
+    # error either — the code is simply ignored. Bounded so a megabyte of
+    # "code" cannot be pushed through the hash on an unauthenticated route.
+    invite_code: Optional[str] = Field(default=None, max_length=200)
+
+
+class RegistrationResponse(BaseModel):
+    """The one answer `POST /api/auth/register` ever gives (issue #210).
+
+    Accepted, duplicate username, duplicate email, missing invite code, wrong
+    invite code, spent invite code, pending queue full — all of them return this
+    same body with the same 201, because anything else is an oracle for which
+    accounts exist. The admin sees the truth in the pending list; the caller
+    sees only that a request was received.
+    """
+
+    message: str
+
+
+class RegistrationModeResponse(BaseModel):
+    """`GET /api/auth/registration` — unauthenticated, and deliberately one
+    field. The login screens need to know whether to show a request form, an
+    invite-code box, or nothing at all, and they ask before anyone has a token.
+    Nothing else about the server's configuration belongs in a reply a stranger
+    can read."""
+
+    mode: str
+
+
+class InviteResponse(BaseModel):
+    """One invite, as the admin list shows it. **No code** — the row does not
+    hold one (only its hash), and the plaintext existed for exactly one
+    response."""
+
+    id: int
+    created_at: datetime
+    expires_at: datetime
+    used_at: Optional[datetime] = None
+    #: "active" | "used" | "expired"
+    status: str
+    #: Usernames rather than ids: this is a list a human reads.
+    created_by: Optional[str] = None
+    used_by: Optional[str] = None
+
+
+class InviteCreateResponse(InviteResponse):
+    """The create response, and the only place a code is ever returned."""
+
+    code: str
 
 
 class UserLogin(BaseModel):
