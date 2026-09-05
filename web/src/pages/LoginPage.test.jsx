@@ -6,22 +6,28 @@ import LoginPage from './LoginPage'
 // had no test at all (2.54 % lines, 0 functions in the coverage baseline), so a
 // regression that locks everyone out would have shipped green.
 
-const { loginMock, registerMock, getMeMock } = vi.hoisted(() => ({
+const { loginMock, registerMock, getMeMock, getRegistrationModeMock } = vi.hoisted(() => ({
     loginMock: vi.fn(),
     registerMock: vi.fn(),
     getMeMock: vi.fn(),
+    getRegistrationModeMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
     login: loginMock,
     register: registerMock,
     getMe: getMeMock,
+    // Issue #210: the page asks the server which registration mode it is in
+    // before deciding what to offer. 'open' is the behaviour these tests pin.
+    getRegistrationMode: getRegistrationModeMock,
 }))
 
 beforeEach(() => {
     loginMock.mockReset()
     registerMock.mockReset()
     getMeMock.mockReset()
+    getRegistrationModeMock.mockReset()
+    getRegistrationModeMock.mockResolvedValue('open')
 })
 
 function fillAndSubmit({ username = 'alice', password = 'hunter2', email } = {}) {
