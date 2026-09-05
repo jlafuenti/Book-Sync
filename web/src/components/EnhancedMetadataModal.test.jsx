@@ -72,3 +72,25 @@ describe('EnhancedMetadataModal enrich from ABS', () => {
         await waitFor(() => expect(onClose).toHaveBeenCalled())
     })
 })
+
+// Issue #279: adopted the shared Modal primitive. This dialog sits over an
+// unsaved form, so backdrop click stays disabled — it never closed that way.
+describe('EnhancedMetadataModal dialog semantics (issue #279)', () => {
+    it('is a labelled dialog that closes on Escape but not on backdrop click', () => {
+        const onClose = vi.fn()
+        const { container } = render(
+            <EnhancedMetadataModal book={book} type="ebook" onClose={onClose} onSave={vi.fn()} />,
+        )
+
+        const dialog = screen.getByRole('dialog')
+        expect(dialog).toHaveAttribute('aria-modal', 'true')
+        expect(dialog).toHaveAccessibleName('Edit Ebook')
+        expect(dialog).toHaveClass('modal', 'modal-xl')
+
+        fireEvent.click(container.querySelector('.modal-overlay'))
+        expect(onClose).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(onClose).toHaveBeenCalledTimes(1)
+    })
+})

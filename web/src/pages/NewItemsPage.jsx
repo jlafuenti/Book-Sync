@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { getNewItems, acknowledgeNewItems, uploadEbookCover, uploadAudiobookCover, updateEbookMetadata, updateAudiobookMetadata } from '../api'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
 import { useAuth } from '../contexts/AuthContext'
+import useListFetch from '../hooks/useListFetch'
 // Server timestamps are naive UTC — parse via the shared helper (issue #216).
 import { formatDate } from '../lib/datetime'
 
@@ -82,11 +83,6 @@ export default function NewItemsPage() {
     const { hasMinRole } = useAuth()
     const canEdit = hasMinRole('editor')
 
-    const [ebooks, setEbooks] = useState([])
-    const [audiobooks, setAudiobooks] = useState([])
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState(null)
-
     const [selected, setSelected] = useState(new Set())
 
     const [ebooksCollapsed, setEbooksCollapsed] = useState(false)
@@ -98,22 +94,18 @@ export default function NewItemsPage() {
     const audiobooksRef = useRef(null)
     const lastClickedRef = useRef(null)
 
-    const load = useCallback(async () => {
-        try {
-            setLoading(true)
-            const data = await getNewItems()
-            setEbooks(data.ebooks || [])
-            setAudiobooks(data.audiobooks || [])
-            setSelected(new Set())
-            lastClickedRef.current = null
-        } catch (e) {
-            setError(e.message)
-        } finally {
-            setLoading(false)
-        }
-    }, [])
-
-    useEffect(() => { load() }, [load])
+    // Issue #276: the loading/error/load() triple is the shared hook now.
+    const { data, loading, error, reload: load } = useListFetch(
+        useCallback(() => getNewItems(), []),
+        {
+            onLoaded: useCallback(() => {
+                setSelected(new Set())
+                lastClickedRef.current = null
+            }, []),
+        },
+    )
+    const ebooks = data?.ebooks || []
+    const audiobooks = data?.audiobooks || []
 
     const allKeys = [
         ...ebooks.map(e => `ebook:${e.id}`),

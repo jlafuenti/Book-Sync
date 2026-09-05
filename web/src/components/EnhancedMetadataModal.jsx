@@ -3,6 +3,7 @@ import { uploadEbookCover, uploadAudiobookCover, applyRemoteCover, rescanBook, e
 import ChapterEditor from './ChapterEditor';
 import MatchTab from './MatchTab';
 import { formatDateTime } from '../lib/datetime';
+import Modal from './Modal';
 
 function formatBytes(bytes) {
     if (!bytes) return '—'
@@ -201,10 +202,14 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
     const isAudiobook = type === 'audiobook';
 
     return (
-        <div className="modal-overlay">
-            <div className="modal modal-xl">
+        <Modal
+            onClose={onClose}
+            labelledBy="enhanced-metadata-title"
+            className="modal modal-xl"
+            closeOnBackdrop={false}
+        >
                 <div className="modal-header">
-                    <h3>Edit {isAudiobook ? 'Audiobook' : 'Ebook'}</h3>
+                    <h3 id="enhanced-metadata-title">Edit {isAudiobook ? 'Audiobook' : 'Ebook'}</h3>
                     <button className="btn btn-secondary" onClick={onClose} type="button" style={{ padding: '6px 12px', fontSize: '1rem', lineHeight: 1 }}>✕ Close</button>
                 </div>
 
@@ -391,7 +396,6 @@ export default function EnhancedMetadataModal({ book, type, onClose, onSave, ini
                         )}
                     </div>
                 </div>
-            </div>
-        </div>
+        </Modal>
     );
 }
