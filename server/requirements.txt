@@ -4,11 +4,11 @@ fastapi==0.141.1
 # request.form() max_files/max_fields bounds landed by 1.3.1). See issue #157.
 starlette==1.6.0
 uvicorn[standard]==0.52.4
-sqlalchemy[asyncio]==2.0.35
-asyncpg==0.30.0
-alembic==1.13.0
+sqlalchemy[asyncio]==2.0.52
+asyncpg==0.31.0
+alembic==1.19.1
 # Sync driver used only by Alembic migrations (the app itself uses asyncpg).
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.12
 # PyJWT replaced python-jose (issue #157): same HS256 usage, and it drops the
 # transitive `ecdsa` dependency whose Minerva timing advisory (CVE-2024-23342)
 # has no fixed release and would otherwise need a permanent pip-audit ignore.
@@ -25,7 +25,7 @@ aiofiles==24.1.0
 # (Jetson) worker.
 numpy>=1.26,<2
 tqdm>=4.66
-ebooklib==0.18
+ebooklib==0.20
 # Pinned deliberately, though both arrive transitively (issue #265). EPUB/OPF
 # parsing relies on lxml >= 5 defaulting to resolve_entities='internal', and
 # defusedxml is now imported directly for the stdlib XML call sites. A dependency
@@ -33,19 +33,19 @@ ebooklib==0.18
 # to pick: libxml2 already drifted 2.11.9 -> 2.14.6 under us while unpinned.
 lxml==6.1.2
 defusedxml==0.7.1
-mobi==0.3.3
-beautifulsoup4==4.12.3
-mutagen==1.47.0
+mobi==0.4.1
+beautifulsoup4==4.15.0
+mutagen==1.48.1
 nltk==3.10.3
-rapidfuzz==3.10.0
-pydantic[email]==2.9.0
-pydantic-settings==2.5.0
-httpx==0.27.0
+rapidfuzz==3.14.6
+pydantic[email]==2.13.5
+pydantic-settings==2.15.0
+httpx==0.28.1
 markdownify==1.2.3
-slowapi==0.1.9
-audible==0.10.0
+slowapi==0.1.10
+audible==0.12.0
 audible-cli>=0.3.0,<1.0
-cryptography==50.0.0
+cryptography==50.0.1
 # zoneinfo needs an IANA database. Linux images usually ship one, Windows never
 # does, and python:*-slim can't be relied on — pin it so the off-hours
 # transcription window (services/offhours.py) resolves zones identically
