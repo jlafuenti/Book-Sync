@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read the **Non-goals** section of
+        [CONTRIBUTING.md](https://github.com/jlafuenti/Book-Sync/blob/main/CONTRIBUTING.md#non-goals)
+        first — multi-file audiobooks, iOS and DRM circumvention are declined on
+        purpose, and so is multi-tenant hosting.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server (FastAPI / database)
+        - Web app
+        - Android app
+        - Transcription worker (Jetson)
+        - Setup / deployment
+        - Cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What are you trying to do, and what makes it awkward today? Describe the
+        situation rather than the solution — the fix is often not the one you
+        would have asked for.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: The change you are proposing, roughly. Sketches and UI notes welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "do nothing" — say why the current workaround is not enough.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: This is not on the non-goals list.
+          required: true

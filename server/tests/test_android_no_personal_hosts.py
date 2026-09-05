@@ -34,7 +34,7 @@ import re
 
 import pytest
 
-from tests.test_repo_hygiene import PERSONAL_DOMAIN
+from tests.personal_identifiers import PERSONAL_DOMAIN
 
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPO_ROOT = os.path.dirname(_SERVER_DIR)

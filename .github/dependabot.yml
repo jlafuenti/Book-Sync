@@ -1,0 +1,68 @@
+version: 2
+
+# Dependency updates (issue #189). Four manifests live in this repo and each one
+# ships code: the server's pip requirements, the web app's npm tree, the Android
+# Gradle catalog, and the actions CI runs. Nothing here told the maintainer when
+# one of them picked up a published advisory.
+#
+# Weekly and grouped on purpose: a routine week should be one PR per ecosystem,
+# not twenty. Security updates are exempt from the group cap and still arrive on
+# their own as soon as GitHub knows about them.
+#
+# This file only opens PRs. Turn on Dependabot alerts and security updates in
+# Settings -> Code security, or the security half of this never fires.
+updates:
+  - package-ecosystem: "pip"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      server-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # The transcription worker's own requirements. Not in the same group as the
+  # server: it runs on different hardware and is upgraded independently.
+  - package-ecosystem: "pip"
+    directory: "/jetson"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      jetson-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gradle"
+    directory: "/android"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      android-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # Keeps the SHA pins in .github/workflows/ current. Without this, pinning to a
+  # commit means the actions silently stop receiving upstream fixes — the pins
+  # and this ecosystem are one mechanism, not two.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        update-types: ["minor", "patch"]

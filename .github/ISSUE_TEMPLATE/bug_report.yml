@@ -1,0 +1,87 @@
+name: Bug report
+description: Something is broken or behaves differently from what the docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** use this form for a security
+        vulnerability — use the private advisory form linked on the "New issue"
+        page instead, so a live bug is not disclosed publicly.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where does it happen? Pick the closest one.
+      options:
+        - Server (FastAPI / database)
+        - Web app
+        - Android app
+        - Transcription worker (Jetson)
+        - Setup / deployment (Docker, migrations, config)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: >-
+        The release tag you are running, or the output of `git rev-parse --short HEAD`.
+        "latest main" is not specific enough to reproduce against.
+      placeholder: "v0.4.1, or 380426b"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        Numbered steps someone else can follow. If it depends on a particular
+        book, say what is unusual about it (format, chapter structure, length) —
+        without attaching the file.
+      placeholder: |
+        1. Upload an EPUB and its audiobook
+        2. Pair them and start a transcription
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >-
+        Server logs (`docker compose logs server`), the browser console, or
+        `adb logcat` output. **Redact tokens, passwords and hostnames first** —
+        this is a public issue.
+      render: text
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >-
+        How you run it (Docker Compose, bare uvicorn), the host OS, and — for the
+        Android app — the device and Android version. Add the browser for a web bug.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is not a security vulnerability (those go through the private advisory form).
+          required: true
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true

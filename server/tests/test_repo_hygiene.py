@@ -332,9 +332,9 @@ def test_env_example_templates_stay_committable(path):
 # out would be publishing the identifier it exists to remove.
 # ---------------------------------------------------------------------------
 
-# The owner's LAN-only domain. Also imported by
-# `test_android_no_personal_hosts.py` so the two guards cannot disagree.
-PERSONAL_DOMAIN = "lafuenti" + ".com"
+# The owner's LAN-only domain, shared with `test_android_no_personal_hosts.py`
+# through `tests/personal_identifiers.py` so the two guards cannot disagree.
+from tests.personal_identifiers import PERSONAL_DOMAIN  # noqa: E402
 
 _PERSONAL_PATTERNS = {
     "the owner's private domain": re.compile(
@@ -441,3 +441,251 @@ def test_personal_identifier_detectors_match_what_they_are_meant_to_catch(sample
 )
 def test_personal_identifier_detectors_leave_legitimate_text_alone(sample):
     assert scan_for_personal_identifiers(sample) == [], f"false positive: {sample!r}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #189: the personal-data guard, widened to the whole repository.
+#
+# `test_android_no_personal_hosts.py` has walked `android/app/**` since issue
+# #58 and never grew past it: docs, server, web, CI config and the agent
+# guidance files were all out of scope, which is where every repo-level leak
+# found in the pre-publication review actually sat. The detectors were the good
+# part; the walk was the gap. So this reuses them verbatim -- one set of
+# regexes, hardened by that file's own tests (#311) -- and points them at every
+# tracked text file instead of one directory.
+#
+# Once the repo is public a regression here is a published one, and git history
+# makes it permanent.
+# ---------------------------------------------------------------------------
+
+import re  # noqa: E402  (kept next to the block that uses it)
+
+from tests.test_android_no_personal_hosts import (  # noqa: E402
+    ALLOWED_LITERALS,
+    _PERSONAL_HOST,
+    _PRIVATE_IP,
+)
+
+try:  # comment-aware stripping was dropped from the Android guard in #372
+    from tests.test_android_no_personal_hosts import strip_comments  # noqa: E402
+except ImportError:  # pragma: no cover - depends on the sibling guard's shape
+    def strip_comments(text: str, suffix: str) -> str:  # noqa: D401
+        """No comment stripping: scan every file raw (stricter, not looser)."""
+        return text
+
+# Rule name -> detector. The first two are imported above rather than restated:
+# a second copy of a regex is a second copy to keep correct, and #311 was
+# exactly a detector that had quietly stopped matching.
+_PERSONAL_DATA_RULES = {
+    "private_ip": _PRIVATE_IP,
+    "personal_host": _PERSONAL_HOST,
+    # The maintainer's own deployment layout: useless to anyone else, and a free
+    # map of the host for anyone else.
+    "deploy_path": re.compile(r"/usr/share/docker-" + r"containers"),
+    # SSH aliases that only resolve inside the maintainer's own config.
+    "ssh_alias": re.compile(r"\bssh-(?:docker|orin)\b"),
+    # A physical device serial (`adb -s <serial>`), which identifies one phone.
+    "device_serial": re.compile(r"\badb\s+(?:-s|--serial)\s+\S+"),
+    # A developer's home directory, the usual way an absolute local path leaks
+    # into a doc or a script.
+    "windows_home": re.compile(r"[A-Za-z]:\\Users\\[^\\\s\"'`]+"),
+}
+
+# Comment stripping is only meaningful for the languages the Android guard knows
+# how to parse, and its deliberate "prose describing history is not a baked-in
+# host" exemption applies to those. Everything else is scanned raw: a private
+# address in a Markdown paragraph or a YAML comment is still published.
+_COMMENT_AWARE_SUFFIXES = {".kt", ".kts", ".xml", ".pro"}
+
+# Binary shapes: scanning them yields mojibake, not findings. Anything not on
+# this list is still sniffed for a NUL byte below, so an unknown binary format
+# does not need a code change to be skipped.
+_BINARY_SUFFIXES = (
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".svgz", ".pdf", ".zip",
+    ".jar", ".aar", ".so", ".dll", ".exe", ".ttf", ".otf", ".woff", ".woff2",
+    ".mp3", ".m4a", ".m4b", ".wav", ".epub", ".mobi", ".azw3", ".keystore",
+    ".jks", ".p12", ".der", ".bin",
+)
+
+_SKIPPED_PATHS = {
+    # Machine-local credentials file. Gitignored, so it should never appear in
+    # the tracked list at all -- named here so that if it ever is committed, the
+    # failure is the hygiene test that catches tracked secrets rather than a
+    # confusing pile of hits from this one.
+    "CLAUDE.local.md",
+    # Generated, enormous, and full of registry hashes that look like nothing
+    # this guard is looking for.
+    "web/package-lock.json",
+}
+
+# (path, rule) -> why this file is allowed to trip that rule. Deliberately keyed
+# by rule and not by literal: an allow-listed file is still scanned by every
+# other rule, and no entry here has to spell out the very string the guard
+# exists to keep out of the repo.
+_PERSONAL_DATA_ALLOWLIST = {
+    # -- Documented examples. RFC1918 addresses are the correct thing to write
+    # in a self-hosting guide; these are illustrations, not anyone's network.
+    ("docker-compose.example.yml", "private_ip"): "example subnet in a template",
+    ("docs/android.md", "private_ip"): "documented example LAN address",
+    ("docs/operations.md", "private_ip"): "documented example subnet",
+    # -- Production code whose subject *is* the address ranges.
+    ("server/services/url_safety.py", "private_ip"): (
+        "the SSRF blocklist: these ranges are the thing it refuses to fetch"
+    ),
+    ("web/src/pages/SystemPage.jsx", "private_ip"): "placeholder in a form field",
+    # -- Synthetic test inputs. Every one is a made-up address chosen to
+    # exercise a code path; see the note in test_android_no_personal_hosts.py
+    # about keeping such samples fictional.
+    ("server/tests/test_abs_metadata.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_audit_retention.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_auth.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_match_apply_cover.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_settings.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_startup.py", "private_ip"): "synthetic test input",
+    ("server/tests/test_url_safety.py", "private_ip"): "synthetic test input",
+    ("web/src/api.test.js", "private_ip"): "synthetic test input",
+    ("web/src/pages/SystemPage.test.jsx", "private_ip"): "synthetic test input",
+    ("web/src/pages/UserManagementPage.auditlog.test.jsx", "private_ip"): (
+        "synthetic test input"
+    ),
+    # -- The guards themselves. Their detectors cannot be tested without
+    # fixtures shaped like the thing they detect.
+    ("server/tests/test_android_no_personal_hosts.py", "private_ip"): (
+        "the detector's own fixtures"
+    ),
+    ("server/tests/test_android_no_personal_hosts.py", "personal_host"): (
+        "the detector's own fixtures, plus the legacy hostname it migrates away from"
+    ),
+    ("server/tests/test_repo_hygiene.py", "deploy_path"): "the rule's own pattern",
+    ("server/tests/test_repo_hygiene.py", "ssh_alias"): "the rule's own fixtures",
+    ("server/tests/test_repo_hygiene.py", "device_serial"): "the rule's own fixtures",
+    ("server/tests/test_repo_hygiene.py", "windows_home"): "the rule's own fixtures",
+}
+
+
+def _looks_binary(raw: bytes) -> bool:
+    return b"\x00" in raw[:8192]
+
+
+def _scannable_tracked_files() -> list[str]:
+    """Tracked repo-relative paths this guard reads. Binaries excluded."""
+    paths = []
+    for path in _git_ls_files():
+        if path in _SKIPPED_PATHS or path.endswith(_BINARY_SUFFIXES):
+            continue
+        abs_path = os.path.join(_REPO_ROOT, *path.split("/"))
+        try:
+            with open(abs_path, "rb") as fh:
+                head = fh.read(8192)
+        except OSError:
+            continue  # tracked but missing on disk (sparse/partial checkout)
+        if _looks_binary(head):
+            continue
+        paths.append(path)
+    return paths
+
+
+def _personal_data_hits(text: str, suffix: str) -> list[tuple[int, str, str]]:
+    """(line number, rule, literal) for every detector hit that isn't allowed."""
+    if suffix in _COMMENT_AWARE_SUFFIXES:
+        text = strip_comments(text, suffix)
+    hits = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for rule, pattern in _PERSONAL_DATA_RULES.items():
+            for match in pattern.finditer(line):
+                literal = match.group(0)
+                if literal in ALLOWED_LITERALS:
+                    continue
+                hits.append((lineno, rule, literal))
+    return hits
+
+
+def test_no_personal_data_in_any_tracked_file():
+    offenders = []
+    for path in _scannable_tracked_files():
+        abs_path = os.path.join(_REPO_ROOT, *path.split("/"))
+        with open(abs_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        suffix = os.path.splitext(path)[1]
+        for lineno, rule, literal in _personal_data_hits(text, suffix):
+            if (path, rule) in _PERSONAL_DATA_ALLOWLIST:
+                continue
+            offenders.append(f"  {path}:{lineno} [{rule}] -> {literal}")
+    assert not offenders, (
+        "Personal or private details in tracked files. This repo is going "
+        "public: a private address, a personal hostname, a deployment path or a "
+        "device serial committed here is published and stays in the history.\n"
+        + "\n".join(offenders)
+        + "\n\nRemove them, or -- if the literal is genuinely a documented "
+        "example or a synthetic test input -- add a (path, rule) entry to "
+        "_PERSONAL_DATA_ALLOWLIST with a one-line reason."
+    )
+
+
+def test_the_scan_reaches_docs_and_ci_config():
+    """The widening is the whole point of #189, so assert the walk is wide.
+
+    A guard that silently stops covering something keeps passing, which is how
+    the Android-only version sat here looking like a repo-wide gate.
+    """
+    scanned = set(_scannable_tracked_files())
+    assert "CLAUDE.md" in scanned
+    assert "README.md" in scanned
+    assert any(p.startswith("docs/") and p.endswith(".md") for p in scanned), (
+        "no docs/*.md reached the scan"
+    )
+    assert any(p.startswith(".github/workflows/") for p in scanned), (
+        "no CI workflow reached the scan"
+    )
+    assert any(p.startswith("server/") and p.endswith(".py") for p in scanned)
+    assert any(p.startswith("web/src/") for p in scanned)
+    assert any(p.startswith("android/") for p in scanned)
+    assert len(scanned) > 300, f"only {len(scanned)} files reached the scan"
+
+
+def test_binary_and_local_files_are_excluded_from_the_scan():
+    scanned = set(_scannable_tracked_files())
+    assert "CLAUDE.local.md" not in scanned, (
+        "the machine-local credentials file must never be scanned -- or tracked"
+    )
+    assert "web/package-lock.json" not in scanned
+    assert not any(p.endswith(_BINARY_SUFFIXES) for p in scanned), (
+        "a binary file reached the scan; it would produce mojibake, not findings"
+    )
+
+
+def test_a_nul_byte_marks_a_file_binary():
+    """The sniff, not the suffix list, is what catches an unknown binary format."""
+    assert _looks_binary(b"PK\x03\x04\x00\x00stuff")
+    assert not _looks_binary(b"plain text, no NUL here\n")
+
+
+# Synthetic fixtures for the rules this file adds. The two imported detectors
+# are already exercised in test_android_no_personal_hosts.py; these four are
+# new, and a rule that silently matches nothing is worse than no rule -- it
+# reads like coverage.
+@pytest.mark.parametrize(
+    "rule,sample",
+    [
+        ("deploy_path", "cd /usr/share/docker-" + "containers/Some-Project"),
+        ("ssh_alias", "use the ssh-" + "docker MCP server"),
+        ("ssh_alias", "tail logs over ssh-" + "orin"),
+        ("device_serial", "adb -s " + "ABCD1234EF logcat -c"),
+        ("device_serial", "adb --serial " + "ABCD1234EF shell"),
+        ("windows_home", r"C:\Users\someone\Documents\notes.md"),
+    ],
+)
+def test_the_added_rules_match_what_they_are_meant_to_catch(rule, sample):
+    assert _PERSONAL_DATA_RULES[rule].search(sample), (
+        f"the {rule} rule no longer matches {sample!r}"
+    )
+
+
+def test_the_added_rules_do_not_fire_on_ordinary_text():
+    """A rule that matches everything gets allow-listed into uselessness."""
+    innocuous = (
+        "docker compose up -d\n"
+        "ssh into the server and run adb devices\n"
+        "the path /usr/share/doc is fine\n"
+    )
+    assert _personal_data_hits(innocuous, ".md") == []

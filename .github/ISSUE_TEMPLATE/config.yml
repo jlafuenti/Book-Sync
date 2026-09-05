@@ -1,0 +1,18 @@
+# Blank issues are off on purpose (issue #190): the "New issue" chooser is the
+# only place a would-be security reporter is told not to file publicly, and a
+# blank issue walks straight past it.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/jlafuenti/Book-Sync/security/advisories/new
+    about: >-
+      Opens a private advisory visible only to you and the maintainer. Never
+      report a vulnerability in a public issue — a live instance of this software
+      is somebody's home server.
+  # Requires Discussions to be turned on (Settings -> General -> Features).
+  # Until it is, this link 404s.
+  - name: Questions, setup help and ideas
+    url: https://github.com/jlafuenti/Book-Sync/discussions
+    about: >-
+      Ask here before filing an issue if you are not sure whether something is a
+      bug.
