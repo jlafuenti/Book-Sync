@@ -68,6 +68,46 @@ def test_match_text_to_sync_points_golden(case):
 
 
 # ---------------------------------------------------------------------------
+# audio -> epub point selection (issue #200) — Android parity contract
+#
+# The rule both platforms implement: the last point that has already started;
+# and when the position precedes every point, the *first* point rather than a
+# silent (0, 0). `services/sync_engine.audio_to_epub` is the Python half,
+# `SyncMatcher.pointForAudioPosition` (via `BookSyncRepository.audioToEpubText`)
+# the Kotlin one.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _AudioPoint:
+    """Duck-typed sync point — `audio_to_epub` reads only these three."""
+    epub_chapter: int
+    epub_sentence_index: int
+    audio_start_ms: int
+
+
+@pytest.mark.parametrize("case", _load("audio_to_epub_cases.json"), ids=lambda c: c["name"])
+def test_audio_to_epub_point_selection_golden(case):
+    from services.sync_engine import audio_to_epub
+
+    raw = case["points"]
+    points = sorted(
+        (_AudioPoint(p["chapter"], p["sentence_index"], p["audio_start_ms"])
+         for p in raw),
+        key=lambda p: p.audio_start_ms,
+    )
+    result = audio_to_epub(points, case["audio_position_ms"])
+
+    idx = case["expected_point_index"]
+    if idx is None:
+        # No point to name. Python's shape for that is the book's origin; what
+        # matters for parity is that it is not claiming one of the points.
+        assert result == (0, 0), case["why"]
+    else:
+        expected = raw[idx]
+        assert result == (expected["chapter"], expected["sentence_index"]), case["why"]
+
+
+# ---------------------------------------------------------------------------
 # Fuzzy-pass internals (issue #41) — edge cases the golden vectors can't reach
 # ---------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@ import {
     getUsers, createUser, updateUser, approveUser,
     resetUserPassword, deleteUser, getAuditLog
 } from '../api'
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../lib/passwordPolicy'
 import { useAuth } from '../contexts/AuthContext'
 // Audit-log and user timestamps are naive UTC (issue #216).
 import { formatDate, formatDateTime } from '../lib/datetime'
@@ -111,7 +112,7 @@ function CreateUserModal({ onClose, onCreated }) {
                     </div>
                     <div className="form-group">
                         <label>Temporary Password</label>
-                        <input type="password" className="form-input" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required minLength={6} autoComplete="new-password" />
+                        <input type="password" className="form-input" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH} autoComplete="new-password" />
                     </div>
                     <div className="form-group">
                         <label>Role</label>
@@ -172,7 +173,7 @@ function ResetPasswordModal({ user, onClose, onReset }) {
                             value={newPassword}
                             onChange={e => setNewPassword(e.target.value)}
                             required
-                            minLength={6}
+                            minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH}
                             autoComplete="new-password"
                         />
                     </div>

@@ -33,6 +33,7 @@ import subprocess
 import tempfile
 from typing import Optional, Tuple
 
+from services.audio_duration import probe_duration_seconds
 from services.audio_integrity import stderr_indicates_corruption
 
 logger = logging.getLogger(__name__)
@@ -198,15 +199,161 @@ def read_chapters_ffprobe(filepath: str, timeout: int = 60) -> Optional[list]:
     return chapters
 
 
-def _rebuild_chapters(filepath: str, chapters: list, timeout: int) -> Tuple[bool, Optional[str]]:
-    """Write `chapters` back into the file via ffmpeg's ffmetadata reinject
-    (same mechanism as routers.chapters.update_audiobook_chapters). Used only
-    when neutralizing the chpl atom removed the file's sole chapter source."""
+# ---------------------------------------------------------------------------
+# The one chapter write-back remux (issue #192)
+# ---------------------------------------------------------------------------
+
+#: How far the remuxed file's runtime may differ from the original's before we
+#: refuse to install it. A codec-copy remux reproduces the same samples, so any
+#: real difference means a truncated or mis-muxed output; the slack is only for
+#: container rounding.
+DURATION_TOLERANCE_SEC = 1.0
+
+#: The iTunes freeform namespace. mutagen exposes these atoms as
+#: ``----:com.apple.iTunes:NAME`` keys; ffmpeg's mov muxer never writes them.
+FREEFORM_PREFIX = "----"
+
+
+def snapshot_freeform_tags(filepath: str) -> dict:
+    """Every iTunes freeform (``----``) atom on this file, as mutagen sees it.
+
+    These are the tags a remux destroys. ffmpeg's mov *muxer* emits only its own
+    fixed list of ilst atoms and never a ``----`` atom, so ``-map_metadata 0``
+    does not save them — with ``-movflags use_metadata_tags`` it writes them as
+    ``mdta`` keys instead, which neither mutagen nor the scanner reads back as
+    iTunes freeform. The only way to keep them is to read them before the remux
+    and write them onto the result. ``routers/library.py`` reads NARRATOR,
+    SERIES, SERIES-PART and publisher straight out of these atoms, so losing
+    them quietly un-tags the book.
+
+    Raises whatever mutagen raises; the caller decides whether that is fatal.
+    """
+    import mutagen.mp4
+
+    audio = mutagen.mp4.MP4(filepath)
+    tags = audio.tags or {}
+    return {k: v for k, v in tags.items() if k.startswith(FREEFORM_PREFIX)}
+
+
+def restore_freeform_tags(filepath: str, tags: dict) -> None:
+    """Write a `snapshot_freeform_tags` result back onto `filepath`."""
+    if not tags:
+        return
+    import mutagen.mp4
+
+    audio = mutagen.mp4.MP4(filepath)
+    if audio.tags is None:
+        audio.add_tags()
+    for key, value in tags.items():
+        audio.tags[key] = value
+    audio.save()
+
+
+def _ffmetadata_without_chapters(raw: bytes) -> list:
+    """The exported FFMETADATA text with every ``[CHAPTER]`` block removed.
+
+    Everything else — the global tags ffmpeg *does* understand — is kept
+    verbatim. The bytes are decoded leniently because ffmpeg copies chapter
+    title bytes through without validating their encoding, so a title another
+    tool wrote in Windows-1252 would crash a hard-coded utf-8 read.
+    """
+    lines = decode_lenient(raw).splitlines(keepends=True)
+    kept, in_chapter = [], False
+    for line in lines:
+        if line.strip() == "[CHAPTER]":
+            in_chapter = True
+            continue
+        if in_chapter and line.startswith("["):
+            in_chapter = False  # a new section begins; keep this line
+        if not in_chapter:
+            kept.append(line)
+    return kept
+
+
+def _chapter_block(start_seconds: float, end_seconds: float, title: str) -> list:
+    timebase = 1000  # ms precision
+    return [
+        "[CHAPTER]\n",
+        "TIMEBASE=1/{}\n".format(timebase),
+        "START={}\n".format(int(start_seconds * timebase)),
+        "END={}\n".format(int(end_seconds * timebase)),
+        "title={}\n".format(ffmetadata_escape(title)),
+    ]
+
+
+def _duration_is_plausible(original: str, produced: str) -> Tuple[bool, Optional[str]]:
+    """Does the remuxed file still describe the same recording?
+
+    An unmeasurable *original* is not a failure: `probe_duration_seconds`
+    returns None for "no opinion", and a file we could never measure has no
+    expectation to compare against. An unmeasurable *output* is: ffprobe read
+    the original fine, so a replacement it cannot read is one we must not
+    install.
+    """
+    expected = probe_duration_seconds(original)
+    if expected is None:
+        return True, None
+    actual = probe_duration_seconds(produced)
+    if actual is None:
+        return False, ("The remuxed file could not be read back — "
+                       "leaving the original in place.")
+    if abs(actual - expected) > DURATION_TOLERANCE_SEC:
+        return False, (
+            f"The remuxed file's duration ({actual:.1f}s) does not match the "
+            f"original's ({expected:.1f}s) — leaving the original in place."
+        )
+    return True, None
+
+
+def remux_with_chapters(
+    filepath: str, chapters: list, timeout: int = 60
+) -> Tuple[bool, Optional[str]]:
+    """Replace `filepath`'s chapters with `chapters`, keeping everything else.
+
+    `chapters` is a list of mappings with ``start`` and ``end`` in **seconds**
+    and a ``title``. Returns ``(True, None)`` or ``(False, message)``.
+
+    The single implementation behind both
+    `routers.chapters.update_audiobook_chapters` and `_rebuild_chapters`
+    (issue #192). They used to carry byte-identical copies of this, each with
+    the same three defects:
+
+    * **Freeform tags survive.** ffmpeg cannot write ``----`` atoms, so they are
+      snapshotted with mutagen before the remux and written back onto the
+      result — onto the *staged* file, before it takes the library's name, so a
+      concurrent scan never sees an untagged copy.
+    * **The staging file lives next to the target**, which makes the final step
+      `os.replace`, an atomic rename within one filesystem, rather than a
+      `shutil.move` out of the system temp dir — across filesystems that is
+      copy-then-delete, and a full disk or a crash mid-copy leaves the original
+      truncated and the replacement half-written.
+    * **The output is checked before it is installed.** A non-empty file whose
+      runtime still matches the original's, or the original stays.
+
+    On every failure path the original is left byte-identical and the staged
+    file is removed. This is a purchased media file and there is no second copy.
+    """
+    ext = os.path.splitext(filepath)[1]
+    directory = os.path.dirname(os.path.abspath(filepath))
+
     fd_meta, temp_meta_path = tempfile.mkstemp(suffix=".txt")
     os.close(fd_meta)
-    fd_out, temp_out_path = tempfile.mkstemp(suffix=os.path.splitext(filepath)[1])
+    # Next to the target, not in the system temp dir — see the docstring.
+    fd_out, temp_out_path = tempfile.mkstemp(dir=directory, suffix=ext)
     os.close(fd_out)
+
     try:
+        # mutagen raises on exactly the files this module exists to repair.
+        # Losing tags we could not read is not a reason to refuse the edit.
+        try:
+            freeform = snapshot_freeform_tags(filepath)
+        except Exception as e:
+            logger.warning(
+                "[chapter_repair] Could not snapshot freeform tags on %s "
+                "(they will be lost by the remux): %s", filepath, e
+            )
+            freeform = {}
+
         export = subprocess.run(
             ["ffmpeg", "-y", "-i", filepath, "-f", "ffmetadata", temp_meta_path],
             capture_output=True, timeout=timeout,
@@ -214,41 +361,68 @@ def _rebuild_chapters(filepath: str, chapters: list, timeout: int) -> Tuple[bool
         if export.returncode != 0:
             return False, _format_ffmpeg_error("Failed to export metadata", export.stderr)
 
-        # Preserve the existing global tags verbatim (chapters are already
-        # gone from this export — the chpl atom was neutralized) and append
-        # the snapshotted chapters with proper FFMETADATA escaping.
         with open(temp_meta_path, "rb") as f:
             raw = f.read()
-        lines = [decode_lenient(raw).rstrip("\n")]
+        lines = _ffmetadata_without_chapters(raw)
         for ch in chapters:
-            lines.append("[CHAPTER]")
-            lines.append("TIMEBASE=1/1000")
-            lines.append(f"START={int(ch['start'] * 1000)}")
-            lines.append(f"END={int(ch['end'] * 1000)}")
-            lines.append("title=" + ffmetadata_escape(ch["title"]))
+            lines.extend(_chapter_block(ch["start"], ch["end"], ch["title"]))
         with open(temp_meta_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+            f.writelines(lines)
 
         reinject = subprocess.run(
             # -map_metadata alone does NOT map chapters — that needs the
             # separate -map_chapters flag, which defaults to input 0 (the
-            # chapterless original) if omitted.
+            # unedited original) if omitted.
             ["ffmpeg", "-y", "-i", filepath, "-i", temp_meta_path,
              "-map_metadata", "1", "-map_chapters", "1", "-codec", "copy",
              temp_out_path],
             capture_output=True, timeout=timeout,
         )
         if reinject.returncode != 0:
-            return False, _format_ffmpeg_error("Failed to rebuild chapters", reinject.stderr)
+            return False, _format_ffmpeg_error("Failed to write chapters", reinject.stderr)
 
-        shutil.move(temp_out_path, filepath)
+        if os.path.getsize(temp_out_path) == 0:
+            return False, "The remux produced an empty file — leaving the original in place."
+
+        ok, why = _duration_is_plausible(filepath, temp_out_path)
+        if not ok:
+            return False, why
+
+        # Onto the staged file: one that appeared under the real name and only
+        # then grew its tags would be visible to a scan in between.
+        try:
+            restore_freeform_tags(temp_out_path, freeform)
+        except Exception as e:
+            # The chapters are correct and the audio is intact; refusing the
+            # whole edit over the tags would be the worse trade.
+            logger.warning(
+                "[chapter_repair] Could not restore freeform tags onto the "
+                "remux of %s: %s", filepath, e
+            )
+
+        os.replace(temp_out_path, filepath)
         return True, None
     except Exception as e:
         return False, str(e)
     finally:
-        for p in (temp_meta_path, temp_out_path):
-            if os.path.exists(p):
-                os.remove(p)
+        for path in (temp_meta_path, temp_out_path):
+            if os.path.exists(path):
+                os.remove(path)
+
+
+def _rebuild_chapters(filepath: str, chapters: list, timeout: int) -> Tuple[bool, Optional[str]]:
+    """Write `chapters` back into the file after neutralizing the chpl atom
+    removed the file's sole chapter source.
+
+    A thin adapter over `remux_with_chapters` — the same implementation the
+    editor's chapter write-back uses (issue #192). These were two byte-identical
+    ffmpeg invocations maintained separately, which is how they both ended up
+    losing freeform tags and replacing the original non-atomically.
+
+    The snapshot rows use ffprobe's `start`/`end` keys already, in seconds,
+    which is exactly what the helper takes.
+    """
+    return remux_with_chapters(filepath, chapters, timeout=timeout)
 
 
 def _make_backup(filepath: str) -> str:

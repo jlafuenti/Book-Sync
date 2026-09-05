@@ -172,6 +172,10 @@ schema step. **An existing database created before Alembic must be stamped once*
    `POST /auth/change-password` and `POST /auth/logout` with `403 password_reset_required`. That
    holds for the web app, the Android app and `curl` alike, so the temporary password cannot be used
    for anything else.
+   If that password is ever lost, there is no self-service reset: an admin resets an ordinary
+   user from System → User Management, and a locked-out admin or sole superadmin is recovered with
+   `docker compose exec server python -m scripts.reset_password <username>` — see
+   [docs/operations.md](docs/operations.md), "Account recovery".
 3. **Scan the library.** **System → Troubleshoot Library → Run Verification Scan** walks the
    mounted ebook and audiobook directories, extracts metadata, and auto-pairs what it can match.
    See [docs/library-conventions.md](docs/library-conventions.md) for the folder/filename patterns

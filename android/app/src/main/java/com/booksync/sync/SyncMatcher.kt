@@ -34,6 +34,35 @@ object SyncMatcher {
     /** Minimum Dice similarity for the fuzzy pass to accept a window. */
     const val FUZZY_THRESHOLD = 0.60
 
+    /**
+     * The sync point an audio position lands on: the last one that has already
+     * started, or `null` when there are no points at all.
+     *
+     * **A position earlier than every point resolves to the first point**
+     * (issue #200), not to "no match" and not to chapter 0. A map may
+     * legitimately start well into the audio — unaligned front matter, a
+     * prologue the aligner dropped — and answering with the book's opening is
+     * inventing a match at a sentence the position has nothing to do with. The
+     * first point is the earliest place this map can actually name.
+     *
+     * Mirrors `services/sync_engine.audio_to_epub`; pinned to the shared golden
+     * vectors in `server/tests/fixtures/sync_parity/audio_to_epub_cases.json`
+     * by AudioToEpubParityTest and, on the server, by
+     * tests/test_sync_matching.py. Change one side and you change both.
+     *
+     * Generic in the point type so a Room entity does not have to implement an
+     * interface just to be sortable by its start time; [audioStartMs] reads it.
+     */
+    fun <T> pointForAudioPosition(
+        points: List<T>,
+        audioPositionMs: Int,
+        audioStartMs: (T) -> Int,
+    ): T? {
+        if (points.isEmpty()) return null
+        val sorted = points.sortedBy(audioStartMs)
+        return sorted.lastOrNull { audioStartMs(it) <= audioPositionMs } ?: sorted.first()
+    }
+
     /** Normalize text for comparison: lowercase, convert ALL whitespace to spaces, strip punctuation. */
     fun normalizeForSearch(text: String): String {
         return text.lowercase()

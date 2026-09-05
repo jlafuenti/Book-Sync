@@ -172,6 +172,24 @@ epub.js CFI still describes it — marking every hint stale would drop each read
 to text-search restore for a page that never moved. A chapter change is a real
 relocation, so there the hints must go stale.
 
+**Audio earlier than the new map's first point is not a match.** A listener parked
+in unaligned front matter, or in a prologue the aligner dropped, has an
+`audio_position_ms` the new map says nothing about. Re-deriving it anyway used to
+answer "chapter 0, sentence 0" — indistinguishable from a genuine hit on the
+opening sentence — so the bookmark was relocated to the start of the book, its
+chapter changed (staling every device's hint at once) and `user_progress` was
+rewritten with it. That violates the invariant above. The re-map now falls
+through to the row's text anchor and, failing that, leaves it alone as
+unresolvable (issue #200). The exact boundary still resolves: a position equal to
+the first point's start is *inside* it. The same rule governs a version-mismatched
+client write, which shares `resolve_on_map`.
+
+`audio_to_epub` itself — the live "where am I in the ebook" query, not a
+rewrite — answers the **first point** for a position that precedes the map, which
+is the earliest place the map can name. Android's `audioToEpubText` does the same
+through `SyncMatcher.pointForAudioPosition`, and the two are pinned to
+`server/tests/fixtures/sync_parity/audio_to_epub_cases.json`.
+
 `captured_at` is never touched and no `BookmarkLog` row is written: a re-map is a
 server-side translation, not a device capture. Stamping `captured_at` would let it
 beat a genuinely newer write from a phone, and the log is the history of moves the

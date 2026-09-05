@@ -385,7 +385,7 @@ async def test_register_disabled_returns_403(client, monkeypatch):
     monkeypatch.setattr(settings, "allow_public_registration", False)
     r = await client.post(
         "/api/auth/register",
-        json={"username": "quentin", "email": "q@example.com", "password": "pw12345"},
+        json={"username": "quentin", "email": "q@example.com", "password": "pw123456"},
     )
     assert r.status_code == 403
 

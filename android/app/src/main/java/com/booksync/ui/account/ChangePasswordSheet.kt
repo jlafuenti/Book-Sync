@@ -97,7 +97,7 @@ fun ChangePasswordSheet(
                 )
             }
             Text(
-                "New password must be at least 8 characters.",
+                PasswordPolicy.MESSAGE,
                 color = colors.textSecondary,
                 fontSize = 13.sp,
             )
@@ -156,14 +156,14 @@ fun ChangePasswordForm(
     val serverError = (state as? ChangePasswordState.Error)?.message
     val submitting = state is ChangePasswordState.Submitting
 
-    val newPasswordValid = newPw.length >= 8
+    val newPasswordValid = PasswordPolicy.isValid(newPw)
     val passwordsMatch   = newPw == confirmPw && newPw.isNotEmpty()
     val formValid        = currentPw.isNotEmpty() && newPasswordValid && passwordsMatch
 
     fun submit() {
         clientError = when {
             currentPw.isEmpty()   -> "Enter your current password."
-            !newPasswordValid     -> "New password must be at least 8 characters."
+            !newPasswordValid     -> PasswordPolicy.MESSAGE
             !passwordsMatch       -> "New passwords do not match."
             else                  -> null
         }

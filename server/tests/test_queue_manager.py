@@ -1690,3 +1690,104 @@ async def test_progress_callback_falls_back_to_a_bare_percentage(monkeypatch):
         await asyncio.sleep(0)
 
     assert writes[0]["message"] == "Transcribing via Local Whisper... (25%)"
+
+
+# ---------------------------------------------------------------------------
+# An empty result is a failure, not a sync (issue #194)
+#
+# A silence-only file, a worker answering `{"sentences": []}`, or an EPUB that
+# extracts no text all made `align_texts` return `[]`. The pipeline saved that
+# as a new map with zero points, set the pair SYNCED and said "Sync complete!"
+# — while `save_sync_map` had already deleted the working map that was there.
+# ---------------------------------------------------------------------------
+
+async def test_an_empty_alignment_does_not_replace_an_existing_sync_map(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
+    await queue_manager._process_next_item()
+
+    good_map = await _sync_map_for(pair.id)
+    assert good_map.version == 1 and good_map.total_sentences == len(FIRST_MAP)
+
+    # Second run: the ebook now extracts no text, so alignment yields nothing.
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
+    monkeypatch.setattr("services.epub_parser.extract_book_sentences", lambda p: [])
+    monkeypatch.setattr("services.alignment.align_texts", lambda e, w: [])
+
+    await queue_manager._process_next_item()
+
+    still = await _sync_map_for(pair.id)
+    assert still.version == 1, "the working map must survive an empty alignment"
+    async with async_session() as s:
+        points = (await s.execute(
+            select(SyncPoint).where(SyncPoint.sync_map_id == still.id)
+        )).scalars().all()
+    assert len(points) == len(FIRST_MAP)
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert "no points" in (refreshed.error_message or "").lower()
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+
+
+async def test_an_empty_alignment_on_a_first_run_fails_instead_of_saying_synced(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
+    monkeypatch.setattr("services.alignment.align_texts", lambda e, w: [])
+
+    await queue_manager._process_next_item()
+
+    assert await _sync_map_for(pair.id) is None, "no map beats an empty map"
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert refreshed.message != "Sync complete!"
+    # The reason has to be something the UI can put in front of a user.
+    assert "no points" in (refreshed.error_message or "").lower()
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
+
+
+async def test_an_empty_transcription_does_not_overwrite_the_cached_transcript(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
+    await queue_manager._process_next_item()
+
+    good = (await _transcripts_for(pair.id))[0]
+    assert good.sentence_count == len(TRANSCRIPT)
+
+    # The audio file was replaced, so the cache is stale and the provider runs
+    # again — and this time answers with nothing.
+    async with async_session() as s:
+        audiobook = (await s.execute(
+            select(AudioBook).join(BookPair, BookPair.audiobook_id == AudioBook.id)
+            .where(BookPair.id == pair.id)
+        )).scalar_one()
+        audiobook.file_path = "/x/replaced/silent.m4b"
+        await s.commit()
+
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=[]), map_rows=FIRST_MAP)
+
+    await queue_manager._process_next_item()
+
+    transcripts = await _transcripts_for(pair.id)
+    assert len(transcripts) == 1
+    assert transcripts[0].sentence_count == len(TRANSCRIPT),         "a good cached transcript must not be replaced by an empty one"
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert "no sentences" in (refreshed.error_message or "").lower()
+
+
+async def test_an_empty_transcription_on_a_first_run_writes_no_transcript(db, monkeypatch):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline(monkeypatch, _PipelineProvider(rows=[]), map_rows=FIRST_MAP)
+
+    await queue_manager._process_next_item()
+
+    assert await _transcripts_for(pair.id) == []
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "failed"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
