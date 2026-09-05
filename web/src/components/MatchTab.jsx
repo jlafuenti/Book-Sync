@@ -18,16 +18,18 @@ export default function MatchTab({ currentData, onApply, bookType }) {
     const [provider, setProvider] = useState(bookType === 'audiobook' ? 'audible' : 'google');
     const providerTouched = useRef(false);
 
-    // Ebooks prefer Hardcover, but only when a token is configured — the
-    // settings GET masks a stored token as "********", so any non-empty
-    // value means "configured". Never override a manual selection.
+    // Ebooks prefer Hardcover, but only when a token is configured. Read the
+    // derived `hardcover_configured` boolean rather than the token: since issue
+    // #263 the settings GET hands anyone below admin an allow-list of
+    // { abs_enabled, hardcover_configured } and no token field at all, masked or
+    // otherwise. Never override a manual selection.
     useEffect(() => {
         if (bookType === 'audiobook') return;
         let cancelled = false;
         (async () => {
             try {
                 const s = await getSettings();
-                if (!cancelled && !providerTouched.current && s.hardcover_api_token) {
+                if (!cancelled && !providerTouched.current && s.hardcover_configured) {
                     setProvider('hardcover');
                 }
             } catch { /* keep the Google default */ }

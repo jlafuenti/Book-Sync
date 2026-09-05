@@ -27,6 +27,8 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [api.md](api.md) | The HTTP API: base URL, auth and sessions, media tokens, roles, route families, error shapes |
+| [openapi.json](openapi.json) | The generated OpenAPI document — every route, request body and response model. Regenerate with `server/scripts/export_openapi.py` |
 | [testing.md](testing.md) | Test suites, fixtures, coverage policy |
 | [position-sync-contract.md](position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |
 

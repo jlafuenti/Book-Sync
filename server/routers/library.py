@@ -2917,12 +2917,17 @@ async def debug_metadata(
     book_type: str,
     book_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Debug endpoint: re-extract metadata from a book's file and return all
     the intermediate data (pattern matches, embedded tags, merged result)
     without modifying the database.
+
+    Editor-gated (issue #263): the response carries the book's absolute
+    `file_path`, the absolute `library_root` it sits under and the raw extracted
+    tags — a map of the operator's filesystem, and never something a reader
+    account had a use for.
     """
     import mutagen as mutagen_lib
     
@@ -3392,11 +3397,15 @@ async def delete_audiobook(
 @router.get("/verify")
 async def verify_files(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(get_editor_user),
 ):
     """
     Check every ebook and audiobook file_path against the filesystem.
     Returns lists of entries whose source files no longer exist.
+
+    Editor-gated (issue #263): the report lists the absolute `file_path` of
+    every orphaned row, and it drives the Maintenance menu's "Verify Files"
+    action, which the web already shows only to editors.
     """
     orphaned_ebooks = []
     orphaned_audiobooks = []

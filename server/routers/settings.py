@@ -102,9 +102,50 @@ DEFAULT_SETTINGS = {
     "audit_log_retention_days": 90,
 }
 
+# ---------------------------------------------------------------------------
+# What a non-admin is allowed to read (issue #263).
+#
+# The full settings dict is the operator's configuration: the Audiobookshelf
+# URL, the transcription worker's URL, the filename patterns that describe the
+# library's layout on disk, the backup schedule and retention. Secrets are
+# masked, but the rest is exactly the reconnaissance an attacker wants and no
+# reader screen has ever needed it.
+#
+# Below admin the response is this allow-list — derived from what the web
+# actually reads outside the admin pages:
+#
+#   abs_enabled          web/src/pages/BookDetailPage.jsx — whether to offer the
+#                        "enrich from Audiobookshelf" action
+#   hardcover_configured web/src/components/MatchTab.jsx — which metadata
+#                        provider to default to. A derived boolean, *not* the
+#                        masked token: a non-admin learns only "an admin set
+#                        one", never anything about the credential itself.
+#
+# Adding a key here means deciding it is safe for a stranger with an account.
+# `tests/test_settings.py::test_settings_get_is_an_allowlist_below_admin` pins
+# the exact set, so growing it is a deliberate act.
+# ---------------------------------------------------------------------------
+PLAIN_USER_SETTING_KEYS = ("abs_enabled", "hardcover_configured")
+
+# Computed on every read from the credential store; never a `system_settings`
+# row. PUT drops them so a client that echoes the GET payload back cannot
+# create a stale duplicate of the derived truth.
+DERIVED_SETTING_KEYS = frozenset({"hardcover_configured"})
+
+
 @router.get("/", response_model=Dict[str, Any])
-async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
-    """Get all system settings."""
+async def get_settings(
+    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """System settings: everything for an admin, an allow-list for everyone else."""
+    full = await _all_settings(db)
+    if user.has_role("admin"):
+        return full
+    return {k: full[k] for k in PLAIN_USER_SETTING_KEYS}
+
+
+async def _all_settings(db: AsyncSession) -> Dict[str, Any]:
+    """The complete settings dict, secrets masked. Admin-only via the route."""
     result = await db.execute(select(SystemSetting))
     settings_list = result.scalars().all()
     
@@ -142,9 +183,12 @@ async def get_settings(db: AsyncSession = Depends(get_db), _: User = Depends(get
     remote_key = await credential_store.get_credential(db, "transcription_remote")
     settings_dict["transcription_remote_key"] = _SECRET_PLACEHOLDER if remote_key else ""
 
-    # And for the Hardcover metadata-provider token.
+    # And for the Hardcover metadata-provider token. `hardcover_configured` is
+    # the non-secret form of the same fact — it is what MatchTab reads, for every
+    # role, so the masked string never has to leave the admin payload.
     hardcover_token = await credential_store.get_credential(db, "hardcover")
     settings_dict["hardcover_api_token"] = _SECRET_PLACEHOLDER if hardcover_token else ""
+    settings_dict["hardcover_configured"] = bool(hardcover_token)
 
     return settings_dict
 
@@ -193,6 +237,12 @@ async def update_settings(
             )
 
     for key, value in new_settings.items():
+        # Derived, read-only view keys (hardcover_configured) are computed on
+        # read. A client that round-trips the GET payload must not persist one
+        # as a settings row.
+        if key in DERIVED_SETTING_KEYS:
+            continue
+
         # Route abs_api_token through the encrypted credential store. An empty
         # string clears the credential; the placeholder means "leave unchanged"
         # (so a UI that round-trips the masked GET doesn't wipe the secret).
@@ -239,7 +289,9 @@ async def update_settings(
             db.add(setting)
 
     await db.commit()
-    return await get_settings(db)
+    # The caller is an admin (get_admin_user above), so echo the full dict —
+    # not the reader allow-list they would get from the route function.
+    return await _all_settings(db)
 
 @router.post("/test-abs")
 async def test_abs_connection(
