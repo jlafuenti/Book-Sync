@@ -8,6 +8,8 @@ import { RequireRole } from './components/RequireRole'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
+import AccountPage from './pages/AccountPage'
+import AccountDeletionPage from './pages/AccountDeletionPage'
 import LibraryPage from './pages/LibraryPage'
 import PairsPage from './pages/PairsPage'
 import SeriesPage from './pages/SeriesPage'
@@ -159,6 +161,7 @@ function getMobilePageTitle(pathname) {
     if (pathname.startsWith('/transcription/edit')) return 'Transcription Editor'
     if (pathname.startsWith('/transcription')) return 'Transcription'
     if (pathname.startsWith('/system')) return 'Admin Console'
+    if (pathname.startsWith('/account')) return 'Account'
     if (pathname.startsWith('/book/')) return 'Book Details'
     return 'Tandem'
 }
@@ -324,11 +327,16 @@ export function AppShell({ user, setUser }) {
                 </nav>
                 <div className="sidebar-footer">
                     <div className="sidebar-user">
-                        <div className="avatar">{user.username[0].toUpperCase()}</div>
-                        <div className="info">
+                        {/* The whole block is the way into Account — there is no
+                            room for a nav entry of its own, and the user card is
+                            where people look for their own settings. */}
+                        <Link to="/account" className="avatar" title="Account">
+                            {user.username[0].toUpperCase()}
+                        </Link>
+                        <Link to="/account" className="info" title="Account">
                             <div className="name">{user.username}</div>
                             <div className="role">{roleLabel}</div>
-                        </div>
+                        </Link>
                         <button className="btn btn-icon btn-secondary" onClick={handleLogout} title="Logout">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
                         </button>
@@ -379,6 +387,14 @@ export function AppShell({ user, setUser }) {
                         <Route path="/system/import-sources" element={<RequireRole min="admin"><ImportSourcesPage /></RequireRole>} />
                         <Route path="/system/troubleshoot" element={<RequireRole min="editor"><TroubleshootPage /></RequireRole>} />
 
+                        {/* Account — every signed-in user's own settings, and
+                            the in-app deletion control Play requires (#146).
+                            Not role-gated: it is the caller's own account. */}
+                        <Route
+                            path="/account"
+                            element={<AccountPage user={user} onAccountDeleted={() => setUser(null)} />}
+                        />
+
                         {/* Book Detail */}
                         <Route path="/book/:type/:id" element={<BookDetailPage />} />
 
@@ -399,11 +415,20 @@ export function AppShell({ user, setUser }) {
     )
 }
 
+// Paths that render before anyone is asked to sign in. There is exactly one,
+// and it exists because Google Play requires a publicly reachable page
+// explaining account deletion for any app that can create an account — its
+// audience is people who have already uninstalled and have no session at all
+// (issue #146). Everything else in this app is behind the gate in App().
+const PUBLIC_PATHS = { '/account-deletion': <AccountDeletionPage /> }
+
 function App() {
     const [user, setUser] = useState(null)
     const [loading, setLoading] = useState(true)
     const [unreachable, setUnreachable] = useState(false)
     const { setTheme } = useTheme()
+    const { pathname } = useLocation()
+    const publicPage = PUBLIC_PATHS[pathname]
 
     // Boot: decide between the app, the login form and the reset gate (#211).
     //
@@ -430,7 +455,9 @@ function App() {
         })
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    useEffect(() => { bootstrap() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // Not on a public path: the deletion page is for people with no session, and
+    // asking the server who they are would only produce a 401 in the console.
+    useEffect(() => { if (!publicPage) bootstrap() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
     // The flag is only read once, at mount (issue #209). api.js announces any
     // later 403 password_reset_required; setting the flag here reuses the gate
@@ -456,6 +483,11 @@ function App() {
         window.addEventListener('tandem:unauthorized', onUnauthorized)
         return () => window.removeEventListener('tandem:unauthorized', onUnauthorized)
     }, [])
+
+    // Before the auth gate on purpose (issue #146). Play's account-deletion
+    // requirement is for a page that works after the app is uninstalled, so it
+    // must not be reachable only through a login form.
+    if (publicPage) return publicPage
 
     if (loading) {
         return (
