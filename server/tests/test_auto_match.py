@@ -3,10 +3,8 @@ Golden vectors for the automatic ebook/audiobook pairing rules (issue #253).
 
 `auto_match_books` runs on every library scan and *permanently* pairs an ebook
 with an audiobook. A wrong pair produces a sync map between two different books.
-Until now none of it was tested, so these vectors pin the rules **exactly as
-they behave today** — including the ones issue #253 argues are wrong — so that
-any later tightening is a deliberate, reviewed edit to this fixture rather than
-a silent change in scan results.
+These vectors pin the rules exactly, so that any later change is a deliberate,
+reviewed edit to this fixture rather than a silent change in scan results.
 
 Fixture: `tests/fixtures/auto_match_cases.json`
 `[{ "name", "why", "ebook": {…columns}, "audiobook": {…columns},
@@ -24,11 +22,13 @@ Fixture: `tests/fixtures/auto_match_cases.json`
   (pinned in `requirements.txt`), so a bump to that pin can legitimately move
   them — re-derive rather than deleting the case.
 
-Three cases are named as pinning questionable behaviour. They are the argument
-of issue #253, recorded so the argument can be settled against real numbers:
-`series_index_1_and_1_5_truncate_equal`,
-`title_near_miss_matches_when_one_side_has_no_author`, and
-`exclusion_is_not_honoured_without_a_file_hash`.
+Four of the rules the first pass recorded as questionable were tightened in
+issue #253, and their vectors were flipped in the same commit: series indexes
+compare as floats (1 is not 1.5), a missing author on either side raises the
+title bar to 90 instead of skipping the author gate, the unpair exclusion is
+keyed by row id as well as file hash, and an empty normalized title never
+pairs. The one deliberately left alone is greedy scan-order assignment —
+`test_assignment_is_greedy_in_scan_order_across_ebooks` still pins it.
 """
 
 import json
@@ -38,6 +38,7 @@ import pytest
 from sqlalchemy import select
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
+from routers import library
 from routers.library import _score_candidate, auto_match_books
 from tests.factories import make_audiobook, make_ebook
 
@@ -113,21 +114,109 @@ async def test_an_unpaired_pair_with_hashes_is_not_recreated(db):
     assert (await db.execute(select(BookPair))).scalars().all() == []
 
 
-async def test_a_hashless_unpaired_pair_is_recreated(db):
-    """PINS A QUESTIONABLE RULE (issue #253).
+async def test_a_hashless_unpaired_pair_is_not_recreated(db):
+    """The exclusion is keyed by row id too, so it survives a missing hash.
 
-    The exclusion is keyed by `file_hash`, and `delete_pair` only records one
-    when *both* rows have a hash. A hash-less row — legacy only, since every
-    ingest and upload path computes one — therefore keeps no memory of the
-    unpair and is re-paired by the very next scan. Flip this to `== 0` when the
-    exclusion learns a hash-free key.
+    Previously `delete_pair` recorded nothing unless *both* rows had a
+    `file_hash`, so a hash-less row — legacy only, since every ingest and
+    upload path computes one — kept no memory of the unpair and was re-paired
+    by the very next scan (issue #253).
     """
-    await make_ebook(db, title="Mistborn", author="Brandon Sanderson",
-                     file_hash=None, auto_pair_excluded_hashes=["audio-hash"])
-    await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
-                         file_hash=None, auto_pair_excluded_hashes=["ebook-hash"])
+    eb = await make_ebook(db, title="Mistborn", author="Brandon Sanderson",
+                          file_hash=None)
+    ab = await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                              file_hash=None)
+    eb.auto_pair_excluded_ids = [ab.id]
+    ab.auto_pair_excluded_ids = [eb.id]
+    await db.commit()
 
+    assert await auto_match_books(db) == 0
+    assert (await db.execute(select(BookPair))).scalars().all() == []
+
+
+async def test_unpairing_hashless_books_stops_the_next_scan_repairing_them(
+    db, make_client, make_user, auth_header
+):
+    """End to end: scan pairs them, the user unpairs, the next scan leaves it.
+
+    Neither row has a `file_hash`, which is exactly the case the old
+    hash-only exclusion could not record.
+    """
+    eb = await make_ebook(db, title="Mistborn", author="Brandon Sanderson",
+                          file_hash=None)
+    ab = await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                              file_hash=None)
+    eb_id, ab_id = eb.id, ab.id
     assert await auto_match_books(db) == 1
+    await db.commit()
+    pair = (await db.execute(select(BookPair))).scalar_one()
+
+    editor = await make_user(username="editor", role="editor")
+    async with make_client(library.router) as c:
+        r = await c.delete(f"/api/library/pairs/{pair.id}",
+                           headers=auth_header(editor))
+        assert r.status_code == 204, r.text
+
+    await db.rollback()  # pick up the endpoint's committed state
+    assert await auto_match_books(db) == 0
+    assert (await db.execute(select(BookPair))).scalars().all() == []
+
+    eb = (await db.execute(select(EBook).where(EBook.id == eb_id))).scalar_one()
+    ab = (await db.execute(
+        select(AudioBook).where(AudioBook.id == ab_id))).scalar_one()
+    assert eb.auto_pair_excluded_ids == [ab_id]
+    assert ab.auto_pair_excluded_ids == [eb_id]
+
+
+async def test_unpairing_still_records_the_file_hashes_as_well(
+    db, make_client, make_user, auth_header
+):
+    """Hash exclusions are kept, not replaced — a rehash keeps remapping them."""
+    eb = await make_ebook(db, title="Mistborn", author="Brandon Sanderson",
+                          file_hash="ebook-hash")
+    ab = await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                              file_hash="audio-hash")
+    eb_id, ab_id = eb.id, ab.id
+    assert await auto_match_books(db) == 1
+    await db.commit()
+    pair = (await db.execute(select(BookPair))).scalar_one()
+
+    editor = await make_user(username="editor", role="editor")
+    async with make_client(library.router) as c:
+        r = await c.delete(f"/api/library/pairs/{pair.id}",
+                           headers=auth_header(editor))
+        assert r.status_code == 204, r.text
+
+    await db.rollback()
+    eb = (await db.execute(select(EBook).where(EBook.id == eb_id))).scalar_one()
+    ab = (await db.execute(
+        select(AudioBook).where(AudioBook.id == ab_id))).scalar_one()
+    assert eb.auto_pair_excluded_hashes == ["audio-hash"]
+    assert ab.auto_pair_excluded_hashes == ["ebook-hash"]
+    # …and the id key went in alongside it, not instead of it.
+    assert eb.auto_pair_excluded_ids == [ab_id]
+    assert ab.auto_pair_excluded_ids == [eb_id]
+
+
+async def test_the_matcher_never_unpairs_an_existing_pair(db):
+    """The tightened rules only stop *new* pairs; existing ones are untouched.
+
+    `auto_match_books` reads only rows that are not in `book_pairs` and never
+    deletes. A pair the old rules created — here a #1 ebook against a #1.5
+    audiobook, which the float comparison would now reject — survives a scan.
+    """
+    eb = await make_ebook(db, title="The Emperor's Soul", series="Elantris",
+                          series_index=1)
+    ab = await make_audiobook(db, title="The Emperor's Soul", series="Elantris",
+                              series_index=1.5)
+    db.add(BookPair(ebook_id=eb.id, audiobook_id=ab.id,
+                    status=PairStatus.AUTO_MATCHED))
+    await db.commit()
+
+    assert await auto_match_books(db) == 0
+
+    pair = (await db.execute(select(BookPair))).scalar_one()
+    assert (pair.ebook_id, pair.audiobook_id) == (eb.id, ab.id)
 
 
 async def test_one_audiobook_is_never_claimed_by_two_ebooks_in_one_run(db):

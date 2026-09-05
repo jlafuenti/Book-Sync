@@ -102,15 +102,30 @@ entirely, so keep a catch-all `<Title>` at the end.
 After every scan, unpaired ebooks are compared against unpaired audiobooks
 (`auto_match_books`). A candidate pair must clear all of these:
 
-- **Not previously unpaired by hand.** Manually unpairing records each side's file hash in the
-  other's `auto_pair_excluded_hashes`, so the scanner won't re-suggest that combination.
+- **Both titles non-empty.** A row whose title is blank (or only whitespace) is never auto-paired.
+  Two empty titles are a perfect fuzzy match on nothing at all, which is metadata missing, not a
+  book found.
+- **Not previously unpaired by hand.** Manually unpairing records the two rows against each other
+  twice over — by row id (`auto_pair_excluded_ids`) and, when both files have been hashed, by file
+  hash (`auto_pair_excluded_hashes`). Either key blocks the pair, so the scanner won't re-suggest
+  that combination even for a row that has no hash. Re-pairing the two by hand still works; the
+  exclusion only tells the *scanner* to keep out.
 - **Series compatible.** If both sides carry a series name they must match at ≥85 (fuzzy, articles
-  stripped); if both also carry an index, the whole numbers must be equal. A series on only one
-  side is treated as missing metadata, not as a conflict.
+  stripped); if both also carry an index, the indexes must be the same **number** — book 1 and the
+  #1.5 novella are different books. `1`, `1.0` and `01` all mean book one; an index that is not a
+  number at all is treated as missing. A series on only one side is treated as missing metadata,
+  not as a conflict.
 - **Author gate.** If both sides have an author they must match at ≥70. Initials and suffixes are
   normalized first, so `L.E. Modesitt Jr.` and `L. E. Modesitt, Jr.` compare equal.
-- **Title score ≥75.** Fuzzy token-sort comparison with leading `the`/`a`/`an` stripped. An author
-  match of ≥80 adds a +10 bonus to the title score.
+- **Title score ≥75, or ≥90 when either side has no author.** Fuzzy token-sort comparison with
+  leading `the`/`a`/`an` stripped. An author match of ≥80 adds a +10 bonus to the title score. With
+  an author missing there is nothing to corroborate a near miss — `The Way of Kings` and
+  `The Way of Kings Prime` score 80 and are different books — so the title alone has to be much
+  better.
+
+These rules only decide which **new** pairs a scan creates. `auto_match_books` looks at rows that
+are not already in `book_pairs` and never deletes one, so tightening them cannot unpair anything
+that already exists; use the Pairs page to correct an old pair.
 
 Each ebook takes its single best-scoring audiobook, and each audiobook is claimed at most once.
 Pairs created this way get status `AUTO_MATCHED` — review them; the scanner is deliberately

@@ -72,7 +72,12 @@ class EBook(Base):
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Hashes of audiobooks this ebook must not be auto-paired with (set on manual unpair)
+    # Audiobooks this ebook must not be auto-paired with (set on manual unpair).
+    # Two keys, either of which blocks the pair: the row ids — always available,
+    # so a hash-less legacy row still remembers the unpair (issue #253) — and the
+    # file hashes, which survive a delete-and-reingest at a new id and are what
+    # `POST /rehash` remaps.
+    auto_pair_excluded_ids: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # `file_path` is the identity key: the scan, the ACSM/convert path and the
@@ -142,7 +147,9 @@ class AudioBook(Base):
     # New-items inbox: cleared once user acknowledges or pairs this item
     acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # Hashes of ebooks this audiobook must not be auto-paired with (set on manual unpair)
+    # Ebooks this audiobook must not be auto-paired with (set on manual unpair).
+    # Same two keys as `EBook.auto_pair_excluded_ids` above.
+    auto_pair_excluded_ids: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
     auto_pair_excluded_hashes: Mapped[list] = mapped_column(JSON_OR_JSONB, nullable=False, default=list)
 
     # Same reasoning as `EBook` above (issue #256): `file_path` is the identity
