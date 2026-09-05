@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { ThemePicker } from './ThemePicker'
 import SignOutEverywhere from './SignOutEverywhere'
 
@@ -16,15 +17,29 @@ const DRAWER_NAV = [
     { path: '/transcription', label: 'Transcription',
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
     },
-    { path: '/system/status', label: 'System',
+    // Gated, and the destination depends on role -- the same rule the sidebar
+    // and the bottom tab bar already follow (issues #283, #208). /system/status
+    // is admin-only; Troubleshoot and Unsupported are editor-level. Leaving the
+    // entry here for everyone sent a plain user into a redirect back to Home,
+    // which reads as a broken app rather than as a permission boundary, and
+    // pointed an editor at the one tab they cannot open.
+    { path: '/system', label: 'System', minRole: 'editor',
       icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
     },
 ]
 
 export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOutEverywhere }) {
     const location = useLocation()
+    const { hasMinRole } = useAuth()
     const drawerRef = useRef(null)
     const startXRef = useRef(null)
+
+    const items = DRAWER_NAV.filter(item => !item.minRole || hasMinRole(item.minRole))
+    const target = (item) => (
+        item.path === '/system'
+            ? (hasMinRole('admin') ? '/system/status' : '/system/troubleshoot')
+            : item.path
+    )
 
     const roleLabel = user?.role
         ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
@@ -57,7 +72,7 @@ export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOu
 
     const isActive = (item) => {
         if (item.exact) return location.pathname === item.path
-        return location.pathname.startsWith(item.path.replace('/status', ''))
+        return location.pathname.startsWith(item.path)
     }
 
     return (
@@ -87,10 +102,10 @@ export default function MobileDrawer({ open, onClose, user, onLogout, onSignedOu
                 </div>
 
                 <nav>
-                    {DRAWER_NAV.map(item => (
+                    {items.map(item => (
                         <Link
                             key={item.path}
-                            to={item.path}
+                            to={target(item)}
                             className={`drawer-link ${isActive(item) ? 'active' : ''}`}
                         >
                             {item.icon}

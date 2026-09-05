@@ -104,3 +104,47 @@ describe('the status reads are admin-only', () => {
         expect(diskMock).not.toHaveBeenCalled()
     })
 })
+
+/**
+ * Issue #208: `GET /api/library/calibre-status` is editor-and-up server-side --
+ * it shells out to `ebook-convert --version`, and a read-only account can
+ * convert nothing.
+ *
+ * `CalibreStatusCard` is the only caller in the whole web client
+ * (`getCalibreStatus` has one import site, here), and it lives inside the
+ * status dashboard, which never renders below admin: `loadStatus` is the only
+ * thing that clears `statusLoading`, and it is `canAdmin`-gated. So the tile
+ * cannot fire from a session that would be refused. Pinned because the coupling
+ * is indirect -- someone moving the card out of the dashboard, or giving the
+ * page a non-admin loading path, would silently start firing a read that 403s.
+ */
+describe('the calibre probe follows the same gate', () => {
+    it('fires for an admin', async () => {
+        authRef.role = 'admin'
+        renderPage('status')
+        await waitFor(() => expect(calibreMock).toHaveBeenCalled())
+    })
+
+    it('does not fire for an editor', async () => {
+        authRef.role = 'editor'
+        renderPage('status')
+        await new Promise(r => setTimeout(r, 0))
+        expect(calibreMock).not.toHaveBeenCalled()
+    })
+
+    it('does not fire for a plain user', async () => {
+        // Belt and braces: RequireRole keeps a plain user off every /system
+        // route (App.test.jsx), so this component never mounts for them at all.
+        authRef.role = 'user'
+        renderPage('status')
+        await new Promise(r => setTimeout(r, 0))
+        expect(calibreMock).not.toHaveBeenCalled()
+    })
+
+    it('does not fire from the one tab an editor can open', async () => {
+        authRef.role = 'editor'
+        renderPage('unsupported')
+        await waitFor(() => expect(unsupportedMock).toHaveBeenCalled())
+        expect(calibreMock).not.toHaveBeenCalled()
+    })
+})

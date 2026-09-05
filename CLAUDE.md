@@ -150,6 +150,18 @@ retention live in the `system_settings` table (defaults in `routers/settings.py`
 edited from the System page. Grepping the filesystem for a host or a mode answers the
 wrong question — read the table.
 
+### Request Transactions
+
+`get_db` commits once, after the handler returns — **one request, one transaction, and the
+dependency owns it**. Handlers do not commit; helpers never commit (they may `flush()`); background
+work opens its own `async_session()` and says so in its docstring. A handler may commit by hand in
+exactly two cases, and must say which in a comment: to persist state before an external side effect
+that can fail or cannot be undone (a file rewrite, an unlink), or to leave progress behind inside a
+long library job, which commits in batches on purpose. The remaining trailing commits in
+`routers/library.py` duplicate `get_db`'s and come out opportunistically, one endpoint at a time,
+never as a sweep. Read `docs/request-transactions.md` before adding a `db.commit()` — or before
+deleting one that looks redundant.
+
 ### Cross-Device Position Sync
 Chapter + sentence index is the portable anchor; a Readium locator (Android) and
 an epub.js CFI (web) are device-local hints, stored per device in
