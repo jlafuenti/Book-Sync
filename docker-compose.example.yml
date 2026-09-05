@@ -4,10 +4,19 @@
 # show up in `git status`/`git diff` and can't drift into a merge conflict when
 # you pull updates to this template.
 #
-# `${POSTGRES_PASSWORD}` below is interpolated by compose from a `.env` file
-# sitting next to docker-compose.yml. Create it too, or the stack never comes
-# up (postgres refuses to initialise with an empty password):
-#   cp .env.example .env    # then fill in POSTGRES_PASSWORD
+# Secrets are NOT in `environment:` (issue #180). `docker inspect` prints a
+# container's whole environment and so does /proc/1/environ, so anything set
+# there is readable by everyone in the `docker` group and by anything that
+# reaches code execution inside the container. Instead each value lives in a
+# file under ./secrets/, compose mounts it at /run/secrets/<name>, and the
+# environment carries only the path (`JWT_SECRET_KEY_FILE=...`). Create the
+# three files before the first `up` — secrets/README.md has the commands:
+#   cd secrets && umask 077 && ...
+#
+# `.env` is still needed for PUID/PGID, which are compose *interpolation*
+# variables and cannot come from a secret (compose reads them before any
+# container exists):
+#   cp .env.example .env
 services:
   server:
     build: ./server
@@ -57,17 +66,46 @@ services:
       # IMPORTANT: point this at a NAS path OFF the docker host's disk — a backup
       # on the same disk that dies is worthless.
       - /path/to/nas/booksync-backups:/backups # ← REPLACE with your NAS backups path
+    # The three secret files, mounted read-only at /run/secrets/<name>. The
+    # `*_FILE` variables below are what points the server at them.
+    secrets:
+      - jwt_secret_key
+      - postgres_password
+      - credential_enc_keys
     environment:
-      # Password comes from POSTGRES_PASSWORD below — keep both in sync.
-      - DATABASE_URL=postgresql+asyncpg://booksync:${POSTGRES_PASSWORD}@db:5432/booksync
-      # APP_ENV=prod (the default) refuses to start unless JWT_SECRET_KEY,
-      # CREDENTIAL_ENC_KEYS, and POSTGRES_PASSWORD below are set to real values.
-      # Set APP_ENV=dev only for local development — it allows the zero-config
-      # insecure defaults.
-      - APP_ENV=prod
+      # ── Secrets: paths, never values (issue #180) ──────────────────────────
+      #
+      # Each `<NAME>_FILE` takes precedence over the plain `<NAME>`, and a path
+      # that does not exist, cannot be read, or is empty is a startup error
+      # naming the variable — never a silent fallback. One trailing newline is
+      # stripped, so `printf '%s\n' ... > file` is fine.
+      #
+      # The server has no DATABASE_URL: it assembles
+      # postgresql+asyncpg://booksync:<password>@db:5432/booksync from the
+      # password below, because compose can interpolate a variable into a URL
+      # but cannot interpolate a secret. Set DATABASE_URL (or
+      # DATABASE_URL_FILE) only for an external database — see the commented
+      # block at the end of this service.
+      #
       # Generate with:
       #   python -c "import secrets; print(secrets.token_urlsafe(64))"
-      - JWT_SECRET_KEY=
+      - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
+      # Comma-separated list of Fernet keys used to encrypt source credentials
+      # (Audible auth blob, ABS API token). First key encrypts new writes; all
+      # keys are tried for decryption, so rotation is "prepend a new key".
+      # Generate with:
+      #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+      - CREDENTIAL_ENC_KEYS_FILE=/run/secrets/credential_enc_keys
+      # The same secret the `db` service reads below — one file, two containers,
+      # so the two can never drift apart.
+      # Generate with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      # APP_ENV=prod (the default) refuses to start unless the JWT secret, the
+      # credential encryption keys and the Postgres password are set to real
+      # values. Set APP_ENV=dev only for local development — it allows the
+      # zero-config insecure defaults.
+      - APP_ENV=prod
       # Comma-separated list of allowed web origins for CORS. APP_ENV=prod
       # refuses to start with the wildcard default — set this to your actual
       # web frontend origin(s).
@@ -91,12 +129,33 @@ services:
       - AUDIOBOOK_DIR=/data/audiobooks
       - APP_DATA_DIR=/data/app
       - IMPORTS_DIR=/data/imports
-      # Comma-separated list of Fernet keys used to encrypt source credentials
-      # (Audible auth blob, ABS API token). First key encrypts new writes; all
-      # keys are tried for decryption, so rotation is "prepend a new key".
-      # Generate with:
-      #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
-      - CREDENTIAL_ENC_KEYS=
+      # ── The less-safe alternative, for anyone who wants it ────────────────
+      #
+      # Every secret above can be passed as a plain value instead, interpolated
+      # by compose from `.env`. The server still supports it; it is simply not
+      # what this template ships, because these lines are what `docker inspect`
+      # and /proc/1/environ hand to anyone who can read them. If you take this
+      # path, delete the matching `*_FILE` line and the `secrets:` list above,
+      # and fill in POSTGRES_PASSWORD in `.env`.
+      #
+      # - DATABASE_URL=postgresql+asyncpg://booksync:${POSTGRES_PASSWORD}@db:5432/booksync
+      # - JWT_SECRET_KEY=
+      # - CREDENTIAL_ENC_KEYS=
+      #
+      # An external Postgres — a managed instance, a different host, a
+      # non-default sslmode — is the one case for setting the URL explicitly
+      # even with secrets. Point it at a file of its own:
+      # - DATABASE_URL_FILE=/run/secrets/database_url
+      # (declare `database_url` in the top-level `secrets:` block and add it to
+      # this service's `secrets:` list; an explicit URL wins over the assembled
+      # one, and POSTGRES_PASSWORD_FILE is then only needed by `db`.)
+      #
+      # Overriding the parts the assembled URL is built from — only if your
+      # `db` service below uses a different role or database name:
+      # - POSTGRES_USER=booksync
+      # - POSTGRES_DB=booksync
+      # - POSTGRES_HOST=db
+      # - POSTGRES_PORT=5432
       # Multipart uploads whose Content-Length exceeds this are refused with
       # 413 before the body is parsed (issue #157). Default is 10 GiB —
       # audiobook uploads are multi-GB, so keep it generous.
@@ -149,13 +208,20 @@ services:
     # "finish the hardening" pass fails a test instead of the database.
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - postgres_password
     environment:
       - POSTGRES_USER=booksync
-      # Generate with:
-      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
-      # Only applied on first init of the booksync_db volume — see README for
-      # how to rotate the password on an already-initialized deployment.
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # The postgres image reads the `_FILE` convention natively, so the same
+      # secret file feeds both this container and the server's assembled
+      # DATABASE_URL — they cannot drift apart (issue #180).
+      #
+      # Only applied on first init of the booksync_db volume. Switching an
+      # already-initialized deployment from POSTGRES_PASSWORD to
+      # POSTGRES_PASSWORD_FILE is safe *as long as the file holds the same
+      # value*: the variable is ignored after init either way. To change the
+      # value, see docs/operations.md, "Rotating the Postgres password".
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
       - POSTGRES_DB=booksync
     volumes:
       - booksync_db:/var/lib/postgresql/data
@@ -196,3 +262,23 @@ services:
 
 volumes:
   booksync_db:
+
+# File-backed secrets (issue #180). Each file holds one value and nothing else;
+# `./secrets/` is gitignored except for its README, which has the commands that
+# create them. Compose mounts each at /run/secrets/<name>, mode 0444, inside
+# only the services that list it above.
+#
+# `docker compose up` fails with a clear error if one of these files is
+# missing — deliberately, since the alternative is a server that starts on the
+# shipped default secret.
+secrets:
+  jwt_secret_key:
+    file: ./secrets/jwt_secret_key
+  postgres_password:
+    file: ./secrets/postgres_password
+  credential_enc_keys:
+    file: ./secrets/credential_enc_keys
+  # For an external database only — see the commented DATABASE_URL_FILE line on
+  # the server service.
+  # database_url:
+  #   file: ./secrets/database_url

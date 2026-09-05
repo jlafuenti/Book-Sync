@@ -99,24 +99,56 @@ def _mounts(body: list[str]) -> list[str]:
     return [m for m in mounts if m]
 
 
-def _declared_volumes(path: str) -> list[str]:
-    """Names under the top-level `volumes:` mapping."""
+def _top_level_names(path: str, section: str) -> list[str]:
+    """Names under a top-level mapping such as `volumes:` or `secrets:`."""
     with open(path, encoding="utf-8") as fh:
         lines = fh.read().splitlines()
 
     names = []
-    in_volumes = False
+    in_section = False
     for raw in lines:
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             continue
         indent = len(raw) - len(raw.lstrip(" "))
         if indent == 0:
-            in_volumes = stripped.rstrip() == "volumes:"
+            in_section = stripped.rstrip() == f"{section}:"
             continue
-        if in_volumes and indent == 2 and stripped.endswith(":"):
+        if in_section and indent == 2 and stripped.endswith(":"):
             names.append(stripped[:-1])
     return names
+
+
+def _declared_volumes(path: str) -> list[str]:
+    """Names under the top-level `volumes:` mapping."""
+    return _top_level_names(path, "volumes")
+
+
+def _declared_secrets(path: str) -> dict[str, str]:
+    """`name: file` for every entry in the top-level `secrets:` mapping."""
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    out: dict[str, str] = {}
+    in_section = False
+    current = None
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent == 0:
+            in_section = stripped.rstrip() == "secrets:"
+            current = None
+            continue
+        if not in_section:
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            current = stripped[:-1]
+            out[current] = ""
+        elif current is not None and stripped.startswith("file:"):
+            out[current] = stripped.split(":", 1)[1].strip()
+    return out
 
 
 @pytest.mark.parametrize("path", COMPOSE_TEMPLATES, ids=lambda p: os.path.relpath(p, _REPO_ROOT))
@@ -236,7 +268,9 @@ def test_helper_parsers_find_the_expected_lists():
     """Guard the environment/volume scanners too — a silently-empty parse would
     make every assertion below vacuously true."""
     server = _services(COMPOSE_TEMPLATES[0])["server"]
-    assert "DATABASE_URL" in _env_vars(server)
+    # Not DATABASE_URL: the server assembles it from the Postgres password
+    # secret now, so the template no longer carries it (issue #180).
+    assert "APP_ENV" in _env_vars(server)
     assert any(m.endswith(":/data/app") for m in _mounts(server))
     assert _declared_volumes(COMPOSE_TEMPLATES[0]), "no top-level volumes parsed"
 
@@ -285,9 +319,12 @@ def test_web_service_declares_only_vite_vars_the_app_reads():
 
 def test_server_service_env_vars_are_settings_aliases():
     """Every `- NAME=` under `server` must be a real setting the app reads."""
-    from config import Settings
+    from config import SECRET_FILE_ENV_VARS, SECRET_FILE_SUFFIX, Settings
 
     aliases = {field.alias for field in Settings.model_fields.values() if field.alias}
+    # `<NAME>_FILE` is read by config.SecretFileSettingsSource rather than
+    # declared as a field of its own (issue #180) — real, just not an alias.
+    aliases |= {name + SECRET_FILE_SUFFIX for name in SECRET_FILE_ENV_VARS}
     body = _services(COMPOSE_TEMPLATES[0])["server"]
     unknown = sorted(name for name in _env_vars(body) if name not in aliases)
     assert not unknown, (
@@ -312,11 +349,12 @@ def test_server_whisper_model_matches_the_code_default():
 
 
 def test_env_example_ships_postgres_password():
-    """`${POSTGRES_PASSWORD}` needs a documented source (issue #232).
+    """`POSTGRES_PASSWORD` needs a documented source (issue #232).
 
-    Compose interpolates it from a `.env` beside the compose file. With no
-    `.env.example` to copy, a fresh clone substitutes the empty string and
-    postgres:16-alpine refuses to initialise.
+    The shipped template reads it from a docker secret rather than
+    interpolating it (issue #180), but the plain-environment path is still
+    supported and still documented in the template — so `.env.example` keeps
+    the row, and says which of the two it belongs to.
     """
     path = os.path.join(_REPO_ROOT, ".env.example")
     assert os.path.isfile(path), (
@@ -541,3 +579,137 @@ def test_env_example_documents_the_puid_and_pgid_knobs():
         text = fh.read()
     for name in ("PUID", "PGID"):
         assert f"{name}=" in text, f".env.example does not document {name}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #180, second half: secrets must not be passed in `environment:`.
+#
+# `docker inspect` prints a container's whole environment, and so does
+# `/proc/1/environ` — so `JWT_SECRET_KEY`, `CREDENTIAL_ENC_KEYS` and the
+# password inside `DATABASE_URL` were readable by anyone in the `docker` group
+# and by anything that reached code execution inside the container. Compose
+# `secrets:` puts each value in a file mounted at `/run/secrets/<name>`, and the
+# environment carries only the path, which `server/config.py` resolves through
+# its `<NAME>_FILE` support.
+#
+# The plain-`environment:` path still works in the code — an operator who
+# prefers it can uncomment it — but it must not be what the template *ships*:
+# the template is what gets copied, and a commented alternative is a choice
+# while an uncommented one is the default.
+# ---------------------------------------------------------------------------
+
+# Names that must never appear uncommented under any service's `environment:`.
+PLAIN_SECRET_ENV_NAMES = [
+    "JWT_SECRET_KEY",
+    "CREDENTIAL_ENC_KEYS",
+    "DATABASE_URL",
+    "POSTGRES_PASSWORD",
+]
+
+
+def test_the_template_passes_no_secret_through_environment():
+    for service, body in _services(COMPOSE_TEMPLATES[0]).items():
+        present = sorted(set(_env_vars(body)) & set(PLAIN_SECRET_ENV_NAMES))
+        assert not present, (
+            f"docker-compose.example.yml passes {present} to `{service}` through "
+            "`environment:`, where `docker inspect` and /proc/1/environ expose "
+            "them. Use the `<NAME>_FILE` form backed by a compose secret, and "
+            "leave the plain form commented out for operators who choose it."
+        )
+
+
+def test_every_file_variable_points_at_a_declared_secret():
+    """`JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key` is a promise that a
+    secret called `jwt_secret_key` is mounted into that service. A typo in
+    either half fails at boot with a missing-file error, so pin both."""
+    path = COMPOSE_TEMPLATES[0]
+    declared = _declared_secrets(path)
+    assert declared, "docker-compose.example.yml declares no top-level secrets:"
+
+    seen = 0
+    for service, body in _services(path).items():
+        granted = _list_block(body, "secrets:")
+        for name, value in _env_vars(body).items():
+            if not name.endswith("_FILE"):
+                continue
+            seen += 1
+            assert value.startswith("/run/secrets/"), (
+                f"`{service}`'s {name}={value!r} is not a compose secret path; "
+                "a secret mounted by compose always lands in /run/secrets/."
+            )
+            secret = value[len("/run/secrets/"):]
+            assert secret in declared, (
+                f"`{service}` reads {name}={value!r}, but no top-level secret "
+                f"called `{secret}` is declared."
+            )
+            assert secret in granted, (
+                f"`{service}` reads {name}={value!r}, but `{secret}` is not in "
+                "that service's own `secrets:` list, so it is never mounted."
+            )
+    assert seen >= 3, (
+        f"only {seen} `*_FILE` variables in the template — the three shipped "
+        "secrets (JWT key, Postgres password, credential encryption keys) must "
+        "all be passed by file."
+    )
+
+
+def test_every_declared_secret_is_file_backed_and_used():
+    """A declared secret nobody mounts reads as documentation that it is in
+    use — the same failure `test_every_declared_volume_is_mounted_by_a_service`
+    exists for."""
+    path = COMPOSE_TEMPLATES[0]
+    declared = _declared_secrets(path)
+    assert declared, "docker-compose.example.yml declares no top-level secrets:"
+    granted = {
+        name
+        for body in _services(path).values()
+        for name in _list_block(body, "secrets:")
+    }
+    orphans = sorted(set(declared) - granted)
+    assert not orphans, (
+        f"top-level secrets {orphans} are declared but granted to no service."
+    )
+    for name, source in declared.items():
+        assert source.startswith("./secrets/"), (
+            f"secret `{name}` is backed by {source!r}; the template's secrets "
+            "live in ./secrets/ beside the compose file, which .gitignore "
+            "fences off (see test_repo_hygiene.py)."
+        )
+
+
+def test_server_and_db_share_one_postgres_password_secret():
+    """The password has to be identical in two containers. Two copies drift;
+    one file cannot. The official postgres image reads the `_FILE` form
+    natively, which is what makes this possible."""
+    services = _services(COMPOSE_TEMPLATES[0])
+    server_path = _env_vars(services["server"]).get("POSTGRES_PASSWORD_FILE")
+    db_path = _env_vars(services["db"]).get("POSTGRES_PASSWORD_FILE")
+    assert server_path, "`server` does not read POSTGRES_PASSWORD_FILE"
+    assert db_path, "`db` does not read POSTGRES_PASSWORD_FILE"
+    assert server_path == db_path, (
+        f"`server` reads the Postgres password from {server_path!r} and `db` "
+        f"from {db_path!r} — they must be the same secret."
+    )
+
+
+def test_the_secrets_readme_documents_every_secret_file():
+    """A file the operator has to create by hand, with no instructions, is how
+    a deployment ends up with an empty secret."""
+    path = os.path.join(_REPO_ROOT, "secrets", "README.md")
+    assert os.path.isfile(path), (
+        "secrets/README.md is missing — docker-compose.example.yml points at "
+        "./secrets/, so a fresh clone has an empty directory and no idea what "
+        "goes in it."
+    )
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+
+    for source in _declared_secrets(COMPOSE_TEMPLATES[0]).values():
+        filename = source.rsplit("/", 1)[-1]
+        assert filename in text, f"secrets/README.md does not mention {filename!r}"
+
+    for needle in ("umask 077", "secrets.token_urlsafe", "Fernet.generate_key"):
+        assert needle in text, (
+            f"secrets/README.md does not give the {needle!r} step — the point "
+            "of the file is that the operator can follow it verbatim."
+        )

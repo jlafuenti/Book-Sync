@@ -240,6 +240,15 @@ _MUST_BE_IGNORED = [
     ".env.prod",
     ".env.production",
     "server/.env.local",
+    # Docker compose secrets (issue #180). These are the live values, one per
+    # file, in the directory docker-compose.example.yml points its `secrets:`
+    # block at — the most concentrated collection of secrets in the whole
+    # deployment, sitting inside the checkout by design.
+    "secrets/jwt_secret_key",
+    "secrets/postgres_password",
+    "secrets/credential_enc_keys",
+    "secrets/database_url",
+    "secrets/anything-the-operator-adds-later",
     # Signing material (Play upload/release keys)
     "android/app/release.keystore",
     "android/app/upload.jks",
@@ -263,6 +272,11 @@ _MUST_NOT_BE_IGNORED = [
     "docker-compose.example.yml",
     "jetson/docker-compose.example.yml",
     "Caddyfile.example",
+    # The one tracked file inside the otherwise-ignored secrets directory: it
+    # explains what the operator has to create there. `/secrets/*` plus a
+    # `!/secrets/README.md` negation — and not `/secrets/`, because git cannot
+    # re-include a file inside an excluded *directory* (issue #180).
+    "secrets/README.md",
 ]
 
 
