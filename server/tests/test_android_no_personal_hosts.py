@@ -215,3 +215,241 @@ def test_reported_line_numbers_are_accurate():
 def test_allowed_literals_still_pass_when_visible_in_a_url():
     """10.0.2.2 is the emulator's alias for the host machine, allowed on purpose."""
     assert scan_text('val emu = "http://10.0.2.2:8000"\n') == []
+
+
+_KOTLIN_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_XML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _strip_kotlin_comments(text: str) -> str:
+    """Blank Kotlin comments, leaving string literals alone (issue #311).
+
+    This used to be two regexes. Neither knew what a string was, so the `//` in
+    any `http://` blanked the rest of the line and a `/*` inside a literal opened
+    a comment that ran to the next `*/` anywhere in the file. The guard could
+    therefore not see a URL in Kotlin code at all -- including the hardcoded
+    default server URL it was written to catch.
+
+    One pass, tracking whether we are inside `"`, `\'` or a `\"\"\"` block.
+    Comments become spaces; newlines are preserved so reported line numbers stay
+    accurate. Not a Kotlin parser, and does not need to be: the only question is
+    whether a `//` or `/*` is inside a literal.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        if text.startswith('"""', i):
+            end = text.find('"""', i + 3)
+            i = n if end == -1 else end + 3
+        elif text[i] == '"' or text[i] == "'":
+            quote = text[i]
+            i += 1
+            while i < n and text[i] != quote:
+                # A backslash escapes whatever follows, including the quote. An
+                # unterminated literal stops at the newline rather than running
+                # away with the rest of the file.
+                if text[i] == "\\":
+                    i += 1
+                elif text[i] == "\n":
+                    break
+                i += 1
+            i += 1
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            stop = n if end == -1 else end + 2
+            while i < stop:
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def strip_comments(text: str, suffix: str) -> str:
+    """Blank out comments, preserving line numbering so offenders stay locatable."""
+
+    def _blank(match: re.Match) -> str:
+        # Keep the newlines so line numbers don't shift.
+        return re.sub(r"[^\n]", " ", match.group(0))
+
+    if suffix == ".xml":
+        return _XML_COMMENT.sub(_blank, text)
+    if suffix == ".pro":
+        # ProGuard rules: `#` comments, and no string syntax to protect.
+        return re.sub(r"#[^\n]*", _blank, text)
+    return _strip_kotlin_comments(text)
+
+
+
+def scan_plain_text(text: str) -> list[tuple[int, str]]:
+    """The same detectors, with no comment stripping — for prose, not source.
+
+    `strip_comments` exists to answer "is this `//` a comment or part of a URL?",
+    a question only source code asks. Run it over Markdown and the `//` in every
+    link blanks the rest of the line, hiding the host inside it. Documentation
+    (docs/privacy.md, checked by test_docs_contract.py) is scanned with this
+    instead: every line is content, so every line is examined.
+    """
+    found = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for match in list(_PRIVATE_IP.finditer(line)) + list(_PERSONAL_HOST.finditer(line)):
+            literal = match.group(0)
+            if literal in ALLOWED_LITERALS:
+                continue
+            found.append((lineno, literal))
+    return found
+
+
+
+# ---------------------------------------------------------------------------
+# Issue #150: the app's declared third parties, pinned against the sources.
+#
+# The privacy policy (docs/privacy.md) and the Play Data safety form both rest on
+# one factual claim: apart from the server the *user* configures, the app talks to
+# exactly one outside host — `api.dictionaryapi.dev`, on demand, when the reader's
+# "Define" action is used. Play enforces those answers retroactively, so the day
+# someone adds a second destination is the day the published policy becomes false.
+#
+# Nothing else notices that. The tests above catch a *personal* host; a perfectly
+# generic new SDK endpoint sails through them. This one fails instead, and its
+# message says what else has to be updated.
+# ---------------------------------------------------------------------------
+
+# Every host the app may name in code, and why. Anything not here is a new
+# destination and needs a policy/form revision before it can be allowlisted.
+DECLARED_THIRD_PARTY_HOSTS = {
+    # The dictionary lookup in the reader (AppModule.provideDictionaryRetrofit).
+    # The single entry the privacy policy exists to declare.
+    "api.dictionaryapi.dev",
+}
+
+_NON_DESTINATION_HOSTS = {
+    # Retrofit's placeholder base URL while no server is configured
+    # (ServerUrlPolicy.UNCONFIGURED_BASE_URL). Requests to it fail locally.
+    "localhost",
+    "127.0.0.1",
+    # The emulator's alias for the developer's own machine.
+    "10.0.2.2",
+    "0.0.0.0",
+    # The dead production hostname, kept so a stored value can be migrated off it
+    # (ServerUrlPolicy.LEGACY_SERVER_URL). Nothing resolves; nothing is sent.
+    f"booksync.{PERSONAL_DOMAIN}",
+    # Where the first-run screen sends someone who has no server yet
+    # (ServerUrlPolicy.TANDEM_REPO_URL). Handed to the *browser* via an intent —
+    # the app itself never requests it, and it carries no user data.
+    "github.com",
+    # RFC 2606 placeholders shown in hint text and error messages.
+    "example.com",
+    "tandem.example.com",
+}
+
+# `scheme://` followed by the authority. Stops at the first character that cannot
+# be part of a host: path, quote, whitespace, or a Kotlin interpolation.
+_URL_HOST = re.compile(r"https?://([^/\s\"'`)>\\$<{}]*)")
+
+_ANDROID_JAVA = os.path.join(_ANDROID_APP, "src", "main", "java")
+
+
+def hosts_in_kotlin(text: str) -> set[str]:
+    """Hostnames appearing in non-comment Kotlin, port and userinfo stripped.
+
+    Empty authorities (a bare `"https://"` used as a scheme test, of which
+    ServerUrlPolicy has several) and interpolated ones (`https://$trimmed`,
+    `http://$currentIp:$port`) are not hosts and are dropped — the regex stops at
+    the `$`, so those come through as an empty string.
+    """
+    found = set()
+    for authority in _URL_HOST.findall(strip_comments(text, ".kt")):
+        host = authority.rsplit("@", 1)[-1].split(":", 1)[0].strip().lower()
+        if host:
+            found.add(host)
+    return found
+
+
+def _hardcoded_hosts():
+    """(relative path, host) for every host literal under android/app/src/main/java."""
+    found = []
+    for root, dirs, files in os.walk(_ANDROID_JAVA):
+        dirs[:] = [d for d in dirs if d not in {"build", ".gradle", ".kotlin"}]
+        for name in files:
+            if not name.endswith(".kt"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            rel = os.path.relpath(path, _REPO_ROOT)
+            found.extend((rel, host) for host in sorted(hosts_in_kotlin(text)))
+    return found
+
+
+def test_only_declared_third_party_hosts_are_hardcoded():
+    allowed = DECLARED_THIRD_PARTY_HOSTS | _NON_DESTINATION_HOSTS
+    offenders = [(rel, host) for rel, host in _hardcoded_hosts() if host not in allowed]
+    assert not offenders, (
+        "Undeclared hosts hardcoded in the Android sources:\n"
+        + "\n".join(f"  {rel} -> {host}" for rel, host in offenders)
+        + "\n\nThe privacy policy (docs/privacy.md) and the Play Data safety form "
+        "in docs/play-listing.md both state that the only third party the app "
+        "contacts is api.dictionaryapi.dev. Update both, then add the host to "
+        "DECLARED_THIRD_PARTY_HOSTS with a note saying what it receives — or, if "
+        "it is not a data destination, to _NON_DESTINATION_HOSTS."
+    )
+
+
+def test_the_declared_dictionary_host_is_actually_still_there():
+    """The reverse: a policy declaring a call the app no longer makes is also wrong.
+
+    Without this, deleting the Define feature would leave the test above passing
+    against an empty tree and the published policy over-declaring.
+    """
+    hosts = {host for _, host in _hardcoded_hosts()}
+    assert DECLARED_THIRD_PARTY_HOSTS <= hosts, (
+        f"docs/privacy.md declares {sorted(DECLARED_THIRD_PARTY_HOSTS)} but the "
+        f"sources no longer contain it. Found: {sorted(hosts)}. If the dictionary "
+        "lookup was removed, remove the declaration from the policy and the Data "
+        "safety form too."
+    )
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        # The real shape of the one declared call.
+        ('.baseUrl("https://api.dictionaryapi.dev/")', {"api.dictionaryapi.dev"}),
+        # A new SDK endpoint: generic, no personal host, invisible to every other
+        # test in this file. This is the case the guard exists for.
+        ('val ingest = "https://telemetry.vendor.example/v1/events"',
+         {"telemetry.vendor.example"}),
+        # Ports and credentials are not part of the host.
+        ('val u = "http://user:pw@api.dictionaryapi.dev:8443/x"',
+         {"api.dictionaryapi.dev"}),
+        # Interpolation is not a host — the LAN cast server builds its URL this way.
+        ('val cast = "http://$currentIp:$localCastPort/"', set()),
+        # A bare scheme used as a prefix test is not a host either.
+        ('if (lower.startsWith("https://")) return trimmed', set()),
+        # Comments are exempt here for the same reason as the rest of the file.
+        ('// see https://telemetry.vendor.example for why\n', set()),
+    ],
+)
+def test_host_extraction_sees_what_it_must_see(source, expected):
+    assert hosts_in_kotlin(source + "\n") == expected
+
+
+def test_plain_text_scan_sees_a_host_inside_a_markdown_link():
+    """The reason docs are not scanned with `strip_comments` (issue #150).
+
+    Source mode reads the `//` in `https://` as a line comment unless it is
+    inside a string literal. Markdown has no string literals, so the whole link
+    would be blanked and a personal host in a published policy would pass.
+    """
+    line = f"Point the app at [my server](https://tandem.{PERSONAL_DOMAIN}/api).\n"
+    assert scan_plain_text(line) == [(1, f"tandem.{PERSONAL_DOMAIN}")]
+
+
+def test_plain_text_scan_still_honours_the_allowlist():
+    assert scan_plain_text("Try http://127.0.0.1:8000 on the same machine.\n") == []
