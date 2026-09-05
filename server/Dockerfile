@@ -54,10 +54,17 @@ ARG APP_GID=1000
 # device keys back into it at RUN time. Left at the default `/root` those are
 # the same directory only while the container is root — so it is set here,
 # before the plugin steps below, and made writable by any uid.
+#
+# `id tandem` is a build-time assertion, not decoration: a missing USER name
+# fails at `docker run` with "unable to find user", which is a much worse place
+# to discover it than here. (python:3.12-slim ships no uid/gid 1000, so the
+# guards below are for a future base-image change, not today.)
 ENV HOME=/home/tandem
 RUN set -eux; \
-    groupadd -g "${APP_GID}" tandem 2>/dev/null || true; \
-    useradd -u "${APP_UID}" -g "${APP_GID}" -d "${HOME}" -M -s /usr/sbin/nologin tandem 2>/dev/null || true; \
+    getent group "${APP_GID}" > /dev/null || groupadd -g "${APP_GID}" tandem; \
+    getent passwd "${APP_UID}" > /dev/null || \
+      useradd -u "${APP_UID}" -g "${APP_GID}" -d "${HOME}" -M -s /usr/sbin/nologin tandem; \
+    id tandem; \
     mkdir -p "${HOME}"; \
     chmod 0777 "${HOME}"
 
