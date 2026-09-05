@@ -375,7 +375,14 @@ kover {
                     "com.booksync.player.AudioPlayerService*",
                     "com.booksync.player.LocalCastHttpServer*",
                     "com.booksync.cast.*",
-                    "com.booksync.auto.*",
+                    // com.booksync.auto is NOT excluded as a package any more
+                    // (issue #172): the Android Auto browse tree and the voice
+                    // search matcher moved there precisely so they could be
+                    // tested, and excluding the package would have hidden them
+                    // again. Only the cover-art helper stays out — it needs a
+                    // real FileProvider and MediaMetadataRetriever; its pure
+                    // sampling math is tested via CoverArtHelperTest.
+                    "com.booksync.auto.CoverArtHelper*",
                     "com.booksync.di.*",
                     "com.booksync.data.local.BookSyncDatabase*",
                 )

@@ -28,10 +28,12 @@ sealed class CoverArtRung {
  * walks the rungs and stops at the first that yields bytes. Same shape as the
  * reader's restore ladder.
  *
- * Pure, and deliberately not in `com.booksync.auto` — that package is excluded
- * from Kover as untestable framework glue (`app/build.gradle.kts`), so logic
- * placed there cannot be covered. This mirrors [HeartbeatThrottle] and
- * `PositionSavePolicy`.
+ * Pure, and deliberately not in `CoverArtHelper` — that class is excluded from
+ * Kover as untestable framework glue (`app/build.gradle.kts`), so logic placed
+ * there cannot be covered. This mirrors [HeartbeatThrottle] and
+ * `PositionSavePolicy`. (The wider `com.booksync.auto` package stopped being
+ * excluded in issue #172, when the browse tree and search matcher moved into
+ * it as pure code.)
  *
  * @param cachedExists    `filesDir/covers/{audiobookId}.jpg` is present
  * @param audioFileExists the audiobook is downloaded, so it can be scanned
