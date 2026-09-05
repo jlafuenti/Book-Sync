@@ -392,3 +392,61 @@ async def test_requeue_409s_when_the_pair_vanished_under_it(
 
     assert r.status_code == 409
     assert "no longer exists" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/transcription/queue/history — bounded (issue #208)
+#
+# `limit: int = 50` was a plain int with no `Query(...)` bounds, so
+# `?limit=10000000` was a valid request that loaded that many rows and then ran
+# a per-row pair lookup on each. Every browse listing in the API is capped at
+# 500; this one was capped at nothing.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("limit=10000", 422),   # over the ceiling
+        ("limit=0", 422),       # a page of nothing is a client bug
+        ("limit=-1", 422),
+        ("offset=-1", 422),     # negative offsets are not a paging strategy
+        ("limit=200", 200),     # the ceiling itself is allowed
+        ("limit=1&offset=0", 200),
+    ],
+)
+async def test_queue_history_limit_and_offset_are_bounded(
+    db, make_client, make_user, auth_header, query, expected
+):
+    user = await make_user(username=f"hist{abs(hash(query)) % 10000}")
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.get(
+            f"/api/transcription/queue/history?{query}", headers=auth_header(user)
+        )
+
+    assert r.status_code == expected
+
+
+async def test_queue_history_is_rate_limited(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    from config import settings
+
+    user = await make_user(username="histrl")
+    monkeypatch.setattr(settings, "search_read_limit", 2)
+
+    async with make_client(transcription_router.router) as c:
+        codes = [
+            (
+                await c.get(
+                    "/api/transcription/queue/history", headers=auth_header(user)
+                )
+            ).status_code
+            for _ in range(3)
+        ]
+        over = await c.get(
+            "/api/transcription/queue/history", headers=auth_header(user)
+        )
+
+    assert codes == [200, 200, 429]
+    assert int(over.headers["Retry-After"]) > 0

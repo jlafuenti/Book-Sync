@@ -1,0 +1,31 @@
+# Build context for the Jetson transcription image
+# (jetson/docker-compose.example.yml, `context: .`).
+#
+# This image only copies `requirements.txt` and `server.py`, so the ignore file
+# is cheap insurance rather than a fix for a live leak — but the compose file in
+# this directory carries TRANSCRIPTION_API_KEY, and the build context is sent to
+# the daemon whole regardless of what the Dockerfile ends up copying.
+#
+# Pinned by server/tests/test_dockerfile_contract.py (issue #234).
+
+# Secrets and local config
+docker-compose.yml
+docker-compose.yml.*
+.env
+.env.*
+!.env.example
+
+# Tests
+test_server.py
+conftest.py
+
+# Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Documentation and repo metadata
+*.md
+.git
+.gitignore
+.dockerignore

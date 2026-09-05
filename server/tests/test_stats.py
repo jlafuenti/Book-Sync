@@ -3,6 +3,7 @@ Stats router tests (issue #46, Phase 3).
 """
 
 import os
+import threading
 import time
 
 import pytest
@@ -467,3 +468,96 @@ async def test_backup_status_allows_admin(make_client, make_user, auth_header):
     async with make_client(stats.router) as c:
         r = await c.get("/api/stats/backup", headers=auth_header(user))
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /api/stats/disk_usage must not stall the server (issue #208)
+#
+# `get_dir_size` is a recursive `os.scandir` over three data roots on a NAS
+# mount, run synchronously inside an `async def`. The server is a single uvicorn
+# worker, so while it runs *nothing else is served* — not login, not
+# `/api/health`, whose compose healthcheck gives up after 10 s. The System page
+# calls it on load, and anyone with an admin token could call it in a loop.
+# ---------------------------------------------------------------------------
+
+async def test_disk_usage_runs_off_the_event_loop(
+    make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    threads = []
+
+    def _spy(path):
+        threads.append(threading.current_thread())
+        return 0
+
+    monkeypatch.setattr(stats, "get_dir_size", _spy)
+
+    user = await make_user(username="adm3", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+
+    assert r.status_code == 200
+    assert threads, "get_dir_size was never called"
+    assert all(t is not threading.main_thread() for t in threads)
+
+
+async def test_disk_usage_is_cached(
+    make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    """A polling page and a hostile loop should cost one scan, not N."""
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(stats, "get_dir_size", lambda path: calls.append(path) or 0)
+
+    user = await make_user(username="adm4", role="admin")
+    async with make_client(stats.router) as c:
+        first = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+        second = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+
+    assert first.json() == second.json()
+    assert len(calls) == 3, f"expected one scan per data root, got {calls}"
+
+
+async def test_disk_usage_cache_expires(
+    make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    """The cache is a rate damper, not a freeze — capacity does change."""
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "disk_usage_cache_seconds", 0)
+    calls = []
+    monkeypatch.setattr(stats, "get_dir_size", lambda path: calls.append(path) or 0)
+
+    user = await make_user(username="adm5", role="admin")
+    async with make_client(stats.router) as c:
+        await c.get("/api/stats/disk_usage", headers=auth_header(user))
+        await c.get("/api/stats/disk_usage", headers=auth_header(user))
+
+    assert len(calls) == 6
+
+
+async def test_disk_usage_is_rate_limited(
+    make_client, make_user, auth_header, monkeypatch, tmp_path
+):
+    """Even cached, a loop costs a request each; 429 names when to come back."""
+    monkeypatch.setattr(settings, "ebook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "app_data_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "expensive_read_limit", 2)
+
+    user = await make_user(username="adm6", role="admin")
+    async with make_client(stats.router) as c:
+        codes = [
+            (await c.get("/api/stats/disk_usage", headers=auth_header(user))).status_code
+            for _ in range(3)
+        ]
+        over = await c.get("/api/stats/disk_usage", headers=auth_header(user))
+
+    assert codes == [200, 200, 429]
+    assert over.status_code == 429
+    assert int(over.headers["Retry-After"]) > 0

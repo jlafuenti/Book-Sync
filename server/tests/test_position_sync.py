@@ -10,9 +10,11 @@ forever. Nothing reconciled them, and the two readers each restored from a
 different one.
 """
 
+import pytest
+
 from tests.factories import make_book_pair
 
-LOCATOR = '{"href":"ch12.xhtml","locations":{"progression":0.4}}'
+LOCATOR ='{"href":"ch12.xhtml","locations":{"progression":0.4}}'
 CFI = "epubcfi(/6/26!/4/2/2/1:0)"
 
 
@@ -424,6 +426,30 @@ async def test_a_background_write_with_no_source_can_still_append_to_the_log(
     assert log.status_code == 200
     assert len(log.json()) == 1
     assert log.json()[0]["source"] == "audiobook"
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("limit=100000", 422),
+        ("limit=0", 422),
+        ("limit=200", 200),
+        ("limit=50", 200),
+    ],
+)
+async def test_the_bookmark_log_limit_is_bounded(
+    client, make_user, auth_header, db, query, expected
+):
+    """`limit` was a bare int with no ceiling — the same defect issue #208 found
+    on `queue/history`, in the one read endpoint every reading client polls."""
+    pair = await make_book_pair(db)
+    user = await make_user(username=f"logreader{abs(hash(query)) % 10000}")
+
+    resp = await client.get(
+        f"/api/sync/bookmark/{pair.id}/log?{query}", headers=auth_header(user)
+    )
+
+    assert resp.status_code == expected
 
 
 async def test_the_write_response_includes_the_hint_it_just_stored(

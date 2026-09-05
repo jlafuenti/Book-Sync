@@ -565,6 +565,10 @@ class SearchResponse(BaseModel):
     ebooks: List[EBookResponse]
     audiobooks: List[AudioBookResponse]
     book_pairs: List[BookPairResponse]
+    # True when any of the three lists hit `library.SEARCH_MAX_RESULTS` and was
+    # cut short (issue #208). Additive, and defaulted, so an older client that
+    # ignores it keeps working — the API version is unchanged.
+    truncated: bool = False
 
 # ============================================================
 # Metadata Cleanup Schemas

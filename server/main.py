@@ -29,6 +29,8 @@ from config import (
 from log_filters import AccessLogSecretFilter
 from version import API_VERSION, APP_VERSION
 from middleware import MultipartBodyLimitMiddleware
+from services import backup_service
+from services.cache import TTLValue
 from services.credentials import validate_startup as validate_credential_keys
 from routers import auth, library, sync, files, transcription, stats, chapters, match, users, troubleshoot
 from routers import settings as settings_router
@@ -277,3 +279,35 @@ async def health():
 async def livez():
     """Liveness probe: static 200 while the process is up."""
     return {"status": "alive"}
+
+
+#: Short TTL on the backup probe. It is unauthenticated, so this — not a
+#: per-user bucket — is what keeps a hostile loop from hammering the NAS mount.
+backup_probe_cache = TTLValue(lambda: settings.backup_probe_cache_seconds)
+
+
+@app.get("/api/health/backup")
+async def backup_health():
+    """Backup-staleness probe for an external monitor (issue #233).
+
+    `GET /api/stats/backup` already answers this question, but it needs an admin
+    login and access tokens last 24 h, so no uptime checker can poll it without
+    a token-refresh dance — which is why the only consumer of the staleness flag
+    today is a badge on the System page, and a nightly backup can fail for a
+    week unnoticed.
+
+    So this one takes no credentials, and that fixes what it may say: a status
+    word (`ok` / `stale` / `never`) and a coarse age in whole hours. No path, no
+    filename, no size, no timestamp — see `backup_service.get_freshness`.
+
+    Always 200. A stale backup is a real problem but not a readiness failure:
+    503 here would take the service out of a load balancer over a backup that
+    did not run, and would be indistinguishable from the DB outage `/api/health`
+    reports. The alert rule matches on the body — docs/operations.md,
+    "Monitoring".
+
+    Cost is one directory listing and one stat, run off the event loop and
+    cached for `BACKUP_PROBE_CACHE_SECONDS`. It never touches the database, so
+    it keeps answering during exactly the outage that makes `/api/health` fail.
+    """
+    return await backup_probe_cache.get(backup_service.get_freshness)
