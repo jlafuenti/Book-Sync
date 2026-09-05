@@ -52,7 +52,17 @@ from schemas import (
     LibraryFacets, LibraryCounts, FacetCount,
 )
 from routers.auth import get_current_user, get_editor_user
-from services.metadata_utils import normalize_author, normalize_series, extract_series_and_index
+from services.metadata_utils import (
+    MEDIA_CORE_FIELDS,
+    MEDIA_DESCRIPTIVE_FIELDS,
+    MEDIA_EXTRACTED_FIELDS,
+    MEDIA_FILL_IF_NULL_FIELDS,
+    MEDIA_FLAG_FIELDS,
+    MEDIA_METADATA_FIELDS,
+    normalize_author,
+    normalize_series,
+    extract_series_and_index,
+)
 from services.abs_metadata import fetch_abs_index, enrich_from_abs, write_metadata_to_file
 from services.audio_duration import probe_duration_seconds
 from services.position_service import (
@@ -505,7 +515,7 @@ async def extract_metadata(
     meta = filename_meta.copy()
 
     has_embedded = False
-    for field in ["title", "author", "series", "series_index", "description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin", "narrators"]:
+    for field in MEDIA_EXTRACTED_FIELDS:
         if file_meta.get(field) is not None:
             meta[field] = file_meta[field]
             has_embedded = True
@@ -717,7 +727,11 @@ async def _ingest_one_ebook(db: AsyncSession, filepath: str, ebook_dir: str) -> 
             existing_ebook.series_index = meta.get("series_index")
             updated = True
 
-        for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "isbn", "asin"]:
+        # Shared with the audiobook ingest below (issue #257). This list used to
+        # be retyped here without `narrators`, so an ebook whose file carried a
+        # narrator tag never got one — even though `EBook.narrators` exists and
+        # `extract_metadata` had already put the value in `meta`.
+        for f in MEDIA_FILL_IF_NULL_FIELDS:
             if meta.get(f) is not None and getattr(existing_ebook, f) is None:
                 setattr(existing_ebook, f, meta.get(f))
                 updated = True
@@ -820,7 +834,7 @@ async def _ingest_one_audiobook(
             existing_audiobook.series_index = meta.get("series_index")
             updated = True
 
-        for f in ["description", "publisher", "publish_year", "language", "genres", "tags", "narrators", "isbn", "asin"]:
+        for f in MEDIA_FILL_IF_NULL_FIELDS:
             if meta.get(f) is not None and getattr(existing_audiobook, f) is None:
                 setattr(existing_audiobook, f, meta.get(f))
                 updated = True
@@ -1098,12 +1112,8 @@ async def rescan_all_files(
             if book.series is None:
                 book.series = meta.get("series") or book.series
                 book.series_index = meta.get("series_index") or book.series_index
-            book.description = meta.get("description") or book.description
-            book.publisher = meta.get("publisher") or book.publisher
-            book.publish_year = meta.get("publish_year") or book.publish_year
-            book.language = meta.get("language") or book.language
-            book.genres = meta.get("genres") or book.genres
-            book.tags = meta.get("tags") or book.tags
+            for f in MEDIA_DESCRIPTIVE_FIELDS:
+                setattr(book, f, meta.get(f) or getattr(book, f))
 
             if meta.get("isbn"): book.isbn = meta["isbn"]
             if meta.get("asin"): book.asin = meta["asin"]
@@ -1140,12 +1150,8 @@ async def rescan_all_files(
             if book.series is None:
                 book.series = meta.get("series") or book.series
                 book.series_index = meta.get("series_index") or book.series_index
-            book.description = meta.get("description") or book.description
-            book.publisher = meta.get("publisher") or book.publisher
-            book.publish_year = meta.get("publish_year") or book.publish_year
-            book.language = meta.get("language") or book.language
-            book.genres = meta.get("genres") or book.genres
-            book.tags = meta.get("tags") or book.tags
+            for f in MEDIA_DESCRIPTIVE_FIELDS:
+                setattr(book, f, meta.get(f) or getattr(book, f))
 
             if meta.get("narrators"): book.narrators = meta["narrators"]
             book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
@@ -1271,13 +1277,9 @@ async def rescan_book_file(
     if book.series is None:
         book.series = meta.get("series") or book.series
         book.series_index = meta.get("series_index") or book.series_index
-    book.description = meta.get("description") or book.description
-    book.publisher = meta.get("publisher") or book.publisher
-    book.publish_year = meta.get("publish_year") or book.publish_year
-    book.language = meta.get("language") or book.language
-    book.genres = meta.get("genres") or book.genres
-    book.tags = meta.get("tags") or book.tags
-    
+    for f in MEDIA_DESCRIPTIVE_FIELDS:
+        setattr(book, f, meta.get(f) or getattr(book, f))
+
     if book_type == "audiobook":
         if meta.get("narrators"): book.narrators = meta["narrators"]
         book.duration_seconds = meta.get("duration_seconds") or book.duration_seconds
@@ -2475,21 +2477,13 @@ async def update_ebook_metadata(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
         
-    if meta.title is not None: book.title = meta.title
-    if meta.author is not None: book.author = meta.author
-    if meta.series is not None: book.series = meta.series
-    if meta.series_index is not None: book.series_index = meta.series_index
-    if meta.description is not None: book.description = meta.description
-    if meta.publisher is not None: book.publisher = meta.publisher
-    if meta.publish_year is not None: book.publish_year = meta.publish_year
-    if meta.language is not None: book.language = meta.language
-    if meta.genres is not None: book.genres = meta.genres
-    if meta.tags is not None: book.tags = meta.tags
-    if meta.narrators is not None: book.narrators = meta.narrators
-    if meta.isbn is not None: book.isbn = meta.isbn
-    if meta.asin is not None: book.asin = meta.asin
-    if meta.is_explicit is not None: book.is_explicit = meta.is_explicit
-    if meta.is_abridged is not None: book.is_abridged = meta.is_abridged
+    # One loop over the shared field list instead of the same fifteen `if`s on
+    # each media type (issue #257). `None` still means "no opinion": a PATCH is
+    # a partial update, so an omitted field is left alone rather than cleared.
+    for field in MEDIA_METADATA_FIELDS:
+        value = getattr(meta, field)
+        if value is not None:
+            setattr(book, field, value)
     
     # Write metadata back to the file
     try:
@@ -2555,21 +2549,13 @@ async def update_audiobook_metadata(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
         
-    if meta.title is not None: book.title = meta.title
-    if meta.author is not None: book.author = meta.author
-    if meta.series is not None: book.series = meta.series
-    if meta.series_index is not None: book.series_index = meta.series_index
-    if meta.description is not None: book.description = meta.description
-    if meta.publisher is not None: book.publisher = meta.publisher
-    if meta.publish_year is not None: book.publish_year = meta.publish_year
-    if meta.language is not None: book.language = meta.language
-    if meta.genres is not None: book.genres = meta.genres
-    if meta.tags is not None: book.tags = meta.tags
-    if meta.narrators is not None: book.narrators = meta.narrators
-    if meta.isbn is not None: book.isbn = meta.isbn
-    if meta.asin is not None: book.asin = meta.asin
-    if meta.is_explicit is not None: book.is_explicit = meta.is_explicit
-    if meta.is_abridged is not None: book.is_abridged = meta.is_abridged
+    # One loop over the shared field list instead of the same fifteen `if`s on
+    # each media type (issue #257). `None` still means "no opinion": a PATCH is
+    # a partial update, so an omitted field is left alone rather than cleared.
+    for field in MEDIA_METADATA_FIELDS:
+        value = getattr(meta, field)
+        if value is not None:
+            setattr(book, field, value)
     
     # Write metadata back to the file
     try:
@@ -2738,11 +2724,14 @@ async def debug_metadata(
 # Metadata Cleanup Endpoints
 # ============================================================
 
-FIELDS_TO_COMPARE = [
-    "title", "author", "series", "series_index", "description",
-    "publisher", "publish_year", "language", "genres", "tags",
-    "is_explicit", "is_abridged", "cover_path"
-]
+# The fields a pair's two halves are compared on. Deliberately *not*
+# `MEDIA_METADATA_FIELDS`: the identifiers are dropped (an ebook and its
+# audiobook legitimately carry different ISBNs/ASINs, and the narrator is
+# audiobook-only), and `cover_path` is added. Derived from the shared groups
+# rather than retyped, so a new metadata field lands here too (issue #257).
+FIELDS_TO_COMPARE = list(
+    MEDIA_CORE_FIELDS + MEDIA_DESCRIPTIVE_FIELDS + MEDIA_FLAG_FIELDS + ("cover_path",)
+)
 
 
 def _pair_has_discrepancies(pair: BookPair) -> bool:
@@ -3229,30 +3218,12 @@ async def enrich_library_from_abs(
     tag_write_failures: list[dict] = []
 
     for ab in audiobooks:
-        file_meta = {
-            "title": ab.title,
-            "author": ab.author,
-            "series": ab.series,
-            "series_index": ab.series_index,
-            "description": ab.description,
-            "publisher": ab.publisher,
-            "publish_year": ab.publish_year,
-            "language": ab.language,
-            "genres": ab.genres,
-            "tags": ab.tags,
-            "isbn": ab.isbn,
-            "asin": ab.asin,
-            "narrators": ab.narrators,
-            "is_explicit": ab.is_explicit,
-            "is_abridged": ab.is_abridged,
-        }
+        file_meta = {f: getattr(ab, f) for f in MEDIA_METADATA_FIELDS}
         enriched, changed, _ = enrich_from_abs(
             file_meta, ab.file_path, abs_index, abs_prefix, force=True
         )
         if changed:
-            for field in ["title", "author", "series", "series_index", "description",
-                          "publisher", "publish_year", "language", "genres", "tags",
-                          "isbn", "asin", "narrators", "is_explicit", "is_abridged"]:
+            for field in MEDIA_METADATA_FIELDS:
                 if enriched.get(field) is not None:
                     setattr(ab, field, enriched[field])
             db.add(ab)
@@ -3305,23 +3276,7 @@ async def enrich_audiobook_from_abs(
             detail="Failed to fetch metadata from Audiobookshelf.",
         )
 
-    file_meta = {
-        "title": ab.title,
-        "author": ab.author,
-        "series": ab.series,
-        "series_index": ab.series_index,
-        "description": ab.description,
-        "publisher": ab.publisher,
-        "publish_year": ab.publish_year,
-        "language": ab.language,
-        "genres": ab.genres,
-        "tags": ab.tags,
-        "isbn": ab.isbn,
-        "asin": ab.asin,
-        "narrators": ab.narrators,
-        "is_explicit": ab.is_explicit,
-        "is_abridged": ab.is_abridged,
-    }
+    file_meta = {f: getattr(ab, f) for f in MEDIA_METADATA_FIELDS}
     enriched, changed, matched = enrich_from_abs(
         file_meta, ab.file_path, abs_index, abs_prefix, force=True
     )
@@ -3331,9 +3286,7 @@ async def enrich_audiobook_from_abs(
         status_key = "no_match"
         message = "No matching entry found in Audiobookshelf for this book."
     elif changed:
-        for field in ["title", "author", "series", "series_index", "description",
-                      "publisher", "publish_year", "language", "genres", "tags",
-                      "isbn", "asin", "narrators", "is_explicit", "is_abridged"]:
+        for field in MEDIA_METADATA_FIELDS:
             if enriched.get(field) is not None:
                 setattr(ab, field, enriched[field])
         db.add(ab)
