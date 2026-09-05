@@ -29,6 +29,7 @@ or if a link here points at a file that does not exist.
 |---|---|
 | [testing.md](testing.md) | Test suites, fixtures, coverage policy |
 | [position-sync-contract.md](position-sync-contract.md) | The cross-device position rules — read before touching bookmark/progress writes |
+| [request-transactions.md](request-transactions.md) | Who commits: `get_db` vs an explicit `db.commit()`, and when a handler may do it itself |
 
 ## Project and release
 

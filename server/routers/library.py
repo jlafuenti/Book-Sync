@@ -1,6 +1,12 @@
 """
 Library router: manage ebooks, audiobooks, and book pairs.
 Includes scanning directories, uploading files, and auto-matching.
+
+**Transactions.** `get_db` commits once, after the handler returns; handlers do
+not need to. The `await db.commit()` calls that remain here are of two kinds,
+and only one of them is load-bearing -- every deliberate one carries a comment
+saying what it is protecting. Read docs/request-transactions.md before adding
+another, and before deleting one that looks redundant (issue #259).
 """
 
 import os
@@ -2978,6 +2984,13 @@ async def resolve_metadata_discrepancy(
         if not _pair_has_discrepancies(pair):
             pair.acknowledged = True
 
+        # Deliberate: persist before the file write-back (issue #259). The
+        # writers below rewrite the EPUB's OPF and the m4b's tags in place and
+        # are not guarded here, so an exception in either would otherwise reach
+        # `get_db`, roll the transaction back, and lose a resolution the
+        # operator had already made -- against a file that may already be half
+        # rewritten. Committing first bounds the disagreement to the harmless
+        # direction. Pinned by tests/test_request_transactions.py.
         await db.commit()
 
         # Write back to files
@@ -3057,6 +3070,10 @@ async def delete_ebook(
 
     # Delete the ebook (cascades to BookPair → SyncMap)
     await db.delete(ebook)
+    # Deliberate: commit before the unlink (issue #259). Removing the file first
+    # would risk the row surviving a rollback with nothing behind it -- the
+    # orphan `verify` exists to find. This order can only leave the opposite,
+    # which the next scan re-ingests.
     await db.commit()
 
     # Optionally delete source file
@@ -3100,6 +3117,7 @@ async def delete_audiobook(
 
     # Delete the audiobook (cascades to BookPair → SyncMap)
     await db.delete(audiobook)
+    # Deliberate: commit before the unlink, as in delete_ebook (issue #259).
     await db.commit()
 
     # Optionally delete source file
@@ -3315,6 +3333,9 @@ async def enrich_library_from_abs(
                 )
             updated_count += 1
 
+    # Deliberate: the row changes stand even for the books whose tags could not
+    # be written -- that partial success is what the response reports, and a
+    # failed tag write must not cost the operator the metadata (issue #259).
     await db.commit()
     message = f"Enriched {updated_count} audiobook(s) from Audiobookshelf"
     if tag_write_failures:
@@ -3390,6 +3411,10 @@ async def enrich_audiobook_from_abs(
         tag_write_ok, tag_write_error = await asyncio.to_thread(
             write_metadata_to_file, ab.file_path, enriched
         )
+        # Deliberate, same contract as the bulk endpoint above: "updated in the
+        # library, but the file's tags could not be written" is a real answer
+        # this endpoint gives, so the row change is committed regardless of
+        # `tag_write_ok` (issue #259).
         await db.commit()
         if tag_write_ok:
             status_key = "enriched"
