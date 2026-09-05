@@ -149,90 +149,6 @@ describe('per-device sessions (issue #250)', () => {
     })
 })
 
-describe('logoutAll() (issue #250)', () => {
-    // The other half of per-device sign-out: since `logout` stopped signing out
-    // the phone, losing a device needed something that still does. The server
-    // has had `POST /api/auth/logout-all` since #250; this is the client that
-    // finally calls it.
-
-    it('calls the account-wide endpoint, not the per-device one', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        localStorage.setItem('tandem_refresh', 'refresh-1')
-
-        const fetchMock = vi.fn().mockResolvedValue({
-            ok: true, status: 200,
-            json: async () => ({ message: 'Signed out on all devices', scope: 'all' }),
-        })
-        vi.stubGlobal('fetch', fetchMock)
-
-        const { logoutAll } = await import('./api')
-        await logoutAll()
-
-        expect(fetchMock).toHaveBeenCalledTimes(1)
-        expect(String(fetchMock.mock.calls[0][0])).toContain('/auth/logout-all')
-    })
-
-    it('clears the local tokens', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        localStorage.setItem('tandem_refresh', 'refresh-1')
-
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: true, status: 200, json: async () => ({}),
-        }))
-
-        const { logoutAll, isLoggedIn } = await import('./api')
-        expect(isLoggedIn()).toBe(true)
-
-        await logoutAll()
-
-        expect(isLoggedIn()).toBe(false)
-        expect(localStorage.getItem('tandem_token')).toBeNull()
-        expect(localStorage.getItem('tandem_refresh')).toBeNull()
-    })
-
-    it('still clears them when the server call fails', async () => {
-        // Same rule as logout(): the browser must not be stuck signed in
-        // because the network was down when the button was pressed.
-        localStorage.setItem('tandem_token', 'access-1')
-        localStorage.setItem('tandem_refresh', 'refresh-1')
-
-        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
-
-        const { logoutAll, isLoggedIn } = await import('./api')
-        await logoutAll()
-
-        expect(isLoggedIn()).toBe(false)
-    })
-
-    it('drops cached media tokens, which the token_version bump just killed', async () => {
-        localStorage.setItem('tandem_token', 'access-1')
-        localStorage.setItem('tandem_refresh', 'refresh-1')
-
-        let minted = 0
-        const fetchMock = vi.fn().mockImplementation(async (url) => {
-            if (String(url).includes('/auth/media-token')) {
-                minted += 1
-                return {
-                    ok: true, status: 200,
-                    json: async () => ({ token: `media-${minted}`, expires_in: 900 }),
-                }
-            }
-            return { ok: true, status: 200, json: async () => ({}) }
-        })
-        vi.stubGlobal('fetch', fetchMock)
-
-        const { coverSrc, logoutAll } = await import('./api')
-
-        await coverSrc('/api/files/covers/a.jpg')
-        expect(minted).toBe(1)
-
-        await logoutAll()
-
-        await coverSrc('/api/files/covers/a.jpg')
-        expect(minted).toBe(2)
-    })
-})
-
 describe('testHardcoverConnection()', () => {
     it('sends the token in a POST body, never in the URL', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
@@ -929,7 +845,12 @@ describe('getPosition()', () => {
 
     it('throws on a genuine server error', async () => {
         localStorage.setItem('tandem_token', 'access-1')
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }))
+        // A body-less 500. The error path reads the body for a `detail` now
+        // (issue #275), so the stub needs a `json` a real Response always has;
+        // a failing one is the point — the fallback message must survive it.
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 500, json: async () => { throw new SyntaxError('no body') },
+        }))
 
         const { getPosition } = await import('./api')
         await expect(getPosition('pair', 42)).rejects.toThrow('Failed to fetch position')
@@ -1263,6 +1184,34 @@ describe('paginated library lists (issue #48)', () => {
         expect(pairs).toEqual([{ id: 9 }])
         expect(fetchMock).toHaveBeenCalledTimes(1)
         expect(fetchMock.mock.calls[0][0]).toBe('/api/library/pairs?page=1&limit=500')
+    })
+
+    // Issue #277: resolving one pair used to mean walking the whole listing.
+    it('getPair(id) costs one request against the single-pair endpoint', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ id: 9, ebook: { title: 'Dune' } }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        localStorage.setItem('tandem_token', 't')
+
+        const { getPair } = await import('./api')
+        const pair = await getPair(9)
+
+        expect(pair).toEqual({ id: 9, ebook: { title: 'Dune' } })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/library/pairs/9')
+    })
+
+    it('getPair(id) surfaces the server detail on a 404', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: false, status: 404,
+            text: async () => JSON.stringify({ detail: 'Pair not found' }),
+            json: async () => ({ detail: 'Pair not found' }),
+        }))
+        localStorage.setItem('tandem_token', 't')
+
+        const { getPair } = await import('./api')
+        await expect(getPair(9)).rejects.toThrow('Pair not found')
     })
 
     it('getNewItems() keeps the {ebooks, audiobooks} array shape, walking both sub-lists', async () => {
@@ -1749,6 +1698,181 @@ describe('register() — error bodies', () => {
 
         await expect(register('alice', 'a@example.com', 'hunter2'))
             .rejects.toThrow('Username already exists')
+    })
+})
+
+// ---------------------------------------------------------------------------
+// The error contract (issue #275)
+//
+// `_jsonOrThrow` existed and fixed exactly this, but only the functions added
+// after it ever used it: everything older copied the error branch rather than
+// calling it, so whether a user saw the server's explanation or a fixed English
+// string depended on which function the page happened to call. `updateMe`,
+// `getUsers`, `getAuditLog` and `getSyncMap` discarded `detail` while their
+// immediate neighbours surfaced it.
+//
+// One case per `// ====` section, both branches. Every function in the table
+// must surface the server's `detail` when the error body has one, and fall back
+// to its own literal when it does not. The literals are unchanged from before
+// the migration — what this fixes is the `detail` being thrown away, not the
+// wording.
+// ---------------------------------------------------------------------------
+
+describe('every section surfaces the server detail, and falls back to its own message', () => {
+    const CASES = [
+        ['Auth', 'updateMe', a => a.updateMe({ email: 'x@example.com' }), 'Failed to update profile'],
+        ['Users', 'getUsers', a => a.getUsers(), 'Failed to fetch users'],
+        ['Users', 'getAuditLog', a => a.getAuditLog(), 'Failed to fetch audit log'],
+        ['Library', 'getEbook', a => a.getEbook(1), 'Failed to fetch ebook'],
+        ['Library', 'getAudiobook', a => a.getAudiobook(1), 'Failed to fetch audiobook'],
+        ['Library', 'deletePair', a => a.deletePair(1), 'Failed to delete pair'],
+        ['Library browse', 'getLibraryItemsPage', a => a.getLibraryItemsPage(), 'Failed to fetch library items'],
+        ['Library browse', 'getLibraryFacets', a => a.getLibraryFacets(), 'Failed to fetch library facets'],
+        ['Transcription', 'getTranscriptionStatus', a => a.getTranscriptionStatus(1), 'Failed to get status'],
+        ['Transcription', 'cancelTranscription', a => a.cancelTranscription(1), 'Failed to cancel transcription'],
+        ['Queue', 'getTranscriptionQueue', a => a.getTranscriptionQueue(), 'Failed to fetch transcription queue'],
+        ['Queue', 'updateQueuePriority', a => a.updateQueuePriority(1, 2), 'Failed to update priority'],
+        ['Sync', 'getSyncMap', a => a.getSyncMap(1), 'Failed to get sync map'],
+        ['Stats', 'getDiskUsage', a => a.getDiskUsage(), 'Failed to fetch disk usage'],
+        ['Backups', 'listBackups', a => a.listBackups(), 'Failed to list backups'],
+        ['Backups', 'getBackupStatus', a => a.getBackupStatus(), 'Failed to fetch backup status'],
+        ['Progress', 'getAllProgress', a => a.getAllProgress(), 'Failed to fetch all progress'],
+        ['Progress', 'getProgress', a => a.getProgress('ebook', 1), 'Failed to fetch progress'],
+        ['Position', 'getPosition', a => a.getPosition('pair', 1), 'Failed to fetch position'],
+        ['Position', 'updatePosition', a => a.updatePosition('pair', 1, {}), 'Failed to update position'],
+        ['Position', 'resetPosition', a => a.resetPosition('pair', 1), 'Failed to reset position'],
+        ['Bookmarks', 'getBookmarkLog', a => a.getBookmarkLog(1), 'Failed to fetch bookmark log'],
+        ['Settings', 'getSettings', a => a.getSettings(), 'Failed to fetch settings'],
+        ['Chapters', 'getEbookChapters', a => a.getEbookChapters(1), 'Failed to get ebook chapters'],
+        ['Chapters', 'updateAudiobookChapters', a => a.updateAudiobookChapters(1, []), 'Failed to update audiobook chapters'],
+        ['Match', 'applyRemoteCover', a => a.applyRemoteCover('ebook', 1, 'u'), 'Failed to apply remote cover'],
+        ['Cleanup', 'getMetadataDiscrepancies', a => a.getMetadataDiscrepancies(), 'Failed to get metadata discrepancies'],
+        ['New items', 'acknowledgeNewItems', a => a.acknowledgeNewItems([1], []), 'Failed to acknowledge new items'],
+        ['New pairs', 'acknowledgeNewPairs', a => a.acknowledgeNewPairs([1]), 'Failed to acknowledge new pairs'],
+        ['Delete/Verify', 'deleteEbook', a => a.deleteEbook(1), 'Failed to delete ebook'],
+        ['Delete/Verify', 'verifyFiles', a => a.verifyFiles(), 'Failed to verify files'],
+        ['Delete/Verify', 'cleanupOrphans', a => a.cleanupOrphans([], []), 'Failed to cleanup orphaned entries'],
+        ['Calibre', 'getCalibreStatus', a => a.getCalibreStatus(), 'Failed to check calibre status'],
+        ['Unsupported', 'getUnsupportedFiles', a => a.getUnsupportedFiles(), 'Failed to load unsupported files'],
+        ['Import sources', 'listImportSources', a => a.listImportSources(), 'Failed to list import sources'],
+        ['Troubleshoot', 'getLibraryIssues', a => a.getLibraryIssues(), 'Failed to load library issues'],
+    ]
+
+    it.each(CASES)('%s / %s surfaces the server detail', async (_section, _name, call) => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            jsonErrorResponse(400, 'the server explained itself')))
+        localStorage.setItem('tandem_token', 't')
+
+        const api = await import('./api')
+        await expect(call(api)).rejects.toThrow('the server explained itself')
+    })
+
+    it.each(CASES)('%s / %s falls back to its own message', async (_section, _name, call, fallback) => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlErrorResponse(502)))
+        localStorage.setItem('tandem_token', 't')
+
+        const api = await import('./api')
+        await expect(call(api)).rejects.toThrow(fallback)
+    })
+})
+
+describe('the two unauthenticated endpoints keep their own error shape', () => {
+    // `errorMessage` appends the status because a login or register failure is
+    // usually a proxy error page, and "the server is down, not your password"
+    // is the only actionable thing left. Everything else is authenticated, so a
+    // non-JSON body there means something much stranger and the literal is
+    // enough — do not unify these two into `jsonOrThrow`.
+    it('login appends the status; a section function does not', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(htmlErrorResponse(502)))
+        localStorage.setItem('tandem_token', 't')
+        const api = await import('./api')
+
+        await expect(api.login('a', 'b')).rejects.toThrow('Login failed (502)')
+        await expect(api.getUsers()).rejects.toThrow(/^Failed to fetch users$/)
+    })
+})
+
+describe('logoutAll() (issue #250)', () => {
+    // The other half of per-device sign-out: since `logout` stopped signing out
+    // the phone, losing a device needed something that still does. The server
+    // has had `POST /api/auth/logout-all` since #250; this is the client that
+    // finally calls it.
+
+    it('calls the account-wide endpoint, not the per-device one', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ message: 'Signed out on all devices', scope: 'all' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { logoutAll } = await import('./api')
+        await logoutAll()
+
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(String(fetchMock.mock.calls[0][0])).toContain('/auth/logout-all')
+    })
+
+    it('clears the local tokens', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({}),
+        }))
+
+        const { logoutAll, isLoggedIn } = await import('./api')
+        expect(isLoggedIn()).toBe(true)
+
+        await logoutAll()
+
+        expect(isLoggedIn()).toBe(false)
+        expect(localStorage.getItem('tandem_token')).toBeNull()
+        expect(localStorage.getItem('tandem_refresh')).toBeNull()
+    })
+
+    it('still clears them when the server call fails', async () => {
+        // Same rule as logout(): the browser must not be stuck signed in
+        // because the network was down when the button was pressed.
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+
+        const { logoutAll, isLoggedIn } = await import('./api')
+        await logoutAll()
+
+        expect(isLoggedIn()).toBe(false)
+    })
+
+    it('drops cached media tokens, which the token_version bump just killed', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        localStorage.setItem('tandem_refresh', 'refresh-1')
+
+        let minted = 0
+        const fetchMock = vi.fn().mockImplementation(async (url) => {
+            if (String(url).includes('/auth/media-token')) {
+                minted += 1
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ token: `media-${minted}`, expires_in: 900 }),
+                }
+            }
+            return { ok: true, status: 200, json: async () => ({}) }
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { coverSrc, logoutAll } = await import('./api')
+
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(1)
+
+        await logoutAll()
+
+        await coverSrc('/api/files/covers/a.jpg')
+        expect(minted).toBe(2)
     })
 })
 

@@ -2017,6 +2017,32 @@ async def list_pairs(
     return await _paginate(db, ordered, base, page, limit)
 
 
+@router.get("/pairs/{pair_id}", response_model=BookPairResponse)
+async def get_pair(
+    pair_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """One book pair by id — the listing's element, fetched directly.
+
+    Resolving a pair used to mean walking every page of `GET /pairs` and
+    filtering client-side (issue #277). Same `_PAIR_LOADS` as the listing, so
+    `sync_map_version` is reported here too: a client that swaps to this
+    endpoint must not lose the field its sync-map cache check keys on
+    (docs/position-sync-contract.md, "Re-transcription").
+
+    Same role floor as the listing — `get_current_user`, not `get_editor_user`.
+    A reader-role account has to be able to resolve a pair it is opening.
+    """
+    result = await db.execute(
+        select(BookPair).options(*_PAIR_LOADS).where(BookPair.id == pair_id)
+    )
+    pair = result.scalar_one_or_none()
+    if not pair:
+        raise HTTPException(status_code=404, detail="Pair not found")
+    return pair
+
+
 # ---------------------------------------------------------------------------
 # Mixed library browse + facets (issue #120)
 #

@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import ePub from 'epubjs'
 import {
-    fetchEbookBlob, getPosition, updatePosition, matchTextToAudio,
-    sendPositionKeepalive, audioToEpub, getDeviceId, getDeviceName,
+    fetchEbookBlob, getPosition, matchTextToAudio, audioToEpub, getDeviceId,
 } from '../api'
+// One module owns the contract's write rules (issue #274): scope, the device
+// triple, who may claim `source`, and what counts as a conflict.
+import {
+    positionTarget, writePosition, keepalivePosition, conflictFrom,
+} from '../lib/position'
 import { planRestore, hasAnchor, navigationEstablishesPosition } from '../lib/positionLadder'
 import {
     normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
@@ -320,11 +324,6 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             // while the other was rejected and the two rows would then
             // disagree about where the reader was, permanently.
             const position = {
-                // Only a foreground, user-initiated write claims the format
-                // (schemas.PositionUpdate). A settle relocation the user
-                // never asked for must not flip a listen-only pair to
-                // `ebook` — omission means "keep the stored value".
-                source: (explicit || userNavigatedRef.current) ? 'ebook' : undefined,
                 epub_chapter: match ? match.epub_chapter : chapter,
                 epub_sentence_index: match ? match.epub_sentence_index : undefined,
                 // A sentence index is a sync-map coordinate; attest which map
@@ -335,30 +334,29 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 epub_progress_percent: Math.round(percent * 100) / 100,
                 audio_position_ms: match ? match.audio_position_ms : undefined,
                 hint: { kind: 'epubjs_cfi', value: cfi },
-                device_id: getDeviceId(),
-                device_name: getDeviceName(),
+                // Stamped when the page turn happened, not after the sync-map
+                // round-trip above — the write attests when the reader was
+                // there (contract, "The write gate").
                 captured_at: capturedAt,
             }
-            const scope = pairId ? 'pair' : 'ebook'
-            const result = await updatePosition(scope, pairId || ebookId, position)
+            const result = await writePosition(
+                positionTarget({ pair_id: pairId }, 'ebook', ebookId),
+                position,
+                // Only a foreground, user-initiated write claims the format. A
+                // settle relocation the user never asked for must not flip a
+                // listen-only pair to `ebook` — omission means "keep the
+                // stored value".
+                { claimSource: (explicit || userNavigatedRef.current) ? 'ebook' : null },
+            )
             // The write reached the server and was adjudicated; a later flush
             // for the same CFI would be a pure duplicate.
             lastIssuedSaveRef.current = cfi
 
             // A genuinely different device wrote something newer. Surface it;
             // never navigate on the user's behalf.
-            if (
-                result?.rejected &&
-                result.device_id &&
-                result.device_id !== getDeviceId()
-            ) {
-                const currentCfiHint = (result.hints || []).find(
-                    h => h.kind === 'epubjs_cfi' && h.current
-                )
-                setStaleConflict({
-                    cfi: currentCfiHint ? currentCfiHint.value : null,
-                    deviceName: result.device_name || result.device_id,
-                })
+            const conflict = conflictFrom(result)
+            if (conflict) {
+                setStaleConflict({ cfi: conflict.cfi, deviceName: conflict.deviceName })
             }
             return true
         } catch (e) {
@@ -388,18 +386,15 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         const textPreview = extractVisibleText()
         return {
             cfi,
-            payload: {
-                // Same rule as doSave: an automatic flush claims the format
-                // only when the user actually navigated this session.
-                source: userNavigatedRef.current ? 'ebook' : undefined,
+            fields: {
                 epub_chapter: spineIndex ?? currentSpineIndexRef.current,
                 epub_text_preview: textPreview || undefined,
                 epub_progress_percent: Math.round(percent * 100) / 100,
                 hint: { kind: 'epubjs_cfi', value: cfi },
-                device_id: getDeviceId(),
-                device_name: getDeviceName(),
-                captured_at: new Date().toISOString(),
             },
+            // Same rule as doSave: an automatic flush claims the format only
+            // when the user actually navigated this session.
+            claimSource: userNavigatedRef.current ? 'ebook' : null,
         }
     }, [extractVisibleText])
 
@@ -428,7 +423,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     const flushPendingSave = useCallback(() => {
         const built = takeFlushablePosition()
         if (!built) return
-        updatePosition(pairId ? 'pair' : 'ebook', pairId || ebookId, built.payload)
+        writePosition(positionTarget({ pair_id: pairId }, 'ebook', ebookId),
+            built.fields, { claimSource: built.claimSource })
             .catch(e => console.warn('[EbookReader] unmount flush failed:', e?.message || e))
     }, [takeFlushablePosition, pairId, ebookId])
 
@@ -455,7 +451,8 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         const flushViaKeepalive = () => {
             const built = takeFlushablePosition()
             if (!built) return
-            sendPositionKeepalive(pairId ? 'pair' : 'ebook', pairId || ebookId, built.payload)
+            keepalivePosition(positionTarget({ pair_id: pairId }, 'ebook', ebookId),
+                built.fields, { claimSource: built.claimSource })
         }
         const onVisibilityChange = () => {
             if (document.visibilityState === 'hidden') flushViaKeepalive()

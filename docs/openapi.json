@@ -7388,6 +7388,52 @@
         "tags": [
           "library"
         ]
+      },
+      "get": {
+        "description": "One book pair by id — the listing's element, fetched directly.\n\nResolving a pair used to mean walking every page of `GET /pairs` and\nfiltering client-side (issue #277). Same `_PAIR_LOADS` as the listing, so\n`sync_map_version` is reported here too: a client that swaps to this\nendpoint must not lose the field its sync-map cache check keys on\n(docs/position-sync-contract.md, \"Re-transcription\").\n\nSame role floor as the listing — `get_current_user`, not `get_editor_user`.\nA reader-role account has to be able to resolve a pair it is opening.",
+        "operationId": "get_pair_api_library_pairs__pair_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookPairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Pair",
+        "tags": [
+          "library"
+        ]
       }
     },
     "/api/library/pairs/{pair_id}/ignore-discrepancies": {

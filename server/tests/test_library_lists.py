@@ -161,6 +161,84 @@ async def test_pairs_paginate_search_either_side_and_keep_sync_map_version(db, l
 
 
 # ---------------------------------------------------------------------------
+# Single pair (issue #277)
+# ---------------------------------------------------------------------------
+
+async def test_get_one_pair_returns_the_same_shape_as_the_listing(db, library_client):
+    """`GET /pairs/{id}` is the listing's element, not a new shape.
+
+    `TranscriptionEditorPage` used to download every pair to find one; it now
+    asks for the one. Anything the listing reports about a pair — including the
+    eager-loaded `sync_map_version` the sync-map cache check keys on — must be
+    reported here too, or a caller that swaps to this endpoint silently loses a
+    field (issue #277).
+    """
+    c, headers = library_client
+    e = EBook(title="Dune", author="Frank Herbert", filename="1.epub", file_path="/x/1.epub")
+    a = AudioBook(title="Dune", author="Frank Herbert", filename="1.m4b", file_path="/x/1.m4b")
+    db.add_all([e, a])
+    await db.flush()
+    pair = BookPair(ebook_id=e.id, audiobook_id=a.id, status=PairStatus.AUTO_MATCHED)
+    db.add(pair)
+    await db.commit()
+
+    resp = await c.get(f"/api/library/pairs/{pair.id}", headers=headers)
+
+    assert resp.status_code == 200
+    one = resp.json()
+    listed = (await c.get("/api/library/pairs", headers=headers)).json()["items"][0]
+    assert one == listed
+    assert one["id"] == pair.id
+    assert one["ebook"]["title"] == "Dune"
+    assert one["audiobook"]["title"] == "Dune"
+    assert "sync_map_version" in one
+
+
+async def test_get_one_pair_404s_for_an_unknown_id(db, library_client):
+    c, headers = library_client
+
+    resp = await c.get("/api/library/pairs/999999", headers=headers)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Pair not found"
+
+
+async def test_get_one_pair_needs_authentication_like_the_listing(db, library_client):
+    """Same role floor as `GET /pairs`: any signed-in user, no editor gate."""
+    c, _ = library_client
+    e = EBook(title="Dune", filename="1.epub", file_path="/x/1.epub")
+    a = AudioBook(title="Dune", filename="1.m4b", file_path="/x/1.m4b")
+    db.add_all([e, a])
+    await db.flush()
+    pair = BookPair(ebook_id=e.id, audiobook_id=a.id, status=PairStatus.AUTO_MATCHED)
+    db.add(pair)
+    await db.commit()
+
+    assert (await c.get(f"/api/library/pairs/{pair.id}")).status_code == 401
+
+
+async def test_get_one_pair_is_open_to_a_plain_user(db, make_client, make_user, auth_header):
+    """The listing takes `get_current_user`, not `get_editor_user` — so a
+    reader-role account can resolve a pair it is about to open."""
+    from routers import library
+
+    reader = await make_user(username="reader", role="user")
+    e = EBook(title="Dune", filename="1.epub", file_path="/x/1.epub")
+    a = AudioBook(title="Dune", filename="1.m4b", file_path="/x/1.m4b")
+    db.add_all([e, a])
+    await db.flush()
+    pair = BookPair(ebook_id=e.id, audiobook_id=a.id, status=PairStatus.AUTO_MATCHED)
+    db.add(pair)
+    await db.commit()
+
+    async with make_client(library.router) as c:
+        resp = await c.get(f"/api/library/pairs/{pair.id}", headers=auth_header(reader))
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == pair.id
+
+
+# ---------------------------------------------------------------------------
 # New items / new pairs
 # ---------------------------------------------------------------------------
 

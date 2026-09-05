@@ -1,18 +1,15 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react'
-import { getAudiobookStreamUrl, updatePosition, sendPositionKeepalive, getDeviceId, getDeviceName, coverSrc } from '../api'
+import { getAudiobookStreamUrl, coverSrc } from '../api'
 import {
     applyMetadata, applyPositionState, setPlaybackState, bindActionHandlers, clearMediaSession,
 } from '../lib/mediaSession'
 import { SKIP_SECONDS, RESUME_REWIND_SECONDS } from '../lib/playbackOffsets'
+// The contract's write rules live in one module (issue #274): which scope a
+// save addresses, the device triple, who may claim `source`, and what counts as
+// a conflict. Nothing here assembles a position payload by hand.
+import { positionTarget, writePosition, keepalivePosition, conflictFrom } from '../lib/position'
 
 const AudioPlayerContext = createContext(null)
-
-// Where a player save goes. A paired audiobook shares one record with its
-// ebook, so the reader and the player can't drift apart; an unpaired one gets
-// its own standalone record.
-function positionTarget(audiobook) {
-    return audiobook?.pairId ? ['pair', audiobook.pairId] : ['audiobook', audiobook.id]
-}
 
 // Write a history-log entry every 30 min of continuous playback (in addition
 // to pause / stop / ended boundaries). Keeps the Session History panel clean —
@@ -132,10 +129,11 @@ export function AudioPlayerProvider({ children }) {
     // Attach to every updatePosition call as `.then(handleConflict)`.
     // Passes the result through unchanged so it stays chainable.
     const handleConflict = useCallback((result) => {
-        if (result && result.rejected && result.device_id && result.device_id !== getDeviceId()) {
+        const conflict = conflictFrom(result)
+        if (conflict) {
             setStaleConflict({
-                position: (result.audio_position_ms || 0) / 1000,
-                deviceName: result.device_name || result.device_id,
+                position: conflict.audioPositionMs / 1000,
+                deviceName: conflict.deviceName,
             })
         }
         return result
@@ -165,16 +163,11 @@ export function AudioPlayerProvider({ children }) {
         const ab = target || currentAudiobookRef.current
         if (!audio || !ab) return Promise.resolve()
         if (appendToLog) lastLogTimeRef.current = Date.now()
-        const [scope, id] = positionTarget(ab)
         pushInFlightRef.current = true
-        return updatePosition(scope, id, {
-            source: claimFormat ? 'audiobook' : undefined,
+        return writePosition(positionTarget(ab, 'audiobook'), {
             audio_position_ms: Math.floor(audio.currentTime * 1000),
             append_to_log: appendToLog,
-            device_id: getDeviceId(),
-            device_name: getDeviceName(),
-            captured_at: new Date().toISOString(),
-        }).then((result) => {
+        }, { claimSource: claimFormat ? 'audiobook' : null }).then((result) => {
             lastPushTimeRef.current = Date.now()
             return handleConflict(result)
         }).catch(() => {}).finally(() => {
@@ -240,16 +233,13 @@ export function AudioPlayerProvider({ children }) {
                 // history entry travel together. As two writes they were
                 // adjudicated separately, so the completion flag could land
                 // while the position was rejected as stale (or vice versa).
-                const [scope, id] = positionTarget(ab)
-                updatePosition(scope, id, {
-                    source: 'audiobook',
+                writePosition(positionTarget(ab, 'audiobook'), {
                     is_completed: true,
                     audio_position_ms: audio ? Math.floor(audio.currentTime * 1000) : undefined,
                     append_to_log: true,
-                    device_id: getDeviceId(),
-                    device_name: getDeviceName(),
-                    captured_at: new Date().toISOString(),
-                }).then(handleConflict).catch(() => {})
+                    // Reaching the end of the file *is* the explicit playback
+                    // event the contract lets claim the format.
+                }, { claimSource: 'audiobook' }).then(handleConflict).catch(() => {})
                 lastLogTimeRef.current = Date.now()
             }
         }
@@ -431,19 +421,15 @@ export function AudioPlayerProvider({ children }) {
             const ab = currentAudiobookRef.current
             if (!ab || !audio) return
             const claimFormat = playingRef.current
-            const [scope, id] = positionTarget(ab)
+            const target = positionTarget(ab, 'audiobook')
             const positionMs = Math.floor(audio.currentTime * 1000)
-            const key = `${scope}:${id}:${positionMs}`
+            const key = `${target[0]}:${target[1]}:${positionMs}`
             if (lastKeepaliveRef.current === key) return
             lastKeepaliveRef.current = key
-            sendPositionKeepalive(scope, id, {
-                source: claimFormat ? 'audiobook' : undefined,
+            keepalivePosition(target, {
                 audio_position_ms: positionMs,
                 append_to_log: true,
-                device_id: getDeviceId(),
-                device_name: getDeviceName(),
-                captured_at: new Date().toISOString(),
-            })
+            }, { claimSource: claimFormat ? 'audiobook' : null })
         }
         // pagehide fires more reliably than beforeunload on mobile Safari; on
         // an iOS PWA neither is guaranteed — visibilitychange → hidden is the
