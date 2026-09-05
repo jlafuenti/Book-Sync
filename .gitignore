@@ -67,6 +67,8 @@ Thumbs.db
 *.png
 # ...but the PWA icons are real assets (issue #62, docs/web-pwa.md)
 !web/public/*.png
+# ...and so are the README screenshots (issue #185)
+!docs/images/*.png
 
 # IDE
 .vscode/
