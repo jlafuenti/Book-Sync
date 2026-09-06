@@ -9,11 +9,12 @@ import datetime
 import pytest
 
 from database import async_session
+from models.book import BookPair, PairStatus
 from models.settings import SystemSetting
 from models.transcription_queue import TranscriptionQueueItem
 from routers import transcription as transcription_router
 from services import offhours
-from tests.factories import make_book_pair
+from tests.factories import make_book_pair, make_sync_map
 
 
 async def _seed_item(db, pair_id, **kwargs):
@@ -253,6 +254,92 @@ async def test_cancel_transcription_allows_editor(db, make_client, make_user, au
             f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
         )
     assert r.status_code != 403
+
+
+# --- Cancel returns the pair to its pre-job status (issue #381) -------------
+#
+# The endpoint used to flip a TRANSCRIBING pair to ERROR on cancel, so a job
+# queued by mistake left a red pair with nothing wrong with the books. The rule
+# lives in `queue_manager.settle_pair_after_cancel`; the endpoint only reaches
+# for it directly when the pair says a job is running but no row backs it.
+
+
+async def test_cancel_returns_a_transcribing_pair_to_its_pre_job_status(
+    db, make_client, make_user, auth_header
+):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(
+        db, pair.id, status="in_progress", pair_status_before="auto_matched"
+    )
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "cancelled"}
+    async with async_session() as s:
+        assert (await s.get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+        assert (await s.get(TranscriptionQueueItem, item.id)).status == "cancelled"
+
+
+async def test_cancel_of_a_re_transcription_leaves_the_pair_synced(
+    db, make_client, make_user, auth_header
+):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    await make_sync_map(db, pair.id)
+    await _seed_item(db, pair.id, status="in_progress", pair_status_before="synced")
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    async with async_session() as s:
+        assert (await s.get(BookPair, pair.id)).status == PairStatus.SYNCED
+
+
+@pytest.mark.parametrize("has_map, expected", [
+    (True, PairStatus.SYNCED),
+    (False, PairStatus.AUTO_MATCHED),
+])
+async def test_cancel_unsticks_a_transcribing_pair_with_no_queue_row(
+    db, make_client, make_user, auth_header, has_map, expected
+):
+    """No row to read the record from, so the status is derived."""
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    if has_map:
+        await make_sync_map(db, pair.id)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 200
+    async with async_session() as s:
+        assert (await s.get(BookPair, pair.id)).status == expected
+
+
+async def test_cancel_still_404s_when_nothing_is_running(
+    db, make_client, make_user, auth_header
+):
+    editor = await make_user(username="ed", role="editor")
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+
+    async with make_client(transcription_router.router) as c:
+        r = await c.post(
+            f"/api/transcription/{pair.id}/cancel", headers=auth_header(editor)
+        )
+
+    assert r.status_code == 404
+    async with async_session() as s:
+        assert (await s.get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
 
 
 # ---------------------------------------------------------------------------

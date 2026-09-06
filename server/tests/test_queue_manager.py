@@ -33,7 +33,7 @@ from services.transcription_providers.base import (
     ProviderUnavailableError,
     TranscriptionPaused,
 )
-from tests.factories import ensure_users, make_book_pair
+from tests.factories import ensure_users, make_book_pair, make_sync_map
 from utils import utcnow
 
 
@@ -1398,12 +1398,6 @@ async def test_a_completed_transcript_is_persisted_even_when_the_item_was_cancel
 
 
 @pytest.mark.parametrize("checkpoint", CHECKPOINTS)
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #254: a cancellation returns early without resetting the pair, "
-           "which `_run_transcription_pipeline` set to TRANSCRIBING on entry. "
-           "Remove this marker with the fix.",
-)
 async def test_cancel_at_each_checkpoint_does_not_leave_the_pair_transcribing(
     db, monkeypatch, checkpoint
 ):
@@ -1448,6 +1442,161 @@ async def test_cancel_after_the_last_checkpoint_is_not_overwritten_by_completed(
     await queue_manager._process_next_item()
 
     assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+
+
+# --- cancel returns the pair to its pre-job status (issue #381) -------------
+#
+# The pipeline flips the pair to TRANSCRIBING on entry and remembers what it
+# was on the queue row. Every path that settles a cancelled item — the API
+# cancel, the pipeline's own checkpoints, the raise path — hands the pair back
+# through the one helper. ERROR is reserved for a job that actually failed.
+
+
+async def test_cancelling_an_in_progress_item_returns_the_pair_to_its_pre_job_status(db):
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(
+        db, pair.id, status="in_progress", pair_status_before="auto_matched"
+    )
+
+    assert await queue_manager.cancel_item(item.id) is True
+
+    assert (await _get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+
+
+async def test_cancelling_a_paused_item_returns_the_pair_to_its_pre_job_status(db, monkeypatch):
+    """A paused job is a pending row, but its pair is still TRANSCRIBING."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(
+        db, pair.id, status="pending", paused_at=utcnow(),
+        pair_status_before="manual_matched",
+    )
+
+    async def _fake_get_provider():
+        return _FakeProvider()
+
+    monkeypatch.setattr(
+        "services.transcription_providers.get_transcription_provider", _fake_get_provider
+    )
+
+    assert await queue_manager.cancel_item(item.id) is True
+
+    assert (await _get(BookPair, pair.id)).status == PairStatus.MANUAL_MATCHED
+
+
+async def test_cancelling_a_pending_item_leaves_an_untouched_pair_alone(db):
+    """Nothing claimed the pair yet, so there is nothing to hand back."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+
+    assert await queue_manager.cancel_item(item.id) is True
+
+    assert (await _get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+
+
+@pytest.mark.parametrize("checkpoint", CHECKPOINTS)
+async def test_cancelling_a_re_transcription_leaves_the_pair_synced(db, monkeypatch, checkpoint):
+    """The pipeline records SYNCED on claim and the checkpoint hands it back."""
+    pair = await make_book_pair(db, status=PairStatus.SYNCED)
+    await make_sync_map(db, pair.id)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline_cancelling_at(monkeypatch, checkpoint, item.id, [])
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "cancelled"
+    assert refreshed.pair_status_before == "synced"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.SYNCED
+
+
+@pytest.mark.parametrize("checkpoint", CHECKPOINTS)
+async def test_cancelling_at_a_checkpoint_returns_an_auto_matched_pair(db, monkeypatch, checkpoint):
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline_cancelling_at(monkeypatch, checkpoint, item.id, [])
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).pair_status_before == "auto_matched"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+
+
+async def test_a_resumed_job_does_not_overwrite_the_recorded_pre_job_status(db, monkeypatch):
+    """Re-entering the pipeline finds the pair already TRANSCRIBING.
+
+    A resume after an off-hours pause, a provider-unavailable retry and a
+    restart all come back through the same entry point. TRANSCRIBING is not a
+    status worth returning to, so the first record stands.
+    """
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(
+        db, pair.id, status="pending", paused_at=utcnow(), progress=0.4,
+        pair_status_before="manual_matched",
+    )
+    _install_pipeline_cancelling_at(monkeypatch, "before_provider", item.id, [])
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).pair_status_before == "manual_matched"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.MANUAL_MATCHED
+
+
+@pytest.mark.parametrize("has_map, expected", [
+    (True, PairStatus.SYNCED),
+    (False, PairStatus.AUTO_MATCHED),
+])
+async def test_cancel_without_a_recorded_status_derives_it(db, has_map, expected):
+    """A row that predates the column (a job running across the deploy)."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    if has_map:
+        await make_sync_map(db, pair.id)
+    item = await _seed_item(db, pair.id, status="in_progress")
+
+    assert await queue_manager.cancel_item(item.id) is True
+
+    assert (await _get(BookPair, pair.id)).status == expected
+
+
+async def test_the_raise_path_returns_the_pair_to_its_pre_job_status(db, monkeypatch):
+    """`_finalize_cancelled` — a cancelled job that unwinds by raising."""
+    pair = await make_book_pair(db, status=PairStatus.TRANSCRIBING)
+    item = await _seed_item(db, pair.id, status="pending", pair_status_before="auto_matched")
+
+    async def _pipeline(item_id, pair_id):
+        queue_manager._cancel_requested.add(item_id)
+        raise TranscriptionPaused("paused", completed_through_sec=900, progress=0.5)
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _pipeline)
+
+    async def _fake_get_provider():
+        return _FakeProvider()
+
+    monkeypatch.setattr(
+        "services.transcription_providers.get_transcription_provider", _fake_get_provider
+    )
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+
+
+async def test_a_job_that_actually_fails_still_marks_the_pair_error(db, monkeypatch):
+    """The recorded pre-job status is for cancels only, never for failures."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+
+    def _boom():
+        raise RuntimeError("worker fell over")
+
+    _install_pipeline(monkeypatch, _PipelineProvider(on_transcribe=_boom))
+
+    await queue_manager._process_next_item()
+
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "failed"
+    assert refreshed.pair_status_before == "auto_matched"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.ERROR
 
 
 # ---------------------------------------------------------------------------
