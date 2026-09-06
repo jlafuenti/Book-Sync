@@ -29,6 +29,11 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- Security headers at the edge: `Caddyfile.example` is now the complete internet-facing proxy
+  recipe — TLS, HSTS, `nosniff`, frame denial, a minimal `Permissions-Policy`, no version
+  advertising, and a Content-Security-Policy derived from the web sources, shipped Report-Only
+  first. The web nginx hides its version and repeats the cheap headers for deployments without
+  Caddy; tests pin the header set and the inline-script hash (#178).
 - API-version handshake: the server reports `app_version`/`api_version` from `/api/health`, and the
   Android app compares it against the version it was built for and shows a banner on a mismatch
   (#349).

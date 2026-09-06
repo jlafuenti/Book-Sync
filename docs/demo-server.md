@@ -172,6 +172,12 @@ demo.example.com {
 }
 ```
 
+The security-header block (`header { defer ... }` — HSTS, frame denial, the
+report-only Content-Security-Policy) is elided above for length; copy it from
+`Caddyfile.example` into this site block verbatim, and verify it with the curl
+check in [operations.md](operations.md), "Edge proxy". A demo box on the
+public internet is exactly where those headers matter (issue #178).
+
 Caddy obtains and renews the Let's Encrypt certificate by itself; the `email`
 global option is the ACME account address, and the only prerequisites are that
 `demo.example.com` resolves to the VPS on public DNS and that ports 80 and 443

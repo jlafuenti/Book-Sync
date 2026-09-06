@@ -751,3 +751,42 @@ def test_readme_links_at_the_secrets_runbook():
         "README.md does not link at the secrets runbook, so an operator "
         "meeting `JWT_SECRET_KEY_FILE` in the env table has nowhere to go."
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #178: the internet-facing proxy — TLS, security headers, CSP — is
+# documented in one place and shipped as Caddyfile.example. The section is
+# what an operator follows before exposing the stack, and README.md's
+# reverse-proxy paragraph links straight at its anchor.
+# ---------------------------------------------------------------------------
+
+_EDGE_PROXY_HEADING = "## Edge proxy"
+
+
+def test_operations_doc_has_the_edge_proxy_section():
+    text = _read(_OPERATIONS_DOC)
+    assert _EDGE_PROXY_HEADING in text, (
+        "docs/operations.md lost its edge-proxy section, and README.md's "
+        "#edge-proxy link now points at nothing."
+    )
+    section = text.split(_EDGE_PROXY_HEADING, 1)[1].split("\n## ", 1)[0]
+    for needle in (
+        "Caddyfile.example",
+        "Strict-Transport-Security",
+        "Report-Only",
+        "frame-ancestors",
+        "curl",
+        "/api/health",
+        "server_tokens",
+        "sha256",
+    ):
+        assert needle in section, (
+            f"docs/operations.md's edge-proxy section never mentions {needle!r}."
+        )
+
+
+def test_readme_links_at_the_edge_proxy_section():
+    assert "docs/operations.md#edge-proxy" in _read(os.path.join(_REPO_ROOT, "README.md")), (
+        "README.md's reverse-proxy paragraph does not link at "
+        "docs/operations.md#edge-proxy."
+    )
