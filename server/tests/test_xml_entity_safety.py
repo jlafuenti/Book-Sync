@@ -114,11 +114,11 @@ def test_the_explicit_parser_leaves_every_entity_unresolved():
 
 
 def test_the_stdlib_xml_sites_use_defusedxml():
-    """library.py and acsm.py parse container.xml/OPF from untrusted archives."""
+    """tag_writer.py and acsm.py parse container.xml/OPF from untrusted archives."""
     import services.import_sources.acsm as acsm_mod
-    import routers.library as library_mod
+    import services.tag_writer as tag_writer_mod
 
-    for mod in (acsm_mod, library_mod):
+    for mod in (acsm_mod, tag_writer_mod):
         assert mod.ET.__name__.startswith("defusedxml"), (
             f"{mod.__name__} parses untrusted archive XML with "
             f"{mod.ET.__name__}; use defusedxml so the choice is explicit"
