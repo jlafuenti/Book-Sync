@@ -1410,21 +1410,16 @@ async def test_cancel_at_each_checkpoint_does_not_leave_the_pair_transcribing(
     assert (await _get(BookPair, pair.id)).status != PairStatus.TRANSCRIBING
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #254: the final `status=completed` write is unconditional, so a "
-           "cancellation landing after the last checkpoint is overwritten. "
-           "Remove this marker with the fix.",
-)
 async def test_cancel_after_the_last_checkpoint_is_not_overwritten_by_completed(
     db, monkeypatch
 ):
-    """A user who cancels while the sync map is being saved stays cancelled.
+    """A user who cancels while the sync map is being saved stays cancelled (#254).
 
     The cancellation is injected at the "Saving sync map..." update — past the
     last checkpoint the pipeline consults, and the window in which
     `cancel_item` writes `cancelled` only for the pipeline to write
-    `completed` over it.
+    `completed` over it. The map itself is already saved by then and is kept:
+    the pair is genuinely SYNCED, and only the queue row records the cancel.
     """
     pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
     item = await _seed_item(db, pair.id, status="pending")
@@ -1441,7 +1436,12 @@ async def test_cancel_after_the_last_checkpoint_is_not_overwritten_by_completed(
 
     await queue_manager._process_next_item()
 
-    assert (await _get(TranscriptionQueueItem, item.id)).status == "cancelled"
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.status == "cancelled"
+    assert refreshed.message == "Cancelled by user"
+    assert refreshed.completed_at is not None
+    assert (await _sync_map_for(pair.id)) is not None, "the finished map is kept"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.SYNCED
 
 
 # --- cancel returns the pair to its pre-job status (issue #381) -------------
@@ -1519,6 +1519,19 @@ async def test_cancelling_at_a_checkpoint_returns_an_auto_matched_pair(db, monke
 
     assert (await _get(TranscriptionQueueItem, item.id)).pair_status_before == "auto_matched"
     assert (await _get(BookPair, pair.id)).status == PairStatus.AUTO_MATCHED
+
+
+async def test_cancelling_at_a_checkpoint_returns_a_manual_matched_pair(db, monkeypatch):
+    """The status is remembered, not guessed: a MANUAL_MATCHED pair has no map,
+    so deriving it would answer AUTO_MATCHED."""
+    pair = await make_book_pair(db, status=PairStatus.MANUAL_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline_cancelling_at(monkeypatch, "after_epub_extract", item.id, [])
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).pair_status_before == "manual_matched"
+    assert (await _get(BookPair, pair.id)).status == PairStatus.MANUAL_MATCHED
 
 
 async def test_a_resumed_job_does_not_overwrite_the_recorded_pre_job_status(db, monkeypatch):

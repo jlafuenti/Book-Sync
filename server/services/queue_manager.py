@@ -314,7 +314,13 @@ async def settle_pair_after_cancel(
 
 
 async def _mark_cancelled(item_id: int, pair_id: int) -> None:
-    """Settle a cancelled item's row and hand its pair back, in one commit."""
+    """Settle a cancelled item's row and hand its pair back, in one commit.
+
+    The one write every cancel path inside the worker ends in: the pipeline's
+    checkpoints, the unwind in `_finalize_cancelled`, and the cancel that
+    lands after the last checkpoint (#254). Clears ``paused_at`` so nothing
+    treats the row as resumable.
+    """
     async with async_session() as db:
         result = await db.execute(
             select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
@@ -1138,14 +1144,37 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             pair.synced_at = utcnow()
         await db.commit()
 
-    # Mark queue item complete
-    await _update_queue_item(
-        item_id,
-        status="completed",
-        progress=1.0,
-        message="Sync complete!",
-        completed_at=utcnow(),
-    )
+    # Mark queue item complete — unless a cancel landed after the last
+    # checkpoint (issue #254). `cancel_item` writes `cancelled` to the row the
+    # moment it is asked, and an unconditional `completed` here overwrote it.
+    # The UPDATE is guarded on the row's status, so whichever write lands
+    # second cannot undo a cancel; the in-process flag covers a cancel whose
+    # own commit is still in flight. The map is already saved and the pair
+    # SYNCED by now, and that stands — the work is done; only the row records
+    # that the user asked for it to stop.
+    async with async_session() as db:
+        result = await db.execute(
+            update(TranscriptionQueueItem)
+            .where(
+                TranscriptionQueueItem.id == item_id,
+                TranscriptionQueueItem.status != "cancelled",
+            )
+            .values(
+                status="completed",
+                progress=1.0,
+                message="Sync complete!",
+                completed_at=utcnow(),
+            )
+        )
+        await db.commit()
+        completed = result.rowcount == 1
+    if not completed or item_id in _cancel_requested:
+        await _mark_cancelled(item_id, pair_id)
+        logger.info(
+            f"Queue item {item_id} (pair {pair_id}) was cancelled while its sync "
+            f"map was being saved; the map is kept and the item stays cancelled"
+        )
+        return
     logger.info(f"Queue item {item_id} (pair {pair_id}) completed successfully")
 
 
