@@ -35,6 +35,11 @@ from models.transcription_queue import TranscriptionQueueItem
 from models.user import User
 from rate_limit import expensive_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
+from schemas import (
+    ActionResult, BulkChapterRepairResult, ChapterRepairResult, DeletedCount,
+    LibraryScanProgress, MultiFileDismissResult, MultiFileRemoveTracksResult,
+    ReplaceFileResult, RequeueResult, SyncMapAuditResponse, TroubleshootIssues,
+)
 from services import chapter_repair, library_verify
 from services import sync_map_audit as sync_map_audit_service
 from services.position_service import (
@@ -138,7 +143,7 @@ def _scan_library_files(ebook_rows: List[dict], audiobook_rows: List[dict]) -> d
     }
 
 
-@router.get("/issues")
+@router.get("/issues", response_model=TroubleshootIssues)
 async def get_issues(
     db: AsyncSession = Depends(get_db),
     # Editor: this page's own fix controls are editor-gated, so gating its data
@@ -342,7 +347,7 @@ async def get_issues(
 # Scan
 # ---------------------------------------------------------------------------
 
-@router.post("/scan", status_code=202)
+@router.post("/scan", status_code=202, response_model=ActionResult)
 async def start_scan(_: User = Depends(get_editor_user)):
     started = await library_verify.start_scan()
     if not started:
@@ -350,12 +355,12 @@ async def start_scan(_: User = Depends(get_editor_user)):
     return {"status": "started"}
 
 
-@router.get("/scan/progress")
+@router.get("/scan/progress", response_model=LibraryScanProgress)
 async def scan_progress(_: User = Depends(get_current_user)):
     return library_verify.get_progress()
 
 
-@router.post("/scan/cancel")
+@router.post("/scan/cancel", response_model=ActionResult)
 async def scan_cancel(_: User = Depends(get_editor_user)):
     library_verify.request_cancel()
     return {"status": "cancel_requested"}
@@ -415,7 +420,7 @@ class BulkDeleteRequest(BaseModel):
     items: List[BulkDeleteItem]
 
 
-@router.post("/bulk-delete")
+@router.post("/bulk-delete", response_model=DeletedCount)
 async def bulk_delete(
     req: BulkDeleteRequest,
     delete_file: bool = Query(True),
@@ -431,7 +436,7 @@ async def bulk_delete(
     return {"deleted": deleted}
 
 
-@router.post("/replace/{item_type}/{item_id}")
+@router.post("/replace/{item_type}/{item_id}", response_model=ReplaceFileResult)
 async def replace_file(
     item_type: str,
     item_id: int,
@@ -541,7 +546,7 @@ async def replace_file(
     return {"status": "replaced", "integrity_ok": ok, "detail": det, "item_id": item_id}
 
 
-@router.post("/repair-chapter-encoding/{item_id}")
+@router.post("/repair-chapter-encoding/{item_id}", response_model=ChapterRepairResult)
 async def repair_chapter_encoding_endpoint(
     item_id: int,
     db: AsyncSession = Depends(get_db),
@@ -566,7 +571,7 @@ class BulkRepairChapterEncodingRequest(BaseModel):
     item_ids: List[int]
 
 
-@router.post("/bulk-repair-chapter-encoding")
+@router.post("/bulk-repair-chapter-encoding", response_model=BulkChapterRepairResult)
 async def bulk_repair_chapter_encoding(
     req: BulkRepairChapterEncodingRequest,
     db: AsyncSession = Depends(get_db),
@@ -588,7 +593,7 @@ async def bulk_repair_chapter_encoding(
     return {"repaired": repaired, "failures": failures}
 
 
-@router.post("/requeue/{pair_id}")
+@router.post("/requeue/{pair_id}", response_model=RequeueResult)
 async def requeue_pair(
     pair_id: int,
     db: AsyncSession = Depends(get_db),
@@ -606,7 +611,7 @@ async def requeue_pair(
 # Sync-map drift audit (issue #295)
 # ---------------------------------------------------------------------------
 
-@router.get("/sync-map-audit")
+@router.get("/sync-map-audit", response_model=SyncMapAuditResponse)
 async def sync_map_audit(
     sample_size: int = Query(sync_map_audit_service.DEFAULT_SAMPLE_SIZE, ge=0, le=100),
     pair_id: Optional[int] = Query(None, ge=1),
@@ -651,7 +656,7 @@ class DeleteCoversRequest(BaseModel):
     filenames: List[str]
 
 
-@router.post("/delete-orphan-covers")
+@router.post("/delete-orphan-covers", response_model=DeletedCount)
 async def delete_orphan_covers(req: DeleteCoversRequest, _: User = Depends(get_editor_user)):
     """Delete orphaned cover files. Paths are constrained to the covers dir."""
     covers_dir = os.path.abspath(settings.covers_dir)
@@ -673,7 +678,7 @@ class AcsmDismissRequest(BaseModel):
     filename: str
 
 
-@router.post("/acsm-dismiss")
+@router.post("/acsm-dismiss", response_model=ActionResult)
 async def acsm_dismiss(req: AcsmDismissRequest, _: User = Depends(get_editor_user)):
     from services.import_sources.acsm import _failed_dir
     target = _failed_dir() / Path(req.filename).name
@@ -699,7 +704,7 @@ async def _folder_or_404(db: AsyncSession, folder_id: int) -> MultiFileAudiobook
     return row
 
 
-@router.post("/multi-file/{folder_id}/dismiss")
+@router.post("/multi-file/{folder_id}/dismiss", response_model=MultiFileDismissResult)
 async def multi_file_dismiss(
     folder_id: int,
     db: AsyncSession = Depends(get_db),
@@ -713,7 +718,8 @@ async def multi_file_dismiss(
     return {"status": "dismissed", "id": row.id}
 
 
-@router.post("/multi-file/{folder_id}/remove-tracks")
+@router.post("/multi-file/{folder_id}/remove-tracks",
+             response_model=MultiFileRemoveTracksResult)
 async def multi_file_remove_tracks(
     folder_id: int,
     db: AsyncSession = Depends(get_db),

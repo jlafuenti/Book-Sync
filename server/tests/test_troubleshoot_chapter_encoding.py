@@ -52,6 +52,9 @@ async def test_get_issues_surfaces_bad_chapter_encoding(
     assert len(bucket) == 1
     assert bucket[0]["item_id"] == bad.id
     assert "invalid continuation byte" in bucket[0]["detail"]
+    # The whole envelope round-trips through its declared model (issue #258).
+    from schemas import TroubleshootIssues
+    TroubleshootIssues.model_validate(body)
 
 
 @pytest.mark.asyncio
