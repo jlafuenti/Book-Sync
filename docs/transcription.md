@@ -98,6 +98,10 @@ language rather than re-detecting from wherever the resume happens to start.
   transcript, and a later re-queue picks it up from the cache instead of re-transcribing.
   The stop is best effort — an unreachable worker still leaves the item cancelled, and the
   worker's own 48h sweep collects the leftovers.
+  A cancel returns the pair to what it was before the job — `synced` for a cancelled
+  re-transcription, otherwise `auto_matched` / `manual_matched` as before — using the status the
+  pipeline recorded on the queue row when it claimed the pair (`pair_status_before`, #381). `error`
+  is reserved for a job that actually failed.
 - **Retries with a ceiling, on a backoff ladder.** A provider-unavailable failure re-pends the item
   and burns a retry; after the ceiling is reached the item is marked permanently failed with the
   error attached. The wait doubles each time — 30s, 60s, 120s, 240s, 480s — capped at 15 minutes,

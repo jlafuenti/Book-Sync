@@ -233,16 +233,21 @@ async def cancel_item(item_id: int) -> bool:
             was_running = True
             item.status = "cancelled"
             item.message = "Cancellation requested"
-            await db.commit()
         elif item.status == "pending":
             was_paused = item.paused_at is not None
             item.status = "cancelled"
             item.message = "Cancelled by user"
             item.completed_at = utcnow()
             item.paused_at = None
-            await db.commit()
         else:
             return False
+
+        # Hand the pair back in the same commit so the UI is unstuck at once,
+        # rather than when (or if) the worker finishes unwinding (#381). Both
+        # branches: a paused job is a pending row whose pair is still
+        # TRANSCRIBING.
+        await settle_pair_after_cancel(db, pair_id, item)
+        await db.commit()
 
     # Tell the worker to stop (issue #196). Flipping the DB row used to be the
     # whole of "cancel": the worker kept the GPU for the remaining hours of the
@@ -267,6 +272,61 @@ async def cancel_item(item_id: int) -> bool:
         await _discard_remote_checkpoint(pair_id)
 
     return True
+
+
+async def settle_pair_after_cancel(
+    db, pair_id: int, item: Optional[TranscriptionQueueItem]
+) -> None:
+    """Return a cancelled job's pair to the status it had before the job (#381).
+
+    The one place the "status after cancel" rule lives. Called from every path
+    that settles a cancelled item — `cancel_item`, the pipeline's own
+    checkpoints, `_finalize_cancelled` — and from the cancel endpoint when the
+    pair says a job is running but no queue row backs it (``item`` is None).
+
+    Only a TRANSCRIBING pair is touched: a pending item never claimed its pair,
+    and a pair another path already settled is left as it is. The status comes
+    from ``item.pair_status_before`` when the pipeline recorded one; a row that
+    predates that column, or no row at all, falls back to deriving it — SYNCED
+    if the pair still has a sync map (a cancelled re-transcription), otherwise
+    AUTO_MATCHED. ERROR is never an answer here; it is reserved for a job that
+    actually failed. Does not commit.
+    """
+    pair = (
+        await db.execute(select(BookPair).where(BookPair.id == pair_id))
+    ).scalar_one_or_none()
+    if pair is None or pair.status != PairStatus.TRANSCRIBING:
+        return
+
+    recorded = item.pair_status_before if item is not None else None
+    if recorded:
+        pair.status = PairStatus(recorded)
+        return
+
+    from models.sync_map import SyncMap
+
+    has_map = (
+        await db.execute(
+            select(SyncMap.id).where(SyncMap.book_pair_id == pair_id).limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    pair.status = PairStatus.SYNCED if has_map else PairStatus.AUTO_MATCHED
+
+
+async def _mark_cancelled(item_id: int, pair_id: int) -> None:
+    """Settle a cancelled item's row and hand its pair back, in one commit."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
+        )
+        item = result.scalar_one_or_none()
+        if item:
+            item.status = "cancelled"
+            item.message = "Cancelled by user"
+            item.paused_at = None
+            item.completed_at = utcnow()
+        await settle_pair_after_cancel(db, pair_id, item)
+        await db.commit()
 
 
 async def _discard_remote_checkpoint(pair_id: int) -> None:
@@ -719,21 +779,11 @@ async def _finalize_cancelled(item_id: int, pair_id: int) -> None:
 
     Called when a job the user cancelled unwinds by raising — usually the pause
     the cancel asked for. Clears ``paused_at`` so nothing treats the row as
-    resumable, and drops the worker's checkpoint plus the audio parked beside
-    it, which nothing will ever resume now.
+    resumable, returns the pair to its pre-job status (#381), and drops the
+    worker's checkpoint plus the audio parked beside it, which nothing will
+    ever resume now.
     """
-    async with async_session() as db:
-        result = await db.execute(
-            select(TranscriptionQueueItem).where(TranscriptionQueueItem.id == item_id)
-        )
-        item = result.scalar_one_or_none()
-        if item:
-            item.status = "cancelled"
-            item.message = "Cancelled by user"
-            item.paused_at = None
-            item.completed_at = utcnow()
-            await db.commit()
-
+    await _mark_cancelled(item_id, pair_id)
     await _discard_remote_checkpoint(pair_id)
 
 
@@ -893,7 +943,15 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         if not pair:
             raise Exception(f"Book pair {pair_id} not found")
 
-        # Mark pair as transcribing
+        # Mark pair as transcribing — remembering what it was first, so a
+        # cancel can hand it back (#381). Only on the first claim: a resume
+        # after an off-hours pause, a provider-unavailable retry and a restart
+        # all re-enter here with the pair already TRANSCRIBING, and that is
+        # not a status worth returning to.
+        if pair.status != PairStatus.TRANSCRIBING:
+            item = await db.get(TranscriptionQueueItem, item_id)
+            if item is not None and item.pair_status_before is None:
+                item.pair_status_before = PairStatus(pair.status).value
         pair.status = PairStatus.TRANSCRIBING
         await db.commit()
 
@@ -932,8 +990,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
 
         # Check cancellation
         if item_id in _cancel_requested:
-            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                      completed_at=utcnow())
+            await _mark_cancelled(item_id, pair_id)
             return
 
         from services.transcription_providers import get_transcription_provider
@@ -1017,8 +1074,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
 
         # Check cancellation — now that the transcript is banked.
         if item_id in _cancel_requested:
-            await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                      completed_at=utcnow())
+            await _mark_cancelled(item_id, pair_id)
             return
 
         await _update_queue_item(
@@ -1046,8 +1102,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
 
     # Check cancellation
     if item_id in _cancel_requested:
-        await _update_queue_item(item_id, status="cancelled", message="Cancelled by user",
-                                  completed_at=utcnow())
+        await _mark_cancelled(item_id, pair_id)
         return
 
     # Step 3: Align texts
