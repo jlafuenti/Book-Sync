@@ -352,6 +352,98 @@ The `web` nginx proxy forwards `X-Forwarded-For` (appending to any incoming chai
 `$proxy_add_x_forwarded_for`) and `X-Forwarded-Proto`, so a client's real address survives both
 the Caddy → web → server and the direct web → server topologies.
 
+## Edge proxy
+
+Nothing inside the stack does TLS or sets the browser security headers — the web app keeps its
+session tokens in `localStorage`, so the headers that limit what an injected script or a framing
+page can do have to come from the proxy in front. [`Caddyfile.example`](../Caddyfile.example) at
+the repo root is that proxy, complete: copy it, change the hostname (and the upstreams if Caddy is
+not on the compose network), and you have TLS, the headers, and the request-body caps from
+[Upload size limits](#upload-size-limits) in one file (issue #178).
+
+```bash
+cp Caddyfile.example /etc/caddy/Caddyfile
+# edit the ADAPT lines, then
+caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+```
+
+**TLS.** Caddy obtains and renews a Let's Encrypt certificate for the site's hostname on its own;
+the name must resolve to the host and ports 80 and 443 must be reachable from the internet (80
+only for the ACME challenge and the redirect to HTTPS). Publish nothing else: with Caddy on the
+compose network the API port is never published, and the `web` port is bound to loopback.
+
+**The headers**, all set in the site's `header { defer ... }` block — `defer` is what makes them
+apply *after* nginx and uvicorn have answered, so they override rather than get overridden:
+
+| Header | Value | Why |
+|---|---|---|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Once seen, the browser refuses plain HTTP to the host for a year, so a first-hop attacker cannot strip the redirect. `preload` is deliberately left off — add it only when every host under the domain is HTTPS-only, because the browser preload list takes months to leave. |
+| `Content-Security-Policy-Report-Only` | see below | Limits where scripts, styles, images, media and connections may come from. **Report-Only first** — see below. |
+| `X-Frame-Options` | `DENY` | No site may frame Tandem (clickjacking the admin pages). While the CSP is Report-Only, this is the header that enforces it; the CSP's `frame-ancestors 'none'` takes over once enforcing. |
+| `X-Content-Type-Options` | `nosniff` | No sniffing a script out of a mislabelled response. |
+| `Referrer-Policy` | `same-origin` | Same value the web nginx already sets (issue #284). |
+| `Permissions-Policy` | `geolocation=(), camera=(), microphone=(), payment=(), usb=()` | Tandem uses none of these; deny them to injected code too. |
+| `Server`, `Via`, `X-Powered-By` | removed | No nginx/Caddy version advertising. nginx additionally runs with `server_tokens off` (web/Dockerfile), so a deployment without Caddy still hides its version. |
+
+**Why the CSP ships Report-Only.** The policy was derived from the web sources — the one inline
+script, the Google Fonts icon stylesheet, epub.js rendering chapters into `srcdoc` iframes that
+inherit the page's policy, blob: URLs for a book's own images, fonts and stylesheets, the four
+metadata-provider hosts whose cover candidates the match dialog previews — and every one of those
+is pinned by a test. But a wrong *enforcing* policy fails silently: chapters render blank, icons
+vanish, and nothing tells the user why. So `Caddyfile.example` sends it as
+`Content-Security-Policy-Report-Only`, which logs what *would* be blocked without blocking it.
+Run that for a few days, use every part of the app (open an ebook, play an audiobook, run a
+metadata match, install the PWA), and watch the browser console: Chrome and Firefox print each
+violation as a `[Report Only] Refused to …` message. When there are none, rename the header to
+`Content-Security-Policy` in the Caddyfile and reload Caddy. If a violation names a host you
+recognise (your Audiobookshelf server serving a cover, say), add it to the directive the message
+names; if it names something you don't, that is the policy doing its job.
+
+**The inline-script hash.** `script-src` allows exactly one inline script by its `sha256` — the
+theme bootstrap in `web/index.html`, which must run before first paint. Editing that script (even
+a comment) changes the hash and an enforcing CSP would then block it, so
+`web/src/security/cspInlineScript.test.js` hashes the script on every run and fails, printing the
+new value, until the Caddyfile is updated to match. `npx vitest run src/security` from `web/`
+runs just that check.
+
+**Verifying.** After every proxy change, print the response headers for the app shell and for an
+API route — the two go through different `handle` blocks, and both must carry the set:
+
+```bash
+for p in / /api/health; do
+  echo "== $p"
+  curl -sI "https://tandem.example.com$p" \
+    | grep -iE '^(HTTP|strict-transport|content-security|x-frame|x-content-type|referrer|permissions|server|via)'
+done
+```
+
+A good result shows, for **both** paths, `HTTP/2 200`, the six headers, and **no** `server:` or
+`via:` line (HTTP/2 lower-cases header names; over HTTP/1.1 they come back capitalised):
+
+```
+== /
+HTTP/2 200
+strict-transport-security: max-age=31536000; includeSubDomains
+content-security-policy-report-only: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; ...
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: same-origin
+permissions-policy: geolocation=(), camera=(), microphone=(), payment=(), usb=()
+== /api/health
+HTTP/2 200
+strict-transport-security: max-age=31536000; includeSubDomains
+content-security-policy-report-only: ...
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: same-origin
+permissions-policy: geolocation=(), camera=(), microphone=(), payment=(), usb=()
+```
+
+If `server: nginx/…` or `via: 1.1 Caddy` is still there, the `header` block lacks `defer`. If the
+headers appear on `/` but not on `/api/health`, the block is inside the `handle {}` for the web
+upstream instead of at site level. Run the check from *outside* the LAN once — a LAN-only DNS
+name can hide an unreachable port 80 that stops certificate renewal.
+
 ## Login throttling
 
 `POST /api/auth/login` is guarded by two independent limits.
