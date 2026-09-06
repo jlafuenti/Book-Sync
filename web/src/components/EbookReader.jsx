@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import ePub from 'epubjs'
 import {
-    fetchEbookBlob, getPosition, matchTextToAudio, audioToEpub, getDeviceId,
+    getPosition, matchTextToAudio, audioToEpub, getDeviceId,
 } from '../api'
 // One module owns the contract's write rules (issue #274): scope, the device
 // triple, who may claim `source`, and what counts as a conflict.
@@ -13,6 +12,7 @@ import {
     normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
 } from '../lib/textSearch'
 import { getReaderPalette, READER_MODES, DEFAULT_THEME } from '../themes'
+import useEpubRendition, { paletteCss } from '../hooks/useEpubRendition'
 import { useTheme } from '../ThemeContext'
 import './EbookReader.css'
 
@@ -32,16 +32,6 @@ function loadStoredFontSize() {
 function loadStoredReaderTheme() {
     const stored = localStorage.getItem(READER_THEME_KEY)
     return READER_MODES.includes(stored) ? stored : 'match'
-}
-
-// The palette must be injected as a <style> into each chapter document — CSS
-// variables set on the parent document never cascade into the epub iframe.
-function paletteCss(palette) {
-    return [
-        `html, body { background: ${palette.background} !important; color: ${palette.text} !important; }`,
-        `h1, h2, h3, h4, h5, h6, p, span, div, li, td, th { color: ${palette.text} !important; }`,
-        `a { color: ${palette.link} !important; }`,
-    ].join('\n')
 }
 
 const READER_MODE_LABELS = [
@@ -96,13 +86,8 @@ export async function executeRestore(book, rendition, steps) {
 
 function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio, saveFlushRef }) {
     const viewerRef = useRef(null)
-    const bookRef = useRef(null)
-    const renditionRef = useRef(null)
     const saveTimerRef = useRef(null)
 
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState(null)
-    const [toc, setToc] = useState([])
     const [showToc, setShowToc] = useState(false)
     const [currentCfi, setCurrentCfi] = useState(null)
     const [progressPercent, setProgressPercent] = useState(0)
@@ -120,6 +105,14 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // [ebookId]-only load effect and must always read the current palette.
     const paletteRef = useRef(palette)
     paletteRef.current = palette
+    // The epub.js lifecycle (issue #278). `handleOpened` below runs the
+    // restore ladder and attaches the `relocated` handler in the same async
+    // continuation, between the TOC load and the spinner clearing;
+    // `handleTeardown` flushes the pending save before the book is destroyed.
+    const { bookRef, renditionRef, toc, loading, error } = useEpubRendition(
+        viewerRef, ebookId,
+        { fontSizeRef, paletteRef, onOpened: handleOpened, onTeardown: handleTeardown },
+    )
     // Save-button feedback: 'saved' shows the ✓, 'error' shows "Not saved".
     // The ✓ only ever means a write actually landed (issue #159) — it used to
     // flash success even while the gate silently swallowed every save.
@@ -478,436 +471,361 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
         setTimeout(() => setSaveState(null), 1500)
     }, [doSave, currentCfi, progressPercent])
 
-    // Initialize epub
-    useEffect(() => {
-        let destroyed = false
-
-        async function loadBook() {
-            try {
-                const arrayBuffer = await fetchEbookBlob(ebookId)
-                if (destroyed) return
-
-                const book = ePub(arrayBuffer)
-                bookRef.current = book
-
-                const rendition = book.renderTo(viewerRef.current, {
-                    width: '100%',
-                    height: '100%',
-                    flow: 'paginated',
-                    spread: 'none',
-                })
-                renditionRef.current = rendition
-
-                // Structural styles only — colors come from the injected
-                // #tandem-reader-theme <style> below, so the palette can
-                // change live with the reader-theme picker (issue #57).
-                rendition.themes.default({
-                    'body': {
-                        'font-family': 'Georgia, "Times New Roman", serif !important',
-                        'padding': '0 48px !important',
-                        'max-width': '100% !important',
-                        'box-sizing': 'border-box !important',
-                    },
-                    'img': { 'max-width': '100% !important' },
-                    '*': { 'max-width': '100% !important', 'box-sizing': 'border-box !important' },
-                })
-
-                // Inject font size + palette via <style> tags (avoids blob URL
-                // MIME rejection; CSS vars don't cross into the iframe). Reads
-                // the refs so a pref change after registration still applies.
-                rendition.hooks.content.register(contents => {
-                    if (contents.document) {
-                        const style = contents.document.createElement('style')
-                        style.id = 'tandem-font-size'
-                        style.textContent = `html { font-size: ${fontSizeRef.current}% !important; }`
-                        contents.document.head.appendChild(style)
-
-                        const themeStyle = contents.document.createElement('style')
-                        themeStyle.id = 'tandem-reader-theme'
-                        themeStyle.textContent = paletteCss(paletteRef.current)
-                        contents.document.head.appendChild(themeStyle)
-                    }
-                })
-
-                // Load TOC
-                const nav = await book.loaded.navigation
-                if (!destroyed) {
-                    setToc(nav.toc || [])
+    // Everything that must happen between the TOC loading and the spinner
+    // clearing: the canonical position fetch, the restore ladder, the gate
+    // verdict, and only THEN the `relocated` handler — so its save path can
+    // never fire before the restore has landed. A hoisted declaration: the
+    // hook above is called before the callbacks this closes over exist.
+    async function handleOpened({ book, rendition, nav, isDestroyed }) {
+        // Fetch the canonical position at open. Reading a snapshot
+        // taken when the *page* loaded meant a position set on another
+        // device in the meantime was never seen.
+        const scope = pairId ? 'pair' : 'ebook'
+        let position = await getPosition(scope, pairId || ebookId).catch(e => {
+            console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
+            // Offline: fall back to the portable anchor the caller
+            // passed in. No CFI hint is threaded through any more —
+            // callers used to pass one read from `user_progress.epub_cfi`,
+            // a mirror column that no longer exists (issue #102), and a
+            // page-load snapshot was staler than this fetch anyway.
+            return initialChapter != null
+                ? {
+                    anchor_revision: 0,
+                    epub_chapter: initialChapter,
+                    epub_text_preview: initialTextPreview || undefined,
+                    hints: [],
                 }
+                : null
+        })
+        if (isDestroyed()) return
 
-                // Fetch the canonical position at open. Reading a snapshot
-                // taken when the *page* loaded meant a position set on another
-                // device in the meantime was never seen.
-                const scope = pairId ? 'pair' : 'ebook'
-                let position = await getPosition(scope, pairId || ebookId).catch(e => {
-                    console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
-                    // Offline: fall back to the portable anchor the caller
-                    // passed in. No CFI hint is threaded through any more —
-                    // callers used to pass one read from `user_progress.epub_cfi`,
-                    // a mirror column that no longer exists (issue #102), and a
-                    // page-load snapshot was staler than this fetch anyway.
-                    return initialChapter != null
-                        ? {
-                            anchor_revision: 0,
-                            epub_chapter: initialChapter,
-                            epub_text_preview: initialTextPreview || undefined,
-                            hints: [],
+        const ladderContext = {
+            spineCount: book.spine?.items?.length ?? 0,
+            deviceId: getDeviceId(),
+            hintKind: 'epubjs_cfi',
+        }
+        let steps = planRestore(position, ladderContext)
+
+        // The audio rung (ladder step 5) — a pair only ever LISTENED
+        // to has a record with `audio_position_ms` and no ebook
+        // anchor. Android executes this rung through its cached sync
+        // map; the web has none, so it asks the server
+        // (`audio_to_epub`, issue #159) and re-plans from the
+        // resolved chapter + preview, which then seed the chapter
+        // display and the text-nav pass below. Audio is always
+        // planned last, so it being FIRST means it is the only rung.
+        let audioDerived = false
+        if (pairId && steps.length > 0 && steps[0].kind === 'audio') {
+            const resolved = await audioToEpub(pairId, steps[0].audioPositionMs)
+                .catch(() => null)
+            if (isDestroyed()) return
+            if (resolved) {
+                position = {
+                    ...position,
+                    epub_chapter: resolved.epub_chapter,
+                    epub_text_preview: resolved.preview || position.epub_text_preview,
+                }
+                steps = planRestore(position, ladderContext)
+                audioDerived = true
+            }
+        }
+        positionRef.current = position
+
+        const landed = await executeRestore(book, rendition, steps)
+
+        // A position we could not resolve is NOT the same as no
+        // position. Saving stays blocked in that case, so a failed
+        // restore can never overwrite a real position with page one.
+        //
+        // An ANCHORED record whose plan came out empty (e.g. a
+        // re-parsed EPUB left `epub_chapter` past this spine, with
+        // nothing else to fall back on) is unresolved too — planning
+        // drops the un-navigable rung, and treating the empty plan as
+        // "unread" was exactly the silent gate-open that let page one
+        // overwrite a real position (issue #159).
+        const unresolved = !landed || (steps.length === 0 && hasAnchor(position))
+        const derivedPreview = (position?.epub_text_preview || '').trim()
+        if (!unresolved && audioDerived && derivedPreview) {
+            // PROVISIONAL landing: the chapter + preview came from the
+            // sync map, not the record, and the map's chapter axis can
+            // be offset from the spine. Displaying the derived chapter
+            // is a guess — only the text-nav pass actually finding the
+            // preview confirms it. Treating the guess as landed is
+            // what let settle relocations write the Copyright page
+            // (and a matcher-minted audio position) over a real
+            // 10-minute listening position.
+            audioConfirmPendingRef.current = true
+            positionEstablishedRef.current = false
+            restoreLandedRef.current = false
+            if (!isDestroyed()) setUnresolvedPosition(false)
+        } else if (!unresolved && audioDerived) {
+            // Derived chapter with no searchable preview: nothing can
+            // ever confirm the guess, so it stays unresolved.
+            positionEstablishedRef.current = false
+            restoreLandedRef.current = false
+            if (!isDestroyed()) setUnresolvedPosition(true)
+        } else {
+            positionEstablishedRef.current = !unresolved
+            restoreLandedRef.current = !unresolved
+            if (!isDestroyed()) setUnresolvedPosition(unresolved)
+        }
+
+        // Track position changes
+        rendition.on('relocated', (location) => {
+            if (isDestroyed()) return
+            const cfi = location.start.cfi
+            const percent = book.locations
+                ? location.start.percentage * 100
+                : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
+            setCurrentCfi(cfi)
+            setProgressPercent(percent)
+
+            // Track chapter-level progression for text extraction (mirrors Android)
+            const page = location.start.displayed?.page || 1
+            const total = location.start.displayed?.total || 1
+            currentChapterProgressionRef.current = Math.max(0, page - 1) / Math.max(1, total)
+
+            // Track spine index for bookmark syncing
+            const spineIndex = book.spine.items.findIndex(item =>
+                item.href && (location.start.href === item.href ||
+                location.start.href.endsWith('/' + item.href) ||
+                item.href.endsWith('/' + location.start.href))
+            )
+            if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
+
+            // Keep the latest position readable from the unmount
+            // flush and the lifecycle keepalive, which cannot rely on
+            // state (the cleanup closes over the first render's).
+            latestPositionRef.current = {
+                cfi,
+                percent,
+                spineIndex: spineIndex >= 0 ? spineIndex : currentSpineIndexRef.current,
+            }
+            // A user-initiated relocation may reopen the write gate
+            // (navigation clause) — do it here, not just at save
+            // time, so the unresolved banner clears on the page turn.
+            maybeOpenGate()
+
+            saveProgress(cfi, percent, spineIndex >= 0 ? spineIndex : undefined)
+
+            // On first render: if we have a text preview, navigate to it within the chapter
+            // Tries current chapter first, then adjacent chapters (±1, ±2) to handle
+            // sync map chapter numbering offset from epub spine indices
+            // Prefer the canonical record's preview: the prop is a
+            // page-load-time snapshot, the record is what the book
+            // actually says now.
+            const previewText = positionRef.current?.epub_text_preview || initialTextPreview
+            if (!textNavDoneRef.current && previewText) {
+                textNavDoneRef.current = true
+                textNavInProgressRef.current = true
+
+                // The preview is SERVER-extracted text; normalize it
+                // with the matcher-parity pipeline or a needle
+                // containing (say) an nbsp-adjacent word can never be
+                // found in identically normalized section text.
+                const targetNorm = normalizeForSearch(previewText)
+                const shortTarget = targetNorm.substring(0, 30)
+
+                if (shortTarget.length >= 5) {
+                    // Search for target text in the currently rendered chapter content.
+                    // Takes an explicit spineHref so we generate the CFI against the
+                    // correct spine section (renditionRef.location can be stale after
+                    // rapid chapter-hopping).
+                    const trySearchChapter = (spineHref) => {
+                        try {
+                            const contents = renditionRef.current?.getContents?.()
+                            const doc = contents?.[0]?.document
+                            if (!doc) return null
+
+                            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+                            const boundaries = []
+                            let accumulated = ''
+                            let n
+                            while ((n = walker.nextNode())) {
+                                const norm = normalizeForSearch(n.textContent)
+                                // Separator between text nodes — the server
+                                // extracts previews with a separator at every
+                                // tag boundary (get_text(separator="\n")), so
+                                // inline markup must not glue words here either.
+                                if (accumulated && !accumulated.endsWith(' ')) accumulated += ' '
+                                boundaries.push({ node: n, start: accumulated.length, len: norm.length })
+                                accumulated += norm
+                            }
+
+                            const idx = accumulated.indexOf(shortTarget)
+                            if (idx < 0) return null
+
+                            const boundary = boundaries.find(b => b.start <= idx && b.start + b.len > idx)
+                            if (!boundary) return null
+
+                            // Calculate the character offset within this text node
+                            const nodeOffset = idx - boundary.start
+                            // Map back to the original (un-normalized) text to get real offset
+                            const origText = boundary.node.textContent
+                            let realOffset = 0
+                            let normCount = 0
+                            for (let i = 0; i < origText.length && normCount < nodeOffset; i++) {
+                                const ch = origText[i].toLowerCase()
+                                const isKept = /[a-z0-9 ]/.test(ch) || WHITESPACE_VARIANT_CHAR_RE.test(ch)
+                                if (isKept) normCount++
+                                realOffset = i + 1
+                            }
+
+                            const range = doc.createRange()
+                            range.setStart(boundary.node, Math.min(realOffset, origText.length))
+                            range.setEnd(boundary.node, Math.min(realOffset, origText.length))
+
+                            const section = bookRef.current?.spine.get(spineHref)
+                            if (!section) {
+                                console.warn(`[EbookReader] text nav: spine.get('${spineHref}') returned null`)
+                                return null
+                            }
+
+                            const cfiStr = section.cfiFromRange(range)
+                            console.log(`[EbookReader] text nav: found '${shortTarget}' in ${spineHref} → CFI ${cfiStr}`)
+                            return cfiStr
+                        } catch (e) {
+                            console.warn('[EbookReader] text nav search error:', e.message)
+                            return null
                         }
-                        : null
-                })
-                if (destroyed) return
+                    }
 
-                const ladderContext = {
-                    spineCount: book.spine?.items?.length ?? 0,
-                    deviceId: getDeviceId(),
-                    hintKind: 'epubjs_cfi',
-                }
-                let steps = planRestore(position, ladderContext)
-
-                // The audio rung (ladder step 5) — a pair only ever LISTENED
-                // to has a record with `audio_position_ms` and no ebook
-                // anchor. Android executes this rung through its cached sync
-                // map; the web has none, so it asks the server
-                // (`audio_to_epub`, issue #159) and re-plans from the
-                // resolved chapter + preview, which then seed the chapter
-                // display and the text-nav pass below. Audio is always
-                // planned last, so it being FIRST means it is the only rung.
-                let audioDerived = false
-                if (pairId && steps.length > 0 && steps[0].kind === 'audio') {
-                    const resolved = await audioToEpub(pairId, steps[0].audioPositionMs)
-                        .catch(() => null)
-                    if (destroyed) return
-                    if (resolved) {
-                        position = {
-                            ...position,
-                            epub_chapter: resolved.epub_chapter,
-                            epub_text_preview: resolved.preview || position.epub_text_preview,
+                    // Load one spine document's text WITHOUT rendering
+                    // it (epub.js Section.load), extracted and
+                    // normalized exactly like the server built the
+                    // previews we search for (issue #305): a
+                    // separator at every tag boundary, then the
+                    // matcher-parity normalization. Null when the
+                    // section can't be loaded.
+                    const loadSectionText = async (idx) => {
+                        const b = bookRef.current
+                        const item = b?.spine?.items?.[idx]
+                        if (!item || typeof item.load !== 'function') return null
+                        try {
+                            const contents = await item.load(
+                                typeof b.load === 'function' ? b.load.bind(b) : undefined
+                            )
+                            const raw = extractSearchableText(contents)
+                                || String(contents?.body?.textContent ?? '')
+                            item.unload?.()
+                            return normalizeForSearch(raw)
+                        } catch (e) {
+                            return null
                         }
-                        steps = planRestore(position, ladderContext)
-                        audioDerived = true
                     }
-                }
-                positionRef.current = position
 
-                const landed = await executeRestore(book, rendition, steps)
-
-                // A position we could not resolve is NOT the same as no
-                // position. Saving stays blocked in that case, so a failed
-                // restore can never overwrite a real position with page one.
-                //
-                // An ANCHORED record whose plan came out empty (e.g. a
-                // re-parsed EPUB left `epub_chapter` past this spine, with
-                // nothing else to fall back on) is unresolved too — planning
-                // drops the un-navigable rung, and treating the empty plan as
-                // "unread" was exactly the silent gate-open that let page one
-                // overwrite a real position (issue #159).
-                const unresolved = !landed || (steps.length === 0 && hasAnchor(position))
-                const derivedPreview = (position?.epub_text_preview || '').trim()
-                if (!unresolved && audioDerived && derivedPreview) {
-                    // PROVISIONAL landing: the chapter + preview came from the
-                    // sync map, not the record, and the map's chapter axis can
-                    // be offset from the spine. Displaying the derived chapter
-                    // is a guess — only the text-nav pass actually finding the
-                    // preview confirms it. Treating the guess as landed is
-                    // what let settle relocations write the Copyright page
-                    // (and a matcher-minted audio position) over a real
-                    // 10-minute listening position.
-                    audioConfirmPendingRef.current = true
-                    positionEstablishedRef.current = false
-                    restoreLandedRef.current = false
-                    if (!destroyed) setUnresolvedPosition(false)
-                } else if (!unresolved && audioDerived) {
-                    // Derived chapter with no searchable preview: nothing can
-                    // ever confirm the guess, so it stays unresolved.
-                    positionEstablishedRef.current = false
-                    restoreLandedRef.current = false
-                    if (!destroyed) setUnresolvedPosition(true)
-                } else {
-                    positionEstablishedRef.current = !unresolved
-                    restoreLandedRef.current = !unresolved
-                    if (!destroyed) setUnresolvedPosition(unresolved)
-                }
-
-                if (!destroyed) setLoading(false)
-
-                // Track position changes
-                rendition.on('relocated', (location) => {
-                    if (destroyed) return
-                    const cfi = location.start.cfi
-                    const percent = book.locations
-                        ? location.start.percentage * 100
-                        : (location.start.displayed?.page / location.start.displayed?.total) * 100 || 0
-                    setCurrentCfi(cfi)
-                    setProgressPercent(percent)
-
-                    // Track chapter-level progression for text extraction (mirrors Android)
-                    const page = location.start.displayed?.page || 1
-                    const total = location.start.displayed?.total || 1
-                    currentChapterProgressionRef.current = Math.max(0, page - 1) / Math.max(1, total)
-
-                    // Track spine index for bookmark syncing
-                    const spineIndex = book.spine.items.findIndex(item =>
-                        item.href && (location.start.href === item.href ||
-                        location.start.href.endsWith('/' + item.href) ||
-                        item.href.endsWith('/' + location.start.href))
-                    )
-                    if (spineIndex >= 0) currentSpineIndexRef.current = spineIndex
-
-                    // Keep the latest position readable from the unmount
-                    // flush and the lifecycle keepalive, which cannot rely on
-                    // state (the cleanup closes over the first render's).
-                    latestPositionRef.current = {
-                        cfi,
-                        percent,
-                        spineIndex: spineIndex >= 0 ? spineIndex : currentSpineIndexRef.current,
+                    // Search EVERY spine document, outward from the
+                    // seed — Android parity (ReaderActivity
+                    // .findSpineIndexForText walks the whole reading
+                    // order the same way). The old ±2 window silently
+                    // missed a real preview whenever the sync map's
+                    // chapter axis was offset from the spine by the
+                    // front matter, which is exactly how a live
+                    // restore ended up on the Copyright page.
+                    const findSpineIndexForText = async (target, seedIdx) => {
+                        const n = (bookRef.current?.spine?.items || []).length
+                        if (!n) return -1
+                        const seed = seedIdx >= 0 && seedIdx < n ? seedIdx : Math.floor(n / 2)
+                        for (let offset = 0; offset < n; offset++) {
+                            const candidates = offset === 0
+                                ? [seed] : [seed + offset, seed - offset]
+                            for (const idx of candidates) {
+                                if (idx < 0 || idx >= n) continue
+                                const text = await loadSectionText(idx)
+                                if (text && text.includes(target)) {
+                                    console.log(`[EbookReader] text nav: found '${target}' in spine ${idx} (seed=${seed})`)
+                                    return idx
+                                }
+                            }
+                        }
+                        return -1
                     }
-                    // A user-initiated relocation may reopen the write gate
-                    // (navigation clause) — do it here, not just at save
-                    // time, so the unresolved banner clears on the page turn.
-                    maybeOpenGate()
 
-                    saveProgress(cfi, percent, spineIndex >= 0 ? spineIndex : undefined)
+                    setTimeout(async () => {
+                        const spineItems = bookRef.current?.spine?.items || []
+                        const baseChapter = currentSpineIndexRef.current
 
-                    // On first render: if we have a text preview, navigate to it within the chapter
-                    // Tries current chapter first, then adjacent chapters (±1, ±2) to handle
-                    // sync map chapter numbering offset from epub spine indices
-                    // Prefer the canonical record's preview: the prop is a
-                    // page-load-time snapshot, the record is what the book
-                    // actually says now.
-                    const previewText = positionRef.current?.epub_text_preview || initialTextPreview
-                    if (!textNavDoneRef.current && previewText) {
-                        textNavDoneRef.current = true
-                        textNavInProgressRef.current = true
-
-                        // The preview is SERVER-extracted text; normalize it
-                        // with the matcher-parity pipeline or a needle
-                        // containing (say) an nbsp-adjacent word can never be
-                        // found in identically normalized section text.
-                        const targetNorm = normalizeForSearch(previewText)
-                        const shortTarget = targetNorm.substring(0, 30)
-
-                        if (shortTarget.length >= 5) {
-                            // Search for target text in the currently rendered chapter content.
-                            // Takes an explicit spineHref so we generate the CFI against the
-                            // correct spine section (renditionRef.location can be stale after
-                            // rapid chapter-hopping).
-                            const trySearchChapter = (spineHref) => {
-                                try {
-                                    const contents = renditionRef.current?.getContents?.()
-                                    const doc = contents?.[0]?.document
-                                    if (!doc) return null
-
-                                    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
-                                    const boundaries = []
-                                    let accumulated = ''
-                                    let n
-                                    while ((n = walker.nextNode())) {
-                                        const norm = normalizeForSearch(n.textContent)
-                                        // Separator between text nodes — the server
-                                        // extracts previews with a separator at every
-                                        // tag boundary (get_text(separator="\n")), so
-                                        // inline markup must not glue words here either.
-                                        if (accumulated && !accumulated.endsWith(' ')) accumulated += ' '
-                                        boundaries.push({ node: n, start: accumulated.length, len: norm.length })
-                                        accumulated += norm
-                                    }
-
-                                    const idx = accumulated.indexOf(shortTarget)
-                                    if (idx < 0) return null
-
-                                    const boundary = boundaries.find(b => b.start <= idx && b.start + b.len > idx)
-                                    if (!boundary) return null
-
-                                    // Calculate the character offset within this text node
-                                    const nodeOffset = idx - boundary.start
-                                    // Map back to the original (un-normalized) text to get real offset
-                                    const origText = boundary.node.textContent
-                                    let realOffset = 0
-                                    let normCount = 0
-                                    for (let i = 0; i < origText.length && normCount < nodeOffset; i++) {
-                                        const ch = origText[i].toLowerCase()
-                                        const isKept = /[a-z0-9 ]/.test(ch) || WHITESPACE_VARIANT_CHAR_RE.test(ch)
-                                        if (isKept) normCount++
-                                        realOffset = i + 1
-                                    }
-
-                                    const range = doc.createRange()
-                                    range.setStart(boundary.node, Math.min(realOffset, origText.length))
-                                    range.setEnd(boundary.node, Math.min(realOffset, origText.length))
-
-                                    const section = bookRef.current?.spine.get(spineHref)
-                                    if (!section) {
-                                        console.warn(`[EbookReader] text nav: spine.get('${spineHref}') returned null`)
-                                        return null
-                                    }
-
-                                    const cfiStr = section.cfiFromRange(range)
-                                    console.log(`[EbookReader] text nav: found '${shortTarget}' in ${spineHref} → CFI ${cfiStr}`)
-                                    return cfiStr
-                                } catch (e) {
-                                    console.warn('[EbookReader] text nav search error:', e.message)
-                                    return null
-                                }
-                            }
-
-                            // Load one spine document's text WITHOUT rendering
-                            // it (epub.js Section.load), extracted and
-                            // normalized exactly like the server built the
-                            // previews we search for (issue #305): a
-                            // separator at every tag boundary, then the
-                            // matcher-parity normalization. Null when the
-                            // section can't be loaded.
-                            const loadSectionText = async (idx) => {
-                                const b = bookRef.current
-                                const item = b?.spine?.items?.[idx]
-                                if (!item || typeof item.load !== 'function') return null
-                                try {
-                                    const contents = await item.load(
-                                        typeof b.load === 'function' ? b.load.bind(b) : undefined
-                                    )
-                                    const raw = extractSearchableText(contents)
-                                        || String(contents?.body?.textContent ?? '')
-                                    item.unload?.()
-                                    return normalizeForSearch(raw)
-                                } catch (e) {
-                                    return null
-                                }
-                            }
-
-                            // Search EVERY spine document, outward from the
-                            // seed — Android parity (ReaderActivity
-                            // .findSpineIndexForText walks the whole reading
-                            // order the same way). The old ±2 window silently
-                            // missed a real preview whenever the sync map's
-                            // chapter axis was offset from the spine by the
-                            // front matter, which is exactly how a live
-                            // restore ended up on the Copyright page.
-                            const findSpineIndexForText = async (target, seedIdx) => {
-                                const n = (bookRef.current?.spine?.items || []).length
-                                if (!n) return -1
-                                const seed = seedIdx >= 0 && seedIdx < n ? seedIdx : Math.floor(n / 2)
-                                for (let offset = 0; offset < n; offset++) {
-                                    const candidates = offset === 0
-                                        ? [seed] : [seed + offset, seed - offset]
-                                    for (const idx of candidates) {
-                                        if (idx < 0 || idx >= n) continue
-                                        const text = await loadSectionText(idx)
-                                        if (text && text.includes(target)) {
-                                            console.log(`[EbookReader] text nav: found '${target}' in spine ${idx} (seed=${seed})`)
-                                            return idx
-                                        }
-                                    }
-                                }
-                                return -1
-                            }
-
-                            setTimeout(async () => {
-                                const spineItems = bookRef.current?.spine?.items || []
-                                const baseChapter = currentSpineIndexRef.current
-
-                                // Concludes the pass. Confirmation matters for
-                                // audio-derived restores: found = the landing
-                                // is real; not found = it was a guess and the
-                                // session is unresolved (banner, gate closed).
-                                const finish = (found) => {
-                                    if (found) confirmProvisionalLanding()
-                                    else failProvisionalLanding()
-                                    textNavInProgressRef.current = false
-                                }
-
-                                // Fast path: the text is usually in the
-                                // chapter already rendered.
-                                let cfiStr = trySearchChapter(spineItems[baseChapter]?.href)
-                                let foundIdx = cfiStr ? baseChapter : -1
-
-                                if (foundIdx < 0) {
-                                    foundIdx = await findSpineIndexForText(shortTarget, baseChapter)
-                                }
-                                if (foundIdx == null || foundIdx < 0) {
-                                    console.warn(`[EbookReader] text nav: '${shortTarget}' not found in any spine document, giving up`)
-                                    finish(false)
-                                    return
-                                }
-
-                                // Keep textNavInProgressRef true through the display() calls.
-                                // Setting it false BEFORE display() (the previous bug) allowed
-                                // doSave to run from the relocated event that display() fires,
-                                // corrupting the just-restored bookmark.
-                                // Also wait 3 s after a CFI navigation: book.locations.generate()
-                                // fires reportLocation() asynchronously, which emits another
-                                // relocated and overwrites our position if not suppressed.
-                                try {
-                                    if (foundIdx !== baseChapter) {
-                                        await renditionRef.current?.display(spineItems[foundIdx].href)
-                                        // Wait for epub.js to fully render the new chapter content
-                                        await new Promise(r => setTimeout(r, 300))
-                                    }
-                                    if (!cfiStr) cfiStr = trySearchChapter(spineItems[foundIdx].href)
-                                    if (cfiStr) {
-                                        await renditionRef.current?.display(cfiStr)
-                                        console.log(`[EbookReader] text nav: navigated to CFI successfully`)
-                                        await new Promise(r => setTimeout(r, 3000))
-                                    }
-                                } catch (e) {
-                                    console.warn('[EbookReader] text nav: navigation failed:', e.message)
-                                } finally {
-                                    // The text WAS located (rendered or in the
-                                    // section source) — the landing is real
-                                    // even when the precise CFI could not be
-                                    // computed; the chapter is right.
-                                    finish(true)
-                                }
-                            }, 100)
-                        } else {
-                            // Too short to search: an audio-derived guess can
-                            // never be confirmed by it.
-                            failProvisionalLanding()
+                        // Concludes the pass. Confirmation matters for
+                        // audio-derived restores: found = the landing
+                        // is real; not found = it was a guess and the
+                        // session is unresolved (banner, gate closed).
+                        const finish = (found) => {
+                            if (found) confirmProvisionalLanding()
+                            else failProvisionalLanding()
                             textNavInProgressRef.current = false
                         }
-                    }
 
-                    // Find current chapter
-                    const currentSection = book.spine.get(location.start.href)
-                    if (currentSection && nav.toc) {
-                        const chapter = nav.toc.find(t =>
-                            t.href && location.start.href.includes(t.href.split('#')[0])
-                        )
-                        if (chapter) setCurrentChapter(chapter.label?.trim() || '')
-                    }
-                })
+                        // Fast path: the text is usually in the
+                        // chapter already rendered.
+                        let cfiStr = trySearchChapter(spineItems[baseChapter]?.href)
+                        let foundIdx = cfiStr ? baseChapter : -1
 
-                // Generate locations for accurate percentages
-                book.ready.then(() => {
-                    return book.locations.generate(1024)
-                }).then(() => {
-                    if (!destroyed && renditionRef.current) {
-                        renditionRef.current.reportLocation()
-                    }
-                })
+                        if (foundIdx < 0) {
+                            foundIdx = await findSpineIndexForText(shortTarget, baseChapter)
+                        }
+                        if (foundIdx == null || foundIdx < 0) {
+                            console.warn(`[EbookReader] text nav: '${shortTarget}' not found in any spine document, giving up`)
+                            finish(false)
+                            return
+                        }
 
-            } catch (err) {
-                if (!destroyed) {
-                    setError(err.message || 'Failed to load ebook')
-                    setLoading(false)
+                        // Keep textNavInProgressRef true through the display() calls.
+                        // Setting it false BEFORE display() (the previous bug) allowed
+                        // doSave to run from the relocated event that display() fires,
+                        // corrupting the just-restored bookmark.
+                        // Also wait 3 s after a CFI navigation: book.locations.generate()
+                        // fires reportLocation() asynchronously, which emits another
+                        // relocated and overwrites our position if not suppressed.
+                        try {
+                            if (foundIdx !== baseChapter) {
+                                await renditionRef.current?.display(spineItems[foundIdx].href)
+                                // Wait for epub.js to fully render the new chapter content
+                                await new Promise(r => setTimeout(r, 300))
+                            }
+                            if (!cfiStr) cfiStr = trySearchChapter(spineItems[foundIdx].href)
+                            if (cfiStr) {
+                                await renditionRef.current?.display(cfiStr)
+                                console.log(`[EbookReader] text nav: navigated to CFI successfully`)
+                                await new Promise(r => setTimeout(r, 3000))
+                            }
+                        } catch (e) {
+                            console.warn('[EbookReader] text nav: navigation failed:', e.message)
+                        } finally {
+                            // The text WAS located (rendered or in the
+                            // section source) — the landing is real
+                            // even when the precise CFI could not be
+                            // computed; the chapter is right.
+                            finish(true)
+                        }
+                    }, 100)
+                } else {
+                    // Too short to search: an audio-derived guess can
+                    // never be confirmed by it.
+                    failProvisionalLanding()
+                    textNavInProgressRef.current = false
                 }
             }
-        }
 
-        loadBook()
-
-        return () => {
-            destroyed = true
-            // Flush the pending save BEFORE destroying the book: the payload's
-            // text preview is extracted from the epub iframe DOM, which
-            // destroy() tears down. Fire-and-forget — the write is issued
-            // synchronously, its response nobody needs (issue #158).
-            try { flushRef.current() } catch (e) {}
-            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-            if (bookRef.current) {
-                try { bookRef.current.destroy() } catch (e) {}
+            // Find current chapter
+            const currentSection = book.spine.get(location.start.href)
+            if (currentSection && nav.toc) {
+                const chapter = nav.toc.find(t =>
+                    t.href && location.start.href.includes(t.href.split('#')[0])
+                )
+                if (chapter) setCurrentChapter(chapter.label?.trim() || '')
             }
-        }
-    }, [ebookId]) // eslint-disable-line react-hooks/exhaustive-deps
+        })
+    }
+
+    // Runs on unmount / ebookId change, before the hook destroys the book.
+    // Flush the pending save BEFORE destroying the book: the payload's text
+    // preview is extracted from the epub iframe DOM, which destroy() tears
+    // down. Fire-and-forget — the write is issued synchronously, its
+    // response nobody needs (issue #158).
+    function handleTeardown() {
+        try { flushRef.current() } catch (e) {}
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
 
     // Keyboard navigation
     useEffect(() => {
