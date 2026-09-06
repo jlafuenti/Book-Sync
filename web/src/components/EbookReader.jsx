@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import {
-    getPosition, matchTextToAudio, audioToEpub, getDeviceId,
-} from '../api'
+import { matchTextToAudio } from '../api'
 // One module owns the contract's write rules (issue #274): scope, the device
 // triple, who may claim `source`, and what counts as a conflict.
 import {
     positionTarget, writePosition, keepalivePosition, conflictFrom,
 } from '../lib/position'
-import { planRestore, hasAnchor, navigationEstablishesPosition } from '../lib/positionLadder'
+// The restore ladder's execution, the landing verdict and the write gate
+// (issue #278) — the piece docs/position-sync-contract.md cares about.
+import { executeRestore, restorePosition, createWriteGate } from '../lib/restoreController'
 import {
     normalizeForSearch, extractSearchableText, WHITESPACE_VARIANT_CHAR_RE,
 } from '../lib/textSearch'
@@ -41,48 +41,8 @@ const READER_MODE_LABELS = [
     ['dark', 'Dark'],
 ]
 
-/**
- * Walk the restore ladder, taking the first step that actually lands.
- *
- * Returns true when the reader is at a position the record describes, false
- * when every step failed. False is *not* "start of book": the caller keeps
- * saving blocked, because a book showing page one after a failed restore is
- * exactly what overwrote a real position with chapter 0.
- */
-export async function executeRestore(book, rendition, steps) {
-    for (const step of steps) {
-        try {
-            if (step.kind === 'hint') {
-                await rendition.display(step.value)
-                return true
-            }
-            if (step.kind === 'chapter') {
-                const item = book.spine?.items?.[step.chapter]
-                if (!item) continue
-                await rendition.display(item.href)
-                return true
-            }
-            if (step.kind === 'percent') {
-                const cfi = book.locations?.cfiFromPercentage?.(step.percent / 100)
-                if (!cfi) continue
-                await rendition.display(cfi)
-                return true
-            }
-            // 'text' is refined after the first relocated event (it needs the
-            // rendered DOM to search); 'audio' needs the sync map. Neither can
-            // land the initial display on its own, so they fall through here.
-        } catch (e) {
-            console.warn(`[EbookReader] restore step '${step.kind}' failed:`, e?.message || e)
-        }
-    }
-    if (steps.length === 0) {
-        // Genuinely unread — start of book is the right answer.
-        await rendition.display()
-        return true
-    }
-    await rendition.display()
-    return false
-}
+// Re-exported for the existing unit tests; it lives in lib/restoreController now.
+export { executeRestore }
 
 function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onClose, bookTitle, onSwitchToAudio, saveFlushRef }) {
     const viewerRef = useRef(null)
@@ -136,8 +96,14 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     const textNavInProgressRef = useRef(false)
     // Nothing may be saved until the restore has landed (or the record was
     // genuinely empty). Without this gate a failed restore sitting on page one
-    // gets persisted over a real position from another device.
-    const positionEstablishedRef = useRef(false)
+    // gets persisted over a real position from another device. The gate's
+    // flags (`positionEstablished`, `restoreLanded`, `audioConfirmPending`,
+    // `userNavigated`) and their transitions are documented with
+    // `createWriteGate`; it lives in a ref so the mount-time `relocated`
+    // handler and every save path read the same object.
+    const gateRef = useRef(null)
+    if (!gateRef.current) gateRef.current = createWriteGate()
+    const gate = gateRef.current
     // The canonical record this reader opened with.
     const positionRef = useRef(null)
     // True when the record held a position we could not resolve. Distinct from
@@ -151,65 +117,33 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // position hasn't moved since — visibilitychange fires on every tab
     // switch, and a duplicate write buys nothing.
     const lastIssuedSaveRef = useRef(null)
-    // The user deliberately navigated (next/prev, keyboard, TOC) since open.
-    // The contract's navigation clause: that makes the current position the
-    // truth, so it may reopen the write gate after an unresolved restore —
-    // never set from `relocated` events, which the restore and the text-nav
-    // pass also emit (issue #159).
-    const userNavigatedRef = useRef(false)
-    // True only when the restore GENUINELY landed: a rung from the record
-    // resolved, the record was empty, or an audio-derived landing was
-    // confirmed by actually finding the preview text. The navigation clause
-    // reopening the gate does NOT set it — saves after an unconfirmed landing
-    // must never carry matcher-derived fields (audio_position_ms above all):
-    // in production the matcher "upgraded" wrong copyright-page text and
-    // overwrote a 600000ms listening position with 1530ms.
-    const restoreLandedRef = useRef(false)
-    // Set while an audio-derived restore awaits confirmation from the
-    // text-nav pass. The chapter + preview came from the SYNC MAP, not the
-    // record, so displaying that chapter is a guess, not a landing — the
-    // map's chapter axis can be offset from the spine, and treating the
-    // guess as landed is what let settle relocations write the Copyright
-    // page over a real position. Only finding the text confirms it.
-    const audioConfirmPendingRef = useRef(false)
 
     // The text-nav pass confirmed an audio-derived landing: the preview text
     // was actually located in this book.
     const confirmProvisionalLanding = useCallback(() => {
-        if (!audioConfirmPendingRef.current) return
-        audioConfirmPendingRef.current = false
-        positionEstablishedRef.current = true
-        restoreLandedRef.current = true
-        setUnresolvedPosition(false)
-    }, [])
+        if (gate.confirmProvisionalLanding()) setUnresolvedPosition(false)
+    }, [gate])
 
     // The text-nav pass could not find the preview anywhere: the audio rung
     // did NOT land. Unresolved semantics — banner, gate stays closed.
     const failProvisionalLanding = useCallback(() => {
-        if (!audioConfirmPendingRef.current) return
-        audioConfirmPendingRef.current = false
-        setUnresolvedPosition(true)
-    }, [])
+        if (gate.failProvisionalLanding()) setUnresolvedPosition(true)
+    }, [gate])
 
     // Opens the write gate if it may open, and says whether it is open.
     // Reads only refs so the mount-time `relocated` handler can call it.
     const maybeOpenGate = useCallback(() => {
-        if (positionEstablishedRef.current) return true
-        if (navigationEstablishesPosition({
-            userNavigated: userNavigatedRef.current,
+        const verdict = gate.maybeOpen({
             spineIndex: latestPositionRef.current.spineIndex,
             chapterProgression: currentChapterProgressionRef.current,
-        })) {
-            positionEstablishedRef.current = true
-            setUnresolvedPosition(false)
-            return true
-        }
-        return false
-    }, [])
+        })
+        if (verdict === 'opened') setUnresolvedPosition(false)
+        return verdict !== 'closed'
+    }, [gate])
 
     const noteUserNavigation = useCallback(() => {
-        userNavigatedRef.current = true
-    }, [])
+        gate.noteUserNavigation()
+    }, [gate])
 
     const extractVisibleText = useCallback(() => {
         const contents = renditionRef.current?.getContents?.()
@@ -305,7 +239,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             // alone.
             const textPreview = extractVisibleText()
             let match = null
-            if (restoreLandedRef.current && pairId && textPreview && textPreview.length > 10) {
+            if (gate.restoreLanded && pairId && textPreview && textPreview.length > 10) {
                 match = await matchTextToAudio(pairId, textPreview, chapter).catch(e => {
                     console.warn('[EbookReader] matchTextToAudio failed:', e.message || e)
                     return null
@@ -339,7 +273,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
                 // settle relocation the user never asked for must not flip a
                 // listen-only pair to `ebook` — omission means "keep the
                 // stored value".
-                { claimSource: (explicit || userNavigatedRef.current) ? 'ebook' : null },
+                { claimSource: (explicit || gate.userNavigated) ? 'ebook' : null },
             )
             // The write reached the server and was adjudicated; a later flush
             // for the same CFI would be a pure duplicate.
@@ -356,7 +290,7 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             console.warn('Failed to save reading progress:', e)
             return false
         }
-    }, [ebookId, pairId, extractVisibleText, maybeOpenGate])
+    }, [ebookId, pairId, extractVisibleText, maybeOpenGate, gate])
 
 
     // Debounced progress save (auto-save on page turn)
@@ -387,9 +321,9 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
             },
             // Same rule as doSave: an automatic flush claims the format only
             // when the user actually navigated this session.
-            claimSource: userNavigatedRef.current ? 'ebook' : null,
+            claimSource: gate.userNavigated ? 'ebook' : null,
         }
-    }, [extractVisibleText])
+    }, [extractVisibleText, gate])
 
     // Common core of the two flush paths. Clears the debounce timer, applies
     // the same gate as doSave, and skips when nothing moved since the last
@@ -477,98 +411,21 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     // never fire before the restore has landed. A hoisted declaration: the
     // hook above is called before the callbacks this closes over exist.
     async function handleOpened({ book, rendition, nav, isDestroyed }) {
-        // Fetch the canonical position at open. Reading a snapshot
-        // taken when the *page* loaded meant a position set on another
-        // device in the meantime was never seen.
-        const scope = pairId ? 'pair' : 'ebook'
-        let position = await getPosition(scope, pairId || ebookId).catch(e => {
-            console.warn('[EbookReader] position fetch failed, using props:', e.message || e)
-            // Offline: fall back to the portable anchor the caller
-            // passed in. No CFI hint is threaded through any more —
-            // callers used to pass one read from `user_progress.epub_cfi`,
-            // a mirror column that no longer exists (issue #102), and a
-            // page-load snapshot was staler than this fetch anyway.
-            return initialChapter != null
-                ? {
-                    anchor_revision: 0,
-                    epub_chapter: initialChapter,
-                    epub_text_preview: initialTextPreview || undefined,
-                    hints: [],
-                }
-                : null
+        // The canonical position fetch (with its offline fallback), the
+        // ladder walk and the verdict all live in lib/restoreController.
+        const restored = await restorePosition({
+            book, rendition, pairId, ebookId, initialChapter, initialTextPreview, isDestroyed,
         })
-        if (isDestroyed()) return
+        if (!restored) return
+        positionRef.current = restored.position
 
-        const ladderContext = {
-            spineCount: book.spine?.items?.length ?? 0,
-            deviceId: getDeviceId(),
-            hintKind: 'epubjs_cfi',
-        }
-        let steps = planRestore(position, ladderContext)
-
-        // The audio rung (ladder step 5) — a pair only ever LISTENED
-        // to has a record with `audio_position_ms` and no ebook
-        // anchor. Android executes this rung through its cached sync
-        // map; the web has none, so it asks the server
-        // (`audio_to_epub`, issue #159) and re-plans from the
-        // resolved chapter + preview, which then seed the chapter
-        // display and the text-nav pass below. Audio is always
-        // planned last, so it being FIRST means it is the only rung.
-        let audioDerived = false
-        if (pairId && steps.length > 0 && steps[0].kind === 'audio') {
-            const resolved = await audioToEpub(pairId, steps[0].audioPositionMs)
-                .catch(() => null)
-            if (isDestroyed()) return
-            if (resolved) {
-                position = {
-                    ...position,
-                    epub_chapter: resolved.epub_chapter,
-                    epub_text_preview: resolved.preview || position.epub_text_preview,
-                }
-                steps = planRestore(position, ladderContext)
-                audioDerived = true
-            }
-        }
-        positionRef.current = position
-
-        const landed = await executeRestore(book, rendition, steps)
-
-        // A position we could not resolve is NOT the same as no
-        // position. Saving stays blocked in that case, so a failed
-        // restore can never overwrite a real position with page one.
-        //
-        // An ANCHORED record whose plan came out empty (e.g. a
-        // re-parsed EPUB left `epub_chapter` past this spine, with
-        // nothing else to fall back on) is unresolved too — planning
-        // drops the un-navigable rung, and treating the empty plan as
-        // "unread" was exactly the silent gate-open that let page one
-        // overwrite a real position (issue #159).
-        const unresolved = !landed || (steps.length === 0 && hasAnchor(position))
-        const derivedPreview = (position?.epub_text_preview || '').trim()
-        if (!unresolved && audioDerived && derivedPreview) {
-            // PROVISIONAL landing: the chapter + preview came from the
-            // sync map, not the record, and the map's chapter axis can
-            // be offset from the spine. Displaying the derived chapter
-            // is a guess — only the text-nav pass actually finding the
-            // preview confirms it. Treating the guess as landed is
-            // what let settle relocations write the Copyright page
-            // (and a matcher-minted audio position) over a real
-            // 10-minute listening position.
-            audioConfirmPendingRef.current = true
-            positionEstablishedRef.current = false
-            restoreLandedRef.current = false
-            if (!isDestroyed()) setUnresolvedPosition(false)
-        } else if (!unresolved && audioDerived) {
-            // Derived chapter with no searchable preview: nothing can
-            // ever confirm the guess, so it stays unresolved.
-            positionEstablishedRef.current = false
-            restoreLandedRef.current = false
-            if (!isDestroyed()) setUnresolvedPosition(true)
-        } else {
-            positionEstablishedRef.current = !unresolved
-            restoreLandedRef.current = !unresolved
-            if (!isDestroyed()) setUnresolvedPosition(unresolved)
-        }
+        // A position we could not resolve is NOT the same as no position.
+        // Saving stays blocked in that case, so a failed restore can never
+        // overwrite a real position with page one — and an audio-derived
+        // landing stays provisional until the text-nav pass below confirms
+        // it (see `classifyLanding`).
+        gate.applyLanding(restored.outcome)
+        if (!isDestroyed()) setUnresolvedPosition(restored.outcome.unresolved)
 
         // Track position changes
         rendition.on('relocated', (location) => {
