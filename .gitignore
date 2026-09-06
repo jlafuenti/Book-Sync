@@ -43,6 +43,17 @@ coverage.xml
 /jetson/docker-compose.yml
 /jetson/docker-compose.yml.*
 
+# Docker compose secrets (issue #180). One live secret per file — the JWT
+# signing key, the Postgres password, the credential encryption keys — sitting
+# inside the checkout because that is where compose's `file:` sources have to
+# be. The most concentrated collection of secrets in the deployment.
+#
+# `/secrets/*` rather than `/secrets/`: git cannot re-include a file inside an
+# excluded *directory*, and the README explaining what belongs here has to stay
+# tracked. Keep the negation immediately after the rule.
+/secrets/*
+!/secrets/README.md
+
 # The real reverse-proxy config. docs/operations.md tells operators to copy
 # Caddyfile.example and adapt it, so the documented setup produces a file here
 # holding whatever credentials the proxy fronts with — and nothing matched it.

@@ -212,11 +212,6 @@ _README_ENV_NOT_SETTINGS = {
         "services (issue #180); the server process never reads it"
     ),
     "PGID": "compose interpolation only, the group half of PUID (issue #180)",
-    "POSTGRES_PASSWORD": (
-        "compose interpolation, read from .env beside docker-compose.yml and "
-        "substituted into the db service and DATABASE_URL — the server process "
-        "never reads it"
-    ),
 }
 
 # Settings fields the README may leave undocumented, with the reason. Empty on
@@ -254,12 +249,17 @@ def _settings_env_names() -> set[str]:
     the (case-insensitive) field name when it does not, so `jwt_algorithm` is
     genuinely settable as `JWT_ALGORITHM` even with no alias declared.
     """
-    from config import Settings
+    from config import SECRET_FILE_ENV_VARS, SECRET_FILE_SUFFIX, Settings
 
-    return {
+    names = {
         (field.alias or name).upper()
         for name, field in Settings.model_fields.items()
     }
+    # The `<NAME>_FILE` variants are read by config.SecretFileSettingsSource
+    # rather than declared as fields (issue #180), and they are the *preferred*
+    # way to pass a secret — so they need rows of their own just as much.
+    names |= {name + SECRET_FILE_SUFFIX for name in SECRET_FILE_ENV_VARS}
+    return names
 
 
 def test_readme_env_parser_finds_the_tables():
@@ -701,4 +701,53 @@ def test_readme_links_at_the_non_root_runbook():
     assert "operations.md#running-as-a-non-root-user" in readme, (
         "README.md does not link at the non-root runbook, so the one-time "
         "ownership change an existing install needs is undiscoverable from it."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #180, second half: the secrets runbook.
+#
+# Moving JWT_SECRET_KEY, CREDENTIAL_ENC_KEYS and the Postgres password out of
+# `environment:` and into files is a change an operator performs on a live
+# install, and the two ways it goes wrong are both silent-looking: a changed
+# CREDENTIAL_ENC_KEYS means every stored import-source credential stops
+# decrypting, and a changed JWT_SECRET_KEY signs every existing session out.
+# The migration therefore has to say, in the doc, that the values are copied
+# rather than regenerated — and it has to have a rollback.
+# ---------------------------------------------------------------------------
+
+_SECRETS_HEADING = "## Secrets"
+
+
+def test_operations_doc_has_the_secrets_runbook():
+    text = _read(_OPERATIONS_DOC)
+    assert _SECRETS_HEADING in text, (
+        "docs/operations.md has no '## Secrets' section, and README.md's "
+        "#secrets link now points at nothing."
+    )
+    section = text.split(_SECRETS_HEADING, 1)[1].split("\n## ", 1)[0]
+    for needle in (
+        "umask 077",
+        "/run/secrets/",
+        "_FILE",
+        "docker inspect",
+        "roll back",
+    ):
+        assert needle.lower() in section.lower(), (
+            f"docs/operations.md's secrets runbook never mentions {needle!r}."
+        )
+    for phrase in ("same value", "re-encrypt"):
+        assert phrase.lower() in section.lower(), (
+            "docs/operations.md's secrets runbook does not say that migrating "
+            "an existing install copies the existing values rather than "
+            f"generating new ones (looked for {phrase!r}). A regenerated "
+            "CREDENTIAL_ENC_KEYS silently orphans every stored credential."
+        )
+
+
+def test_readme_links_at_the_secrets_runbook():
+    readme = _read(os.path.join(_REPO_ROOT, "README.md"))
+    assert "operations.md#secrets" in readme, (
+        "README.md does not link at the secrets runbook, so an operator "
+        "meeting `JWT_SECRET_KEY_FILE` in the env table has nowhere to go."
     )

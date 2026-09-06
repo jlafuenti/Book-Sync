@@ -82,9 +82,12 @@ service.
 
 If you expose an instance beyond your LAN, at minimum:
 
-- [ ] **Set the mandatory secrets.** The server refuses to start without them rather than
-      inventing defaults — `JWT_SECRET_KEY`, `POSTGRES_PASSWORD`, and `CREDENTIAL_ENC_KEYS` if
-      you store third-party credentials. Generate them randomly; never reuse an example value.
+- [ ] **Set the mandatory secrets, as files.** The server refuses to start without them rather
+      than inventing defaults — `JWT_SECRET_KEY`, `POSTGRES_PASSWORD`, and `CREDENTIAL_ENC_KEYS`
+      if you store third-party credentials. Generate them randomly; never reuse an example value.
+      Pass them as compose `secrets:` (the `<NAME>_FILE` form the template ships), not in
+      `environment:` — an environment variable is printed by `docker inspect` and readable in
+      `/proc/1/environ`. See `docs/operations.md`, "Secrets".
 - [ ] **Close public registration** (`ALLOW_PUBLIC_REGISTRATION=false`) or approve accounts
       manually. It is on by default for first-run convenience on a home LAN.
 - [ ] **Terminate TLS in front of the app.** Nothing in this repo does TLS; use a reverse proxy
