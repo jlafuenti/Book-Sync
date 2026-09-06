@@ -1,9 +1,131 @@
-# Tandem reverse-proxy template (issue #151). uvicorn enforces no request-body
-# limit — the app caps each uploaded file (MAX_UPLOAD_BYTES / MAX_COVER_BYTES)
-# but only after bytes arrive, so the proxy must stop oversized bodies at the edge.
-# Replace hostname and upstreams to match your deployment.
+# Tandem edge-proxy template (issues #151, #178).
+#
+# This is the internet-facing proxy: it terminates TLS, adds the security
+# headers, caps request bodies and forwards everything to the two compose
+# services. Copy it and adapt the lines marked ADAPT — nothing else needs to
+# change for a stock docker-compose.example.yml deployment:
+#
+#     cp Caddyfile.example /etc/caddy/Caddyfile      # or wherever your Caddy reads
+#
+# Why the headers live here and not only in nginx: nginx `add_header` does not
+# inherit into a `location` that sets its own (web/Dockerfile has five), and
+# nginx never sees the /api/* responses this proxy forwards straight to
+# uvicorn. web/Dockerfile still repeats the cheap headers (nosniff, frame
+# denial, referrer policy) so a deployment without Caddy gets those; the CSP
+# and HSTS only exist here.
+#
+# Verify after a deploy (docs/operations.md, "Edge proxy"):
+#     curl -s -o /dev/null -D - https://tandem.example.com/
+#     curl -s -o /dev/null -D - https://tandem.example.com/api/health
+#     (a GET with the headers dumped; `curl -I` sends HEAD, which the API answers with 405)
 
-your-hostname.example.com {
+# ADAPT: your public hostname. Caddy obtains and renews a Let's Encrypt
+# certificate for it automatically — the name must resolve to this host and
+# ports 80 and 443 must be reachable from the internet (80 only for the ACME
+# challenge and the HTTP→HTTPS redirect). Put a global block above this one
+# with `email you@example.com` to get certificate-expiry notices. For a
+# LAN-only install use `tls internal` inside the block; for your own
+# certificate, `tls /path/fullchain.pem /path/privkey.pem`.
+tandem.example.com {
+	encode gzip
+
+	# ---- Security headers (issue #178) -----------------------------------
+	# `defer` applies the block after the upstream has answered, so these
+	# override whatever nginx or uvicorn sent, and the `-` deletions really
+	# remove the upstream's own Server/Via headers rather than running before
+	# they exist.
+	header {
+		defer
+
+		# One year, every subdomain. Add `; preload` only once every host under
+		# the domain is HTTPS-only — preload is a browser-list submission that
+		# takes months to undo.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+		# Browsers must not guess a script or stylesheet out of a mislabelled
+		# response.
+		X-Content-Type-Options "nosniff"
+
+		# Nobody may frame Tandem (clickjacking the admin pages). X-Frame-Options
+		# is the legacy header every browser honours; the CSP's frame-ancestors
+		# below is the modern one — and while the CSP is Report-Only this is
+		# the header that actually enforces.
+		X-Frame-Options "DENY"
+
+		# Same value the web nginx sets (issue #284): the document never sends
+		# a referrer to another origin.
+		Referrer-Policy "same-origin"
+
+		# Nothing in Tandem uses these device APIs; deny them so an injected
+		# script cannot either.
+		Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
+
+		# No version advertising: nginx's `Server: nginx/x.y.z`, Caddy's own
+		# `Server: Caddy` and the `Via: 1.1 Caddy` the proxy adds.
+		-Server
+		-Via
+		-X-Powered-By
+
+		# ---- Content-Security-Policy ------------------------------------
+		# Shipped as REPORT-ONLY first. A wrong *enforcing* policy breaks the
+		# ebook reader silently (chapters render blank, no error the user can
+		# see), so run this for a few days, use every part of the app — open an
+		# ebook, play an audiobook, run a metadata match, install the PWA —
+		# and watch the browser console for "[Report Only]" CSP messages. When
+		# there are none, rename the header to `Content-Security-Policy` to
+		# start enforcing. There is no report-uri: Tandem has no endpoint to
+		# collect reports, the console is the report.
+		#
+		# What each directive is for (derived from the web sources, not
+		# guessed — the tests in server/tests/test_edge_headers_contract.py and
+		# web/src/security/cspInlineScript.test.js pin the parts that matter):
+		#
+		#   default-src 'self'       everything not named below is same-origin
+		#   base-uri 'self'          no injected <base> redirecting relative URLs
+		#   object-src 'none'        no plugins
+		#   frame-ancestors 'none'   CSP-era X-Frame-Options: DENY
+		#   form-action 'self'       no form can post a session elsewhere
+		#   script-src               'self' plus ONE sha256: the theme bootstrap
+		#                            inline in web/index.html (it must run before
+		#                            first paint, hence inline). Edit that script
+		#                            and the hash changes — cspInlineScript.test.js
+		#                            fails and prints the new value. No
+		#                            'unsafe-inline', no 'unsafe-eval'.
+		#   worker-src 'self'        the PWA service worker (/sw.js)
+		#   style-src                'unsafe-inline' is unavoidable: React style=
+		#                            props throughout, and the reader injects
+		#                            <style> tags into every chapter document.
+		#                            fonts.googleapis.com is the Material Symbols
+		#                            icon stylesheet; blob: is epub.js serving a
+		#                            book's own stylesheets from the archive.
+		#   font-src                 fonts.gstatic.com serves the icon font files;
+		#                            blob:/data: are fonts bundled inside an EPUB.
+		#   img-src                  data:/blob: are covers and in-book images;
+		#                            the four hosts are where metadata-match
+		#                            results (Google Books, Open Library, Audible,
+		#                            Hardcover) preview candidate covers from
+		#                            before the server fetches one.
+		#   media-src                the audio element streams from /api (self);
+		#                            blob: for media embedded in an EPUB.
+		#   frame-src                epub.js renders each chapter into an <iframe
+		#                            srcdoc>. A srcdoc document has no URL of its
+		#                            own — it INHERITS this policy — which is why
+		#                            the reader's blob:/data:/inline needs appear
+		#                            above rather than in a separate policy. blob:
+		#                            covers epub.js's blob-URL fallback when srcdoc
+		#                            is unavailable. data: frames are not needed.
+		#   connect-src 'self'       every fetch goes to /api on this origin
+		#   manifest-src 'self'      /manifest.webmanifest
+		#   upgrade-insecure-requests  any stray http:// subresource is fetched
+		#                            over https instead
+		Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'sha256-mHVtbWrVj3qtXqCU08T4et0kweo72ZuGqoYJ4DV5Gbc='; worker-src 'self'; style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com; font-src 'self' data: blob: https://fonts.gstatic.com; img-src 'self' data: blob: https://books.google.com https://books.googleusercontent.com https://covers.openlibrary.org https://m.media-amazon.com https://assets.hardcover.app; media-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'; manifest-src 'self'; upgrade-insecure-requests"
+	}
+
+	# ---- Request-body caps (issue #151) ----------------------------------
+	# uvicorn enforces no request-body limit — the app caps each uploaded file
+	# (MAX_UPLOAD_FILE_BYTES / MAX_COVER_BYTES) but only after the bytes arrive,
+	# so the proxy stops oversized bodies at the edge. The upload routes get a
+	# generous cap; every other API route a small one.
 	@big_uploads path \
 		/api/library/upload/* \
 		/api/library/ebooks/*/cover \
@@ -14,17 +136,24 @@ your-hostname.example.com {
 		request_body {
 			max_size 4GB
 		}
-		reverse_proxy localhost:8000
+		reverse_proxy server:8000
 	}
 
 	handle /api/* {
 		request_body {
 			max_size 16MB
 		}
-		reverse_proxy localhost:8000
+		reverse_proxy server:8000
 	}
 
+	# ADAPT (upstreams): `server:8000` and `web:3000` are the compose service
+	# names — the layout docs/operations.md recommends, with Caddy on the
+	# compose network and no API port published at all. If Caddy runs on the
+	# host instead, publish the ports on loopback ("127.0.0.1:3000:3000",
+	# "127.0.0.1:8000:8000") and use `localhost:3000` / `localhost:8000` here.
+	# Either way, set FORWARDED_ALLOW_IPS on the server service to the address
+	# Caddy connects from (docs/operations.md, "Reverse proxy").
 	handle {
-		reverse_proxy localhost:3000
+		reverse_proxy web:3000
 	}
 }

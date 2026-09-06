@@ -23,39 +23,60 @@ FROM nginxinc/nginx-unprivileged:alpine
 # The COPY and the config write need root; USER drops back at the end.
 USER root
 COPY --from=build /app/dist /usr/share/nginx/html
+# The cheap security headers (issues #284, #178). nginx add_header does not
+# merge: any location block with an add_header of its own discards every
+# inherited one, so these live in one include file that the server block AND
+# every location that sets a header of its own pull in. Without Caddy in front
+# this is all a deployment gets; the CSP and HSTS only exist at the edge
+# (Caddyfile.example), because HSTS is meaningless without TLS and the CSP
+# needs to cover /api/* responses this nginx never sees.
+RUN printf '%s\n' \
+    'add_header X-Content-Type-Options "nosniff" always;' \
+    'add_header X-Frame-Options "DENY" always;' \
+    'add_header Referrer-Policy "same-origin" always;' \
+    > /etc/nginx/security-headers.inc
+
 # SPA routing + API proxy + PWA cache headers (issue #62, docs/web-pwa.md).
 #
 # The service worker, its precache manifest, index.html and the web manifest
 # must never be served from a stale HTTP cache — the worker's update check is
 # what rolls a new deploy out to installed apps. Hashed /assets/* are immutable
 # by construction (Vite content-hashes the names), so cache them hard.
+#
+# `server_tokens off` stops nginx advertising its version on every response
+# (and on its own error pages).
 RUN echo 'server { \
     listen 3000; \
+    server_tokens off; \
     root /usr/share/nginx/html; \
-    # nginx add_header does not merge: any location block with an add_header of \
-    # its own discards every inherited one. This server-level line covers the \
-    # blocks that set no headers, and /index.html repeats it -- that is the one \
-    # that matters, since the document is what sends a referrer (issue #284). \
-    add_header Referrer-Policy "same-origin" always; \
+    # The server-level include covers the blocks that set no headers; the \
+    # others repeat it because add_header does not inherit -- /index.html is \
+    # the one that matters most, since the document is what sends a referrer \
+    # (issue #284) and is what a framing page would load (issue #178). \
+    include /etc/nginx/security-headers.inc; \
     location = /sw.js { \
     add_header Cache-Control "no-cache, must-revalidate"; \
+    include /etc/nginx/security-headers.inc; \
     try_files $uri =404; \
     } \
     location ~ ^/workbox-.*\.js$ { \
     add_header Cache-Control "no-cache, must-revalidate"; \
+    include /etc/nginx/security-headers.inc; \
     try_files $uri =404; \
     } \
     location = /manifest.webmanifest { \
     add_header Cache-Control "no-cache, must-revalidate"; \
+    include /etc/nginx/security-headers.inc; \
     types { } default_type application/manifest+json; \
     try_files $uri =404; \
     } \
     location = /index.html { \
     add_header Cache-Control "no-cache, must-revalidate"; \
-    add_header Referrer-Policy "same-origin" always; \
+    include /etc/nginx/security-headers.inc; \
     } \
     location /assets/ { \
     add_header Cache-Control "public, max-age=31536000, immutable"; \
+    include /etc/nginx/security-headers.inc; \
     try_files $uri =404; \
     } \
     location / { \
