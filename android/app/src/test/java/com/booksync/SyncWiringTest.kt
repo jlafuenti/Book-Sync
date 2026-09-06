@@ -73,7 +73,7 @@ class SyncWiringTest {
 
     @Test
     fun `draining the offline queue is serialised`() {
-        val repo = codeLines(source("com/booksync/data/repository/BookSyncRepository.kt"))
+        val repo = codeLines(source("com/booksync/data/repository/PositionRepository.kt"))
 
         // SyncWorker (periodic + connectivity-triggered) and LibraryViewModel can
         // all call processPendingSync at once, and each reads the whole queue up
@@ -234,7 +234,7 @@ class SyncWiringTest {
         // syncedToServer = 0, and syncAllBookmarksAndProgress does the same on
         // every library load. All of them sent under whatever token was stored.
         val repo = codeLines(
-            source("com/booksync/data/repository/BookSyncRepository.kt")
+            source("com/booksync/data/repository/PositionRepository.kt")
         )
 
         for (call in listOf(

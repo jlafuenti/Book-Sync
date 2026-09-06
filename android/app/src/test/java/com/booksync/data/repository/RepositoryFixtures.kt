@@ -49,11 +49,51 @@ internal fun buildRepository(
     audioBookDao = audioBookDao,
     syncPointDao = syncPointDao,
     bookmarkDao = bookmarkDao,
-    pendingSyncDao = pendingSyncDao,
     userProgressDao = userProgressDao,
     acknowledgedItemDao = acknowledgedItemDao,
-    bookmarkLogDao = bookmarkLogDao,
     context = context,
+    diagnosticLogger = diagnosticLogger,
+    userScopeProvider = userScopeProvider,
+    positions = buildPositionRepository(
+        api = api,
+        bookPairDao = bookPairDao,
+        syncPointDao = syncPointDao,
+        bookmarkDao = bookmarkDao,
+        pendingSyncDao = pendingSyncDao,
+        userProgressDao = userProgressDao,
+        bookmarkLogDao = bookmarkLogDao,
+        diagnosticLogger = diagnosticLogger,
+        deviceIdManager = deviceIdManager,
+        json = json,
+        userScopeProvider = userScopeProvider,
+    ),
+)
+
+/**
+ * The same, for a [PositionRepository] tested directly rather than through
+ * the facade. [buildRepository] builds its facade over one of these, so a test
+ * that hands the same mocks to either sees the same behaviour.
+ */
+internal fun buildPositionRepository(
+    api: BookSyncApi = mockk(relaxed = true),
+    bookPairDao: BookPairDao = mockk(relaxed = true),
+    syncPointDao: SyncPointDao = mockk(relaxed = true),
+    bookmarkDao: BookmarkDao = mockk(relaxed = true),
+    pendingSyncDao: PendingSyncDao = mockk(relaxed = true),
+    userProgressDao: UserProgressDao = mockk(relaxed = true),
+    bookmarkLogDao: BookmarkLogDao = mockk(relaxed = true),
+    diagnosticLogger: DiagnosticLogger = mockk(relaxed = true),
+    deviceIdManager: DeviceIdManager = mockk(relaxed = true),
+    json: Json = Json { ignoreUnknownKeys = true },
+    userScopeProvider: UserScopeProvider = testScopeProvider(),
+): PositionRepository = PositionRepository(
+    api = api,
+    bookPairDao = bookPairDao,
+    syncPointDao = syncPointDao,
+    bookmarkDao = bookmarkDao,
+    pendingSyncDao = pendingSyncDao,
+    userProgressDao = userProgressDao,
+    bookmarkLogDao = bookmarkLogDao,
     diagnosticLogger = diagnosticLogger,
     deviceIdManager = deviceIdManager,
     json = json,
