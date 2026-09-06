@@ -41,6 +41,12 @@ class TranscriptionQueueItem(Base):
     # re-dispatched ahead of fresh ones so a half-done book finishes first.
     paused_at = Column(DateTime, nullable=True)
 
+    # The pair's status when this job first claimed it (a `PairStatus` value,
+    # e.g. "auto_matched"), written by the pipeline on entry and handed back
+    # by `queue_manager.settle_pair_after_cancel` if the job is cancelled
+    # (issue #381). NULL on rows that predate the column; a cancel then falls
+    # back to deriving it. Never read for a job that fails — that is ERROR.
+    pair_status_before = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=utcnow, nullable=False)
     started_at = Column(DateTime, nullable=True)

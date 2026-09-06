@@ -10910,7 +10910,7 @@
     },
     "/api/transcription/{pair_id}/cancel": {
       "post": {
-        "description": "Cancel an active or pending transcription job.",
+        "description": "Cancel an active or pending transcription job.\n\nThe pair returns to what it was before the job — SYNCED for a cancelled\nre-transcription, otherwise AUTO_MATCHED / MANUAL_MATCHED as before.\nERROR is reserved for a job that actually failed.",
         "operationId": "cancel_transcription_api_transcription__pair_id__cancel_post",
         "parameters": [
           {
