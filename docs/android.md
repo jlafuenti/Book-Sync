@@ -361,6 +361,54 @@ hard-coded third-party host under `app/src/main/java`. **A new destination fails
 purpose** — adding one means updating the policy and the Data safety answers in
 [play-listing.md](play-listing.md) in the same change.
 
+## Reader
+
+`ReaderActivity` hosts Readium's `EpubNavigatorFragment`. Two things it does to the publication
+before the navigator ever sees it are worth knowing about.
+
+### The `<head/>` transformer
+
+Readium 3.1.2 injects its stylesheet and its JavaScript into every XHTML resource by finding a
+literal `</head>` and splicing its tags in front of it. A self-closing `<head/>` is well-formed
+XHTML and has no such tag, so the injector throws `No </head> closing tag found in this resource`
+*while the WebView is streaming the response*. The WebView renders its own error page for that
+spine item — and since the tap that reveals the toolbar and the swipe that turns the page are
+both driven by the JavaScript that never got injected, the reader is then a dead end for that
+book, with only the system Back button. Calibre writes exactly this shape for the SVG cover title
+page it generates, so it is not a rare content bug (issue #373).
+
+`normalizeEpubHead` in `ui/reader/EpubHeadNormalizer.kt` rewrites `<head/>` to `<head></head>`
+and returns its input untouched otherwise. It is deliberately the narrowest possible rewrite:
+this code runs over every page of every book, so anything looser would be a general-purpose
+content rewriter nobody asked for. The byte-level wrapper decodes as ISO-8859-1 — the one charset
+that round-trips any byte sequence — so a UTF-8 resource comes back byte-identical.
+
+It is wired in through `PublicationOpener(onCreatePublication = ...)`, which is the one hook
+Readium 3.1.2 offers between parsing and building a publication: it hands over the
+`Publication.Builder`, and `ReaderActivity.normalizeHeads` replaces `builder.container` with a
+`TransformingContainer` that decorates XHTML/HTML entries only. There is no separate resource-
+transformer registry in this version of the toolkit; the container wrapper *is* the supported
+interposition point, and it sits below the navigator's `WebViewServer`, so the injector sees the
+rewritten bytes. **The user's files are never modified** — the rewrite happens in memory, per
+read.
+
+### The escape hatch
+
+Because any resource failure produces the same dead end, `ReaderActivity` also implements
+Readium's `Navigator.Listener.onResourceLoadFailed`: it reveals the toolbar (which the missing
+JavaScript can no longer do) and shows a snackbar, *This page could not be displayed*, with a
+**Next chapter** action that calls `navigator.go(nextLink)`. `ResourceFailurePolicy` holds the
+decision — which resource has already been reported, whether the bars need revealing, whether
+there is a next resource at all — so it can be unit-tested without a WebView, the same way
+`PositionSavePolicy` and `PageAudioHandoff` are.
+
+One limit worth recording: Readium calls `onResourceLoadFailed` from `WebViewServer` when the
+*container* fails to produce a resource, which is upstream of the HTML injection. An injector
+failure like the `<head/>` one surfaces only as a broken response stream, so it does **not** reach
+this callback. The transformer is what fixes that case; the escape hatch covers everything else
+(a missing or unreadable spine item, a truncated download) and keeps any future variant a
+nuisance rather than a lock-out.
+
 ## Position sync
 
 The Android app writes position through the same endpoint as the web app and follows the same
