@@ -827,3 +827,249 @@ class PositionResponse(BaseModel):
     device_id: Optional[str] = None
     device_name: Optional[str] = None
     hints: List[PositionHintResponse] = []
+
+
+# ===========================================================================
+# Mirrors of hand-built dicts (issue #258)
+# ===========================================================================
+#
+# The routes below used to return bare dicts. Each model here is a one-to-one
+# mirror of that dict — same keys, same optionality — so declaring it changes
+# nothing on the wire; it only makes the shape visible in `/openapi.json` and
+# validated on the way out. `tests/test_response_model_contracts.py` pins the
+# key sets by hand, independently of these classes.
+
+from typing import Dict  # noqa: E402
+from pydantic import ConfigDict  # noqa: E402
+
+
+class StrictResponse(BaseModel):
+    """Base for a model that mirrors a handler's hand-built dict.
+
+    ``extra="forbid"`` is deliberate. Pydantic's default is to *ignore* extra
+    keys, which would make a key the handler adds (or a typo in one it already
+    sends) vanish from the response silently — the exact failure these models
+    exist to prevent. With ``forbid``, FastAPI's response validation rejects
+    the mismatch with a 500 instead, and the route's tests fail before it
+    ships. The cost is that dict and model must move together; that is the
+    point.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ActionResult(StrictResponse):
+    """``{"status": "..."}`` — an action that has nothing else to report."""
+
+    status: str
+
+
+class MessageResponse(StrictResponse):
+    """``{"message": "..."}`` — a human-readable summary and nothing else."""
+
+    message: str
+
+
+class DeletedCount(StrictResponse):
+    deleted: int
+
+
+# --- troubleshoot -----------------------------------------------------------
+
+class TroubleshootItem(StrictResponse):
+    """One ebook/audiobook row in a troubleshoot category (`_item_dict`)."""
+
+    item_type: str
+    item_id: int
+    title: str
+    author: Optional[str]
+    filename: Optional[str]
+    file_path: str
+    format: Optional[str]
+    file_size: Optional[int]
+    detail: str
+    pair_id: Optional[int]
+
+
+class TroubleshootFolderItem(TroubleshootItem):
+    """A multi-file audiobook folder (issue #63): the item shape plus the
+    folder's own fields. `filename` is always null here."""
+
+    file_count: int
+    extension: str
+    imported_track_count: int
+
+
+class TroubleshootPairItem(StrictResponse):
+    """A row keyed by pair rather than by item — failed transcriptions and
+    synced pairs that have lost their sync map."""
+
+    pair_id: int
+    ebook_id: int
+    audiobook_id: int
+    title: str
+    author: Optional[str]
+    detail: str
+
+
+class TroubleshootFileItem(StrictResponse):
+    """A loose file with no library row behind it — an orphaned cover or a
+    quarantined ACSM import."""
+
+    filename: str
+    file_path: str
+    file_size: int
+    detail: str
+
+
+class TroubleshootCategories(StrictResponse):
+    """Every category `GET /api/troubleshoot/issues` reports, always present
+    (an empty list when clean). Same keys as `CATEGORIES` in
+    `web/src/pages/TroubleshootPage.jsx`."""
+
+    missing: List[TroubleshootItem]
+    zero_byte: List[TroubleshootItem]
+    chapter_encoding_bad: List[TroubleshootItem]
+    audio_corrupt: List[TroubleshootItem]
+    ebook_drm: List[TroubleshootItem]
+    ebook_unreadable: List[TroubleshootItem]
+    unsupported_format: List[TroubleshootItem]
+    multi_file_audiobook: List[TroubleshootFolderItem]
+    sync_map_missing: List[TroubleshootPairItem]
+    duplicate: List[TroubleshootItem]
+    missing_cover: List[TroubleshootItem]
+    orphaned_cover: List[TroubleshootFileItem]
+    failed_transcription: List[TroubleshootPairItem]
+    failed_acsm: List[TroubleshootFileItem]
+
+
+class TroubleshootIssues(StrictResponse):
+    categories: TroubleshootCategories
+    #: One entry per category, `len()` of the matching list.
+    counts: Dict[str, int]
+    total: int
+
+
+class LibraryScanProgress(StrictResponse):
+    """`services.library_verify` state as `GET /api/troubleshoot/scan/progress`
+    reports it. Timestamps are ISO-8601 strings."""
+
+    running: bool
+    phase_index: int
+    phase_count: int
+    phase_label: str
+    current: int
+    total: int
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    cancel_requested: bool
+    last_error: Optional[str]
+
+
+class RequeueResult(ActionResult):
+    pair_id: int
+
+
+class MultiFileDismissResult(ActionResult):
+    id: int
+
+
+class MultiFileRemoveTracksResult(DeletedCount):
+    id: int
+
+
+class ReplaceFileResult(ActionResult):
+    """`status` is always `"replaced"`; `integrity_ok`/`detail` are the
+    re-run integrity check on the new file."""
+
+    integrity_ok: bool
+    detail: Optional[str]
+    item_id: int
+
+
+class ChapterRepairResult(ActionResult):
+    """`status` is `"repaired"` or `"failed"`; `detail` is null on success."""
+
+    detail: Optional[str]
+    item_id: int
+
+
+class ChapterRepairFailure(StrictResponse):
+    item_id: int
+    title: Optional[str]
+    error: Optional[str]
+
+
+class BulkChapterRepairResult(StrictResponse):
+    repaired: int
+    failures: List[ChapterRepairFailure]
+
+
+class SyncMapAuditRow(StrictResponse):
+    """One pair's verdict from `services.sync_map_audit` (issue #295)."""
+
+    pair_id: int
+    title: Optional[str]
+    ebook_id: int
+    ebook_path: Optional[str]
+    sync_map_version: Optional[int]
+    total_sentences: Optional[int]
+    stored_epub_hash: Optional[str]
+    current_epub_hash: Optional[str]
+    #: "match" | "mismatch" | "unknown" | "file_missing"
+    hash_status: str
+    #: "ok" | "skipped" | "unreadable"
+    text_status: str
+    sampled: int
+    hits: int
+    hit_rate: Optional[float]
+    has_cached_transcript: bool
+    #: "healthy" | "stale" | "unknown"
+    status: str
+    reason: str
+    #: "realign" | "retranscribe" | "restore_file", or null when healthy
+    suggested_action: Optional[str]
+    realign_path: Optional[str]
+
+
+class SyncMapAuditResponse(StrictResponse):
+    sample_size: int
+    checked: int
+    flagged: int
+    realign_endpoint: str
+    pairs: List[SyncMapAuditRow]
+
+
+# --- library ------------------------------------------------------------------
+
+class VerifyRow(StrictResponse):
+    """A library row whose file is gone from disk (`library._verify_row`)."""
+
+    id: int
+    title: str
+    author: Optional[str]
+    filename: str
+    file_path: str
+    format: Optional[str]
+
+
+class VerifyFilesResponse(StrictResponse):
+    orphaned_ebooks: List[VerifyRow]
+    orphaned_audiobooks: List[VerifyRow]
+    #: True when either list hit `library.VERIFY_MAX_RESULTS` (issue #208).
+    truncated: bool
+
+
+class CleanupResponse(MessageResponse):
+    deleted_ebooks: int
+    deleted_audiobooks: int
+
+
+class CalibreStatusResponse(StrictResponse):
+    """`{"available": true, "version": ...}` or `{"available": false,
+    "error": ...}` — the route declares `response_model_exclude_none`, so the
+    key that does not apply is absent, exactly as the dict was."""
+
+    available: bool
+    version: Optional[str] = None
+    error: Optional[str] = None
