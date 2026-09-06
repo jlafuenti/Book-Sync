@@ -12,18 +12,22 @@ import java.io.IOException
  * "we couldn't reach the server" will fix itself, and an expired session needs
  * an action only the user can take.
  *
- * @param title the book as the user named it
+ * @param title the book as the user named it, or null when the caller does not
+ *   know it yet — the reader placeholder on a cold cache (issue #417) has only
+ *   a pair id, because the title would have come from the row that is missing
  * @param cause what went wrong, or null when the server answered and simply
  *   does not have the book
  */
-fun downloadUnavailableMessage(title: String, cause: Throwable?): String {
-    if (cause == null) return "\"$title\" is no longer in the library on the server."
+fun downloadUnavailableMessage(title: String?, cause: Throwable?): String {
+    val name = title?.let { "\"$it\"" } ?: "this book"
+    val gone = "${name.replaceFirstChar(Char::uppercase)} is no longer in the library on the server."
+    if (cause == null) return gone
 
     // Retrofit and okio wrap the real cause; matching only the top-level type
     // would report a genuine network blip as a missing book.
     val causes = generateSequence(cause) { it.cause }.take(8).toList()
     if (causes.any { it is IOException }) {
-        return "Can't reach the server — \"$title\" was not downloaded."
+        return "Can't reach the server — $name was not downloaded."
     }
 
     // The repository reports HTTP failures as Exception("HTTP <code>: …") and
@@ -35,8 +39,8 @@ fun downloadUnavailableMessage(title: String, cause: Throwable?): String {
     }
     return when (status) {
         401 -> "Your session has expired. Sign in again."
-        403 -> "You don't have permission to download \"$title\"."
-        404 -> "\"$title\" is no longer in the library on the server."
-        else -> "Couldn't download \"$title\": ${cause.message ?: "unknown error"}"
+        403 -> "You don't have permission to download $name."
+        404 -> gone
+        else -> "Couldn't download $name: ${cause.message ?: "unknown error"}"
     }
 }
