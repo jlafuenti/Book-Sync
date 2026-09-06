@@ -51,7 +51,6 @@ internal fun buildRepository(
     bookmarkDao = bookmarkDao,
     userProgressDao = userProgressDao,
     acknowledgedItemDao = acknowledgedItemDao,
-    context = context,
     diagnosticLogger = diagnosticLogger,
     userScopeProvider = userScopeProvider,
     positions = buildPositionRepository(
@@ -67,6 +66,34 @@ internal fun buildRepository(
         json = json,
         userScopeProvider = userScopeProvider,
     ),
+    downloads = buildMediaDownloadRepository(
+        api = api,
+        bookPairDao = bookPairDao,
+        eBookDao = eBookDao,
+        audioBookDao = audioBookDao,
+        syncPointDao = syncPointDao,
+        context = context,
+        diagnosticLogger = diagnosticLogger,
+    ),
+)
+
+/** As [buildPositionRepository], for a [MediaDownloadRepository] tested directly. */
+internal fun buildMediaDownloadRepository(
+    api: BookSyncApi = mockk(relaxed = true),
+    bookPairDao: BookPairDao = mockk(relaxed = true),
+    eBookDao: EBookDao = mockk(relaxed = true),
+    audioBookDao: AudioBookDao = mockk(relaxed = true),
+    syncPointDao: SyncPointDao = mockk(relaxed = true),
+    context: Context = mockk(relaxed = true),
+    diagnosticLogger: DiagnosticLogger = mockk(relaxed = true),
+): MediaDownloadRepository = MediaDownloadRepository(
+    api = api,
+    bookPairDao = bookPairDao,
+    eBookDao = eBookDao,
+    audioBookDao = audioBookDao,
+    syncPointDao = syncPointDao,
+    context = context,
+    diagnosticLogger = diagnosticLogger,
 )
 
 /**
