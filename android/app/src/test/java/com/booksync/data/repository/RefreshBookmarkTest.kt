@@ -4,14 +4,12 @@ import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.PositionHintResponse
 import com.booksync.data.remote.PositionResponse
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.local.dao.BookmarkDao
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import retrofit2.Response
@@ -27,22 +25,9 @@ class RefreshBookmarkTest {
     private val api = mockk<BookSyncApi>()
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun serverPosition(
