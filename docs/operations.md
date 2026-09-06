@@ -49,6 +49,58 @@ the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` �
 ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
 them. See [import-sources.md](import-sources.md).
 
+### Schema drift on a stamped database
+
+Stamping tells Alembic "this database is already at revision X". It does not check, so whatever
+the pre-Alembic `create_all` produced is what the database still has, and it can differ from what
+the migrations describe. That is exactly what happened here: three columns the models and
+`0001_baseline.py` both declare `NOT NULL` were nullable in production, and `alembic check`
+reported them as three outstanding `modify_nullable` operations (issue #389). Migration
+`0017_repair_nullability` fixes those three and is a no-op on a database built from the
+migrations.
+
+To ask whether any *other* column drifted the same way — nullable in the live database, `NOT NULL`
+in `Base.metadata` — run this on the server host. It prints one line per drifting column and a
+count; a healthy database prints `drift: 0` and nothing else.
+
+```bash
+docker compose exec server python - <<'PY'
+import asyncio, importlib, pkgutil
+from sqlalchemy import text
+import models
+# Import every model module, so Base.metadata is complete. (alembic/env.py keeps
+# a hand-written list for this; the installed `alembic` package shadows it on
+# import, so walk the package instead.)
+for m in pkgutil.iter_modules(models.__path__):
+    importlib.import_module(f"models.{m.name}")
+from database import Base, engine
+
+async def main():
+    async with engine.connect() as conn:
+        rows = await conn.execute(text(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND is_nullable = 'YES'"
+        ))
+        live_nullable = {(r.table_name, r.column_name) for r in rows}
+    drift = sorted(
+        (t.name, c.name)
+        for t in Base.metadata.sorted_tables
+        for c in t.columns
+        if not c.nullable and (t.name, c.name) in live_nullable
+    )
+    for table, column in drift:
+        print(f"{table}.{column}")
+    print("drift:", len(drift))
+
+asyncio.run(main())
+PY
+```
+
+`alembic check` is the broader version of the same question — it covers types, indexes and
+constraints too — but it only answers on a database it can autogenerate against, and it reports
+the drift rather than naming the columns to repair. The same comparison runs in CI as
+`server/tests/test_migrations_postgres.py::test_no_column_is_nullable_that_the_models_declare_not_null`.
+
 ### Rolling back
 
 **Take a manual backup (System → Backups) before every upgrade** — it is what makes the last
