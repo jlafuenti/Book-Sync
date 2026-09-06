@@ -58,6 +58,7 @@ from schemas import (
     NewItemsResponse, AcknowledgeItemsRequest, AcknowledgePairsRequest, Page,
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
+    CalibreStatusResponse, CleanupResponse, MessageResponse, VerifyFilesResponse,
 )
 from rate_limit import expensive_reads, search_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
@@ -1270,7 +1271,7 @@ async def scan_library(
         return await scan_library_impl(db)
 
 
-@router.post("/rescan-all")
+@router.post("/rescan-all", response_model=MessageResponse)
 async def rescan_all_files(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_editor_user)
@@ -3466,7 +3467,7 @@ def _verify_row(item) -> dict:
     }
 
 
-@router.get("/verify")
+@router.get("/verify", response_model=VerifyFilesResponse)
 async def verify_files(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(rate_limited(expensive_reads, get_editor_user)),
@@ -3516,7 +3517,7 @@ class CleanupRequest(BaseModel):
     audiobook_ids: List[int] = []
 
 
-@router.post("/cleanup")
+@router.post("/cleanup", response_model=CleanupResponse)
 async def cleanup_orphans(
     req: CleanupRequest,
     db: AsyncSession = Depends(get_db),
@@ -3795,7 +3796,13 @@ def _probe_calibre() -> dict:
 calibre_status_cache = TTLValue(lambda: settings.calibre_status_cache_seconds)
 
 
-@router.get("/calibre-status")
+@router.get(
+    "/calibre-status",
+    response_model=CalibreStatusResponse,
+    # The probe returns either `version` or `error`, never both; without
+    # this the absent one would be emitted as null, which the dict never did.
+    response_model_exclude_none=True,
+)
 async def get_calibre_status(
     current_user: User = Depends(rate_limited(expensive_reads, get_editor_user)),
 ):
