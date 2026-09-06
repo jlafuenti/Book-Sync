@@ -137,12 +137,20 @@ CI gates: server = 30% global floor + ≥80% patch coverage; web = vitest thresh
 Names below are the env-var **aliases** — what `Settings` actually reads. `extra = "ignore"`
 (`config.py`) means a misspelled variable is silently discarded, so check the alias in
 `config.py` (or the env tables in `README.md`) rather than guessing one.
-- `DATABASE_URL` — PostgreSQL async URL (asyncpg)
+- `DATABASE_URL` — PostgreSQL async URL (asyncpg). Optional: assembled from
+  `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_HOST`/`POSTGRES_PORT`/`POSTGRES_DB` when not set
 - `JWT_SECRET_KEY`, `CREDENTIAL_ENC_KEYS` — Token signing and at-rest credential encryption
 - `EBOOK_DIR`, `AUDIOBOOK_DIR`, `APP_DATA_DIR`, `COVERS_DIR`, `IMPORTS_DIR`, `BACKUPS_DIR` — File system paths
 - `WHISPER_MODEL`, `WHISPER_DEVICE` — Local Whisper model and device (cpu/cuda)
 - `TRANSCRIPTION_PROVIDER`, `TRANSCRIPTION_REMOTE_URL` — Provider mode and remote worker URL
 - `GOOGLE_BOOKS_API_KEY` — Optional; enables metadata enrichment
+
+**Secrets never go in compose `environment:`** (issue #180). Every secret setting also reads a
+`<NAME>_FILE` variable naming a file — the Docker secrets convention, `/run/secrets/<name>` in the
+shipped template. `<NAME>_FILE` wins over `<NAME>`, and a path that is missing, unreadable or empty
+is a startup error naming the variable, never a silent fallback. The list of names is
+`config.SECRET_FILE_ENV_VARS`; adding a secret setting without adding it there fails
+`server/tests/test_secret_files.py`. Runbook: `docs/operations.md`, "Secrets".
 
 **Much of the runtime configuration is DB-backed, not env-backed.** The transcription
 provider/URL/timeout, the Audiobookshelf connection, the off-hours window, backups and

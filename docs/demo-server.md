@@ -98,6 +98,10 @@ demo-specific changes to the template, all on the `server` service:
       - ./backups:/backups
     environment:
       - APP_ENV=prod
+      # Inline values, deliberately: this is a throwaway demo whose secrets
+      # protect nothing and are rotated by rebuilding the box. A real
+      # deployment uses the file-backed `secrets:` the main template ships —
+      # see operations.md, "Secrets".
       - JWT_SECRET_KEY=            # python -c "import secrets; print(secrets.token_urlsafe(64))"
       - CREDENTIAL_ENC_KEYS=       # python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
       - CORS_ORIGINS=https://demo.example.com
