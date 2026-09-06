@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import android.content.Context
 import androidx.work.*
 import com.booksync.worker.DownloadWorker
+import com.booksync.worker.downloadUnavailableMessage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
@@ -50,6 +51,12 @@ class ReaderViewModel @Inject constructor(
 
     private val _downloadingProgress = MutableStateFlow<String?>(null)
     val downloadingProgress = _downloadingProgress.asStateFlow()
+
+    /** Why the last "Download Ebook" tap could not start, or null. Rendered as a snackbar. */
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError = _downloadError.asStateFlow()
+
+    fun clearDownloadError() { _downloadError.value = null }
 
     /**
      * Set the first time this screen asks for the EPUB, and never cleared — see
@@ -102,11 +109,38 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Resolve the pair, *then* enqueue the download (issue #417).
+     *
+     * [_pair] comes from `getPairsFlow()`, which is Room. A search result comes
+     * from the server, so on a fresh install — Library tab never opened — this
+     * screen can be reached for a pair Room has never seen, and this used to
+     * begin with `_pair.value ?: return`: the button did nothing, with no
+     * request, no snackbar, and not even a logcat line. Same defect class as
+     * issue #338, which fixed Search's download menu but not this button.
+     *
+     * `resolvePairById` is cache first, server second, and refreshing the pair
+     * list also fills Room — so `getPairsFlow` then emits the pair, the title
+     * bar fills in, and the progress observer has an id to match. Setting
+     * [autoDownloadRequested] before that emission is what stops the
+     * auto-download of issue #171 from enqueueing the same work a second time.
+     */
     fun downloadEbook() {
-        val p = _pair.value ?: return
         autoDownloadRequested = true
-        val request = DownloadWorker.request(p.id, "EBOOK")
-        workManager.enqueueUniqueWork(ebookWorkName(p.id), ExistingWorkPolicy.REPLACE, request)
+        viewModelScope.launch {
+            val p = _pair.value ?: try {
+                repository.resolvePairById(pairId)
+            } catch (e: Exception) {
+                _downloadError.value = downloadUnavailableMessage(title = null, cause = e)
+                return@launch
+            }
+            if (p == null) {
+                _downloadError.value = downloadUnavailableMessage(title = null, cause = null)
+                return@launch
+            }
+            val request = DownloadWorker.request(p.id, "EBOOK")
+            workManager.enqueueUniqueWork(ebookWorkName(p.id), ExistingWorkPolicy.REPLACE, request)
+        }
     }
 
     /**
@@ -161,6 +195,18 @@ fun ReaderScreen(
     val isReady by viewModel.isReady.collectAsState()
     val downloadingProgress by viewModel.downloadingProgress.collectAsState()
     val context = LocalContext.current
+
+    // A download that cannot start says so here (issue #417). This screen is
+    // reachable straight from Search, so like Search it has no Library toast
+    // to fall back on — without this a failed tap left no trace at all.
+    val downloadError by viewModel.downloadError.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(downloadError) {
+        downloadError?.let {
+            snackbar.showSnackbar(it, duration = SnackbarDuration.Long)
+            viewModel.clearDownloadError()
+        }
+    }
 
     // Track whether we've launched the activity
     var hasLaunched by remember { mutableStateOf(false) }
@@ -241,6 +287,7 @@ fun ReaderScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(
             modifier = Modifier
