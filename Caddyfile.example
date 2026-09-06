@@ -15,7 +15,9 @@
 # and HSTS only exist here.
 #
 # Verify after a deploy (docs/operations.md, "Edge proxy"):
-#     curl -sI https://tandem.example.com/ ; curl -sI https://tandem.example.com/api/health
+#     curl -s -o /dev/null -D - https://tandem.example.com/
+#     curl -s -o /dev/null -D - https://tandem.example.com/api/health
+#     (a GET with the headers dumped; `curl -I` sends HEAD, which the API answers with 405)
 
 # ADAPT: your public hostname. Caddy obtains and renews a Let's Encrypt
 # certificate for it automatically — the name must resolve to this host and

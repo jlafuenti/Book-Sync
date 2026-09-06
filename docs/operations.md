@@ -407,12 +407,13 @@ new value, until the Caddyfile is updated to match. `npx vitest run src/security
 runs just that check.
 
 **Verifying.** After every proxy change, print the response headers for the app shell and for an
-API route — the two go through different `handle` blocks, and both must carry the set:
+API route — the two go through different `handle` blocks, and both must carry the set. Use a GET
+with the headers dumped rather than `curl -I`: a HEAD request gets a 405 from the API:
 
 ```bash
 for p in / /api/health; do
   echo "== $p"
-  curl -sI "https://tandem.example.com$p" \
+  curl -s -o /dev/null -D - "https://tandem.example.com$p" \
     | grep -iE '^(HTTP|strict-transport|content-security|x-frame|x-content-type|referrer|permissions|server|via)'
 done
 ```
