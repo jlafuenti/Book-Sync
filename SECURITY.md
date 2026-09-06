@@ -90,8 +90,10 @@ If you expose an instance beyond your LAN, at minimum:
       `/proc/1/environ`. See `docs/operations.md`, "Secrets".
 - [ ] **Close public registration** (`ALLOW_PUBLIC_REGISTRATION=false`) or approve accounts
       manually. It is on by default for first-run convenience on a home LAN.
-- [ ] **Terminate TLS in front of the app.** Nothing in this repo does TLS; use a reverse proxy
-      (see `Caddyfile.example` and `docs/operations.md`).
+- [ ] **Terminate TLS in front of the app.** Nothing in this repo does TLS; use a reverse proxy.
+      Start from `Caddyfile.example` — it also carries the security headers (HSTS, frame denial,
+      a Content-Security-Policy) that nothing inside the stack sets; see `docs/operations.md`,
+      "Edge proxy", for how to verify them.
 - [ ] **Publish only the proxy.** Do not expose the raw API port. The bundled nginx proxies only
       `/api/`, while the API port itself serves `/docs` and `/openapi.json` unauthenticated —
       harmless on a LAN, an inventory of your endpoints on the internet.

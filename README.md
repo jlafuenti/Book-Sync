@@ -244,6 +244,9 @@ for how to create the files and how to migrate an existing install without chang
 prefer putting the proxy (e.g. Caddy) on the compose network pointed at `server:8000`, and bind
 the published `8000`/`3000` ports to `127.0.0.1` or your LAN firewall so the proxy can't be
 bypassed. Details: [docs/operations.md → Reverse proxy](docs/operations.md#reverse-proxy).
+Exposing it to the internet? Start from [`Caddyfile.example`](Caddyfile.example) — it terminates
+TLS and carries the security headers (HSTS, frame denial, a Content-Security-Policy) that nothing
+inside the stack sets: [docs/operations.md → Edge proxy](docs/operations.md#edge-proxy).
 
 **Optional** — all have working defaults:
 
