@@ -293,12 +293,15 @@ function EbookReader({ ebookId, pairId, initialChapter, initialTextPreview, onCl
     }, [ebookId, pairId, extractVisibleText, maybeOpenGate, gate])
 
 
-    // Debounced progress save (auto-save on page turn)
-    const saveProgress = useCallback((cfi, percent) => {
+    // Debounced progress save (auto-save on page turn). `spineIndex` is the
+    // chapter the relocation landed in; it used to be dropped here and doSave
+    // fell back to currentSpineIndexRef, which happened to hold the same
+    // value (issue #278). EbookReader.relocated.test.jsx pins the chapter.
+    const saveProgress = useCallback((cfi, percent, spineIndex) => {
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
         saveTimerRef.current = setTimeout(() => {
             saveTimerRef.current = null
-            doSave(cfi, percent)
+            doSave(cfi, percent, spineIndex)
         }, 2000)
     }, [doSave])
 
