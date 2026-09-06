@@ -140,18 +140,26 @@ async def cancel_transcription(
     # cancelling one discards work that may not be the canceller's.
     _: User = Depends(get_editor_user),
 ):
-    """Cancel an active or pending transcription job."""
-    # Update BookPair status first to ensure UI gets unstuck
+    """Cancel an active or pending transcription job.
+
+    The pair returns to what it was before the job — SYNCED for a cancelled
+    re-transcription, otherwise AUTO_MATCHED / MANUAL_MATCHED as before.
+    ERROR is reserved for a job that actually failed.
+    """
+    # The pair used to be flipped to ERROR here (issue #381), which made a job
+    # queued by mistake look like a broken pair. The "status after cancel"
+    # rule lives in `queue_manager.settle_pair_after_cancel`; `cancel_item`
+    # applies it, and this endpoint only reaches for it directly when the pair
+    # says a job is running but no queue row backs it.
+    from services.queue_manager import cancel_item, settle_pair_after_cancel
+
     pair_result = await db.execute(select(BookPair).where(BookPair.id == pair_id))
     pair = pair_result.scalar_one_or_none()
-    
+
     if not pair:
         raise HTTPException(status_code=404, detail="Book pair not found")
-        
+
     was_transcribing = pair.status == PairStatus.TRANSCRIBING
-    if was_transcribing:
-        pair.status = PairStatus.ERROR
-        await db.commit()
 
     # Find the queue item for this pair
     result = await db.execute(
@@ -163,10 +171,13 @@ async def cancel_transcription(
     item = result.scalar_one_or_none()
 
     if item:
-        from services.queue_manager import cancel_item
         await cancel_item(item.id)
-    elif not was_transcribing:
-        # Only throw 404 if it wasn't transcribing AND no item was found
+    elif was_transcribing:
+        # No row backs the running pair. Unstick it the same way a cancel
+        # would, with nothing recorded to read from.
+        await settle_pair_after_cancel(db, pair_id, None)
+        await db.commit()
+    else:
         raise HTTPException(status_code=404, detail="No active transcription found for this pair")
 
     return {"status": "cancelled"}
