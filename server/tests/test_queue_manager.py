@@ -1534,6 +1534,28 @@ async def test_cancelling_at_a_checkpoint_returns_a_manual_matched_pair(db, monk
     assert (await _get(BookPair, pair.id)).status == PairStatus.MANUAL_MATCHED
 
 
+@pytest.mark.parametrize("has_map, expected", [
+    (True, PairStatus.SYNCED),
+    (False, PairStatus.AUTO_MATCHED),
+])
+async def test_cancelling_a_retry_of_an_errored_pair_derives_a_fresh_status(db, monkeypatch, has_map, expected):
+    """A retry records ERROR as the pre-job status, because that is what the
+    pair honestly was. Cancelling that retry must not hand ERROR back: the
+    job did not fail, the user stopped it. Derive instead, as for a row with
+    no record at all (owner's call, 2026-09-06)."""
+    pair = await make_book_pair(db, status=PairStatus.ERROR)
+    if has_map:
+        db.add(SyncMap(book_pair_id=pair.id, version=1))
+        await db.commit()
+    item = await _seed_item(db, pair.id, status="pending")
+    _install_pipeline_cancelling_at(monkeypatch, "after_epub_extract", item.id, [])
+
+    await queue_manager._process_next_item()
+
+    assert (await _get(TranscriptionQueueItem, item.id)).pair_status_before == "error"
+    assert (await _get(BookPair, pair.id)).status == expected
+
+
 async def test_a_resumed_job_does_not_overwrite_the_recorded_pre_job_status(db, monkeypatch):
     """Re-entering the pipeline finds the pair already TRANSCRIBING.
 

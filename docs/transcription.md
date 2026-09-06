@@ -101,7 +101,9 @@ language rather than re-detecting from wherever the resume happens to start.
   A cancel returns the pair to what it was before the job — `synced` for a cancelled
   re-transcription, otherwise `auto_matched` / `manual_matched` as before — using the status the
   pipeline recorded on the queue row when it claimed the pair (`pair_status_before`, #381). `error`
-  is reserved for a job that actually failed. A cancel that lands after the last checkpoint —
+  is reserved for a job that actually failed, so a cancelled *retry* of an errored pair does not go
+  back to `error`: the recorded status is ignored and a fresh one is derived (`synced` if a sync map
+  exists, else `auto_matched`). A cancel that lands after the last checkpoint —
   while the sync map is being saved — still wins: the final `completed` write is conditional on
   the row not already being `cancelled`, the finished map is kept, and only the queue row records
   the cancel (#254).
