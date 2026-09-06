@@ -89,6 +89,21 @@
         "title": "AcsmDismissRequest",
         "type": "object"
       },
+      "ActionResult": {
+        "additionalProperties": false,
+        "description": "``{\"status\": \"...\"}`` — an action that has nothing else to report.",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ActionResult",
+        "type": "object"
+      },
       "ApplyCoverRequest": {
         "properties": {
           "book_id": {
@@ -1193,6 +1208,28 @@
         "title": "BookmarkSource",
         "type": "string"
       },
+      "BulkChapterRepairResult": {
+        "additionalProperties": false,
+        "properties": {
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/ChapterRepairFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "repaired": {
+            "title": "Repaired",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repaired",
+          "failures"
+        ],
+        "title": "BulkChapterRepairResult",
+        "type": "object"
+      },
       "BulkDeleteItem": {
         "properties": {
           "item_id": {
@@ -1243,6 +1280,43 @@
         "title": "BulkRepairChapterEncodingRequest",
         "type": "object"
       },
+      "CalibreStatusResponse": {
+        "additionalProperties": false,
+        "description": "`{\"available\": true, \"version\": ...}` or `{\"available\": false,\n\"error\": ...}` — the route declares `response_model_exclude_none`, so the\nkey that does not apply is absent, exactly as the dict was.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "CalibreStatusResponse",
+        "type": "object"
+      },
       "Chapter": {
         "properties": {
           "end_time": {
@@ -1271,6 +1345,76 @@
         "title": "Chapter",
         "type": "object"
       },
+      "ChapterRepairFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "item_id",
+          "title",
+          "error"
+        ],
+        "title": "ChapterRepairFailure",
+        "type": "object"
+      },
+      "ChapterRepairResult": {
+        "additionalProperties": false,
+        "description": "`status` is `\"repaired\"` or `\"failed\"`; `detail` is null on success.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "detail",
+          "item_id"
+        ],
+        "title": "ChapterRepairResult",
+        "type": "object"
+      },
       "CleanupRequest": {
         "properties": {
           "audiobook_ids": {
@@ -1291,6 +1435,30 @@
           }
         },
         "title": "CleanupRequest",
+        "type": "object"
+      },
+      "CleanupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted_audiobooks": {
+            "title": "Deleted Audiobooks",
+            "type": "integer"
+          },
+          "deleted_ebooks": {
+            "title": "Deleted Ebooks",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "deleted_ebooks",
+          "deleted_audiobooks"
+        ],
+        "title": "CleanupResponse",
         "type": "object"
       },
       "CreateBackupRequest": {
@@ -1324,6 +1492,20 @@
           "filenames"
         ],
         "title": "DeleteCoversRequest",
+        "type": "object"
+      },
+      "DeletedCount": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "DeletedCount",
         "type": "object"
       },
       "DiscrepantField": {
@@ -2307,6 +2489,87 @@
         "title": "LibraryItemKind",
         "type": "string"
       },
+      "LibraryScanProgress": {
+        "additionalProperties": false,
+        "description": "`services.library_verify` state as `GET /api/troubleshoot/scan/progress`\nreports it. Timestamps are ISO-8601 strings.",
+        "properties": {
+          "cancel_requested": {
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "current": {
+            "title": "Current",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "phase_count": {
+            "title": "Phase Count",
+            "type": "integer"
+          },
+          "phase_index": {
+            "title": "Phase Index",
+            "type": "integer"
+          },
+          "phase_label": {
+            "title": "Phase Label",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "running",
+          "phase_index",
+          "phase_count",
+          "phase_label",
+          "current",
+          "total",
+          "started_at",
+          "finished_at",
+          "cancel_requested",
+          "last_error"
+        ],
+        "title": "LibraryScanProgress",
+        "type": "object"
+      },
       "LibraryScanResponse": {
         "properties": {
           "auto_matched_pairs": {
@@ -2673,6 +2936,21 @@
         "title": "MediaTokenResponse",
         "type": "object"
       },
+      "MessageResponse": {
+        "additionalProperties": false,
+        "description": "``{\"message\": \"...\"}`` — a human-readable summary and nothing else.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "MessageResponse",
+        "type": "object"
+      },
       "MetadataDiscrepancy": {
         "properties": {
           "audiobook_id": {
@@ -2878,6 +3156,44 @@
           }
         },
         "title": "MetadataUpdate",
+        "type": "object"
+      },
+      "MultiFileDismissResult": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "id"
+        ],
+        "title": "MultiFileDismissResult",
+        "type": "object"
+      },
+      "MultiFileRemoveTracksResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted",
+          "id"
+        ],
+        "title": "MultiFileRemoveTracksResult",
         "type": "object"
       },
       "NewItemsResponse": {
@@ -3890,6 +4206,62 @@
         "title": "RegistrationResponse",
         "type": "object"
       },
+      "ReplaceFileResult": {
+        "additionalProperties": false,
+        "description": "`status` is always `\"replaced\"`; `integrity_ok`/`detail` are the\nre-run integrity check on the new file.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "integrity_ok": {
+            "title": "Integrity Ok",
+            "type": "boolean"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "integrity_ok",
+          "detail",
+          "item_id"
+        ],
+        "title": "ReplaceFileResult",
+        "type": "object"
+      },
+      "RequeueResult": {
+        "additionalProperties": false,
+        "properties": {
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "pair_id"
+        ],
+        "title": "RequeueResult",
+        "type": "object"
+      },
       "ResolveDiscrepancyRequest": {
         "properties": {
           "audiobook_updates": {
@@ -4033,6 +4405,206 @@
           }
         },
         "title": "SourceConfigUpdate",
+        "type": "object"
+      },
+      "SyncMapAuditResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "checked": {
+            "title": "Checked",
+            "type": "integer"
+          },
+          "flagged": {
+            "title": "Flagged",
+            "type": "integer"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/SyncMapAuditRow"
+            },
+            "title": "Pairs",
+            "type": "array"
+          },
+          "realign_endpoint": {
+            "title": "Realign Endpoint",
+            "type": "string"
+          },
+          "sample_size": {
+            "title": "Sample Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_size",
+          "checked",
+          "flagged",
+          "realign_endpoint",
+          "pairs"
+        ],
+        "title": "SyncMapAuditResponse",
+        "type": "object"
+      },
+      "SyncMapAuditRow": {
+        "additionalProperties": false,
+        "description": "One pair's verdict from `services.sync_map_audit` (issue #295).",
+        "properties": {
+          "current_epub_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Epub Hash"
+          },
+          "ebook_id": {
+            "title": "Ebook Id",
+            "type": "integer"
+          },
+          "ebook_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ebook Path"
+          },
+          "has_cached_transcript": {
+            "title": "Has Cached Transcript",
+            "type": "boolean"
+          },
+          "hash_status": {
+            "title": "Hash Status",
+            "type": "string"
+          },
+          "hit_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hit Rate"
+          },
+          "hits": {
+            "title": "Hits",
+            "type": "integer"
+          },
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          },
+          "realign_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realign Path"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sampled": {
+            "title": "Sampled",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stored_epub_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Epub Hash"
+          },
+          "suggested_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Action"
+          },
+          "sync_map_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sync Map Version"
+          },
+          "text_status": {
+            "title": "Text Status",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "total_sentences": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Sentences"
+          }
+        },
+        "required": [
+          "pair_id",
+          "title",
+          "ebook_id",
+          "ebook_path",
+          "sync_map_version",
+          "total_sentences",
+          "stored_epub_hash",
+          "current_epub_hash",
+          "hash_status",
+          "text_status",
+          "sampled",
+          "hits",
+          "hit_rate",
+          "has_cached_transcript",
+          "status",
+          "reason",
+          "suggested_action",
+          "realign_path"
+        ],
+        "title": "SyncMapAuditRow",
         "type": "object"
       },
       "SyncMapResponse": {
@@ -4374,6 +4946,436 @@
         "title": "TranscriptionStatusResponse",
         "type": "object"
       },
+      "TroubleshootCategories": {
+        "additionalProperties": false,
+        "description": "Every category `GET /api/troubleshoot/issues` reports, always present\n(an empty list when clean). Same keys as `CATEGORIES` in\n`web/src/pages/TroubleshootPage.jsx`.",
+        "properties": {
+          "audio_corrupt": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Audio Corrupt",
+            "type": "array"
+          },
+          "chapter_encoding_bad": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Chapter Encoding Bad",
+            "type": "array"
+          },
+          "duplicate": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Duplicate",
+            "type": "array"
+          },
+          "ebook_drm": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Ebook Drm",
+            "type": "array"
+          },
+          "ebook_unreadable": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Ebook Unreadable",
+            "type": "array"
+          },
+          "failed_acsm": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootFileItem"
+            },
+            "title": "Failed Acsm",
+            "type": "array"
+          },
+          "failed_transcription": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPairItem"
+            },
+            "title": "Failed Transcription",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "missing_cover": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Missing Cover",
+            "type": "array"
+          },
+          "multi_file_audiobook": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootFolderItem"
+            },
+            "title": "Multi File Audiobook",
+            "type": "array"
+          },
+          "orphaned_cover": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootFileItem"
+            },
+            "title": "Orphaned Cover",
+            "type": "array"
+          },
+          "sync_map_missing": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPairItem"
+            },
+            "title": "Sync Map Missing",
+            "type": "array"
+          },
+          "unsupported_format": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Unsupported Format",
+            "type": "array"
+          },
+          "zero_byte": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootItem"
+            },
+            "title": "Zero Byte",
+            "type": "array"
+          }
+        },
+        "required": [
+          "missing",
+          "zero_byte",
+          "chapter_encoding_bad",
+          "audio_corrupt",
+          "ebook_drm",
+          "ebook_unreadable",
+          "unsupported_format",
+          "multi_file_audiobook",
+          "sync_map_missing",
+          "duplicate",
+          "missing_cover",
+          "orphaned_cover",
+          "failed_transcription",
+          "failed_acsm"
+        ],
+        "title": "TroubleshootCategories",
+        "type": "object"
+      },
+      "TroubleshootFileItem": {
+        "additionalProperties": false,
+        "description": "A loose file with no library row behind it — an orphaned cover or a\nquarantined ACSM import.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size": {
+            "title": "File Size",
+            "type": "integer"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "file_path",
+          "file_size",
+          "detail"
+        ],
+        "title": "TroubleshootFileItem",
+        "type": "object"
+      },
+      "TroubleshootFolderItem": {
+        "additionalProperties": false,
+        "description": "A multi-file audiobook folder (issue #63): the item shape plus the\nfolder's own fields. `filename` is always null here.",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "extension": {
+            "title": "Extension",
+            "type": "string"
+          },
+          "file_count": {
+            "title": "File Count",
+            "type": "integer"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "imported_track_count": {
+            "title": "Imported Track Count",
+            "type": "integer"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "item_type": {
+            "title": "Item Type",
+            "type": "string"
+          },
+          "pair_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_type",
+          "item_id",
+          "title",
+          "author",
+          "filename",
+          "file_path",
+          "format",
+          "file_size",
+          "detail",
+          "pair_id",
+          "file_count",
+          "extension",
+          "imported_track_count"
+        ],
+        "title": "TroubleshootFolderItem",
+        "type": "object"
+      },
+      "TroubleshootIssues": {
+        "additionalProperties": false,
+        "properties": {
+          "categories": {
+            "$ref": "#/components/schemas/TroubleshootCategories"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "categories",
+          "counts",
+          "total"
+        ],
+        "title": "TroubleshootIssues",
+        "type": "object"
+      },
+      "TroubleshootItem": {
+        "additionalProperties": false,
+        "description": "One ebook/audiobook row in a troubleshoot category (`_item_dict`).",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "item_id": {
+            "title": "Item Id",
+            "type": "integer"
+          },
+          "item_type": {
+            "title": "Item Type",
+            "type": "string"
+          },
+          "pair_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Id"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_type",
+          "item_id",
+          "title",
+          "author",
+          "filename",
+          "file_path",
+          "format",
+          "file_size",
+          "detail",
+          "pair_id"
+        ],
+        "title": "TroubleshootItem",
+        "type": "object"
+      },
+      "TroubleshootPairItem": {
+        "additionalProperties": false,
+        "description": "A row keyed by pair rather than by item — failed transcriptions and\nsynced pairs that have lost their sync map.",
+        "properties": {
+          "audiobook_id": {
+            "title": "Audiobook Id",
+            "type": "integer"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "ebook_id": {
+            "title": "Ebook Id",
+            "type": "integer"
+          },
+          "pair_id": {
+            "title": "Pair Id",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair_id",
+          "ebook_id",
+          "audiobook_id",
+          "title",
+          "author",
+          "detail"
+        ],
+        "title": "TroubleshootPairItem",
+        "type": "object"
+      },
       "UnsupportedFileResponse": {
         "properties": {
           "already_converted": {
@@ -4708,6 +5710,90 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyFilesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "orphaned_audiobooks": {
+            "items": {
+              "$ref": "#/components/schemas/VerifyRow"
+            },
+            "title": "Orphaned Audiobooks",
+            "type": "array"
+          },
+          "orphaned_ebooks": {
+            "items": {
+              "$ref": "#/components/schemas/VerifyRow"
+            },
+            "title": "Orphaned Ebooks",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "orphaned_ebooks",
+          "orphaned_audiobooks",
+          "truncated"
+        ],
+        "title": "VerifyFilesResponse",
+        "type": "object"
+      },
+      "VerifyRow": {
+        "additionalProperties": false,
+        "description": "A library row whose file is gone from disk (`library._verify_row`).",
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "author",
+          "filename",
+          "file_path",
+          "format"
+        ],
+        "title": "VerifyRow",
         "type": "object"
       }
     },
@@ -6449,7 +7535,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CalibreStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6484,7 +7572,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7899,7 +8989,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -8347,7 +9439,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyFilesResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -10075,7 +11169,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10131,7 +11227,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
               }
             },
             "description": "Successful Response"
@@ -10175,7 +11273,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BulkChapterRepairResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10220,7 +11320,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
               }
             },
             "description": "Successful Response"
@@ -10255,7 +11357,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TroubleshootIssues"
+                }
               }
             },
             "description": "Successful Response"
@@ -10291,7 +11395,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MultiFileDismissResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10337,7 +11443,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MultiFileRemoveTracksResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10383,7 +11491,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ChapterRepairResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10448,7 +11558,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ReplaceFileResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10493,7 +11605,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RequeueResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10527,7 +11641,9 @@
           "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10551,7 +11667,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -10575,7 +11693,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryScanProgress"
+                }
               }
             },
             "description": "Successful Response"
@@ -10659,7 +11779,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMapAuditResponse"
+                }
               }
             },
             "description": "Successful Response"
