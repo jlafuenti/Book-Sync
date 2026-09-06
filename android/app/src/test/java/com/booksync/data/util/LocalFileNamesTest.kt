@@ -148,7 +148,7 @@ class LocalFileNamesTest {
 
         assertTrue(
             "these build a path from a server-supplied filename instead of going " +
-                "through BookSyncRepository.localEbookFile / localAudioFile, so the " +
+                "through MediaDownloadRepository.localEbookFile / localAudioFile, so the " +
                 "traversal is still open there (issue #177): $offenders",
             offenders.isEmpty(),
         )
@@ -156,9 +156,9 @@ class LocalFileNamesTest {
 
     @Test
     fun `the repository sanitises rather than trusting the name`() {
-        val repo = mainSources().first { it.name == "BookSyncRepository.kt" }.readText()
+        val repo = mainSources().first { it.name == "MediaDownloadRepository.kt" }.readText()
         assertTrue(
-            "BookSyncRepository must call localFileName — without it the accessors " +
+            "MediaDownloadRepository must call localFileName — without it the accessors " +
                 "are just a rename of the old join.",
             repo.contains("localFileName("),
         )
