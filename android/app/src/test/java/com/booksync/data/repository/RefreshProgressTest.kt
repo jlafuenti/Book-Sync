@@ -3,14 +3,12 @@ package com.booksync.data.repository
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
@@ -31,22 +29,9 @@ class RefreshProgressTest {
     private val api = mockk<BookSyncApi>()
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
-        bookmarkDao = mockk(relaxed = true),
-        pendingSyncDao = mockk(relaxed = true),
         userProgressDao = userProgressDao,
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun serverPosition(
