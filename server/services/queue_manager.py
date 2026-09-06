@@ -299,7 +299,11 @@ async def settle_pair_after_cancel(
         return
 
     recorded = item.pair_status_before if item is not None else None
-    if recorded:
+    # A retry of a failed job records ERROR, because that is what the pair
+    # honestly was. Cancelling that retry must not hand ERROR back: the job
+    # did not fail, the user stopped it. Treat the record as absent and
+    # derive, like a row that predates the column.
+    if recorded and recorded != PairStatus.ERROR.value:
         pair.status = PairStatus(recorded)
         return
 
