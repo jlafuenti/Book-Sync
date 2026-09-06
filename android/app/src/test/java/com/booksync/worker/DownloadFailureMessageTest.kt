@@ -24,6 +24,19 @@ class DownloadFailureMessageTest {
     }
 
     @Test
+    fun `a caller that does not know the title still gets a sentence`() {
+        // The reader placeholder on a cold cache has only a pair id (issue
+        // #417): the title would have come from the very row that is missing.
+        // "\"null\" is no longer in the library" is not a message.
+        val gone = downloadUnavailableMessage(null, cause = null)
+        assertTrue("must not leak null, was: $gone", !gone.contains("null"))
+        assertTrue("must read as a sentence, was: $gone", gone.startsWith("This book"))
+        val offline = downloadUnavailableMessage(null, UnknownHostException("no such host"))
+        assertTrue("must not leak null, was: $offline", !offline.contains("null"))
+        assertTrue("must mention reaching the server, was: $offline", offline.contains("reach the server"))
+    }
+
+    @Test
     fun `an unreachable server says so instead of blaming the book`() {
         val msg = downloadUnavailableMessage("Bartleby", UnknownHostException("no such host"))
         assertTrue("must mention reaching the server, was: $msg", msg.contains("reach the server"))
