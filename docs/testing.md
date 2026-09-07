@@ -263,27 +263,31 @@ current total from `./gradlew :app:koverLogDebug`.** The number quoted here has 
 the gradle file twice (issues #240 and this refresh), which is why
 `server/tests/test_docs_contract.py` now fails the build when the two disagree.
 
-Highest-leverage backfill targets, by **missed** lines, measured against the earlier
-2026-09-03 run (the 43.86% baseline, before the first-run screen of #175 landed). The list is
-no longer "all at 0%": `BookSyncRepository`, `PlayerViewModel` and `DownloadedViewModel` are
-part-covered, and `AuthInterceptor` has dropped off it entirely (#143/#218). What is left is
-mostly the ViewModels. **Regenerate it before working from it** — the command is under the
-table:
+Highest-leverage backfill targets, by **missed** lines, from the 2026-09-07 run (59.30%,
+after #217 drove `PlayerViewModel` directly — it went from 115 to 240 covered lines and is
+no longer the top entry). `BookSyncRepository` is now a thin facade over the three
+repositories #224 split out, so most of its old count sits under `PositionRepository`, which
+is well covered. `AuthInterceptor` and `RetryInterceptor` are at 15/15 and 20/21 and off the
+list. What is left is mostly the ViewModels that have never been constructed in a test —
+`LibraryViewModel`, `BookDetailsViewModel`, `DiagnosticsViewModel`, `NewItemsViewModel` —
+and `DownloadWorker`. `DeleteAccountDialogKt` is a Compose dialog the exclude patterns do
+not match; it belongs on the exclude list, not in a test. **Regenerate the table before
+working from it** — the command is under it:
 
 | Class (with its lambdas) | Missed | Covered |
 |---|---|---|
-| `BookSyncRepository` | 316 | 605 |
-| `PlayerViewModel` | 291 | 98 |
-| `LibraryViewModel` | 227 | 0 |
-| `SearchViewModel` | 152 | 0 |
-| `HomeViewModel` | 142 | 0 |
-| `BookDetailsViewModel` | 114 | 0 |
-| `DownloadWorker` | 110 | 0 |
+| `LibraryViewModel` | 229 | 0 |
+| `PlayerViewModel` | 153 | 240 |
+| `PositionRepository` | 134 | 507 |
+| `SearchViewModel` | 127 | 49 |
+| `BookDetailsViewModel` | 118 | 0 |
+| `BookSyncRepository` | 113 | 83 |
+| `HomeViewModel` | 108 | 48 |
+| `DownloadWorker` | 108 | 5 |
+| `DeleteAccountDialogKt` | 102 | 0 |
 | `DiagnosticsViewModel` | 72 | 0 |
+| `DiagnosticLogger` | 65 | 0 |
 | `NewItemsViewModel` | 61 | 0 |
-| `DownloadedViewModel` | 57 | 23 |
-| `DiagnosticLogger` | 57 | 0 |
-| `ReaderViewModel` | 46 | 0 |
 
 The ViewModels are the cheapest of these — mockk + `Dispatchers.setMain` already work here,
 see the Android section below. Regenerate the table with
@@ -372,7 +376,12 @@ leave*: `TokenRefreshTest` asserts that a rejected refresh does not recurse, tha
 concurrent 401s produce exactly one refresh POST, and that a redirect before the 401 does not
 suppress it (#143); `RetryInterceptorTest` asserts that a persistent 5xx is returned rather
 than disguised as an IOException, that a 4xx is not retried at all, and that the backoff
-between attempts doubles (#218). A mocked chain can express none of those.
+between attempts doubles (#218). A mocked chain can express none of those. The edges of
+the same two classes are in `AuthInterceptorTest` (an empty token attaches no header, a
+stale header is replaced rather than stacked, the token is re-read per request, the
+password-reset marker is honoured only on a 403 and only within the 512-byte peek) and
+`RetryInterceptorBoundsTest` (a budget of one attempt does not back off, a budget of zero is
+rejected up front, a cancelled call is not slept for) — #217.
 
 The Media3 media-id wire format has exactly one owner, `player/MediaId.kt`, so its
 `pair_N` / `audiobook_N` dispatch is a pure function `MediaIdTest` can pin end to end even
@@ -392,6 +401,24 @@ left inside the service is only the wiring, and that is pinned by reading the so
 the call sites exist and that no second owner has appeared, e.g. that `CMD_USER_PAUSE` is
 declared, registered and handled, and that `PlayerViewModel`'s poll loop writes no position
 of its own.
+
+`PlayerViewModel` itself — the class that decides where playback resumes — is driven directly
+since #217, on a `StandardTestDispatcher` so its bounded server pulls and its 500 ms loop run
+on virtual time. `PlayerViewModelRestoreTest` pins the open-time restore: the server position
+and the sync map are pulled *before* the local row is applied and a hung pull falls back to
+the cache; the restore seek is announced with `CMD_SUPPRESS_NEXT_SEEK_FLUSH` before it is
+issued and waits for `STATE_READY`; a later Room emission does not re-seek; a sentence-sync
+handoff from the reader wins over the stored row and is what teardown persists; a user seek
+goes through unsuppressed and writes nothing here. `PlayerViewModelHeartbeatTest` runs the
+poll loop and asserts what the wiring test could only read — it mirrors the controller,
+requests chapters once, and writes no position and announces no pause of its own — and pins
+the one write the ViewModel still makes, the `onCleared` save, claiming the format only when
+the player was playing at that moment. `PlayerViewModelDownloadTest` covers the WorkManager
+mirror (clamped progress, the worker's own failure message, the standalone entity re-read on
+success). The loop is `while (true)` on virtual time, so every test that starts it ends
+through the real `ViewModelStore.clear()` path — left running, `runTest`'s closing
+`advanceUntilIdle()` spins it until the heap is gone and every later class in the JVM fails
+with it.
 
 The module has **mockk** and **kotlinx-coroutines-test** (`testOptions.unitTests
 .isReturnDefaultValues = true`), so ViewModels are testable off-device: mock the
@@ -420,7 +447,7 @@ cd android
 The floor lives in the `kover { reports { verify { ... } } }` block of
 `android/app/build.gradle.kts` — that file is the source of truth, and
 `server/tests/test_docs_contract.py` fails the build if the number below stops matching it.
-It is currently **53% lines**; measured total was **56.86%** (2938/5167 lines) on 2026-09-06,
+It is currently **56% lines**; measured total was **59.30%** (3064/5167 lines) on 2026-09-07,
 floor set a few points under, exactly like the server's `--cov-fail-under`. Run
 `./gradlew :app:koverLogDebug` for today's total rather than trusting that figure.
 `.github/workflows/android-tests.yml` runs

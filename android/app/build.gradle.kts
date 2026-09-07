@@ -430,18 +430,19 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 56.86% line coverage on 2026-09-06 (2938/5167 lines)
-                    // after issue #225 pulled the player's decision layers out of the
-                    // excluded service; floor set a few points under, same as the
-                    // server's --cov-fail-under. Ratchet: after any PR that raises the
-                    // total, bump this to (new total − 3), whole percent.
+                    // Measured 59.30% line coverage on 2026-09-07 (3064/5167 lines)
+                    // after issue #217 drove PlayerViewModel's restore, poll loop and
+                    // download mirror directly (29% -> 61% of that class); floor set a
+                    // few points under, same as the server's --cov-fail-under. Ratchet:
+                    // after any PR that raises the total, bump this to
+                    // (new total − 3), whole percent.
                     //
-                    // Previous baselines: 53.48% (2533/4736) earlier on 2026-09-06,
-                    // 50.53% (2141/4237) on 2026-09-04, 48.55%
-                    // (2020/4161) on 2026-09-03, and 43.86% (1722/3926) earlier that day,
-                    // before the first-run screen of issue #175 landed — which is where
-                    // most of that jump came from.
-                    minValue = 53
+                    // Previous baselines: 56.86% (2938/5167) on 2026-09-06 after issue
+                    // #225, 53.48% (2533/4736) earlier that day, 50.53% (2141/4237) on
+                    // 2026-09-04, 48.55% (2020/4161) on 2026-09-03, and 43.86%
+                    // (1722/3926) earlier that day, before the first-run screen of
+                    // issue #175 landed — which is where most of that jump came from.
+                    minValue = 56
                     coverageUnits = CoverageUnit.LINE
                 }
             }

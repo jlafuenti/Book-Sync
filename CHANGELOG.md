@@ -69,7 +69,9 @@ operator must do by hand rather than read about afterwards.
 - Repo: compose-template drift fixed, `docs/README.md` added as the single docs index, stale Jetson
   documentation and shipped implementation plans removed (#348).
 - Tests: golden vectors for auto-matching and the real pipeline in the queue-manager tests (#353);
-  Android test backfill with the Kover floor raised to 40 (#337).
+  Android test backfill with the Kover floor raised to 40 (#337); `PlayerViewModel`'s restore,
+  poll loop and download mirror and the interceptor edges are driven directly, floor raised to
+  56 (#217).
 
 ### Fixed
 
