@@ -397,6 +397,13 @@ kover {
                     "com.booksync.ui.theme.*",
                     "com.booksync.ui.BookSyncNavigation*",
                     "com.booksync.ui.reader.ReaderActivity*",
+                    // The reader's decision layers are NOT excluded (issue #227):
+                    // ReaderRestoreExecutor (the restore ladder's execution) and
+                    // ReaderSelection.kt (what the selection toolbar decides) are
+                    // plain Kotlin with their own tests. Only the WebView/ActionMode
+                    // glue that acts on those decisions stays out.
+                    "com.booksync.ui.reader.ReaderSelectionController*",
+                    "com.booksync.ui.reader.ReaderDisplaySettings*",
                     "com.booksync.ui.reader.DictionarySheet*",
                     "com.booksync.ui.player.UnifiedAudioPlayer*",
                     "com.booksync.ui.account.ChangePasswordSheet*",
@@ -430,18 +437,20 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 56.86% line coverage on 2026-09-06 (2938/5167 lines)
-                    // after issue #225 pulled the player's decision layers out of the
-                    // excluded service; floor set a few points under, same as the
-                    // server's --cov-fail-under. Ratchet: after any PR that raises the
-                    // total, bump this to (new total − 3), whole percent.
+                    // Measured 57.97% line coverage on 2026-09-07 (3074/5303 lines)
+                    // after issue #227 pulled the reader's restore ladder and selection
+                    // decisions out of the excluded Activity; floor set a few points
+                    // under, same as the server's --cov-fail-under. Ratchet: after any
+                    // PR that raises the total, bump this to (new total − 3), whole
+                    // percent.
                     //
-                    // Previous baselines: 53.48% (2533/4736) earlier on 2026-09-06,
+                    // Previous baselines: 56.86% (2938/5167) on 2026-09-06 (issue #225),
+                    // 53.48% (2533/4736) earlier on 2026-09-06,
                     // 50.53% (2141/4237) on 2026-09-04, 48.55%
                     // (2020/4161) on 2026-09-03, and 43.86% (1722/3926) earlier that day,
                     // before the first-run screen of issue #175 landed — which is where
                     // most of that jump came from.
-                    minValue = 53
+                    minValue = 54
                     coverageUnits = CoverageUnit.LINE
                 }
             }

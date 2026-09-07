@@ -7,8 +7,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.TextView
-import org.readium.r2.navigator.preferences.Theme
-import org.readium.r2.navigator.preferences.FontFamily
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
@@ -20,7 +18,6 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ReaderPositionSnapshot
 import com.booksync.data.repository.toStoredPosition
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
-import com.booksync.data.sync.RestoreStep
 import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
 import com.google.android.material.appbar.MaterialToolbar
@@ -37,7 +34,6 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
-import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.shared.ExperimentalReadiumApi
@@ -90,57 +86,6 @@ class ReaderActivity : AppCompatActivity() {
         // the view to the pre-change locator (re-layout finishes drawing in
         // ~200-400 ms; the go() must land after it or Readium re-lays again).
         private const val RELAYOUT_RESTORE_DELAY_MS = 800L
-        /** If audio moved less than this since the locator was captured, reuse it verbatim. */
-        private const val LOCATOR_REUSE_THRESHOLD_MS = 30_000
-        private const val PREFS_NAME = "reader_display"
-        private const val KEY_FONT_SIZE = "font_size"
-        private const val KEY_THEME = "theme"
-        private const val KEY_FONT_FAMILY = "font_family"
-        private const val KEY_LINE_SPACING = "line_spacing"
-        private const val KEY_MARGINS = "margins"
-
-        /**
-         * Injected into the Readium host WebView on every page turn.
-         * Listens for text selection in all epub iframes and stores the last selection in
-         * window.top._bookSyncSelection so it survives ActionMode dismissal.
-         * Readium serves epub content from localhost iframes, so same-origin access works.
-         */
-        private const val SELECTION_TRACKER_JS = """
-            (function() {
-                function installInDoc(doc) {
-                    if (!doc || doc._bsListenerAdded) return;
-                    doc._bsListenerAdded = true;
-                    doc.addEventListener('selectionchange', function() {
-                        try {
-                            var sel = doc.defaultView.getSelection();
-                            var text = sel ? sel.toString().trim() : '';
-                            if (text.length > 3) { window.top._bookSyncSelection = text; }
-                        } catch(e) {}
-                    });
-                }
-                installInDoc(document);
-                var frames = document.querySelectorAll('iframe');
-                for (var i = 0; i < frames.length; i++) {
-                    try {
-                        installInDoc(frames[i].contentDocument);
-                        frames[i].addEventListener('load', (function(f) {
-                            return function() { try { installInDoc(f.contentDocument); } catch(e) {} };
-                        })(frames[i]));
-                    } catch(e) {}
-                }
-                new MutationObserver(function(ms) {
-                    ms.forEach(function(m) {
-                        m.addedNodes.forEach(function(n) {
-                            if (n.nodeName === 'IFRAME') {
-                                n.addEventListener('load', function() {
-                                    try { installInDoc(n.contentDocument); } catch(e) {}
-                                });
-                            }
-                        });
-                    });
-                }).observe(document.body || document, {childList: true, subtree: true});
-            })()
-        """
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -223,9 +168,6 @@ class ReaderActivity : AppCompatActivity() {
     private var relayoutRestoreTarget: Locator? = null
     private var relayoutRestoreJob: kotlinx.coroutines.Job? = null
 
-    // Holds the user's selected text captured in onActionModeStarted, before ActionMode clears it
-    private var lastSelectedText: String = ""
-
     // UI views
     private lateinit var topBar: View
     private lateinit var bottomBar: View
@@ -251,7 +193,7 @@ class ReaderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reader)
 
-        loadSavedPreferences()
+        displaySettings.load()
         initViews()
         applyWindowInsets()
         // Install before the navigator exists — the wrapper sits at the content
@@ -288,7 +230,7 @@ class ReaderActivity : AppCompatActivity() {
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_switch_audio -> { syncAudioToPage(); true }
-                R.id.action_font_settings -> { showFontSettings(); true }
+                R.id.action_font_settings -> { showDisplaySettings(); true }
                 else -> false
             }
         }
@@ -523,7 +465,7 @@ class ReaderActivity : AppCompatActivity() {
                     ?: run { Log.e(TAG, "Navigator fragment null"); finish(); return@launch }
 
                 navigator?.addInputListener(tapListener)
-                applyPreferences()
+                navigator?.let { displaySettings.apply(it) }
 
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
@@ -538,40 +480,6 @@ class ReaderActivity : AppCompatActivity() {
                 finish()
             }
         }
-    }
-
-    /** Find which spine index contains the given text preview.
-     *  Searches outward from hintIdx to prefer nearby matches. */
-    private suspend fun findSpineIndexForText(previewText: String, hintIdx: Int = -1): Int? {
-        val pub = publication ?: return null
-        if (previewText.isEmpty()) return null
-        
-        // Strip leading chapter headings (e.g. "CHAPTER 28\n") since epub text has different formatting
-        val stripped = previewText.replace(Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE), "")
-        // Normalize newlines to spaces and collapse whitespace
-        val searchText = stripped.replace("\n", " ").replace(Regex("\\s+"), " ").take(60).trim()
-        
-        if (searchText.length < 10) {
-            Log.d(TAG, "findSpineIndexForText: search text too short after cleaning: '$searchText'")
-            return null
-        }
-        
-        val n = pub.readingOrder.size
-        // If we have a valid hint, search outward from it
-        val hint = if (hintIdx in 0 until n) hintIdx else n / 2
-        for (offset in 0 until n) {
-            for (candidate in listOf(hint + offset, hint - offset).distinct()) {
-                if (candidate in 0 until n) {
-                    val plainText = getChapterPlainText(candidate) ?: continue
-                    if (plainText.contains(searchText, ignoreCase = true)) {
-                        Log.d(TAG, "findSpineIndexForText: found '${searchText.take(40)}' at spine $candidate (hint=$hint)")
-                        return candidate
-                    }
-                }
-            }
-        }
-        Log.d(TAG, "findSpineIndexForText: no match for '${searchText.take(40)}'")
-        return null
     }
 
     private suspend fun getChapterPlainText(chapterIndex: Int): String? {
@@ -597,27 +505,31 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun findTextProgressionInChapter(chapterIndex: Int, textPreview: String): Double? {
-        val plainText = getChapterPlainText(chapterIndex) ?: return null
-        // Strip chapter heading and normalize whitespace
-        val stripped = textPreview.replace(Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE), "")
-        val cleanPreview = stripped.replace("\n", " ").replace(Regex("\\s+"), " ").trim().lowercase()
-        val cleanPlain = plainText.replace(Regex("\\s+"), " ").lowercase()
-        
-        val index = cleanPlain.indexOf(cleanPreview)
-        if (index >= 0) {
-            return index.toDouble() / cleanPlain.length
-        }
-        
-        // Approximate fallback if exact search misses (typos etc)
-        // Just look for the first 20 characters
-        val shortPreview = cleanPreview.take(20)
-        val shortIndex = cleanPlain.indexOf(shortPreview)
-        if (shortIndex >= 0) {
-            return shortIndex.toDouble() / cleanPlain.length
-        }
-        
-        return null
+    /**
+     * The restore ladder's view of the open book (issue #227): the reading
+     * order, each item's parsed text (through [getChapterPlainText]'s cache),
+     * and the chapter lengths [startPositionTracking] precomputes.
+     */
+    private val spineSource = object : SpineSource {
+        override val spineCount: Int get() = publication?.readingOrder?.size ?: 0
+        override suspend fun plainTextAt(index: Int): String? = getChapterPlainText(index)
+        override suspend fun chapterLengths(): LongArray =
+            chapterLengthsDeferred?.await() ?: super.chapterLengths()
+    }
+
+    /**
+     * Executes the ladder [planRestore] produces. Built lazily because the
+     * audio rung exists only for a paired book, and which mode this is comes
+     * from the intent in onCreate.
+     */
+    private val restoreExecutor: ReaderRestoreExecutor by lazy {
+        ReaderRestoreExecutor(
+            spineSource,
+            hintDecodes = { decodeHint(it) != null },
+            audio = if (isStandalone) null else AudioAnchorSource { audioMs ->
+                repository.audioToEpubText(pairId, audioMs)
+            },
+        )
     }
 
     // ============ Bar toggle ============
@@ -825,27 +737,11 @@ class ReaderActivity : AppCompatActivity() {
         if (readingOrder.isEmpty()) return
 
         lifecycleScope.launch {
-            // Get content-weighted chapter lengths (precomputed in background by startPositionTracking).
-            // Falls back to computing now if somehow not ready yet.
-            val lengths = chapterLengthsDeferred?.await()
-                ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
-
-            val totalLength = lengths.sum().coerceAtLeast(1)
-            val targetChar = (progress * totalLength).toLong().coerceIn(0, totalLength - 1)
-
-            // Find which spine item contains targetChar
-            var accumulated = 0L
-            var targetSpineIndex = readingOrder.size - 1
-            var targetProgression = 1.0
-            for (i in lengths.indices) {
-                val len = lengths[i]
-                if (accumulated + len > targetChar) {
-                    targetSpineIndex = i
-                    targetProgression = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
-                    break
-                }
-                accumulated += len
-            }
+            // The same content-weighted mapping the percent rung uses, run
+            // the other way: a slider fraction -> spine item + progression.
+            val spineTarget = restoreExecutor.targetForProgress(progress) ?: return@launch
+            val targetSpineIndex = spineTarget.index
+            val targetProgression = spineTarget.progression ?: 0.0
 
             Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
             val link = readingOrder[targetSpineIndex]
@@ -868,42 +764,45 @@ class ReaderActivity : AppCompatActivity() {
 
     private suspend fun getInitialLocator(pub: Publication): Locator? {
         return try {
-            val position = canonicalPosition
             val steps = planRestore(
-                position,
+                canonicalPosition,
                 spineCount = pub.readingOrder.size,
                 deviceId = repository.deviceId,
                 hintKind = HINT_READIUM_LOCATOR,
             )
             Log.d(TAG, "getInitialLocator: plan=${steps.map { it.kind }}")
 
-            for (step in steps) {
-                val locator = executeRestoreStep(pub, step, position)
-                if (locator != null) {
-                    Log.d(TAG, "getInitialLocator: restored via '${step.kind}'")
-                    // Monotonic — see PositionSavePolicy. An exception thrown
-                    // by a LATER step (caught below) can no longer demote this
-                    // back to Unresolved, unlike the old boolean flag.
-                    savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Landed)
-                    return locator
+            // The ladder itself — which rung lands, and where — is
+            // ReaderRestoreExecutor's (issue #227); this adapter only turns
+            // the answer into a Readium locator and records the outcome.
+            val result = restoreExecutor.resolve(steps)
+            val target = result.target
+            val locator = target?.let { locatorFor(pub, it) }
+            if (target is RestoreTarget.Spine && locator != null) {
+                target.persistAsHintForAudioMs?.let { audioMs ->
+                    // Persist so the next open at this audio position takes the
+                    // exact-hint rung instead of redoing this lossy chain.
+                    repository.updateBookmarkLocator(pairId, locator.toJSON().toString(), audioMs)
                 }
-                Log.d(TAG, "getInitialLocator: step '${step.kind}' did not resolve")
             }
-
-            // No steps at all means the book is genuinely unread, and opening
-            // at the beginning is correct — a full save is safe. Steps that
-            // all failed mean we hold a position we could not resolve — the
-            // policy still allows a local metadata-only stamp (never the full
-            // anchors) until the user actually turns a page.
-            val outcome = if (steps.isEmpty())
-                PositionSavePolicy.RestoreOutcome.Unread
-            else
+            // Monotonic — see PositionSavePolicy. Recorded only once the
+            // locator (and any persist) is in hand, so an exception thrown
+            // on the way there is caught below as Unresolved, and a landing
+            // already recorded can never be demoted by it.
+            //
+            // A rung that landed but yields no locator (a spine link Readium
+            // cannot address) opens the book at the start; that is not a
+            // landing, and reporting it as one would let a full save
+            // overwrite the real position with page one. Withhold instead.
+            val outcome = if (target != null && locator == null) {
+                Log.w(TAG, "getInitialLocator: '${result.landed?.kind}' landed but produced no locator")
                 PositionSavePolicy.RestoreOutcome.Unresolved
+            } else result.outcome
             savePolicy.onRestoreOutcome(outcome)
-            if (outcome == PositionSavePolicy.RestoreOutcome.Unresolved) {
-                Log.w(TAG, "getInitialLocator: position unresolved — full saves withheld until a page turn")
+            if (locator != null) {
+                Log.d(TAG, "getInitialLocator: restored via '${result.landed?.kind}'")
             }
-            null
+            locator
         } catch (e: Exception) {
             Log.w(TAG, "Error getting initial locator", e)
             // Monotonic — a landed rung earlier in the ladder is not undone
@@ -913,107 +812,25 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** Try one rung of the ladder. Returns null when it doesn't resolve. */
-    private suspend fun executeRestoreStep(
-        pub: Publication,
-        step: RestoreStep,
-        position: StoredPosition?,
-    ): Locator? = when (step) {
-        is RestoreStep.Hint ->
-            runCatching { Locator.fromJSON(org.json.JSONObject(step.value)) }.getOrNull()
-
-        is RestoreStep.Text -> {
-            val seed = step.seedChapter ?: 0
-            val idx = findSpineIndexForText(step.text, seed)
-            if (idx != null && idx in pub.readingOrder.indices) {
-                pub.locatorFromLink(pub.readingOrder[idx])?.copy(
-                    locations = Locator.Locations(
-                        progression = findTextProgressionInChapter(idx, step.text) ?: 0.0
-                    )
-                )
-            } else null
-        }
-
-        is RestoreStep.Chapter ->
-            pub.readingOrder.getOrNull(step.chapter)?.let { pub.locatorFromLink(it) }
-
-        is RestoreStep.Percent -> locatorForProgress(pub, step.percent / 100.0)
-
-        // An audio rung cannot resolve without a sync map, and a standalone
-        // ebook has neither one nor an audiobook to have produced the position
-        // (issue #169). Guarded rather than left to return null by accident:
-        // audioToEpubText would otherwise query sync points for pair id 0.
-        is RestoreStep.Audio -> if (isStandalone) null else {
-            // Audio -> sync map -> preview -> the same text search as above.
-            val (syncChapter, previewText) = repository.audioToEpubText(
-                pairId, step.audioPositionMs)
-            val idx = findSpineIndexForText(previewText, syncChapter)
-                ?: syncChapter.takeIf { it in pub.readingOrder.indices }
-            if (idx != null && idx in pub.readingOrder.indices && previewText.isNotEmpty()) {
-                val computed = pub.locatorFromLink(pub.readingOrder[idx])?.copy(
-                    locations = Locator.Locations(
-                        progression = findTextProgressionInChapter(idx, previewText) ?: 0.0
-                    )
-                )
-                // Persist so the next open at this audio position takes the
-                // exact-hint rung instead of redoing this lossy chain.
-                if (computed != null) {
-                    repository.updateBookmarkLocator(
-                        pairId, computed.toJSON().toString(), step.audioPositionMs)
-                }
-                computed
-            } else null
-        }
-    }
-
-    /** Map a 0..1 book fraction onto a locator, weighting chapters by length. */
-    private suspend fun locatorForProgress(pub: Publication, progress: Double): Locator? {
-        val readingOrder = pub.readingOrder
-        if (readingOrder.isEmpty()) return null
-        val lengths = chapterLengthsDeferred?.await()
-            ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
-        val total = lengths.sum().coerceAtLeast(1)
-        val targetChar = (progress * total).toLong().coerceIn(0, total - 1)
-
-        var accumulated = 0L
-        var spineIndex = readingOrder.size - 1
-        var withinChapter = 1.0
-        for (i in lengths.indices) {
-            val len = lengths[i]
-            if (accumulated + len > targetChar) {
-                spineIndex = i
-                withinChapter = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
-                break
-            }
-            accumulated += len
-        }
-        return pub.locatorFromLink(readingOrder[spineIndex])?.copy(
-            locations = Locator.Locations(progression = withinChapter.coerceIn(0.0, 1.0))
-        )
-    }
+    /** A stored Readium locator hint, or null when the value cannot be displayed. */
+    private fun decodeHint(value: String): Locator? =
+        runCatching { Locator.fromJSON(org.json.JSONObject(value)) }.getOrNull()
 
     /**
-     * Resolve a position from the portable anchor alone (chapter + sentence),
-     * used when the stored locator can't be trusted. Same preview -> spine ->
-     * progression chain the audiobook slow path uses; falls back to the start
-     * of the chapter when there's no usable preview text.
+     * Readium `Locator` construction for a restore target — the one thing
+     * the executor deliberately does not do. A spine target with no
+     * progression is the item's own locator (the chapter rung's "top of the
+     * chapter"); one with a progression replaces the locations wholesale,
+     * exactly as the text, percent and audio rungs always have.
      */
-    private suspend fun locatorFromChapterAnchor(pub: Publication, chapter: Int?): Locator? {
-        val chapterIdx = chapter?.takeIf { it in pub.readingOrder.indices } ?: return null
-        // Sentence resolution needs the sync map's per-sentence text, which only
-        // a pair has. A standalone ebook restores to the top of the chapter and
-        // relies on its locator hint for anything finer (issue #169).
-        val previewText = if (isStandalone) "" else {
-            val bookmark = repository.getBookmark(pairId)
-            repository.epubTextForSentence(pairId, chapterIdx, bookmark?.epubSentenceIndex)
+    private fun locatorFor(pub: Publication, target: RestoreTarget): Locator? = when (target) {
+        is RestoreTarget.Hint -> decodeHint(target.value)
+        is RestoreTarget.Spine -> {
+            val base = pub.readingOrder.getOrNull(target.index)?.let { pub.locatorFromLink(it) }
+            val progression = target.progression
+            if (base == null || progression == null) base
+            else base.copy(locations = Locator.Locations(progression = progression))
         }
-        val base = pub.locatorFromLink(pub.readingOrder[chapterIdx]) ?: return null
-        if (previewText.isEmpty()) return base
-        val resolvedIdx = findSpineIndexForText(previewText, chapterIdx) ?: chapterIdx
-        val link = pub.readingOrder.getOrNull(resolvedIdx) ?: return base
-        val resolvedBase = pub.locatorFromLink(link) ?: return base
-        val progressionVal = findTextProgressionInChapter(resolvedIdx, previewText) ?: 0.0
-        return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
     }
 
     /**
@@ -1353,571 +1170,49 @@ class ReaderActivity : AppCompatActivity() {
 
     // ============ Display Settings ============
 
-    // Track cumulative preferences so changes don't wipe each other
-    private var currentPreferences = EpubPreferences()
+    /** Font / theme / spacing preferences and their dialog — see [ReaderDisplaySettings]. */
+    private val displaySettings: ReaderDisplaySettings by lazy { ReaderDisplaySettings(this) }
 
-    private fun loadSavedPreferences() {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val fontSize = prefs.getFloat(KEY_FONT_SIZE, 1.0f).toDouble()
-        val themeName = prefs.getString(KEY_THEME, null)
-        val theme = when (themeName) {
-            "light" -> Theme.LIGHT
-            "sepia" -> Theme.SEPIA
-            "dark" -> Theme.DARK
-            else -> null
-        }
-        val fontFamilyName = prefs.getString(KEY_FONT_FAMILY, null)
-        val fontFamily = when (fontFamilyName) {
-            "serif" -> FontFamily.SERIF
-            "sans-serif" -> FontFamily.SANS_SERIF
-            "cursive" -> FontFamily.CURSIVE
-            "monospace" -> FontFamily.MONOSPACE
-            "system" -> null // Default
-            else -> null
-        }
-        val lineSpacingRaw = prefs.getFloat(KEY_LINE_SPACING, -1f)
-        val lineSpacing = if (lineSpacingRaw > 0) lineSpacingRaw.toDouble() else null
-        
-        val marginsRaw = prefs.getFloat(KEY_MARGINS, -1f)
-        val margins = if (marginsRaw > 0) marginsRaw.toDouble() else null
-
-        currentPreferences = EpubPreferences(
-            fontSize = fontSize,
-            theme = theme,
-            fontFamily = fontFamily,
-            lineHeight = lineSpacing,
-            pageMargins = margins,
-            publisherStyles = false
-        )
-    }
-
-    private fun savePreferences() {
-        val editor = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-        editor.putFloat(KEY_FONT_SIZE, (currentPreferences.fontSize ?: 1.0).toFloat())
-        
-        val themeName = when (currentPreferences.theme) {
-            Theme.LIGHT -> "light"
-            Theme.SEPIA -> "sepia"
-            Theme.DARK -> "dark"
-            else -> null
-        }
-        if (themeName != null) editor.putString(KEY_THEME, themeName)
-        else editor.remove(KEY_THEME)
-
-        val fontFamilyName = when (currentPreferences.fontFamily) {
-            FontFamily.SERIF -> "serif"
-            FontFamily.SANS_SERIF -> "sans-serif"
-            FontFamily.CURSIVE -> "cursive"
-            FontFamily.MONOSPACE -> "monospace"
-            else -> null
-        }
-        if (fontFamilyName != null) editor.putString(KEY_FONT_FAMILY, fontFamilyName)
-        else editor.remove(KEY_FONT_FAMILY)
-
-        if (currentPreferences.lineHeight != null) {
-            editor.putFloat(KEY_LINE_SPACING, currentPreferences.lineHeight!!.toFloat())
-        } else {
-            editor.remove(KEY_LINE_SPACING)
-        }
-
-        if (currentPreferences.pageMargins != null) {
-            editor.putFloat(KEY_MARGINS, currentPreferences.pageMargins!!.toFloat())
-        } else {
-            editor.remove(KEY_MARGINS)
-        }
-
-        editor.apply()
-    }
-
-    private fun applyPreferences() {
-        navigator?.submitPreferences(currentPreferences)
-    }
-
-    private fun showFontSettings() {
+    private fun showDisplaySettings() {
         val nav = navigator ?: return
-
-        val dialogView = layoutInflater.inflate(R.layout.dialog_display_settings, null)
-
-        // Tab switching
-        val tabLayout = dialogView.findViewById<com.google.android.material.tabs.TabLayout>(R.id.tab_layout)
-        val textContent = dialogView.findViewById<View>(R.id.tab_text_content)
-        val displayContent = dialogView.findViewById<View>(R.id.tab_display_content)
-
-        tabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
-                when (tab?.position) {
-                    0 -> {
-                        textContent.visibility = View.VISIBLE
-                        displayContent.visibility = View.GONE
-                    }
-                    1 -> {
-                        textContent.visibility = View.GONE
-                        displayContent.visibility = View.VISIBLE
-                    }
-                }
-            }
-            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
-            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
-        })
-
-        // ======== TEXT TAB ========
-
-        // Font Family toggle group
-        val fontGroup = dialogView.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.font_family_group)
-        val btnFontSystem = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_system)
-        val btnFontSerif = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_serif)
-        val btnFontSans = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_sans)
-
-        // Pre-select current font
-        when (currentPreferences.fontFamily) {
-            FontFamily.SERIF -> fontGroup.check(R.id.btn_font_serif)
-            FontFamily.SANS_SERIF -> fontGroup.check(R.id.btn_font_sans)
-            else -> fontGroup.check(R.id.btn_font_system)
-        }
-
-        fontGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (isChecked) {
-                val fontFamily = when (checkedId) {
-                    R.id.btn_font_serif -> FontFamily.SERIF
-                    R.id.btn_font_sans -> FontFamily.SANS_SERIF
-                    else -> null
-                }
-                currentPreferences = currentPreferences.copy(fontFamily = fontFamily)
-                nav.submitPreferences(currentPreferences)
-                savePreferences()
-            }
-        }
-
-        // Font Size
-        val btnFontDecrease = dialogView.findViewById<View>(R.id.btn_font_decrease)
-        val btnFontIncrease = dialogView.findViewById<View>(R.id.btn_font_increase)
-        val btnFontReset = dialogView.findViewById<View>(R.id.btn_font_reset)
-        val textFontSize = dialogView.findViewById<TextView>(R.id.text_font_size)
-
-        fun updateFontSize(newSize: Double?) {
-            currentPreferences = currentPreferences.copy(fontSize = newSize)
-            textFontSize.text = if (newSize != null) "${(newSize * 100).toInt()}%" else "100%"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textFontSize.text = "${((currentPreferences.fontSize ?: 1.0) * 100).toInt()}%"
-
-        btnFontDecrease.setOnClickListener {
-            val current = currentPreferences.fontSize ?: 1.0
-            updateFontSize((current - 0.1).coerceAtLeast(0.5))
-        }
-        btnFontIncrease.setOnClickListener {
-            val current = currentPreferences.fontSize ?: 1.0
-            updateFontSize((current + 0.1).coerceAtMost(3.0))
-        }
-        btnFontReset.setOnClickListener { updateFontSize(null) }
-
-        // Line Spacing
-        val btnSpacingDecrease = dialogView.findViewById<View>(R.id.btn_spacing_decrease)
-        val btnSpacingIncrease = dialogView.findViewById<View>(R.id.btn_spacing_increase)
-        val btnSpacingReset = dialogView.findViewById<View>(R.id.btn_spacing_reset)
-        val textSpacing = dialogView.findViewById<TextView>(R.id.text_spacing)
-
-        fun updateSpacing(newSpacing: Double?) {
-            currentPreferences = currentPreferences.copy(lineHeight = newSpacing)
-            textSpacing.text = if (newSpacing != null) "%.1fx".format(newSpacing) else "1.2x"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textSpacing.text = "%.1fx".format(currentPreferences.lineHeight ?: 1.2)
-
-        btnSpacingDecrease.setOnClickListener {
-            val current = currentPreferences.lineHeight ?: 1.2
-            updateSpacing((current - 0.1).coerceAtLeast(1.0))
-        }
-        btnSpacingIncrease.setOnClickListener {
-            val current = currentPreferences.lineHeight ?: 1.2
-            updateSpacing((current + 0.1).coerceAtMost(2.5))
-        }
-        btnSpacingReset.setOnClickListener { updateSpacing(null) }
-
-        // Margins
-        val btnMarginDecrease = dialogView.findViewById<View>(R.id.btn_margin_decrease)
-        val btnMarginIncrease = dialogView.findViewById<View>(R.id.btn_margin_increase)
-        val btnMarginReset = dialogView.findViewById<View>(R.id.btn_margin_reset)
-        val textMargins = dialogView.findViewById<TextView>(R.id.text_margins)
-
-        fun updateMargins(newMargins: Double?) {
-            currentPreferences = currentPreferences.copy(pageMargins = newMargins)
-            textMargins.text = if (newMargins != null) "%.2fx".format(newMargins) else "1.00x"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textMargins.text = "%.2fx".format(currentPreferences.pageMargins ?: 1.0)
-
-        btnMarginDecrease.setOnClickListener {
-            val current = currentPreferences.pageMargins ?: 1.0
-            updateMargins((current - 0.25).coerceAtLeast(0.5))
-        }
-        btnMarginIncrease.setOnClickListener {
-            val current = currentPreferences.pageMargins ?: 1.0
-            updateMargins((current + 0.25).coerceAtMost(3.0))
-        }
-        btnMarginReset.setOnClickListener { updateMargins(null) }
-
-        // ======== DISPLAY TAB ========
-
-        val btnThemeLight = dialogView.findViewById<View>(R.id.btn_theme_light)
-        val btnThemeSepia = dialogView.findViewById<View>(R.id.btn_theme_sepia)
-        val btnThemeDark = dialogView.findViewById<View>(R.id.btn_theme_dark)
-        val checkLight = dialogView.findViewById<View>(R.id.check_theme_light)
-        val checkSepia = dialogView.findViewById<View>(R.id.check_theme_sepia)
-        val checkDark = dialogView.findViewById<View>(R.id.check_theme_dark)
-
-        fun updateThemeChecks(theme: Theme?) {
-            checkLight.visibility = if (theme == Theme.LIGHT) View.VISIBLE else View.GONE
-            checkSepia.visibility = if (theme == Theme.SEPIA) View.VISIBLE else View.GONE
-            checkDark.visibility = if (theme == Theme.DARK || theme == null) View.VISIBLE else View.GONE
-        }
-
-        // Show current checkmark
-        updateThemeChecks(currentPreferences.theme)
-
-        fun applyTheme(theme: Theme?) {
-            currentPreferences = currentPreferences.copy(theme = theme)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-            updateThemeChecks(theme)
-        }
-
-        btnThemeLight.setOnClickListener { applyTheme(Theme.LIGHT) }
-        btnThemeSepia.setOnClickListener { applyTheme(Theme.SEPIA) }
-        btnThemeDark.setOnClickListener { applyTheme(Theme.DARK) }
-
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .create()
-
-        dialog.show()
+        displaySettings.showDialog(this, nav)
     }
 
     // ============ Text Selection Sync ============
     //
-    // The floating selection toolbar (Copy / Share / Select all / etc.) is
-    // driven by an `ActionMode.Callback` that the WebView starts when the user
-    // long-presses text. To strip noise items and inject our own BEFORE the
-    // toolbar takes its menu snapshot, we have to intercept the *creation* of
-    // the ActionMode — not mutate the menu after.
-    //
-    // System Chrome WebView does NOT route this through
-    // `Window.Callback.onWindowStartingActionMode`; tested empirically and
-    // also documented behavior. Instead, the WebView calls
-    // `View.startActionMode(callback, TYPE_FLOATING)`, which walks up via
-    // `ViewParent.startActionModeForChild(...)`. Each ancestor ViewGroup gets
-    // a chance to intercept. So we install a custom intercepting FrameLayout
-    // between the WebView and its current parent at runtime — see
-    // `installSelectionInterceptor()`.
-    //
-    // `onActionModeStarted` is also kept as a defensive fallback: it adds
-    // Define / Sync-to-Audio post-hoc so they're at least available even if
-    // the interceptor wasn't installed (e.g. WebView was recreated, etc.).
-    // Mutate-after-snapshot can't refresh the rendered toolbar, so the noise
-    // strip path lives only inside the wrapper. See plan in
-    // `.claude/plans/playful-painting-salamander.md`.
+    // The floating-toolbar surgery (intercepting the WebView's ActionMode,
+    // trimming noise items, injecting Define / Sync to Audio) lives in
+    // ReaderSelectionController (issue #227); the two actions it invokes are
+    // below, because they need the navigator, the repository and the
+    // hand-off to the player.
 
-    /**
-     * Install ONE [SelectionInterceptingFrameLayout] around the activity's
-     * content root, so we intercept TYPE_FLOATING ActionMode creation via
-     * `startActionModeForChild`.
-     *
-     * Key fact: `startActionModeForChild` PROPAGATES UP the whole view
-     * hierarchy (each ViewGroup delegates to its parent until the DecorView
-     * creates the FloatingActionMode). So we don't need to wrap each of
-     * Readium's per-page WebViews — a single wrapper around the activity
-     * content root sees every selection from every WebView, including pages
-     * created later by the pager. The content root exists from setContentView
-     * and is never recreated. Idempotent; onResume() re-calls as a no-op.
-     */
-    private var hasInstalledSelectionInterceptor: Boolean = false
-
-    private fun installSelectionInterceptor() {
-        if (hasInstalledSelectionInterceptor) return
-        val content = findViewById<ViewGroup>(android.R.id.content) ?: return
-        val root = content.getChildAt(0) ?: return
-        if (root is SelectionInterceptingFrameLayout) {
-            hasInstalledSelectionInterceptor = true
-            return
-        }
-        val params = root.layoutParams
-        content.removeView(root)
-        val interceptor = SelectionInterceptingFrameLayout(this).apply {
-            // Don't consume touches ourselves.
-            isClickable = false
-            isFocusable = false
-            addView(
-                root,
-                android.widget.FrameLayout.LayoutParams(
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
-            )
-        }
-        content.addView(interceptor, params)
-        hasInstalledSelectionInterceptor = true
-        Log.d(TAG, "Selection interceptor installed at activity content root")
+    private val selectionController: ReaderSelectionController by lazy {
+        ReaderSelectionController(
+            this,
+            object : ReaderSelectionController.Host {
+                override fun webView() = navigator?.view?.let { findWebView(it) }
+                override val syncToAudioAvailable: Boolean get() = pair?.audiobookDownloaded == true
+                override fun onDefine(selectedText: String) = defineSelectedWord(selectedText)
+                override fun onSyncToAudio(selectedText: String) = syncSelectedTextToAudio(selectedText)
+            },
+        )
     }
 
-    /**
-     * Custom ViewGroup ancestor of the WebView. Chrome WebView calls
-     * `parent.startActionModeForChild(view, callback, TYPE_FLOATING)` when a
-     * text selection happens. By overriding here, we get to wrap the callback
-     * BEFORE the ActionMode is created and BEFORE the FloatingToolbar takes
-     * its menu snapshot — which is the only point at which menu mutations
-     * actually affect the rendered toolbar.
-     */
-    private inner class SelectionInterceptingFrameLayout(
-        context: android.content.Context,
-    ) : android.widget.FrameLayout(context) {
+    /** See [ReaderSelectionController.install]. Idempotent; onResume() re-calls as a no-op. */
+    private fun installSelectionInterceptor() = selectionController.install()
 
-        override fun startActionModeForChild(
-            originalView: android.view.View,
-            callback: android.view.ActionMode.Callback,
-            type: Int,
-        ): android.view.ActionMode? {
-            if (type == android.view.ActionMode.TYPE_FLOATING) {
-                Log.d(TAG, "Intercepting startActionModeForChild type=$type (selection toolbar)")
-                return super.startActionModeForChild(
-                    originalView,
-                    SelectionCallbackWrapper(callback),
-                    type,
-                )
-            }
-            return super.startActionModeForChild(originalView, callback, type)
-        }
-
-        // Older overload — WebView always passes a type on API 23+, so this
-        // typically isn't hit, but override defensively.
-        override fun startActionModeForChild(
-            originalView: android.view.View,
-            callback: android.view.ActionMode.Callback,
-        ): android.view.ActionMode? {
-            return super.startActionModeForChild(originalView, callback)
-        }
-    }
-
-    /**
-     * Defensive fallback: if the interceptor isn't installed (e.g. WebView
-     * lifecycle edge case, or device WebView routes through a different code
-     * path), this still injects our custom items so they're at least
-     * reachable. We don't bother trimming here because mutate-after-snapshot
-     * doesn't refresh the rendered toolbar.
-     */
+    /** Defensive fallback — see [ReaderSelectionController.onActionModeStarted]. */
     override fun onActionModeStarted(mode: android.view.ActionMode?) {
         super.onActionModeStarted(mode)
-        if (mode == null) return
-        captureSelection()
-        val menu = mode.menu ?: return
-        trimSelectionMenu(menu)
-        injectCustomItems(mode, menu)
-        // Re-render the floating toolbar so our injected items are visible.
-        // Without this, items added after the initial onCreateActionMode snapshot
-        // are silently ignored by the FloatingToolbar.
-        mode.invalidate()
-    }
-
-    /**
-     * Wraps the WebView's selection ActionMode callback so we can:
-     *   - Strip Share / Select All / Translate / Web Search from the Menu
-     *     before the floating toolbar ever snapshots it.
-     *   - Re-strip on `onPrepareActionMode` for Android 14+ async text-classifier
-     *     items (those arrive later via a second prepare pass).
-     *   - Inject our own "Define" + "Sync to Audio" items.
-     *   - Delegate Copy / positioning / destroy to the original callback.
-     *
-     * Must extend `Callback2`, not the plain `Callback` interface, so
-     * `onGetContentRect` is forwarded — otherwise the toolbar mis-positions
-     * away from the selection.
-     */
-    private inner class SelectionCallbackWrapper(
-        private val delegate: android.view.ActionMode.Callback,
-    ) : android.view.ActionMode.Callback2() {
-
-        override fun onCreateActionMode(
-            mode: android.view.ActionMode,
-            menu: android.view.Menu,
-        ): Boolean {
-            // Let the WebView populate first so we can edit the result.
-            val keep = delegate.onCreateActionMode(mode, menu)
-            captureSelection()
-            trimSelectionMenu(menu)
-            injectCustomItems(mode, menu)
-            return keep || true
-        }
-
-        override fun onPrepareActionMode(
-            mode: android.view.ActionMode,
-            menu: android.view.Menu,
-        ): Boolean {
-            // Async TextClassifier items (API 29+) come in via a follow-up prepare
-            // cycle. Re-strip + re-inject so the rendered toolbar stays clean.
-            delegate.onPrepareActionMode(mode, menu)
-            trimSelectionMenu(menu)
-            injectCustomItems(mode, menu)
-            return true
-        }
-
-        override fun onActionItemClicked(
-            mode: android.view.ActionMode,
-            item: android.view.MenuItem,
-        ): Boolean {
-            // Our injected items consume their clicks via setOnMenuItemClickListener,
-            // so this only fires for Copy / Read Aloud / etc. — delegate as-is.
-            return delegate.onActionItemClicked(mode, item)
-        }
-
-        override fun onDestroyActionMode(mode: android.view.ActionMode) {
-            delegate.onDestroyActionMode(mode)
-        }
-
-        override fun onGetContentRect(
-            mode: android.view.ActionMode,
-            view: android.view.View?,
-            outRect: android.graphics.Rect,
-        ) {
-            // Forward when possible so the toolbar anchors to the selection.
-            // Falling back to super positions the toolbar at the view origin,
-            // which looks broken — but better than crashing.
-            if (delegate is android.view.ActionMode.Callback2) {
-                delegate.onGetContentRect(mode, view, outRect)
-            } else {
-                super.onGetContentRect(mode, view, outRect)
-            }
-        }
-    }
-
-    /**
-     * Read the selection stored by the selectionchange tracker injected in
-     * savePosition. `window.getSelection()` here is unreliable (ActionMode may
-     * have cleared the DOM selection by the time JS evaluates), so we prefer
-     * `window._bookSyncSelection` which the tracker captures the moment the
-     * user makes a selection.
-     */
-    private fun captureSelection() {
-        val webView = navigator?.view?.let { findWebView(it) } ?: return
-        webView.evaluateJavascript("""
-            (function() {
-                var stored = window._bookSyncSelection || '';
-                if (stored.trim().length > 3) return stored;
-                var frames = document.querySelectorAll('iframe');
-                for (var i = 0; i < frames.length; i++) {
-                    try {
-                        var sel = frames[i].contentWindow.getSelection().toString().trim();
-                        if (sel.length > 3) return sel;
-                    } catch(e) {}
-                }
-                return window.getSelection().toString();
-            })()
-        """.trimIndent()) { result ->
-            val captured = result?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
-            if (captured.isNotEmpty()) {
-                lastSelectedText = captured
-                Log.d(TAG, "Captured selection: '${captured.take(60)}'")
-            }
-        }
-    }
-
-    /**
-     * Insert the reader's two custom selection actions: Define (order 0,
-     * leftmost) and Sync to Audio (order 1). Idempotent via `findItem` —
-     * safe to call from both `onCreateActionMode` and `onPrepareActionMode`,
-     * and from the `onActionModeStarted` fallback.
-     *
-     * Sync to Audio is only injected when there is a downloaded paired
-     * audiobook, since it has nothing to scrub to otherwise.
-     */
-    private fun injectCustomItems(mode: android.view.ActionMode, menu: android.view.Menu) {
-        if (menu.findItem(R.id.action_define) == null) {
-            menu.add(0, R.id.action_define, 0, "Define").setOnMenuItemClickListener {
-                defineSelectedWord()
-                mode.finish()
-                true
-            }
-            Log.d(TAG, "Added 'Define' to ActionMode menu")
-        }
-        if (pair?.audiobookDownloaded == true &&
-            menu.findItem(R.id.action_sync_selection) == null
-        ) {
-            menu.add(0, R.id.action_sync_selection, 1, "Sync to Audio").setOnMenuItemClickListener {
-                syncSelectedTextToAudio()
-                mode.finish()
-                true
-            }
-            Log.d(TAG, "Added 'Sync to Audio' to ActionMode menu")
-        }
-    }
-
-    /**
-     * Remove Web Search / Select All / Share / Translate / Assist from the
-     * floating selection toolbar. We keep Copy (android.R.id.copy) so users
-     * can still quote a passage, and we leave anything we don't recognize
-     * alone so accessibility items like "Read Aloud" stay available.
-     *
-     * The system populates these items dynamically (some on Android 14+ from
-     * text classification), so we match by id AND by a loose title contains
-     * check to catch variants like "Share…", "Search web", or locale strings.
-     */
-    private fun trimSelectionMenu(menu: android.view.Menu?) {
-        menu ?: return
-        val knownNoiseIds = setOf(
-            android.R.id.shareText,
-            android.R.id.selectAll,
-            // android.R.id.textAssist (= 0x1020041) is the slot the system
-            // TextClassifier uses to inject "smart" suggestions like a
-            // Google-branded "Define" or "Translate" chip. We have our own
-            // Define / Sync to Audio actions, so strip whatever the
-            // classifier picks here unconditionally. Without this strip a
-            // "G Define" appears next to ours on the second-or-later
-            // selection (after the async classifier pass finishes).
-            android.R.id.textAssist,
-            // Some OEMs use non-android-framework ids for these text-classifier
-            // items; match by title below catches them.
-        )
-        // Substrings (case-insensitive) to match against the item title.
-        // Use contains rather than exact match so we catch "Share…",
-        // "Select all", "Search web", OEM-specific labels, etc.
-        val noiseTitleSubstrings = listOf(
-            "share", "select all", "translate",
-            "web search", "search web", "assist",
-        )
-        val itemsToRemove = mutableListOf<Int>()
-        for (i in 0 until menu.size()) {
-            val item = menu.getItem(i) ?: continue
-            val itemId = item.itemId
-            val title = item.title?.toString().orEmpty()
-            val titleLower = title.lowercase().trim().trimEnd('\u2026', '.', ' ')
-            Log.v(TAG, "Selection menu item: id=0x${itemId.toString(16)} title='$title'")
-            // Don't touch our own custom items
-            if (itemId == R.id.action_define || itemId == R.id.action_sync_selection) continue
-            // Don't touch Copy — users still need it
-            if (itemId == android.R.id.copy) continue
-            // Leave Read Aloud / accessibility items alone
-            if ("read aloud" in titleLower || "speak" in titleLower) continue
-            val matchesId = itemId in knownNoiseIds
-            val matchesTitle = noiseTitleSubstrings.any { it in titleLower }
-            if (matchesId || matchesTitle) itemsToRemove += itemId
-        }
-        itemsToRemove.forEach { menu.removeItem(it) }
-        if (itemsToRemove.isNotEmpty()) {
-            Log.d(TAG, "Stripped ${itemsToRemove.size} noise item(s) from selection toolbar")
-        }
+        selectionController.onActionModeStarted(mode)
     }
 
     /**
      * Look up the first word of the user's selection on dictionaryapi.dev
      * and present the result in a dialog. Silent/Toast on offline or 404.
      */
-    private fun defineSelectedWord() {
-        val raw = lastSelectedText.trim()
-        // Take the first "wordy" token — strip trailing/leading punctuation, pick first whitespace-separated chunk.
-        val firstToken = raw.split(Regex("\\s+"))
-            .firstOrNull()
-            ?.trim { !it.isLetter() && it != '\'' && it != '-' }
-            .orEmpty()
+    private fun defineSelectedWord(selectedText: String) {
+        val firstToken = firstDefinableToken(selectedText)
 
         if (firstToken.isEmpty()) {
             android.widget.Toast.makeText(this, "Select a word to define", android.widget.Toast.LENGTH_SHORT).show()
@@ -1949,13 +1244,14 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun syncSelectedTextToAudio() {
-        // Use text captured in onActionModeStarted — by the time this click fires,
-        // the ActionMode interaction has already cleared window.getSelection().
-        val selectedText = lastSelectedText.trim()
+    private fun syncSelectedTextToAudio(rawSelectedText: String) {
+        // Use the text captured when the ActionMode started — by the time this
+        // click fires, the ActionMode interaction has already cleared
+        // window.getSelection().
+        val selectedText = rawSelectedText.trim()
         Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
 
-        if (selectedText.length < 5) {
+        if (selectionTooShortToSync(selectedText)) {
             android.widget.Toast.makeText(this, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -1966,25 +1262,29 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
 
         lifecycleScope.launch {
-            val audioMs = repository.epubToAudioText(pairId, chapterIndex, selectedText)
-            if (audioMs > 0) {
+            val outcome = syncSelectionToAudio(
+                repository = repository,
+                pairId = pairId,
+                chapterIndex = chapterIndex,
+                locatorJson = locator.toJSON().toString(),
+                selectedText = selectedText,
+            ) { audioMs ->
                 Log.d(TAG, "syncSelectedText: matched audioMs=$audioMs (${formatAudioTime(audioMs.toLong())})")
+                // Set before the write, so a savePosition landing in between
+                // can't resolve its own sync-point guess over this deliberate
+                // match (see ReaderPositionSnapshot.skipSyncPointLookup).
                 sentenceSyncPending = true
-                // Same bookkeeping as the page path — shared so the two can't
-                // drift apart again (issue #114).
-                PageAudioHandoff.apply(
-                    repository = repository,
-                    pairId = pairId,
-                    chapterIndex = chapterIndex,
-                    locatorJson = locator.toJSON().toString(),
-                    audioMs = audioMs,
-                )
-                val timeStr = formatAudioTime(audioMs.toLong())
-                android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
-                // After successful sync, jump straight to the player so the user can continue listening.
-                switchToAudio()
-            } else {
-                android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            when (outcome) {
+                is SelectionSyncOutcome.Matched -> {
+                    val audioMs = outcome.audioMs
+                    val timeStr = formatAudioTime(audioMs.toLong())
+                    android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
+                    // After successful sync, jump straight to the player so the user can continue listening.
+                    switchToAudio()
+                }
+                SelectionSyncOutcome.NoMatch ->
+                    android.widget.Toast.makeText(this@ReaderActivity, "No matching audio found", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1998,21 +1298,7 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /** Injects the selection-change tracker into the Readium WebView (idempotent). */
-    private fun injectSelectionTracker() {
-        val webView = navigator?.view?.let { findWebView(it) } ?: return
-        webView.evaluateJavascript(SELECTION_TRACKER_JS) {}
-    }
-
-    private fun findWebView(view: View): android.webkit.WebView? {
-        if (view is android.webkit.WebView) return view
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val result = findWebView(view.getChildAt(i))
-                if (result != null) return result
-            }
-        }
-        return null
-    }
+    private fun injectSelectionTracker() = selectionController.injectTracker()
 
     // ============ Lifecycle ============
 
