@@ -209,7 +209,7 @@ async def _set_patterns(db, patterns, key="ebook_filename_patterns"):
 
 async def test_scan_metadata_uses_a_repeated_placeholder_pattern(db, caplog):
     """The whole point: `Author/Title/Title.epub` now yields metadata."""
-    from routers.library import parse_filename_metadata_with_settings
+    from services.metadata_extract import parse_filename_metadata_with_settings
 
     await _set_patterns(db, ["<Author>/<Title>/<Title>"])
 
@@ -233,7 +233,7 @@ async def test_a_stored_bad_pattern_does_not_break_the_scan(db, caplog):
     """Validation is on the save path, so a pattern stored before this change —
     or written straight into the table — still has to be survivable. It is
     skipped, and the next pattern in the list does the work."""
-    from routers.library import parse_filename_metadata_with_settings
+    from services.metadata_extract import parse_filename_metadata_with_settings
 
     await _set_patterns(db, ["<Titel>", "<Author>/<Title>"])
 
@@ -254,7 +254,7 @@ async def test_the_scan_skips_a_pattern_that_will_not_compile(db):
     """`compile_pattern` returning None is the scan's skip signal. A blank line
     in the stored list is the everyday way that happens — the settings textarea
     produces one for every trailing newline."""
-    from routers.library import parse_filename_metadata_with_settings
+    from services.metadata_extract import parse_filename_metadata_with_settings
 
     await _set_patterns(db, ["", "<Author>/<Title>"])
 
@@ -272,7 +272,7 @@ async def test_a_pattern_that_blows_up_on_one_path_does_not_abort_the_scan(db, c
     """The remaining per-file `except` is about applying a compiled pattern to a
     specific path, not about compiling it. It must still let the file fall
     through to the filename fallback rather than take the scan down."""
-    import routers.library as library
+    from services import metadata_extract
 
     class _ExplodingRegex:
         def match(self, _target):
@@ -280,14 +280,14 @@ async def test_a_pattern_that_blows_up_on_one_path_does_not_abort_the_scan(db, c
 
     caplog.set_level(logging.WARNING)
     await _set_patterns(db, ["<Title>"])
-    original = library.compile_pattern
-    library.compile_pattern = lambda _pattern: _ExplodingRegex()
+    original = metadata_extract.compile_pattern
+    metadata_extract.compile_pattern = lambda _pattern: _ExplodingRegex()
     try:
-        meta = await library.parse_filename_metadata_with_settings(
+        meta = await metadata_extract.parse_filename_metadata_with_settings(
             "Some Title.epub", db, parent_dir_name="Some Author", file_type="ebook",
         )
     finally:
-        library.compile_pattern = original
+        metadata_extract.compile_pattern = original
 
     # Fell through to the filename fallback rather than raising.
     assert meta["title"] == "Some Title"

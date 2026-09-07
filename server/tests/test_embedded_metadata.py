@@ -18,7 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from routers.library import _read_embedded_metadata
+from services import metadata_extract
+from services.metadata_extract import _read_embedded_metadata
 
 OPF = (
     '<?xml version="1.0"?>'
@@ -163,15 +164,13 @@ def audio(tmp_path):
 @pytest.fixture(autouse=True)
 def no_ffprobe(monkeypatch):
     """ffprobe is not a dependency of these assertions; keep the tests hermetic."""
-    from routers import library
 
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
 
 def _tagged(monkeypatch, tags):
-    from routers import library
 
-    monkeypatch.setattr(library.mutagen, "File", lambda *a, **k: tags)
+    monkeypatch.setattr(metadata_extract.mutagen, "File", lambda *a, **k: tags)
 
 
 def test_mp4_atoms_are_read(audio, monkeypatch):
@@ -272,10 +271,9 @@ def test_a_file_with_no_tags_still_yields_its_runtime(audio, monkeypatch):
     truthiness would be dropped for exactly the files where it is the only
     metadata worth having.
     """
-    from routers import library
 
     _tagged(monkeypatch, MP4({}, length=3600.4))
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
     meta = _read_embedded_metadata(audio, "audiobook")
 
@@ -285,10 +283,9 @@ def test_a_file_with_no_tags_still_yields_its_runtime(audio, monkeypatch):
 
 def test_ffprobe_wins_over_the_container_header(audio, monkeypatch):
     """ffprobe is the authority; mutagen's `info.length` is the fallback."""
-    from routers import library
 
     _tagged(monkeypatch, MP4({"\xa9nam": ["Timed"]}, length=10.0))
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: 7200)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: 7200)
 
     assert _read_embedded_metadata(audio, "audiobook")["duration_seconds"] == 7200
 
@@ -302,11 +299,10 @@ def test_no_duration_key_at_all_when_neither_source_can_supply_one(audio, monkey
 
 
 def test_a_container_mutagen_cannot_open_yields_no_metadata(audio, monkeypatch):
-    from routers import library
 
     def _explode(*a, **k):
         raise OSError("truncated container")
 
-    monkeypatch.setattr(library.mutagen, "File", _explode)
+    monkeypatch.setattr(metadata_extract.mutagen, "File", _explode)
 
     assert _read_embedded_metadata(audio, "audiobook") == {}
