@@ -28,7 +28,7 @@ from config import settings
 from models.book import AudioBook
 import routers.library as library
 import routers.troubleshoot as troubleshoot
-from services import metadata_extract
+from services import library_scan, metadata_extract
 
 
 @contextlib.asynccontextmanager
@@ -143,6 +143,9 @@ def stub_extract(monkeypatch):
         async def _fake_extract(filepath, file_type, db, library_root=None):
             return dict(meta)
 
+        # The scan ingest reads it from services.library_scan; the rescan
+        # endpoints still read it from the router module (issue #255).
+        monkeypatch.setattr(library_scan, "extract_metadata", _fake_extract)
         monkeypatch.setattr(library, "extract_metadata", _fake_extract)
         return meta
 

@@ -19,6 +19,7 @@ from config import settings
 from database import async_session
 from models.book import EBook, AudioBook, BookPair
 import routers.library as library
+from services import library_scan
 
 
 @contextlib.asynccontextmanager
@@ -46,7 +47,7 @@ def stub_metadata(monkeypatch):
         async def _fake_extract(filepath, file_type, db, library_root=None):
             return meta
 
-        monkeypatch.setattr(library, "extract_metadata", _fake_extract)
+        monkeypatch.setattr(library_scan, "extract_metadata", _fake_extract)
         return meta
 
     return _install

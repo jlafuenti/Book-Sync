@@ -42,7 +42,7 @@ def epub(tmp_path):
 def library_dirs(monkeypatch, tmp_path):
     """Point the scan at empty throwaway directories, with ABS disabled."""
     from config import settings
-    from routers import library
+    from services import library_scan
 
     ebook_dir = tmp_path / "ebooks"
     audio_dir = tmp_path / "audiobooks"
@@ -54,7 +54,7 @@ def library_dirs(monkeypatch, tmp_path):
     async def _no_abs(db):
         return {}
 
-    monkeypatch.setattr(library, "_maybe_load_abs_index", _no_abs)
+    monkeypatch.setattr(library_scan, "_maybe_load_abs_index", _no_abs)
     return ebook_dir, audio_dir
 
 
@@ -65,15 +65,15 @@ async def test_a_scan_that_dies_midway_keeps_the_batches_it_already_committed(
     db, library_dirs, monkeypatch
 ):
     from database import async_session
-    from routers import library
+    from services import library_scan
 
     ebook_dir, _ = library_dirs
     for i in range(5):
         write_epub(str(ebook_dir / f"Author - Book {i}.epub"), [("ch1.xhtml", CHAPTER)])
 
-    monkeypatch.setattr(library, "SCAN_COMMIT_BATCH", 2)
+    monkeypatch.setattr(library_scan, "SCAN_COMMIT_BATCH", 2)
 
-    real = library._ingest_one_ebook
+    real = library_scan._ingest_one_ebook
     calls = {"n": 0}
 
     async def _fails_on_the_third(*args, **kwargs):
@@ -82,10 +82,10 @@ async def test_a_scan_that_dies_midway_keeps_the_batches_it_already_committed(
             raise RuntimeError("the disk went away mid-scan")
         return await real(*args, **kwargs)
 
-    monkeypatch.setattr(library, "_ingest_one_ebook", _fails_on_the_third)
+    monkeypatch.setattr(library_scan, "_ingest_one_ebook", _fails_on_the_third)
 
     with pytest.raises(RuntimeError):
-        await library.scan_library_impl(db)
+        await library_scan.scan_library_impl(db)
     await db.rollback()
 
     # A *different* session, so nothing here can be reading uncommitted state.
@@ -96,13 +96,13 @@ async def test_a_scan_that_dies_midway_keeps_the_batches_it_already_committed(
 async def test_a_completed_scan_leaves_its_last_short_batch_committed(db, library_dirs):
     """Batching must not strand the tail — three files against a batch of two."""
     from database import async_session
-    from routers import library
+    from services import library_scan
 
     ebook_dir, _ = library_dirs
     for i in range(3):
         write_epub(str(ebook_dir / f"Author - Book {i}.epub"), [("ch1.xhtml", CHAPTER)])
 
-    resp = await library.scan_library_impl(db)
+    resp = await library_scan.scan_library_impl(db)
 
     assert resp.new_ebooks == 3
     async with async_session() as fresh:
@@ -111,12 +111,12 @@ async def test_a_completed_scan_leaves_its_last_short_batch_committed(db, librar
 
 async def test_the_scan_response_shape_is_unchanged(db, library_dirs):
     """Batching is invisible to the client: same fields, same counts."""
-    from routers import library
+    from services import library_scan
 
     ebook_dir, _ = library_dirs
     write_epub(str(ebook_dir / "Author - Only Book.epub"), [("ch1.xhtml", CHAPTER)])
 
-    resp = await library.scan_library_impl(db)
+    resp = await library_scan.scan_library_impl(db)
 
     assert set(resp.model_dump()) == {
         "new_ebooks", "new_audiobooks", "auto_matched_pairs",
@@ -129,7 +129,7 @@ async def test_the_scan_response_shape_is_unchanged(db, library_dirs):
 # ----------------------------------------------------- the losing side of a race
 
 
-def _miss_once(monkeypatch, library):
+def _miss_once(monkeypatch, library_scan):
     """Make the next `_find_by_path` report "nothing there".
 
     A deterministic stand-in for the racing transaction: the real race is two
@@ -138,7 +138,7 @@ def _miss_once(monkeypatch, library):
     after the row exists puts the write path in exactly that state. Mirrors
     `test_progress_uniqueness.py::_one_shot_none`.
     """
-    real = library._find_by_path
+    real = library_scan._find_by_path
     calls = {"n": 0}
 
     async def _misses_once(*args, **kwargs):
@@ -147,28 +147,28 @@ def _miss_once(monkeypatch, library):
             return None
         return await real(*args, **kwargs)
 
-    monkeypatch.setattr(library, "_find_by_path", _misses_once)
+    monkeypatch.setattr(library_scan, "_find_by_path", _misses_once)
 
 
 async def test_losing_a_race_to_insert_an_ebook_path_converges_on_one_row(
     db, epub, tmp_path, monkeypatch
 ):
-    from routers import library
+    from services import library_scan
 
-    assert await library._ingest_one_ebook(db, epub, str(tmp_path)) is True
+    assert await library_scan._ingest_one_ebook(db, epub, str(tmp_path)) is True
     await db.commit()
 
-    _miss_once(monkeypatch, library)
+    _miss_once(monkeypatch, library_scan)
 
     # No exception, no second row, and the caller is told nothing was created.
-    assert await library._ingest_one_ebook(db, epub, str(tmp_path)) is False
+    assert await library_scan._ingest_one_ebook(db, epub, str(tmp_path)) is False
     await db.commit()
     assert await _count(db, EBook) == 1
 
 
 async def test_losing_the_race_on_an_audiobook_converges_too(db, tmp_path, monkeypatch):
     """Both halves of the library ingest the same way, so both recover the same way."""
-    from routers import library
+    from services import library_scan
 
     path = str(tmp_path / "Author - Title.m4b")
     with open(path, "wb") as fh:
@@ -176,12 +176,12 @@ async def test_losing_the_race_on_an_audiobook_converges_too(db, tmp_path, monke
 
     monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
-    assert await library._ingest_one_audiobook(db, path, str(tmp_path), {}) is True
+    assert await library_scan._ingest_one_audiobook(db, path, str(tmp_path), {}) is True
     await db.commit()
 
-    _miss_once(monkeypatch, library)
+    _miss_once(monkeypatch, library_scan)
 
-    assert await library._ingest_one_audiobook(db, path, str(tmp_path), {}) is False
+    assert await library_scan._ingest_one_audiobook(db, path, str(tmp_path), {}) is False
     await db.commit()
     assert await _count(db, AudioBook) == 1
 
@@ -196,7 +196,7 @@ async def test_an_integrity_error_the_reread_cannot_explain_is_not_swallowed(
     silently never appears in the library. Here the lookup is stubbed to miss
     every time, so the recovery has nothing to hand back and must re-raise.
     """
-    from routers import library
+    from services import library_scan
 
     db.add(EBook(title="Winner", filename="x.epub", file_path=epub))
     await db.commit()
@@ -204,9 +204,9 @@ async def test_an_integrity_error_the_reread_cannot_explain_is_not_swallowed(
     async def _always_missing(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(library, "_find_by_path", _always_missing)
+    monkeypatch.setattr(library_scan, "_find_by_path", _always_missing)
 
     with pytest.raises(IntegrityError):
-        await library._ingest_one_ebook(db, epub, str(tmp_path))
+        await library_scan._ingest_one_ebook(db, epub, str(tmp_path))
 
     await db.rollback()
