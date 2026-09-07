@@ -32,6 +32,11 @@ import mutagen
 # behaviour -- it makes the choice explicit for input that arrives as an
 # attacker-supplied archive, and keeps bandit quiet on a public repo.
 import defusedxml.ElementTree as ET
+# defusedxml re-exports only the *parsers* (fromstring, parse, tostring …), so
+# parsing stays defused (issue #265) while the two tree builders the writer
+# needs come from the stdlib. The parsed tree is a plain stdlib Element, so the
+# two mix without ceremony. Issue #428.
+from xml.etree.ElementTree import SubElement, register_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +98,7 @@ def write_ebook_metadata(filepath: str, book) -> None:
             'calibre': 'http://calibre.kovidgoyal.net/2009/metadata',
         }
         for prefix, uri in namespaces.items():
-            ET.register_namespace(prefix, uri)
+            register_namespace(prefix, uri)
             
         root = ET.fromstring(opf_content)
         metadata = None
@@ -115,7 +120,7 @@ def write_ebook_metadata(filepath: str, book) -> None:
                     child.text = str(value)
                     found = True
             if not found:
-                el = ET.SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
+                el = SubElement(metadata, f"{{http://purl.org/dc/elements/1.1/}}{tag_name}")
                 el.text = str(value)
 
         def clear_dc_tag(tag_name, value):
@@ -144,12 +149,12 @@ def write_ebook_metadata(filepath: str, book) -> None:
                         metadata.remove(meta_tag)
                         
             # Add new ones
-            series_meta = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            series_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
             series_meta.attrib['name'] = 'calibre:series'
             series_meta.attrib['content'] = str(book.series)
             
             if getattr(book, 'series_index', None) is not None:
-                index_meta = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+                index_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
                 index_meta.attrib['name'] = 'calibre:series_index'
                 index_meta.attrib['content'] = str(book.series_index)
                 
