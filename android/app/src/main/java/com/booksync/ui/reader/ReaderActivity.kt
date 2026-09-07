@@ -789,7 +789,16 @@ class ReaderActivity : AppCompatActivity() {
             // locator (and any persist) is in hand, so an exception thrown
             // on the way there is caught below as Unresolved, and a landing
             // already recorded can never be demoted by it.
-            savePolicy.onRestoreOutcome(result.outcome)
+            //
+            // A rung that landed but yields no locator (a spine link Readium
+            // cannot address) opens the book at the start; that is not a
+            // landing, and reporting it as one would let a full save
+            // overwrite the real position with page one. Withhold instead.
+            val outcome = if (target != null && locator == null) {
+                Log.w(TAG, "getInitialLocator: '${result.landed?.kind}' landed but produced no locator")
+                PositionSavePolicy.RestoreOutcome.Unresolved
+            } else result.outcome
+            savePolicy.onRestoreOutcome(outcome)
             if (locator != null) {
                 Log.d(TAG, "getInitialLocator: restored via '${result.landed?.kind}'")
             }
