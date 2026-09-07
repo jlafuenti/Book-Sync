@@ -7,8 +7,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.TextView
-import org.readium.r2.navigator.preferences.Theme
-import org.readium.r2.navigator.preferences.FontFamily
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
@@ -36,7 +34,6 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
-import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.shared.ExperimentalReadiumApi
@@ -89,12 +86,6 @@ class ReaderActivity : AppCompatActivity() {
         // the view to the pre-change locator (re-layout finishes drawing in
         // ~200-400 ms; the go() must land after it or Readium re-lays again).
         private const val RELAYOUT_RESTORE_DELAY_MS = 800L
-        private const val PREFS_NAME = "reader_display"
-        private const val KEY_FONT_SIZE = "font_size"
-        private const val KEY_THEME = "theme"
-        private const val KEY_FONT_FAMILY = "font_family"
-        private const val KEY_LINE_SPACING = "line_spacing"
-        private const val KEY_MARGINS = "margins"
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -202,7 +193,7 @@ class ReaderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reader)
 
-        loadSavedPreferences()
+        displaySettings.load()
         initViews()
         applyWindowInsets()
         // Install before the navigator exists — the wrapper sits at the content
@@ -239,7 +230,7 @@ class ReaderActivity : AppCompatActivity() {
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_switch_audio -> { syncAudioToPage(); true }
-                R.id.action_font_settings -> { showFontSettings(); true }
+                R.id.action_font_settings -> { showDisplaySettings(); true }
                 else -> false
             }
         }
@@ -474,7 +465,7 @@ class ReaderActivity : AppCompatActivity() {
                     ?: run { Log.e(TAG, "Navigator fragment null"); finish(); return@launch }
 
                 navigator?.addInputListener(tapListener)
-                applyPreferences()
+                navigator?.let { displaySettings.apply(it) }
 
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
@@ -1170,247 +1161,12 @@ class ReaderActivity : AppCompatActivity() {
 
     // ============ Display Settings ============
 
-    // Track cumulative preferences so changes don't wipe each other
-    private var currentPreferences = EpubPreferences()
+    /** Font / theme / spacing preferences and their dialog — see [ReaderDisplaySettings]. */
+    private val displaySettings: ReaderDisplaySettings by lazy { ReaderDisplaySettings(this) }
 
-    private fun loadSavedPreferences() {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val fontSize = prefs.getFloat(KEY_FONT_SIZE, 1.0f).toDouble()
-        val themeName = prefs.getString(KEY_THEME, null)
-        val theme = when (themeName) {
-            "light" -> Theme.LIGHT
-            "sepia" -> Theme.SEPIA
-            "dark" -> Theme.DARK
-            else -> null
-        }
-        val fontFamilyName = prefs.getString(KEY_FONT_FAMILY, null)
-        val fontFamily = when (fontFamilyName) {
-            "serif" -> FontFamily.SERIF
-            "sans-serif" -> FontFamily.SANS_SERIF
-            "cursive" -> FontFamily.CURSIVE
-            "monospace" -> FontFamily.MONOSPACE
-            "system" -> null // Default
-            else -> null
-        }
-        val lineSpacingRaw = prefs.getFloat(KEY_LINE_SPACING, -1f)
-        val lineSpacing = if (lineSpacingRaw > 0) lineSpacingRaw.toDouble() else null
-        
-        val marginsRaw = prefs.getFloat(KEY_MARGINS, -1f)
-        val margins = if (marginsRaw > 0) marginsRaw.toDouble() else null
-
-        currentPreferences = EpubPreferences(
-            fontSize = fontSize,
-            theme = theme,
-            fontFamily = fontFamily,
-            lineHeight = lineSpacing,
-            pageMargins = margins,
-            publisherStyles = false
-        )
-    }
-
-    private fun savePreferences() {
-        val editor = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-        editor.putFloat(KEY_FONT_SIZE, (currentPreferences.fontSize ?: 1.0).toFloat())
-        
-        val themeName = when (currentPreferences.theme) {
-            Theme.LIGHT -> "light"
-            Theme.SEPIA -> "sepia"
-            Theme.DARK -> "dark"
-            else -> null
-        }
-        if (themeName != null) editor.putString(KEY_THEME, themeName)
-        else editor.remove(KEY_THEME)
-
-        val fontFamilyName = when (currentPreferences.fontFamily) {
-            FontFamily.SERIF -> "serif"
-            FontFamily.SANS_SERIF -> "sans-serif"
-            FontFamily.CURSIVE -> "cursive"
-            FontFamily.MONOSPACE -> "monospace"
-            else -> null
-        }
-        if (fontFamilyName != null) editor.putString(KEY_FONT_FAMILY, fontFamilyName)
-        else editor.remove(KEY_FONT_FAMILY)
-
-        if (currentPreferences.lineHeight != null) {
-            editor.putFloat(KEY_LINE_SPACING, currentPreferences.lineHeight!!.toFloat())
-        } else {
-            editor.remove(KEY_LINE_SPACING)
-        }
-
-        if (currentPreferences.pageMargins != null) {
-            editor.putFloat(KEY_MARGINS, currentPreferences.pageMargins!!.toFloat())
-        } else {
-            editor.remove(KEY_MARGINS)
-        }
-
-        editor.apply()
-    }
-
-    private fun applyPreferences() {
-        navigator?.submitPreferences(currentPreferences)
-    }
-
-    private fun showFontSettings() {
+    private fun showDisplaySettings() {
         val nav = navigator ?: return
-
-        val dialogView = layoutInflater.inflate(R.layout.dialog_display_settings, null)
-
-        // Tab switching
-        val tabLayout = dialogView.findViewById<com.google.android.material.tabs.TabLayout>(R.id.tab_layout)
-        val textContent = dialogView.findViewById<View>(R.id.tab_text_content)
-        val displayContent = dialogView.findViewById<View>(R.id.tab_display_content)
-
-        tabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
-                when (tab?.position) {
-                    0 -> {
-                        textContent.visibility = View.VISIBLE
-                        displayContent.visibility = View.GONE
-                    }
-                    1 -> {
-                        textContent.visibility = View.GONE
-                        displayContent.visibility = View.VISIBLE
-                    }
-                }
-            }
-            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
-            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
-        })
-
-        // ======== TEXT TAB ========
-
-        // Font Family toggle group
-        val fontGroup = dialogView.findViewById<com.google.android.material.button.MaterialButtonToggleGroup>(R.id.font_family_group)
-        val btnFontSystem = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_system)
-        val btnFontSerif = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_serif)
-        val btnFontSans = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btn_font_sans)
-
-        // Pre-select current font
-        when (currentPreferences.fontFamily) {
-            FontFamily.SERIF -> fontGroup.check(R.id.btn_font_serif)
-            FontFamily.SANS_SERIF -> fontGroup.check(R.id.btn_font_sans)
-            else -> fontGroup.check(R.id.btn_font_system)
-        }
-
-        fontGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (isChecked) {
-                val fontFamily = when (checkedId) {
-                    R.id.btn_font_serif -> FontFamily.SERIF
-                    R.id.btn_font_sans -> FontFamily.SANS_SERIF
-                    else -> null
-                }
-                currentPreferences = currentPreferences.copy(fontFamily = fontFamily)
-                nav.submitPreferences(currentPreferences)
-                savePreferences()
-            }
-        }
-
-        // Font Size
-        val btnFontDecrease = dialogView.findViewById<View>(R.id.btn_font_decrease)
-        val btnFontIncrease = dialogView.findViewById<View>(R.id.btn_font_increase)
-        val btnFontReset = dialogView.findViewById<View>(R.id.btn_font_reset)
-        val textFontSize = dialogView.findViewById<TextView>(R.id.text_font_size)
-
-        fun updateFontSize(newSize: Double?) {
-            currentPreferences = currentPreferences.copy(fontSize = newSize)
-            textFontSize.text = if (newSize != null) "${(newSize * 100).toInt()}%" else "100%"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textFontSize.text = "${((currentPreferences.fontSize ?: 1.0) * 100).toInt()}%"
-
-        btnFontDecrease.setOnClickListener {
-            val current = currentPreferences.fontSize ?: 1.0
-            updateFontSize((current - 0.1).coerceAtLeast(0.5))
-        }
-        btnFontIncrease.setOnClickListener {
-            val current = currentPreferences.fontSize ?: 1.0
-            updateFontSize((current + 0.1).coerceAtMost(3.0))
-        }
-        btnFontReset.setOnClickListener { updateFontSize(null) }
-
-        // Line Spacing
-        val btnSpacingDecrease = dialogView.findViewById<View>(R.id.btn_spacing_decrease)
-        val btnSpacingIncrease = dialogView.findViewById<View>(R.id.btn_spacing_increase)
-        val btnSpacingReset = dialogView.findViewById<View>(R.id.btn_spacing_reset)
-        val textSpacing = dialogView.findViewById<TextView>(R.id.text_spacing)
-
-        fun updateSpacing(newSpacing: Double?) {
-            currentPreferences = currentPreferences.copy(lineHeight = newSpacing)
-            textSpacing.text = if (newSpacing != null) "%.1fx".format(newSpacing) else "1.2x"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textSpacing.text = "%.1fx".format(currentPreferences.lineHeight ?: 1.2)
-
-        btnSpacingDecrease.setOnClickListener {
-            val current = currentPreferences.lineHeight ?: 1.2
-            updateSpacing((current - 0.1).coerceAtLeast(1.0))
-        }
-        btnSpacingIncrease.setOnClickListener {
-            val current = currentPreferences.lineHeight ?: 1.2
-            updateSpacing((current + 0.1).coerceAtMost(2.5))
-        }
-        btnSpacingReset.setOnClickListener { updateSpacing(null) }
-
-        // Margins
-        val btnMarginDecrease = dialogView.findViewById<View>(R.id.btn_margin_decrease)
-        val btnMarginIncrease = dialogView.findViewById<View>(R.id.btn_margin_increase)
-        val btnMarginReset = dialogView.findViewById<View>(R.id.btn_margin_reset)
-        val textMargins = dialogView.findViewById<TextView>(R.id.text_margins)
-
-        fun updateMargins(newMargins: Double?) {
-            currentPreferences = currentPreferences.copy(pageMargins = newMargins)
-            textMargins.text = if (newMargins != null) "%.2fx".format(newMargins) else "1.00x"
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-        }
-        textMargins.text = "%.2fx".format(currentPreferences.pageMargins ?: 1.0)
-
-        btnMarginDecrease.setOnClickListener {
-            val current = currentPreferences.pageMargins ?: 1.0
-            updateMargins((current - 0.25).coerceAtLeast(0.5))
-        }
-        btnMarginIncrease.setOnClickListener {
-            val current = currentPreferences.pageMargins ?: 1.0
-            updateMargins((current + 0.25).coerceAtMost(3.0))
-        }
-        btnMarginReset.setOnClickListener { updateMargins(null) }
-
-        // ======== DISPLAY TAB ========
-
-        val btnThemeLight = dialogView.findViewById<View>(R.id.btn_theme_light)
-        val btnThemeSepia = dialogView.findViewById<View>(R.id.btn_theme_sepia)
-        val btnThemeDark = dialogView.findViewById<View>(R.id.btn_theme_dark)
-        val checkLight = dialogView.findViewById<View>(R.id.check_theme_light)
-        val checkSepia = dialogView.findViewById<View>(R.id.check_theme_sepia)
-        val checkDark = dialogView.findViewById<View>(R.id.check_theme_dark)
-
-        fun updateThemeChecks(theme: Theme?) {
-            checkLight.visibility = if (theme == Theme.LIGHT) View.VISIBLE else View.GONE
-            checkSepia.visibility = if (theme == Theme.SEPIA) View.VISIBLE else View.GONE
-            checkDark.visibility = if (theme == Theme.DARK || theme == null) View.VISIBLE else View.GONE
-        }
-
-        // Show current checkmark
-        updateThemeChecks(currentPreferences.theme)
-
-        fun applyTheme(theme: Theme?) {
-            currentPreferences = currentPreferences.copy(theme = theme)
-            nav.submitPreferences(currentPreferences)
-            savePreferences()
-            updateThemeChecks(theme)
-        }
-
-        btnThemeLight.setOnClickListener { applyTheme(Theme.LIGHT) }
-        btnThemeSepia.setOnClickListener { applyTheme(Theme.SEPIA) }
-        btnThemeDark.setOnClickListener { applyTheme(Theme.DARK) }
-
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setView(dialogView)
-            .create()
-
-        dialog.show()
+        displaySettings.showDialog(this, nav)
     }
 
     // ============ Text Selection Sync ============

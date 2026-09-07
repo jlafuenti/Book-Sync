@@ -403,6 +403,7 @@ kover {
                     // plain Kotlin with their own tests. Only the WebView/ActionMode
                     // glue that acts on those decisions stays out.
                     "com.booksync.ui.reader.ReaderSelectionController*",
+                    "com.booksync.ui.reader.ReaderDisplaySettings*",
                     "com.booksync.ui.reader.DictionarySheet*",
                     "com.booksync.ui.player.UnifiedAudioPlayer*",
                     "com.booksync.ui.account.ChangePasswordSheet*",
