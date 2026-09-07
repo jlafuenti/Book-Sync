@@ -420,7 +420,7 @@ cd android
 The floor lives in the `kover { reports { verify { ... } } }` block of
 `android/app/build.gradle.kts` — that file is the source of truth, and
 `server/tests/test_docs_contract.py` fails the build if the number below stops matching it.
-It is currently **53% lines**; measured total was **56.86%** (2938/5167 lines) on 2026-09-06,
+It is currently **54% lines**; measured total was **57.97%** (3074/5303 lines) on 2026-09-07,
 floor set a few points under, exactly like the server's `--cov-fail-under`. Run
 `./gradlew :app:koverLogDebug` for today's total rather than trusting that figure.
 `.github/workflows/android-tests.yml` runs
