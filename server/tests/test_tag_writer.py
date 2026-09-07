@@ -10,16 +10,14 @@ building genuine M4B/MP3/FLAC containers per case would test mutagen, not this.
 Two pre-existing behaviours are pinned rather than fixed here, because the
 extraction was a pure move:
 
-* the EPUB writer has raised `AttributeError` on every call since the switch
-  to defusedxml (issue #428) — `test_epub_write_back_currently_fails_on_defusedxml`
-  pins that, and the round-trip tests reach the rest of the writer through
-  `_defusedxml_shim`. Delete both when #428 is fixed;
+* (fixed in #428: the EPUB writer used to raise `AttributeError` on every
+  call because defusedxml re-exports only the parsers; the round-trip tests
+  below now run against the writer as shipped, with no shim);
 * a container mutagen opens but which carries *no tags at all* is treated as
   unopenable, because mutagen's `FileType` is a mapping whose truthiness is
   its tag count (see `_read_embedded_metadata` for the same trap).
 """
 
-import xml.etree.ElementTree as stdlib_ET
 import zipfile
 from types import SimpleNamespace
 
@@ -51,20 +49,6 @@ def epub(tmp_path):
     return write_epub(str(tmp_path / "book.epub"), [("ch1.xhtml", CHAPTER)])
 
 
-@pytest.fixture
-def _defusedxml_shim(monkeypatch):
-    """Install the two tree *builders* defusedxml does not re-export (#428).
-
-    `defusedxml.ElementTree` wraps only the parsing entry points; the writer
-    also calls `register_namespace` and `SubElement`, which the stdlib module
-    provides on the same `Element` type. Borrowing them lets these tests reach
-    the code past the first call. `raising=False` so the fixture becomes a
-    harmless no-op once the writer stops needing it.
-    """
-    monkeypatch.setattr(ET, "register_namespace", stdlib_ET.register_namespace, raising=False)
-    monkeypatch.setattr(ET, "SubElement", stdlib_ET.SubElement, raising=False)
-
-
 def _metadata(path):
     with zipfile.ZipFile(path) as z:
         root = ET.fromstring(z.read("OEBPS/content.opf"))
@@ -83,17 +67,6 @@ def _calibre(meta):
     }
 
 
-def test_epub_write_back_currently_fails_on_defusedxml(epub, caplog):
-    """Pins issue #428. When that is fixed this test must be deleted, along
-    with the `_defusedxml_shim` fixture the round-trip tests lean on."""
-    with pytest.raises(AttributeError, match="register_namespace"):
-        tag_writer.write_ebook_metadata(epub, _book(title="Never written"))
-
-    assert "Failed to write EPUB metadata" in caplog.text
-    assert _dc(_metadata(epub), "title") == ["Axis Test"]
-
-
-@pytest.mark.usefixtures("_defusedxml_shim")
 def test_epub_fields_round_trip_and_the_rest_of_the_archive_survives(epub):
     tag_writer.write_ebook_metadata(epub, _book(
         title="New Title", author="Ann Author", description="A blurb",
@@ -115,7 +88,6 @@ def test_epub_fields_round_trip_and_the_rest_of_the_archive_survives(epub):
         assert z.read("mimetype") == b"application/epub+zip"
 
 
-@pytest.mark.usefixtures("_defusedxml_shim")
 def test_an_empty_value_removes_the_dc_tag_it_previously_wrote(epub):
     tag_writer.write_ebook_metadata(epub, _book(title="T", description="Old blurb"))
     assert _dc(_metadata(epub), "description") == ["Old blurb"]
@@ -124,7 +96,6 @@ def test_an_empty_value_removes_the_dc_tag_it_previously_wrote(epub):
     assert _dc(_metadata(epub), "description") == []
 
 
-@pytest.mark.usefixtures("_defusedxml_shim")
 def test_a_new_series_replaces_the_old_calibre_meta_and_no_index_writes_none(epub):
     tag_writer.write_ebook_metadata(epub, _book(title="T", series="Old", series_index=1.0))
     tag_writer.write_ebook_metadata(epub, _book(title="T", series="New", series_index=None))
@@ -132,7 +103,6 @@ def test_a_new_series_replaces_the_old_calibre_meta_and_no_index_writes_none(epu
     assert _calibre(_metadata(epub)) == {"calibre:series": "New"}
 
 
-@pytest.mark.usefixtures("_defusedxml_shim")
 def test_no_series_on_the_book_leaves_the_existing_calibre_meta_alone(epub):
     tag_writer.write_ebook_metadata(epub, _book(title="T", series="Keep", series_index=3.0))
     tag_writer.write_ebook_metadata(epub, _book(title="Retitled", series=None))
@@ -142,7 +112,6 @@ def test_no_series_on_the_book_leaves_the_existing_calibre_meta_alone(epub):
     assert _calibre(meta) == {"calibre:series": "Keep", "calibre:series_index": "3.0"}
 
 
-@pytest.mark.usefixtures("_defusedxml_shim")
 def test_the_opf_is_found_by_extension_when_container_xml_is_unreadable(tmp_path):
     path = str(tmp_path / "no-container.epub")
     with zipfile.ZipFile(path, "w") as z:
@@ -170,7 +139,6 @@ def test_non_epub_and_missing_paths_are_skipped_without_error(tmp_path):
     assert not (tmp_path / "absent.epub").exists()
 
 
-@pytest.mark.usefixtures("_defusedxml_shim")
 @pytest.mark.parametrize("entries", [
     {"mimetype": "application/epub+zip"},                          # no OPF anywhere
     {"x.opf": '<package xmlns="http://www.idpf.org/2007/opf"/>'},  # OPF, no metadata
