@@ -18,6 +18,7 @@ import threading
 
 import pytest
 
+from services import metadata_extract
 from tests.factories import write_epub
 
 CHAPTER = "<html><body><p>A sentence long enough to survive filtering.</p></body></html>"
@@ -67,7 +68,7 @@ async def test_the_epub_parse_runs_off_the_event_loop(db, epub_file, monkeypatch
         recorder.note()
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(library.epub, "read_epub", _watched)
+    monkeypatch.setattr(metadata_extract.epub, "read_epub", _watched)
 
     await library.extract_metadata(epub_file, "ebook", db)
 
@@ -84,8 +85,8 @@ async def test_the_audio_container_read_runs_off_the_event_loop(db, audio_file, 
         recorder.note()
         return None
 
-    monkeypatch.setattr(library.mutagen, "File", _watched)
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract.mutagen, "File", _watched)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
     await library.extract_metadata(audio_file, "audiobook", db)
 
@@ -103,8 +104,8 @@ async def test_the_duration_probe_still_runs_off_the_event_loop(db, audio_file, 
         recorder.note()
         return None
 
-    monkeypatch.setattr(library, "probe_duration_seconds", _watched)
-    monkeypatch.setattr(library.mutagen, "File", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", _watched)
+    monkeypatch.setattr(metadata_extract.mutagen, "File", lambda *a, **k: None)
 
     await library.extract_metadata(audio_file, "audiobook", db)
 
@@ -143,7 +144,7 @@ async def test_ingesting_an_audiobook_hashes_off_the_event_loop(
         return real(path)
 
     monkeypatch.setattr(library, "compute_file_hash", _watched)
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
     assert await library._ingest_one_audiobook(db, audio_file, str(tmp_path), {}) is True
 

@@ -33,7 +33,7 @@ from sqlalchemy import select
 from config import settings
 from models.book import AudioBook
 import routers.library as library
-from services import abs_metadata
+from services import abs_metadata, metadata_extract
 
 
 # --------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def fake_mutagen(monkeypatch):
 def no_ffprobe(monkeypatch):
     """Keep these tests off ffprobe entirely — they are about tags, not length,
     and shelling out to a real binary over a fake file just adds latency."""
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda path: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda path: None)
 
 
 @pytest.fixture
