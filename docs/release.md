@@ -77,7 +77,10 @@ Fill this in as it happens; it is the answer to "when can we ship" and to
 
 | Fact | Value |
 |---|---|
-| Developer account type | Personal, created after 2023-11-13 → closed test required |
+| Developer account type | Personal, created **2026-09-05** (developer name "Tandem Book") → closed test required |
+| Identity verification | Submitted 2026-09-05, awaiting Google |
+| Where testers sign in | The public demo stack (#147): second compose project on the owner's docker host behind a Cloudflare Tunnel, kept on the latest `main` daily; built once the repo is public |
+| Android Auto | Opting in at first submission (#172); head-unit pass pending |
 | Minimum testers at filing time | *(confirm in Play Console — 12 at last check)* |
 | Closed test first upload | |
 | Twelfth tester opted in (day 0) | |
