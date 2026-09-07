@@ -430,7 +430,7 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 59.30% line coverage on 2026-09-07 (3064/5167 lines)
+                    // Measured 57.68% line coverage on 2026-09-07 (3200/5548 lines, #227 + #217 merged)
                     // after issue #217 drove PlayerViewModel's restore, poll loop and
                     // download mirror directly (29% -> 61% of that class); floor set a
                     // few points under, same as the server's --cov-fail-under. Ratchet:
