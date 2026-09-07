@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from models.book import AudioBook, EBook
+from services import metadata_extract
 from tests.factories import write_epub
 
 CHAPTER = "<html><body><p>A sentence long enough to survive filtering.</p></body></html>"
@@ -173,7 +174,7 @@ async def test_losing_the_race_on_an_audiobook_converges_too(db, tmp_path, monke
     with open(path, "wb") as fh:
         fh.write(b"not really an audio container")
 
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda *a, **k: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
     assert await library._ingest_one_audiobook(db, path, str(tmp_path), {}) is True
     await db.commit()

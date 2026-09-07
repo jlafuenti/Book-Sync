@@ -28,6 +28,7 @@ from config import settings
 from models.book import AudioBook
 import routers.library as library
 import routers.troubleshoot as troubleshoot
+from services import metadata_extract
 
 
 @contextlib.asynccontextmanager
@@ -102,14 +103,14 @@ def no_ffprobe(monkeypatch):
     """Default every test to "ffprobe found nothing", so the tests that care
     about mutagen exercise the fallback deliberately rather than by accident of
     whether ffprobe happens to be installed on the machine running them."""
-    monkeypatch.setattr(library, "probe_duration_seconds", lambda path: None)
+    monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda path: None)
 
 
 @pytest.fixture
 def fake_ffprobe(monkeypatch):
     """Make the ffprobe probe return a fixed number of seconds."""
     def _install(seconds):
-        monkeypatch.setattr(library, "probe_duration_seconds", lambda path: seconds)
+        monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda path: seconds)
 
     return _install
 
