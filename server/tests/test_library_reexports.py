@@ -48,6 +48,15 @@ SEAMS = {
         )
     },
     "services.abs_metadata": {"_load_abs_settings": "load_abs_settings"},
+    "services.library_browse": {
+        name: name for name in (
+            "PAGE_DEFAULT_LIMIT", "PAGE_MAX_LIMIT", "SEARCH_MAX_RESULTS", "_LIKE_ESCAPE",
+            "_like_term", "_search_clause", "_library_order", "_paginate", "_list_media",
+            "_pairs_base", "_PAIR_LOADS", "_int_null", "_paired_ebook", "_paired_audiobook",
+            "_pair_arm", "_media_arm", "_browse_arms", "_browse_subquery", "_browse_order",
+            "_hydrate_items", "_count", "search_impl", "list_items_impl", "facets_impl",
+        )
+    },
 }
 
 CASES = [
