@@ -1150,28 +1150,27 @@ class AudioPlayerService : MediaLibraryService() {
     // Sleep timer
     // =========================================================
 
+    /**
+     * The wait, the fade and the pause are [runSleepTimer]'s (issue #225);
+     * this only turns the command into a job on the service scope. The target
+     * is resolved after the wait, so a Cast switch mid-countdown fades whatever
+     * player is current by then.
+     */
     private fun handleSleepTimer(minutes: Int) {
         sleepTimerJob?.cancel()
-        if (minutes <= 0) return
-
+        val schedule = SleepTimerSchedule.forMinutes(minutes) ?: return
         sleepTimerJob = serviceScope.launch {
-            val totalMs = minutes * 60 * 1000L
-            val waitMs = maxOf(0L, totalMs - 30_000L)
-            delay(waitMs)
-
-            val fadeSteps = 30
-            val fadeDuration = minOf(30_000L, totalMs)
-            val fadeInterval = fadeDuration / fadeSteps
-            val player = mediaLibrarySession?.player ?: return@launch
-
-            for (i in fadeSteps downTo 0) {
-                if (!player.isPlaying) return@launch
-                player.volume = 1.0f * i / fadeSteps
-                delay(fadeInterval)
-            }
-            player.pause()
-            player.volume = 1.0f
+            runSleepTimer(schedule) { mediaLibrarySession?.player?.let(::SleepTimerPlayer) }
         }
+    }
+
+    /** [SleepTimerTarget] over the session's current player. */
+    private class SleepTimerPlayer(private val player: Player) : SleepTimerTarget {
+        override val isPlaying: Boolean get() = player.isPlaying
+        override var volume: Float
+            get() = player.volume
+            set(value) { player.volume = value }
+        override fun pause() = player.pause()
     }
 
     // =========================================================
