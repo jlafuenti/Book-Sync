@@ -122,7 +122,7 @@ fun autoBrowseItems(
 ): List<MediaItem> {
     val items = books.mapNotNull { book ->
         val url = urlFor(book) ?: return@mapNotNull null
-        bookItem(book, url, artworkFor(book))
+        autoBookItem(book, url, artworkFor(book))
     }
     if (items.isNotEmpty() || emptyMessage == null) return items
     return listOf(autoMessageItem(emptyMessage))
@@ -152,7 +152,13 @@ private fun browseFolder(id: String, title: String): MediaItem = MediaItem.Build
     )
     .build()
 
-private fun bookItem(book: AutoBook, url: String, artwork: Uri?): MediaItem {
+/**
+ * One playable book row. Shared by the browse tree and by the service's
+ * resolve path (`onGetItem` / `onSetMediaItems`, issue #225), so a book cannot
+ * carry one resume position in the list and another when Auto asks for it by
+ * id. [url] is the playback source — download or stream — already chosen.
+ */
+fun autoBookItem(book: AutoBook, url: String, artwork: Uri?): MediaItem {
     val extras = Bundle().apply {
         putLong("resumePositionMs", book.resumePositionMs)
         putLong("durationMs", book.durationMs)

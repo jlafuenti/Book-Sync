@@ -39,13 +39,19 @@ import com.booksync.auto.AUTO_UNAVAILABLE_MESSAGE
 import com.booksync.auto.AutoBook
 import com.booksync.auto.CoverArtHelper
 import com.booksync.auto.asSearchable
+import com.booksync.auto.autoBookItem
 import com.booksync.auto.autoBrowseItems
+import com.booksync.auto.autoEffectiveStartIndex
 import com.booksync.auto.autoMessageItem
 import com.booksync.auto.autoRootTabs
 import com.booksync.auto.autoSearch
+import com.booksync.auto.autoSearchIndex
+import com.booksync.auto.autoSearchPage
+import com.booksync.auto.autoStartPositionMs
 import com.booksync.auto.continueListeningBooks
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
+import com.booksync.auto.toAutoBook
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.diagnostics.LogChannel
@@ -1437,10 +1443,8 @@ class AudioPlayerService : MediaLibraryService() {
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val all = autoSearchResults[query] ?: ImmutableList.of()
-            val from = (page * pageSize).coerceAtMost(all.size)
-            val to = (from + pageSize).coerceAtMost(all.size)
             return Futures.immediateFuture(
-                LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), params)
+                LibraryResult.ofItemList(ImmutableList.copyOf(autoSearchPage(all, page, pageSize)), params)
             )
         }
 
@@ -1583,19 +1587,12 @@ class AudioPlayerService : MediaLibraryService() {
                     }
                 }
                 // Google Assistant / Android Auto pass startIndex = C.INDEX_UNSET (-1) when
-                // they want the player to use its default. getOrNull(-1) returns null, which
-                // would make us lose the bookmarked position embedded in the resolved item's
-                // extras and start from 0. Normalize to 0 (first item) for both lookup and
-                // the returned MediaItemsWithStartPosition.
-                val effectiveStartIndex =
-                    if (startIndex < 0 || startIndex >= resolvedItems.size) 0 else startIndex
+                // they want the player to use its default; the rules for both the
+                // index and the position are pure (AutoPlayRequest.kt, issue #225).
+                val effectiveStartIndex = autoEffectiveStartIndex(startIndex, resolvedItems.size)
                 val item = resolvedItems.getOrNull(effectiveStartIndex)
                 val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
-                val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
-                    startPositionMs
-                } else {
-                    resumeMs
-                }
+                val resolvedPosition = autoStartPositionMs(startPositionMs, resumeMs)
                 diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems resolved effectiveStartIndex=$effectiveStartIndex resumeMs=$resumeMs resolvedPosition=$resolvedPosition mediaId=${item?.mediaId}")
                 future.set(
                     MediaSession.MediaItemsWithStartPosition(resolvedItems, effectiveStartIndex, resolvedPosition)
@@ -1620,32 +1617,20 @@ class AudioPlayerService : MediaLibraryService() {
         ImmutableList.copyOf(autoRootTabs())
 
     /** Pair row → browse row. Room only: no network on the browse path. */
-    private suspend fun autoBookFor(pair: BookPairEntity): AutoBook = AutoBook(
-        mediaId = MediaId.Pair(pair.id).value,
-        title = pair.audiobookTitle,
-        author = pair.audiobookAuthor,
-        series = pair.ebookSeries,
-        audiobookId = pair.audiobookId,
-        pairId = pair.id,
-        resumePositionMs = repository.getBookmark(pair.id)?.audioPositionMs?.toLong() ?: 0L,
-        durationMs = (pair.audiobookDurationSeconds ?: 0) * 1000L,
-        audioFilename = pair.audiobookFilename,
-        serverCoverPath = pair.audiobookCoverPath,
-    )
+    private suspend fun autoBookFor(pair: BookPairEntity): AutoBook =
+        pair.toAutoBook(resumePositionMs = pairResumeMs(pair.id))
 
     /** Standalone audiobook row → browse row. Room only, same as above. */
-    private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook = AutoBook(
-        mediaId = MediaId.Audiobook(audio.id).value,
-        title = audio.title,
-        author = audio.author,
-        series = audio.series,
-        audiobookId = audio.id,
-        resumePositionMs = repository.getProgressOnce("audiobook", audio.id)
-            ?.audioPositionMs?.toLong() ?: 0L,
-        durationMs = (audio.durationSeconds ?: 0) * 1000L,
-        audioFilename = audio.filename,
-        serverCoverPath = audio.coverFilename,
-    )
+    private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook =
+        audio.toAutoBook(resumePositionMs = audiobookResumeMs(audio.id))
+
+    /** The cached bookmark position for a pair; 0 when the book was never opened. */
+    private suspend fun pairResumeMs(pairId: Int): Long =
+        repository.getBookmark(pairId)?.audioPositionMs?.toLong() ?: 0L
+
+    /** The cached progress position for a standalone audiobook; 0 when never opened. */
+    private suspend fun audiobookResumeMs(audiobookId: Int): Long =
+        repository.getProgressOnce("audiobook", audiobookId)?.audioPositionMs?.toLong() ?: 0L
 
     /**
      * The playback source for a browse row: the download, else the stream
@@ -1766,24 +1751,23 @@ class AudioPlayerService : MediaLibraryService() {
      * "play Bartleby" with two Bartlebys picks the one being listened to, and a
      * blank query — Assistant's "play Tandem" — resumes the most recent book.
      */
-    private suspend fun autoSearchIndex(): List<AutoBook> {
+    private suspend fun loadAutoSearchIndex(): List<AutoBook> {
         val recentPairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) }
         val recentStandalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
             .map { autoBookFor(it) }
         val recent = continueListeningBooks(recentPairs, recentStandalone)
-        val recentIds = recent.map { it.mediaId }.toSet()
         // Uncapped on purpose: a node cap is a rendering limit, and applying it
         // here would make books past it unsayable.
         val all = mergedLibrary(
             pairs = repository.getPairsFlow().first().map { autoBookFor(it) },
             standalone = repository.getAudiobooksFlow().first().map { autoBookFor(it) },
         )
-        return recent + all.filterNot { it.mediaId in recentIds }
+        return autoSearchIndex(recent, all)
     }
 
     /** The books [autoSearch] picked, as playable items. Empty means no hits. */
     private suspend fun autoSearchBooks(query: String): List<AutoBook> {
-        val index = autoSearchIndex()
+        val index = loadAutoSearchIndex()
         val byId = index.associateBy { it.mediaId }
         return autoSearch(query, index.map { it.asSearchable() }).mapNotNull { byId[it.mediaId] }
     }
@@ -1864,36 +1848,19 @@ class AudioPlayerService : MediaLibraryService() {
      * A filename the app refuses to resolve (issue #177) no longer removes the
      * book from the browse tree: it means "not downloaded", and the stream URL
      * is built from the audiobook id, which never came from a filename.
+     *
+     * The item itself comes from the same [autoBookItem] the browse tree uses
+     * (issue #225); only the source selection stays here, because it stats
+     * the filesystem.
      */
     private fun buildPairMediaItem(
         pair: BookPairEntity,
         resumePositionMs: Long,
         coverUri: Uri?
     ): MediaItem? {
-        val extras = Bundle().apply {
-            putLong("resumePositionMs", resumePositionMs)
-            putLong("durationMs", (pair.audiobookDurationSeconds ?: 0) * 1000L)
-            putString("sourceType", "pair")
-            putInt("pairId", pair.id)
-        }
-        return MediaItem.Builder()
-            .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(
-                mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
-                    ?: return null
-            )
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(pair.audiobookTitle)
-                    .setArtist(pair.audiobookAuthor)
-                    .setArtworkUri(coverUri)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .setExtras(extras)
-                    .build()
-            )
-            .build()
+        val uri = mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
+            ?: return null
+        return autoBookItem(pair.toAutoBook(resumePositionMs), uri.toString(), coverUri)
     }
 
     /** Null for the same reason as [buildPairMediaItem] (issue #177). */
@@ -1902,26 +1869,8 @@ class AudioPlayerService : MediaLibraryService() {
         resumePositionMs: Long,
         coverUri: Uri?
     ): MediaItem? {
-        val extras = Bundle().apply {
-            putLong("resumePositionMs", resumePositionMs)
-            putLong("durationMs", (audio.durationSeconds ?: 0) * 1000L)
-            putString("sourceType", "standalone")
-            putInt("audiobookId", audio.id)
-        }
-        return MediaItem.Builder()
-            .setMediaId(MediaId.Audiobook(audio.id).value)
-            .setUri(mediaUriFor(repository.localAudioFile(audio.filename), audio.id) ?: return null)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(audio.title)
-                    .setArtist(audio.author)
-                    .setArtworkUri(coverUri)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .setExtras(extras)
-                    .build()
-            )
-            .build()
+        val uri = mediaUriFor(repository.localAudioFile(audio.filename), audio.id)
+            ?: return null
+        return autoBookItem(audio.toAutoBook(resumePositionMs), uri.toString(), coverUri)
     }
 }
