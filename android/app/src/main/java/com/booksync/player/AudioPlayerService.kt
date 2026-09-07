@@ -1194,18 +1194,13 @@ class AudioPlayerService : MediaLibraryService() {
                     titles.add(title)
                     startTimesMs.add(window.defaultPositionMs)
                 }
-            } else if (timeline.windowCount == 1) {
-                val uri = player.currentMediaItem?.localConfiguration?.uri
-                if (uri != null) {
-                    val retriever = android.media.MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(this, uri)
-                    } catch (_: Exception) {
-                    } finally {
-                        retriever.release()
-                    }
-                }
             }
+            // A single-window item has no chapter markers the player can see.
+            // This used to open a media metadata probe on the item's URI here
+            // and then read nothing from it — dead work that, for a streamed
+            // audiobook, was a network read on the main thread and ended in an
+            // ANR (issue #435). Chapter data for streamed books comes from the
+            // server's chapter endpoints, not from probing the media.
         } catch (e: Exception) {
             Log.w(TAG, "Error extracting chapters", e)
         }
