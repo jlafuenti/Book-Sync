@@ -167,6 +167,24 @@ def test_every_compose_service_restarts_unless_stopped(path):
     )
 
 
+def test_web_service_healthchecks_the_shell():
+    """The web service must probe its own SPA shell (issue #327).
+
+    nginx serves index.html for every unknown path, so a probe on "/" or an
+    invented path proves nothing; the check must fetch /index.html and look
+    for the app's root element, which is only there when the built bundle is.
+    """
+    services = _services(COMPOSE_TEMPLATES[0])
+    body = services["web"]
+    assert "healthcheck:" in body, "web service has no healthcheck block"
+    assert any("/index.html" in line for line in body), (
+        "web healthcheck does not fetch /index.html"
+    )
+    assert any("id=" in line and "root" in line for line in body), (
+        "web healthcheck does not check for the root element"
+    )
+
+
 def test_server_service_healthchecks_the_api():
     """The server service must poll /api/health (issue #47).
 

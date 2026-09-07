@@ -259,6 +259,16 @@ services:
     depends_on:
       - server
     restart: unless-stopped
+    # Liveness for the frontend (issue #327). The SPA shell is served for every
+    # unknown path, so probing "/" would prove only that nginx answers; asking
+    # for /index.html and checking for the app's root element proves the built
+    # bundle is actually there. wget is BusyBox's, present in the alpine image.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/index.html | grep -q 'id=\"root\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   booksync_db:
