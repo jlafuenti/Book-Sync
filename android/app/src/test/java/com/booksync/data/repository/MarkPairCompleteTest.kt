@@ -14,7 +14,6 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -44,22 +43,12 @@ class MarkPairCompleteTest {
         every { it.deviceName } returns "Jesse's Pixel"
     }
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
         deviceIdManager = deviceIdManager,
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun okResponse() = Response.success(

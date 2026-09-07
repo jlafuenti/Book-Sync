@@ -17,7 +17,6 @@ import io.mockk.mockk
 import io.mockk.slot
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
@@ -49,22 +48,11 @@ class ResolveDownloadTargetTest {
     private val eBookDao = mockk<EBookDao>(relaxed = true)
     private val audioBookDao = mockk<AudioBookDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
         bookPairDao = bookPairDao,
         eBookDao = eBookDao,
         audioBookDao = audioBookDao,
-        syncPointDao = mockk(relaxed = true),
-        bookmarkDao = mockk(relaxed = true),
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun notFound() = HttpException(

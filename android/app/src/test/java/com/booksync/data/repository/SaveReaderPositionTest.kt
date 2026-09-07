@@ -9,7 +9,6 @@ import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.local.entity.SyncPointEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
 import io.mockk.coEvery
@@ -24,7 +23,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
@@ -62,22 +60,12 @@ class SaveReaderPositionTest {
     private val bookPairDao = mockk<BookPairDao>(relaxed = true)
 
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
         bookPairDao = bookPairDao,
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
         syncPointDao = syncPointDao,
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     // A preview long enough for SyncMatcher's exact pass, reused verbatim as

@@ -3,13 +3,11 @@ package com.booksync.data.repository
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertFalse
@@ -39,22 +37,9 @@ class DownloadPathContainmentTest {
 
     private val api = mockk<BookSyncApi>()
 
-    private fun repository(filesDir: File) = BookSyncRepository(
+    private fun repository(filesDir: File) = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
-        bookmarkDao = mockk(relaxed = true),
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
         context = mockk(relaxed = true) { every { this@mockk.filesDir } returns filesDir },
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun pair(ebookFilename: String) = BookPairEntity(

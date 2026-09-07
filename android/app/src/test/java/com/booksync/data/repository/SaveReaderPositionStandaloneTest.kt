@@ -5,7 +5,6 @@ import com.booksync.data.local.dao.BookmarkLogDao
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
 import io.mockk.coEvery
@@ -14,7 +13,6 @@ import io.mockk.coVerifyOrder
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -50,22 +48,12 @@ class SaveReaderPositionStandaloneTest {
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
-        acknowledgedItemDao = mockk(relaxed = true),
         bookmarkLogDao = bookmarkLogDao,
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun okResponse() = PositionResponse(

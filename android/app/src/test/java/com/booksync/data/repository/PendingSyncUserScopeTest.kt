@@ -3,14 +3,12 @@ package com.booksync.data.repository
 import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.UserScopeProvider
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Test
 import retrofit2.Response
 
@@ -34,21 +32,9 @@ class PendingSyncUserScopeTest {
     private val pendingSyncDao = mockk<PendingSyncDao>(relaxed = true)
     private val userScopeProvider = mockk<UserScopeProvider>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
-        bookmarkDao = mockk(relaxed = true),
         pendingSyncDao = pendingSyncDao,
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
         userScopeProvider = userScopeProvider,
     )
 

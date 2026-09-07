@@ -8,7 +8,6 @@ import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
 import io.mockk.coEvery
@@ -20,7 +19,6 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
@@ -56,22 +54,12 @@ class SavePlaybackPositionTest {
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
     private val bookmarkLogDao = mockk<BookmarkLogDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
-        acknowledgedItemDao = mockk(relaxed = true),
         bookmarkLogDao = bookmarkLogDao,
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun positionResponse(

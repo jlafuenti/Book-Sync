@@ -3,13 +3,11 @@ package com.booksync.data.repository
 import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,22 +27,8 @@ class UpdateBookmarkMetadataTest {
 
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
-        api = mockk<BookSyncApi>(relaxed = true),
-        bookPairDao = mockk(relaxed = true),
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
+    private fun repository() = buildRepository(
         bookmarkDao = bookmarkDao,
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     @Test
@@ -160,22 +144,10 @@ class UpdateBookmarkMetadataTest {
 
         val api = mockk<BookSyncApi>(relaxed = true)
         val pendingSyncDao = mockk<com.booksync.data.local.dao.PendingSyncDao>(relaxed = true)
-        val repo = BookSyncRepository(
+        val repo = buildRepository(
             api = api,
-            bookPairDao = mockk(relaxed = true),
-            eBookDao = mockk(relaxed = true),
-            audioBookDao = mockk(relaxed = true),
-            syncPointDao = mockk(relaxed = true),
             bookmarkDao = bookmarkDao,
             pendingSyncDao = pendingSyncDao,
-            userProgressDao = mockk(relaxed = true),
-            acknowledgedItemDao = mockk(relaxed = true),
-            bookmarkLogDao = mockk(relaxed = true),
-            context = mockk(relaxed = true),
-            diagnosticLogger = mockk(relaxed = true),
-            deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-            json = Json { ignoreUnknownKeys = true },
-            userScopeProvider = testScopeProvider(),
         )
 
         repo.updateBookmarkMetadata(42, source = "ebook")
