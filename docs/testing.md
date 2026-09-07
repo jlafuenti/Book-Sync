@@ -255,7 +255,7 @@ overall (56.28%), and the cheapest lifts for it are the API modules: `importSour
 Same rule again. After any PR that raises the Android total, bump `minValue` in the `kover`
 block of `android/app/build.gradle.kts` to `new_total − 3`, whole percent. Milestone targets:
 **10 → 20 → 30 → 40** and up (a lower ladder than server/web — the module started further
-back). Past 40 as of 2026-09-03; next rung is 50.
+back). Past 50 as of 2026-09-06; next rung is 60.
 
 **Do not read the floor off this document — read it off `minValue` in the
 `kover { reports { verify { … } } }` block of `android/app/build.gradle.kts`, and get the
@@ -381,8 +381,13 @@ though `AudioPlayerService` itself is excluded below.
 The same trick carries the service's *decisions* out of the excluded class and into small
 pure ones: `HeartbeatThrottle` (when a heartbeat may push, #65), `ContinuousPlaybackLog`
 (when a 30-min history entry is due) and `PauseSavePolicy` (whether the stop being saved
-right now may claim the format, #226) each have their own test. What is left inside the
-service is only the wiring, and that is pinned by reading the source —
+right now may claim the format, #226) each have their own test. Issue #225 carried the rest
+out the same way: the Android Auto rows and play request (`auto/AutoBookRows.kt`,
+`auto/AutoPlayRequest.kt`), the Cast URL and mime rules (`CastMediaItemFactory`), the
+handoff decision (`PlayerSwitchDecision.kt`), the LAN cast server's lifecycle
+(`LocalCastServerController`, with `LocalCastHttpServer.serve()` itself driven directly in
+`LocalCastHttpServerTest`) and the sleep timer (`SleepTimer.kt`, on virtual time). What is
+left inside the service is only the wiring, and that is pinned by reading the source —
 `BoundarySaveWiringTest`, `SeekFlushWiringTest` and `PauseOwnershipWiringTest` assert that
 the call sites exist and that no second owner has appeared, e.g. that `CMD_USER_PAUSE` is
 declared, registered and handled, and that `PlayerViewModel`'s poll loop writes no position
@@ -415,7 +420,7 @@ cd android
 The floor lives in the `kover { reports { verify { ... } } }` block of
 `android/app/build.gradle.kts` — that file is the source of truth, and
 `server/tests/test_docs_contract.py` fails the build if the number below stops matching it.
-It is currently **50% lines**; measured total was **53.48%** (2533/4736 lines) on 2026-09-06,
+It is currently **52% lines**; measured total was **55.35%** (2740/4950 lines) on 2026-09-06,
 floor set a few points under, exactly like the server's `--cov-fail-under`. Run
 `./gradlew :app:koverLogDebug` for today's total rather than trusting that figure.
 `.github/workflows/android-tests.yml` runs
@@ -433,8 +438,10 @@ number is not a whole-app figure. Three buckets are excluded from the denominato
    the sheets and `UnifiedAudioPlayer`, `MainActivity`, `BookSyncApp`. Untestable without an
    emulator or Robolectric today; revisit if Robolectric is adopted.
 3. **Framework/service glue with no JVM-testable surface** — `AudioPlayerService`,
-   `LocalCastHttpServer`, `cast.*`, `auto.*`, `di.*`, `BookSyncDatabase`. Same reasoning as
-   the server excluding its ffmpeg/hardware glue.
+   `cast.*`, `auto.CoverArtHelper`, `di.*`, `BookSyncDatabase`. Same reasoning as the server
+   excluding its ffmpeg/hardware glue. `LocalCastHttpServer` and the rest of `auto.*` used to
+   be here and are now tested (issues #172, #225) — the exclude list in `build.gradle.kts` is
+   the source of truth.
 
 **ViewModels are deliberately *not* excluded** even though they live under `ui/`. They are
 plain JVM classes, several are already tested, and they remain the largest untested logic
