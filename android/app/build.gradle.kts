@@ -430,7 +430,7 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 55.35% line coverage on 2026-09-06 (2740/4950 lines)
+                    // Measured 56.86% line coverage on 2026-09-06 (2938/5167 lines)
                     // after issue #225 pulled the player's decision layers out of the
                     // excluded service; floor set a few points under, same as the
                     // server's --cov-fail-under. Ratchet: after any PR that raises the
@@ -441,7 +441,7 @@ kover {
                     // (2020/4161) on 2026-09-03, and 43.86% (1722/3926) earlier that day,
                     // before the first-run screen of issue #175 landed — which is where
                     // most of that jump came from.
-                    minValue = 52
+                    minValue = 53
                     coverageUnits = CoverageUnit.LINE
                 }
             }
