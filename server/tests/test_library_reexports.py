@@ -57,6 +57,12 @@ SEAMS = {
             "_hydrate_items", "_count", "search_impl", "list_items_impl", "facets_impl",
         )
     },
+    "services.discrepancies": {
+        name: name for name in (
+            "FIELDS_TO_COMPARE", "_pair_has_discrepancies",
+            "find_discrepancies_impl", "apply_resolution", "ignore_fields_impl",
+        )
+    },
 }
 
 CASES = [

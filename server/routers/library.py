@@ -40,7 +40,7 @@ from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
     EBookDetailResponse, AudioBookDetailResponse,
-    MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest, DiscrepantField,
+    MetadataDiscrepancy, ResolveDiscrepancyRequest, IgnoreDiscrepancyRequest,
     NewItemsResponse, AcknowledgeItemsRequest, AcknowledgePairsRequest, Page,
     LibraryItem, LibraryItemKind, LibraryTab, LibrarySort, SortDir,
     LibraryFacets, LibraryCounts, FacetCount,
@@ -50,9 +50,7 @@ from rate_limit import expensive_reads, search_reads
 from routers.auth import get_current_user, get_editor_user, rate_limited
 from services.cache import TTLValue
 from services.metadata_utils import (
-    MEDIA_CORE_FIELDS,
     MEDIA_DESCRIPTIVE_FIELDS,
-    MEDIA_FLAG_FIELDS,
     MEDIA_METADATA_FIELDS,
     normalize_author,
     normalize_series,
@@ -97,6 +95,12 @@ from services.library_browse import (  # noqa: F401 -- re-exports
     _pairs_base, _PAIR_LOADS, _int_null, _paired_ebook, _paired_audiobook,
     _pair_arm, _media_arm, _browse_arms, _browse_subquery, _browse_order,
     _hydrate_items, _count, search_impl, list_items_impl, facets_impl,
+)
+# Pair metadata discrepancies live in services/discrepancies.py (issue #255).
+# `test_media_column_parity` reads `FIELDS_TO_COMPARE` off this module.
+from services.discrepancies import (  # noqa: F401 -- re-exports
+    FIELDS_TO_COMPARE, _pair_has_discrepancies,
+    find_discrepancies_impl, apply_resolution, ignore_fields_impl,
 )
 # Aliased under the old private names: the handlers call these module globals,
 # and the existing tests stub them on this module (issue #255).
@@ -1180,38 +1184,9 @@ async def debug_metadata(
 # Metadata Cleanup Endpoints
 # ============================================================
 
-# The fields a pair's two halves are compared on. Deliberately *not*
-# `MEDIA_METADATA_FIELDS`: the identifiers are dropped (an ebook and its
-# audiobook legitimately carry different ISBNs/ASINs, and the narrator is
-# audiobook-only), and `cover_path` is added. Derived from the shared groups
-# rather than retyped, so a new metadata field lands here too (issue #257).
-FIELDS_TO_COMPARE = list(
-    MEDIA_CORE_FIELDS + MEDIA_DESCRIPTIVE_FIELDS + MEDIA_FLAG_FIELDS + ("cover_path",)
-)
-
-
-def _pair_has_discrepancies(pair: BookPair) -> bool:
-    """Return True if a pair still has un-ignored metadata mismatches."""
-    if not pair.ebook or not pair.audiobook:
-        return False
-    ignored = set(pair.ignored_fields or [])
-    for field in FIELDS_TO_COMPARE:
-        if field in ignored:
-            continue
-        ev = getattr(pair.ebook, field)
-        av = getattr(pair.audiobook, field)
-        if ev == "":
-            ev = None
-        if av == "":
-            av = None
-        if field == "series_index":
-            if ev is not None:
-                ev = float(ev)
-            if av is not None:
-                av = float(av)
-        if ev != av:
-            return True
-    return False
+# `FIELDS_TO_COMPARE`, `_pair_has_discrepancies` and the bodies of the three
+# discrepancy endpoints live in services/discrepancies.py (issue #255); see
+# the re-export block above.
 
 
 @router.get("/new-items", response_model=NewItemsResponse)
@@ -1299,55 +1274,7 @@ async def get_metadata_discrepancies(
     _: User = Depends(get_current_user),
 ):
     """Find all book pairs with discrepancies in their shared metadata fields."""
-    result = await db.execute(
-        select(BookPair)
-        .options(
-            selectinload(BookPair.ebook),
-            selectinload(BookPair.audiobook)
-        )
-    )
-    pairs = result.scalars().all()
-    
-    discrepancies: List[MetadataDiscrepancy] = []
-    
-    for pair in pairs:
-        if not pair.ebook or not pair.audiobook:
-            continue
-            
-        diffs = []
-        ignored = set(pair.ignored_fields or [])
-        for field in FIELDS_TO_COMPARE:
-            if field in ignored:
-                continue
-            ebook_val = getattr(pair.ebook, field)
-            audio_val = getattr(pair.audiobook, field)
-            
-            # Normalize empty strings to None for comparison
-            if ebook_val == "": ebook_val = None
-            if audio_val == "": audio_val = None
-            
-            # Format numbers to avoid float vs int mismatches
-            if field == "series_index":
-                if ebook_val is not None: ebook_val = float(ebook_val)
-                if audio_val is not None: audio_val = float(audio_val)
-                
-            if ebook_val != audio_val:
-                diffs.append(DiscrepantField(
-                    field=field,
-                    ebook_value=str(ebook_val) if ebook_val is not None else None,
-                    audiobook_value=str(audio_val) if audio_val is not None else None
-                ))
-                
-        if diffs:
-            discrepancies.append(MetadataDiscrepancy(
-                pair_id=pair.id,
-                ebook_id=pair.ebook.id,
-                audiobook_id=pair.audiobook.id,
-                title=pair.ebook.title or pair.audiobook.title or "Unknown",
-                discrepancies=diffs
-            ))
-            
-    return discrepancies
+    return await find_discrepancies_impl(db)
 
 @router.post("/pairs/{pair_id}/resolve-discrepancies")
 async def resolve_metadata_discrepancy(
@@ -1372,42 +1299,9 @@ async def resolve_metadata_discrepancy(
         
     ebook = pair.ebook
     audiobook = pair.audiobook
-    
-    # Process EBook updates
-    ebook_changed = False
-    for field, value in req.ebook_updates.items():
-        if field in FIELDS_TO_COMPARE:
-            # Handle type conversions
-            if field == "series_index" and value is not None:
-                value = float(value)
-            elif field == "publish_year" and value is not None:
-                value = int(value)
-            elif field in ["is_explicit", "is_abridged"] and value is not None:
-                value = str(value).lower() in ("true", "1")
-                
-            setattr(ebook, field, value)
-            ebook_changed = True
-            
-    # Process AudioBook updates
-    audio_changed = False
-    for field, value in req.audiobook_updates.items():
-        if field in FIELDS_TO_COMPARE:
-            # Handle type conversions
-            if field == "series_index" and value is not None:
-                value = float(value)
-            elif field == "publish_year" and value is not None:
-                value = int(value)
-            elif field in ["is_explicit", "is_abridged"] and value is not None:
-                value = str(value).lower() in ("true", "1")
-                
-            setattr(audiobook, field, value)
-            audio_changed = True
-            
-    if ebook_changed or audio_changed:
-        # Auto-acknowledge pair if all discrepancies are now resolved
-        if not _pair_has_discrepancies(pair):
-            pair.acknowledged = True
+    ebook_changed, audio_changed = apply_resolution(pair, req)
 
+    if ebook_changed or audio_changed:
         # Deliberate: persist before the file write-back (issue #259). The
         # writers below rewrite the EPUB's OPF and the m4b's tags in place and
         # are not guarded here, so an exception in either would otherwise reach
@@ -1439,21 +1333,7 @@ async def ignore_metadata_discrepancies(
     if not pair:
         raise HTTPException(status_code=404, detail="Pair not found")
 
-    existing = set(pair.ignored_fields or [])
-    existing.update(req.fields)
-    pair.ignored_fields = list(existing)
-
-    # Need ebook/audiobook loaded to check discrepancies
-    result = await db.execute(
-        select(BookPair)
-        .options(selectinload(BookPair.ebook), selectinload(BookPair.audiobook))
-        .where(BookPair.id == pair_id)
-    )
-    loaded_pair = result.scalar_one_or_none()
-    if loaded_pair and not _pair_has_discrepancies(loaded_pair):
-        loaded_pair.acknowledged = True
-
-    await db.commit()
+    await ignore_fields_impl(db, pair, req.fields)
     return {"message": "Fields ignored successfully"}
 
 
