@@ -18,7 +18,7 @@ import threading
 
 import pytest
 
-from services import metadata_extract
+from services import library_scan, metadata_extract
 from tests.factories import write_epub
 
 CHAPTER = "<html><body><p>A sentence long enough to survive filtering.</p></body></html>"
@@ -123,7 +123,7 @@ async def test_ingesting_an_ebook_hashes_off_the_event_loop(db, epub_file, tmp_p
         recorder.note()
         return real(path)
 
-    monkeypatch.setattr(library, "compute_file_hash", _watched)
+    monkeypatch.setattr(library_scan, "compute_file_hash", _watched)
 
     assert await library._ingest_one_ebook(db, epub_file, str(tmp_path)) is True
 
@@ -143,7 +143,7 @@ async def test_ingesting_an_audiobook_hashes_off_the_event_loop(
         recorder.note()
         return real(path)
 
-    monkeypatch.setattr(library, "compute_file_hash", _watched)
+    monkeypatch.setattr(library_scan, "compute_file_hash", _watched)
     monkeypatch.setattr(metadata_extract, "probe_duration_seconds", lambda *a, **k: None)
 
     assert await library._ingest_one_audiobook(db, audio_file, str(tmp_path), {}) is True
@@ -166,7 +166,7 @@ async def test_registering_a_converted_epub_hashes_off_the_event_loop(
         recorder.note()
         return real(path)
 
-    monkeypatch.setattr(library, "compute_file_hash", _watched)
+    monkeypatch.setattr(library_scan, "compute_file_hash", _watched)
 
     source = EBook(title="Source", filename="source.azw3", file_path="/books/source.azw3")
     db.add(source)
@@ -194,16 +194,16 @@ async def test_the_scan_walks_the_library_off_the_event_loop(db, tmp_path, monke
     async def _no_abs(db_):
         return {}
 
-    monkeypatch.setattr(library, "_maybe_load_abs_index", _no_abs)
+    monkeypatch.setattr(library_scan, "_maybe_load_abs_index", _no_abs)
 
     recorder = ThreadRecorder()
-    real_walk = library.os.walk
+    real_walk = library_scan.os.walk
 
     def _watched(*args, **kwargs):
         recorder.note()
         return real_walk(*args, **kwargs)
 
-    monkeypatch.setattr(library.os, "walk", _watched)
+    monkeypatch.setattr(library_scan.os, "walk", _watched)
 
     await library.scan_library_impl(db)
 

@@ -38,6 +38,16 @@ SEAMS = {
             "auto_match_books",
         )
     },
+    "services.library_scan": {
+        name: name for name in (
+            "EBOOK_EXTENSIONS", "AUDIOBOOK_EXTENSIONS", "SCAN_COMMIT_BATCH", "_Batch",
+            "_hash_and_size", "_find_by_path", "_insert_or_reread",
+            "_ingest_one_ebook", "_ingest_one_audiobook", "_maybe_load_abs_index",
+            "_multi_file_groups", "_walk_tree", "_classify_tree",
+            "scan_files_impl", "scan_library_impl",
+        )
+    },
+    "services.abs_metadata": {"_load_abs_settings": "load_abs_settings"},
 }
 
 CASES = [

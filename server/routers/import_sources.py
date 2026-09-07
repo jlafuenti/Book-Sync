@@ -333,7 +333,7 @@ async def acsm_upload(
         # Targeted scan of just the just-placed file — no need to walk the
         # whole library for a single upload.
         try:
-            from routers.library import scan_files_impl
+            from services.library_scan import scan_files_impl
             await scan_files_impl(db, [result["target_path"]])
             await db.commit()
         except Exception as e:

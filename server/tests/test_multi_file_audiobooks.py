@@ -159,7 +159,7 @@ def test_fingerprint_changes_with_the_folder_contents(tmp_path):
 
 @pytest.fixture
 def library_dirs(monkeypatch, tmp_path):
-    from routers import library
+    from services import library_scan
     from services import multi_file_audiobooks as mfa
 
     ebook_dir = tmp_path / "ebooks"
@@ -176,9 +176,9 @@ def library_dirs(monkeypatch, tmp_path):
     async def _no_abs(db):
         return {}
 
-    monkeypatch.setattr(library, "extract_metadata", _fake_extract)
-    monkeypatch.setattr(library, "_maybe_load_abs_index", _no_abs)
-    monkeypatch.setattr(library, "_extract_and_save_cover", lambda *a, **k: None)
+    monkeypatch.setattr(library_scan, "extract_metadata", _fake_extract)
+    monkeypatch.setattr(library_scan, "_maybe_load_abs_index", _no_abs)
+    monkeypatch.setattr(library_scan, "_extract_and_save_cover", lambda *a, **k: None)
     # Fixture files carry no tags; the scanner's tag reader must not choke on them.
     monkeypatch.setattr(mfa, "read_audio_tags", lambda path: {})
     return ebook_dir, audio_dir

@@ -143,7 +143,7 @@ async def _run_sync(source_key: str, trigger: str) -> None:
     if sync_result and sync_result.items_added > 0:
         try:
             from models.book import AudioBook, EBook
-            from routers.library import scan_files_impl
+            from services.library_scan import scan_files_impl
             imported_paths = [item.file_path for item in sync_result.imported_items]
             async with async_session() as db:
                 if imported_paths:
