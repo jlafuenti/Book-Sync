@@ -4,8 +4,6 @@ import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.local.dao.BookmarkDao
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
-import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -33,22 +31,9 @@ class ResolvePairOpenTargetTest {
     private val bookPairDao = mockk<BookPairDao>()
     private val bookmarkDao = mockk<BookmarkDao>()
 
-    private fun repository() = BookSyncRepository(
-        api = mockk<BookSyncApi>(relaxed = true),
+    private fun repository() = buildRepository(
         bookPairDao = bookPairDao,
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun pair(

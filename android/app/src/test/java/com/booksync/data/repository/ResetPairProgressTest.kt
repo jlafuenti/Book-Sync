@@ -6,12 +6,10 @@ import com.booksync.data.local.dao.PendingSyncDao
 import com.booksync.data.local.dao.UserProgressDao
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertFalse
@@ -62,22 +60,12 @@ class ResetPairProgressTest {
         status = "ready",
     )
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
         bookPairDao = bookPairDao,
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
-        syncPointDao = mockk(relaxed = true),
         bookmarkDao = bookmarkDao,
         pendingSyncDao = pendingSyncDao,
         userProgressDao = userProgressDao,
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     @Test

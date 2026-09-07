@@ -15,7 +15,6 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -44,22 +43,10 @@ class SyncMapVersionTest {
     private val bookPairDao = mockk<BookPairDao>(relaxed = true)
     private val syncPointDao = mockk<SyncPointDao>(relaxed = true)
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
         bookPairDao = bookPairDao,
-        eBookDao = mockk(relaxed = true),
-        audioBookDao = mockk(relaxed = true),
         syncPointDao = syncPointDao,
-        bookmarkDao = mockk(relaxed = true),
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
-        context = mockk(relaxed = true),
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private fun remotePair(syncMapVersion: Int?) = BookPairResponse(

@@ -8,7 +8,6 @@ import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.BookSyncApi
-import com.booksync.data.remote.DeviceIdManager
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -17,7 +16,6 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -62,22 +60,12 @@ class DownloadTest {
         filesDir.deleteRecursively()
     }
 
-    private fun repository() = BookSyncRepository(
+    private fun repository() = buildRepository(
         api = api,
         bookPairDao = bookPairDao,
         eBookDao = eBookDao,
         audioBookDao = audioBookDao,
-        syncPointDao = mockk(relaxed = true),
-        bookmarkDao = mockk(relaxed = true),
-        pendingSyncDao = mockk(relaxed = true),
-        userProgressDao = mockk(relaxed = true),
-        acknowledgedItemDao = mockk(relaxed = true),
-        bookmarkLogDao = mockk(relaxed = true),
         context = context,
-        diagnosticLogger = mockk(relaxed = true),
-        deviceIdManager = mockk<DeviceIdManager>(relaxed = true),
-        json = Json { ignoreUnknownKeys = true },
-        userScopeProvider = testScopeProvider(),
     )
 
     private val pair = BookPairEntity(
