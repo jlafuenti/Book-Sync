@@ -446,7 +446,7 @@ class PlayerViewModel @Inject constructor(
                 startPositionPolling()
 
                 // Fetch initial speed setting from service
-                val futureCmd = mediaController.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_GET_SPEED, Bundle.EMPTY), Bundle.EMPTY)
+                val futureCmd = mediaController.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_GET_SPEED, Bundle()), Bundle())
                 futureCmd.addListener({
                     try {
                         val result = futureCmd.get()
@@ -626,7 +626,11 @@ class PlayerViewModel @Inject constructor(
     private fun mediaUriFor(localFile: java.io.File?, audiobookId: Int): Uri? =
         MediaSourceSelector.select(localFile, serverUrl, audiobookId)?.toUri()
 
-    private fun startPositionPolling() {
+    // `internal` + VisibleForTesting (issue #217): the loop is the one place this
+    // screen touches the controller on a timer, and "it writes nothing" is a rule
+    // worth asserting at runtime rather than only by reading the source.
+    @androidx.annotation.VisibleForTesting
+    internal fun startPositionPolling() {
         positionPollingJob?.cancel()
         positionPollingJob = viewModelScope.launch {
             while (true) {
@@ -723,7 +727,7 @@ class PlayerViewModel @Inject constructor(
      * exactly one stop (see `PauseSavePolicy`).
      */
     private fun announceUserPause(ctrl: MediaController) {
-        // Bundle() rather than Bundle.EMPTY: the JVM unit tests link against
+        // Bundle() rather than the shared empty instance: the JVM unit tests link against
         // the stub android.jar, where the static EMPTY is null and
         // SessionCommand's checkNotNull(extras) throws. An empty Bundle costs
         // nothing and keeps this path unit-testable.
@@ -743,8 +747,8 @@ class PlayerViewModel @Inject constructor(
      */
     private fun restoreSeek(ctrl: MediaController, positionMs: Long) {
         ctrl.sendCustomCommand(
-            SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle.EMPTY),
-            Bundle.EMPTY,
+            SessionCommand(AudioPlayerService.CMD_SUPPRESS_NEXT_SEEK_FLUSH, Bundle()),
+            Bundle(),
         )
         ctrl.seekTo(positionMs)
     }
@@ -783,8 +787,8 @@ class PlayerViewModel @Inject constructor(
 
     private fun loadChaptersFromService(ctrl: MediaController) {
         val futureCmd = ctrl.sendCustomCommand(
-            SessionCommand(AudioPlayerService.CMD_GET_CHAPTERS, Bundle.EMPTY),
-            Bundle.EMPTY
+            SessionCommand(AudioPlayerService.CMD_GET_CHAPTERS, Bundle()),
+            Bundle()
         )
         futureCmd.addListener({
             try {
@@ -859,7 +863,7 @@ class PlayerViewModel @Inject constructor(
 
         val ctrl = controller ?: return
         val args = Bundle().apply { putFloat("speed", newSpeed) }
-        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SPEED, Bundle.EMPTY), args)
+        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SPEED, Bundle()), args)
         _speed.value = newSpeed
     }
 
@@ -869,7 +873,7 @@ class PlayerViewModel @Inject constructor(
 
         val ctrl = controller ?: return
         val args = Bundle().apply { putInt("minutes", minutes) }
-        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SLEEP_TIMER, Bundle.EMPTY), args)
+        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SLEEP_TIMER, Bundle()), args)
 
         // Start countdown display
         if (minutes > 0) {
@@ -888,7 +892,7 @@ class PlayerViewModel @Inject constructor(
         _sleepTimerRemainingMs.value = 0L
         val ctrl = controller ?: return
         val args = Bundle().apply { putInt("minutes", 0) }
-        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SLEEP_TIMER, Bundle.EMPTY), args)
+        ctrl.sendCustomCommand(SessionCommand(AudioPlayerService.CMD_SET_SLEEP_TIMER, Bundle()), args)
     }
 
     /**
