@@ -405,8 +405,14 @@ kover {
 
                     // --- Android framework / service glue with no JVM-testable surface
                     // (same reasoning as the server excluding ffmpeg/hardware glue).
+                    // AudioPlayerService is the one remaining player exclude. Its
+                    // decision layers — the Auto browse tree and play request
+                    // (auto/), the Cast URL/mime factory, the switch decision, the
+                    // LAN-server controller and the sleep timer (player/) — are
+                    // plain Kotlin, tested, and deliberately NOT listed here
+                    // (issue #225). LocalCastHttpServer left the list at the same
+                    // time: its serve() is driven directly in LocalCastHttpServerTest.
                     "com.booksync.player.AudioPlayerService*",
-                    "com.booksync.player.LocalCastHttpServer*",
                     "com.booksync.cast.*",
                     // com.booksync.auto is NOT excluded as a package any more
                     // (issue #172): the Android Auto browse tree and the voice
@@ -424,10 +430,11 @@ kover {
         verify {
             rule {
                 bound {
-                    // Measured 55.14% line coverage on 2026-09-06 (2731/4953 lines);
-                    // floor set a few points under, same as the server's --cov-fail-under.
-                    // Ratchet: after any PR that raises the total, bump this to
-                    // (new total − 3), whole percent.
+                    // Measured 55.35% line coverage on 2026-09-06 (2740/4950 lines)
+                    // after issue #225 pulled the player's decision layers out of the
+                    // excluded service; floor set a few points under, same as the
+                    // server's --cov-fail-under. Ratchet: after any PR that raises the
+                    // total, bump this to (new total − 3), whole percent.
                     //
                     // Previous baselines: 53.48% (2533/4736) earlier on 2026-09-06,
                     // 50.53% (2141/4237) on 2026-09-04, 48.55%

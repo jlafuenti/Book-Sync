@@ -16,7 +16,6 @@ import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -39,13 +38,19 @@ import com.booksync.auto.AUTO_UNAVAILABLE_MESSAGE
 import com.booksync.auto.AutoBook
 import com.booksync.auto.CoverArtHelper
 import com.booksync.auto.asSearchable
+import com.booksync.auto.autoBookItem
 import com.booksync.auto.autoBrowseItems
+import com.booksync.auto.autoEffectiveStartIndex
 import com.booksync.auto.autoMessageItem
 import com.booksync.auto.autoRootTabs
 import com.booksync.auto.autoSearch
+import com.booksync.auto.autoSearchIndex
+import com.booksync.auto.autoSearchPage
+import com.booksync.auto.autoStartPositionMs
 import com.booksync.auto.continueListeningBooks
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
+import com.booksync.auto.toAutoBook
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.diagnostics.LogChannel
@@ -72,13 +77,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlinx.coroutines.withTimeoutOrNull
@@ -216,10 +221,17 @@ class AudioPlayerService : MediaLibraryService() {
     // Local HTTP server that serves downloaded audiobooks to the Cast receiver over the LAN.
     // Started in castSessionListener.onSessionStarted, torn down in onSessionEnded. Avoids
     // depending on public DNS for a LAN-only hostname — Google Home devices hardcode 8.8.8.8.
-    private var localCastServer: LocalCastHttpServer? = null
-    private var localCastIp: String? = null
-    private var localCastPort: Int? = null
-    private var localCastPathToken: String? = null
+    // The lifecycle rules live in [LocalCastServerController] (issue #225); this service
+    // only supplies the Android pieces: the Wi-Fi address walk and the NanoHTTPD subclass.
+    private val castServer by lazy {
+        LocalCastServerController(
+            readTimeoutMs = NanoHTTPDSocketReadTimeoutMs,
+            detectIp = ::detectWifiIpv4,
+            newServer = { token -> LocalCastHttpServer(File(filesDir, "audiobooks"), token) },
+        )
+    }
+    // Serialises player switches (see [requestPlayerSwitch]).
+    private val playerSwitchMutex = Mutex()
     // The local (file://) MediaItem we were playing when casting started. Remembered so that
     // when the Cast session ends we can restore local playback — CastPlayer's own
     // currentMediaItem carries the http:// LAN URL (we bypass setMediaItem), which ExoPlayer
@@ -234,26 +246,9 @@ class AudioPlayerService : MediaLibraryService() {
         override fun onStatusUpdated() {
             val client = CastContext.getSharedInstance()?.sessionManager?.currentCastSession?.remoteMediaClient
             val status = client?.mediaStatus ?: return
-            val stateName = when (status.playerState) {
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_UNKNOWN -> "UNKNOWN"
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_IDLE -> "IDLE"
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PLAYING -> "PLAYING"
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_PAUSED -> "PAUSED"
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_BUFFERING -> "BUFFERING"
-                com.google.android.gms.cast.MediaStatus.PLAYER_STATE_LOADING -> "LOADING"
-                else -> "state=${status.playerState}"
-            }
-            val idleReasonName = when (status.idleReason) {
-                com.google.android.gms.cast.MediaStatus.IDLE_REASON_NONE -> "none"
-                com.google.android.gms.cast.MediaStatus.IDLE_REASON_FINISHED -> "FINISHED"
-                com.google.android.gms.cast.MediaStatus.IDLE_REASON_CANCELED -> "CANCELED"
-                com.google.android.gms.cast.MediaStatus.IDLE_REASON_INTERRUPTED -> "INTERRUPTED"
-                com.google.android.gms.cast.MediaStatus.IDLE_REASON_ERROR -> "ERROR"
-                else -> "reason=${status.idleReason}"
-            }
             val pos = status.streamPosition
-            if (pos > 0L) lastKnownCastPositionMs = pos
-            Log.d(TAG, "Cast status: $stateName idle=$idleReasonName pos=$pos")
+            lastKnownCastPositionMs = castReportedPosition(lastKnownCastPositionMs, pos)
+            Log.d(TAG, "Cast status: ${castStatusLabel(status.playerState, status.idleReason)} pos=$pos")
         }
 
         override fun onMediaError(error: com.google.android.gms.cast.MediaError) {
@@ -285,23 +280,23 @@ class AudioPlayerService : MediaLibraryService() {
     private val castSessionListener = object : SessionManagerListener<CastSession> {
         override fun onSessionStarted(session: CastSession, sessionId: String) {
             attachRemoteMediaClientCallback()
-            startLocalCastServer()
-            castPlayer?.let { switchToPlayer(it, savePosition = true) }
+            castServer.start()
+            castPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
         }
         override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
             attachRemoteMediaClientCallback()
-            startLocalCastServer()
-            castPlayer?.let { switchToPlayer(it, savePosition = false) }
+            castServer.start()
+            castPlayer?.let { requestPlayerSwitch(it, savePosition = false) }
         }
         override fun onSessionEnded(session: CastSession, error: Int) {
             detachRemoteMediaClientCallback()
-            exoPlayer?.let { switchToPlayer(it, savePosition = true) }
-            stopLocalCastServer()
+            exoPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
+            castServer.stop()
         }
         override fun onSessionSuspended(session: CastSession, reason: Int) {
             detachRemoteMediaClientCallback()
-            exoPlayer?.let { switchToPlayer(it, savePosition = true) }
-            stopLocalCastServer()
+            exoPlayer?.let { requestPlayerSwitch(it, savePosition = true) }
+            castServer.stop()
         }
         override fun onSessionStartFailed(session: CastSession, error: Int) {}
         override fun onSessionEnding(session: CastSession) {}
@@ -481,7 +476,7 @@ class AudioPlayerService : MediaLibraryService() {
             )
             // If a cast session is already active when the service starts, switch immediately
             if (castContext.sessionManager.currentCastSession?.isConnected == true) {
-                switchToPlayer(cast, savePosition = false)
+                requestPlayerSwitch(cast, savePosition = false)
             }
         } catch (e: Exception) {
             Log.d(TAG, "Cast not available: ${e.message}")
@@ -608,7 +603,7 @@ class AudioPlayerService : MediaLibraryService() {
     override fun onDestroy() {
         sleepTimerJob?.cancel()
         stopAutoPositionSave()
-        stopLocalCastServer()
+        castServer.stop()
         // Final flush BEFORE the scope dies (issue #164): detached, so
         // cancelling serviceScope on the next line can't abort it. The
         // saveLastPosition below writes only the SharedPreferences hint for
@@ -637,63 +632,8 @@ class AudioPlayerService : MediaLibraryService() {
     // Local Cast HTTP server
     // =========================================================
 
-    /**
-     * Boots the on-device HTTP server that streams downloaded audiobooks to the Cast
-     * receiver over the LAN. Returns true if the server is up and we have a usable
-     * Wi-Fi IPv4 address to put in Cast URLs. Idempotent — safe to call when already
-     * running (will rebind to the current Wi-Fi IP, which is what we want if the phone
-     * just changed networks).
-     */
-    private fun startLocalCastServer() {
-        // If we already have a server running and the IP hasn't changed, leave it alone.
-        val currentIp = detectWifiIpv4()
-        if (currentIp == null) {
-            Log.w(TAG, "startLocalCastServer: no Wi-Fi IPv4 found — Cast streaming will fail")
-            stopLocalCastServer()
-            return
-        }
-        if (localCastServer != null && localCastIp == currentIp) {
-            Log.d(TAG, "startLocalCastServer: already running at http://$currentIp:$localCastPort/")
-            return
-        }
-        // IP changed or no server yet — restart cleanly.
-        stopLocalCastServer()
-
-        val token = UUID.randomUUID().toString().replace("-", "")
-        val server = LocalCastHttpServer(
-            audiobooksDir = File(filesDir, "audiobooks"),
-            pathToken = token,
-        )
-        try {
-            server.start(NanoHTTPDSocketReadTimeoutMs, /* daemon = */ false)
-        } catch (e: Exception) {
-            Log.e(TAG, "startLocalCastServer: failed to start", e)
-            return
-        }
-        localCastServer = server
-        localCastIp = currentIp
-        localCastPort = server.listeningPort
-        localCastPathToken = token
-        // Host and port only. The path token gates the LAN server that serves
-        // the audiobook, so logging it hands anyone reading logcat a working
-        // stream URL for as long as the cast session lives (issue #231).
-        Log.i(TAG, "LocalCastHttpServer started at http://$currentIp:${server.listeningPort}/")
-    }
-
-    private fun stopLocalCastServer() {
-        localCastServer?.let { server ->
-            try {
-                server.stop()
-                Log.i(TAG, "LocalCastHttpServer stopped")
-            } catch (e: Exception) {
-                Log.w(TAG, "LocalCastHttpServer stop threw", e)
-            }
-        }
-        localCastServer = null
-        localCastIp = null
-        localCastPort = null
-        localCastPathToken = null
-    }
+    // Start/stop and the per-session token live in [LocalCastServerController]
+    // (issue #225); [castServer] is the instance. Only the Android part stays here:
 
     /**
      * Finds the phone's Wi-Fi IPv4 by walking the active network's LinkProperties.
@@ -724,11 +664,111 @@ class AudioPlayerService : MediaLibraryService() {
     // =========================================================
 
     /**
-     * Switches the active player between ExoPlayer (local) and CastPlayer (Chromecast).
-     * Saves the current position before switching if [savePosition] is true, then
-     * transfers the current media item and position to the new player.
+     * What the Cast handoff needs to know about one book, looked up off the
+     * main thread before the swap (issue #225).
      */
-    private fun switchToPlayer(newPlayer: Player, savePosition: Boolean) {
+    private class PlayableAudio(val audiobookId: Int, val filename: String?, val localFile: File?) {
+        /**
+         * The Cast precondition (issue #171): only a downloaded book can be
+         * served over the LAN, so only a downloaded book may be cast.
+         */
+        val hasLocalCopy: Boolean get() = localFile?.isFile == true
+    }
+
+    /** The outgoing player, captured the moment a switch is requested. */
+    private class OutgoingPlayer(val currentItem: MediaItem?, val decision: PlayerSwitchDecision)
+
+    /**
+     * Resolves a media id to its audio. Room, so never on the main thread.
+     *
+     * A standalone audiobook survives a missing Room row — its id is in the
+     * mediaId, which is all the stream URL needs (issue #338) — while a pair
+     * cannot, since only the row knows which audiobook it points at.
+     */
+    private suspend fun lookupPlayableAudio(mediaId: String): PlayableAudio? =
+        withContext(Dispatchers.IO) {
+            when (val id = MediaId.parse(mediaId)) {
+                is MediaId.Pair -> repository.getPairById(id.pairId)?.let { pair ->
+                    PlayableAudio(
+                        audiobookId = pair.audiobookId,
+                        filename = pair.audiobookFilename,
+                        localFile = repository.localAudioFile(pair.audiobookFilename),
+                    )
+                }
+                is MediaId.Audiobook -> {
+                    val filename = repository.getAudiobookById(id.audiobookId)?.filename
+                    PlayableAudio(
+                        audiobookId = id.audiobookId,
+                        filename = filename,
+                        localFile = filename?.let { repository.localAudioFile(it) },
+                    )
+                }
+                null -> null
+            }
+        }
+
+    /**
+     * Asks for the active player to become [newPlayer] — ExoPlayer (local) or
+     * CastPlayer (Chromecast).
+     *
+     * The book lookup the swap needs used to be two `runBlocking` Room reads on
+     * the main thread (issue #225). Now the outgoing player is snapshotted on
+     * the main thread the moment the switch is requested — a CastPlayer whose
+     * session just ended forgets its position and item within moments — the
+     * lookup runs on IO, and the swap itself follows back on the main thread.
+     * `Dispatchers.Main.immediate` is what makes "the moment" literal: launched
+     * from the main thread, the coroutine runs synchronously up to the lookup,
+     * so the snapshot happens inside the Cast callback exactly as the old
+     * synchronous path read it, not one looper hop later.
+     *
+     * Requests are serialised through [playerSwitchMutex], which is fair
+     * (FIFO): Cast callbacks that arrive in quick succession — started, then
+     * ended — are applied in that order even though each one suspends for its
+     * lookup, so a later request can never overtake an earlier one and each
+     * snapshot sees the player the previous switch left behind. `serviceScope`
+     * is cancelled in `onDestroy`, which drops any switch still waiting.
+     */
+    private fun requestPlayerSwitch(newPlayer: Player, savePosition: Boolean) {
+        serviceScope.launch(Dispatchers.Main.immediate) {
+            playerSwitchMutex.withLock {
+                val session = mediaLibrarySession ?: return@withLock
+                val currentPlayer = session.player
+                if (currentPlayer === newPlayer) return@withLock
+                val outgoing = OutgoingPlayer(
+                    currentItem = currentPlayer.currentMediaItem,
+                    decision = decidePlayerSwitch(
+                        leavingCast = currentPlayer is CastPlayer,
+                        rawPositionMs = currentPlayer.currentPosition,
+                        lastKnownCastPositionMs = lastKnownCastPositionMs,
+                        playWhenReady = currentPlayer.playWhenReady,
+                        playbackState = currentPlayer.playbackState,
+                    ),
+                )
+                // Going to Cast, the book is whatever is playing (or was, before
+                // an earlier cast). Coming back, CastPlayer's own item carries the
+                // LAN URL and an unmappable mediaId, so prefer the remembered one.
+                val subject = if (newPlayer is CastPlayer) {
+                    outgoing.currentItem ?: lastLocalMediaItem
+                } else {
+                    lastLocalMediaItem ?: outgoing.currentItem
+                }
+                val audio = subject?.let { lookupPlayableAudio(it.mediaId) }
+                switchToPlayer(newPlayer, savePosition, outgoing, audio)
+            }
+        }
+    }
+
+    /**
+     * Performs the switch decided by [requestPlayerSwitch]. Main thread only.
+     * Saves the current position before switching if [savePosition] is true,
+     * then transfers the current media item and position to the new player.
+     */
+    private fun switchToPlayer(
+        newPlayer: Player,
+        savePosition: Boolean,
+        outgoing: OutgoingPlayer,
+        audio: PlayableAudio?,
+    ) {
         val session = mediaLibrarySession ?: return
         val currentPlayer = session.player
         if (currentPlayer === newPlayer) return
@@ -740,12 +780,9 @@ class AudioPlayerService : MediaLibraryService() {
         // television. Refuse before the swap and keep playing on the phone
         // (issue #171); the player screen disables the Cast button for the same
         // reason, so this is the belt to that braces.
-        if (newPlayer is CastPlayer) {
-            val candidate = currentPlayer.currentMediaItem ?: lastLocalMediaItem
-            if (candidate == null || !hasLocalCopy(candidate)) {
-                Log.w(TAG, "switchToPlayer: not casting — audiobook is not downloaded")
-                return
-            }
+        if (newPlayer is CastPlayer && audio?.hasLocalCopy != true) {
+            Log.w(TAG, "switchToPlayer: not casting — audiobook is not downloaded")
+            return
         }
 
         // Every cast transition is a session boundary — log it when saving.
@@ -755,19 +792,9 @@ class AudioPlayerService : MediaLibraryService() {
         // same conservative treatment as the other background boundary saves.
         if (savePosition) saveCurrentPositionForAuto(appendToLog = true, claimFormat = false, detached = true)
 
-        val currentItem = currentPlayer.currentMediaItem
-        val rawPositionMs = currentPlayer.currentPosition
-        // When a Cast session ends, CastPlayer.currentPosition often reads 0 because it has
-        // already disconnected from the receiver. Fall back to the last position the receiver
-        // reported so local playback resumes where casting left off (instead of 0:00).
-        val positionMs = if (currentPlayer is CastPlayer && rawPositionMs <= 0L && lastKnownCastPositionMs > 0L) {
-            lastKnownCastPositionMs
-        } else {
-            rawPositionMs
-        }
-        val playWhenReady = currentPlayer.playWhenReady
-        val playbackState = currentPlayer.playbackState
-        val shouldPlay = playWhenReady && playbackState != Player.STATE_ENDED
+        val currentItem = outgoing.currentItem
+        val positionMs = outgoing.decision.positionMs
+        val shouldPlay = outgoing.decision.shouldPlay
 
         currentPlayer.stop()
         session.player = newPlayer
@@ -785,7 +812,7 @@ class AudioPlayerService : MediaLibraryService() {
                 // whatever URI local playback was using, which since issue #171 can
                 // be the server's authenticated stream URL. Better to load nothing
                 // than to make the television ask for a token it does not have.
-                val castItem = buildCastMediaItem(sourceLocalItem)
+                val castItem = buildCastMediaItem(sourceLocalItem, audio)
                 if (castItem == null) {
                     Log.w(TAG, "switchToPlayer: no LAN cast URL for this book; nothing loaded")
                 } else {
@@ -799,7 +826,7 @@ class AudioPlayerService : MediaLibraryService() {
             // down as we speak. [buildLocalMediaItem] resolves the book afresh — the
             // downloaded file if there is one, the server stream otherwise (issue #171).
             val sourceItem = lastLocalMediaItem ?: currentItem
-            val localItem = sourceItem?.let { buildLocalMediaItem(it) }
+            val localItem = sourceItem?.let { buildLocalMediaItem(it, audio) }
             if (localItem != null) {
                 newPlayer.setMediaItem(localItem, positionMs)
                 newPlayer.prepare()
@@ -811,85 +838,28 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     /**
-     * Is this book's audio actually on the phone? The Cast precondition
-     * (issue #171) — checked before the player swap so a stream-only book keeps
-     * playing here instead of being handed to a receiver that cannot fetch it.
-     */
-    private fun hasLocalCopy(item: MediaItem): Boolean {
-        val filename = when (val id = MediaId.parse(item.mediaId)) {
-            is MediaId.Pair ->
-                runBlocking { repository.getPairById(id.pairId) }?.audiobookFilename
-            is MediaId.Audiobook ->
-                runBlocking { repository.getAudiobookById(id.audiobookId) }?.filename
-            null -> null
-        } ?: return false
-        return repository.localAudioFile(filename)?.isFile == true
-    }
-
-    /**
      * Rebuilds a MediaItem pointing at the on-device LAN HTTP server
      * (`http://<phone-ip>:<port>/<token>/<filename>`) so the Cast receiver streams the
-     * downloaded audiobook directly from the phone. Returns null if the local cast server
-     * isn't running, the mediaId is unrecognised, or the file isn't downloaded.
+     * downloaded audiobook directly from the phone. Null if the local cast server
+     * isn't running, the book could not be resolved, or the file isn't downloaded —
+     * the rules are [CastMediaItemFactory]'s; this only supplies the pieces.
      */
-    private fun buildCastMediaItem(original: MediaItem): MediaItem? {
-        val ip = localCastIp
-        val port = localCastPort
-        val token = localCastPathToken
-        if (ip == null || port == null || token == null) {
+    private fun buildCastMediaItem(original: MediaItem, audio: PlayableAudio?): MediaItem? {
+        val address = castServer.address
+        if (address == null) {
             Log.w(TAG, "buildCastMediaItem: local cast server not running — cannot build URL")
             return null
         }
-
-        val mediaId = original.mediaId
-        val filename = when (val id = MediaId.parse(mediaId)) {
-            is MediaId.Pair ->
-                runBlocking { repository.getPairById(id.pairId) }?.audiobookFilename
-            is MediaId.Audiobook ->
-                runBlocking { repository.getAudiobookById(id.audiobookId) }?.filename
-            null -> null
-        } ?: run {
-            Log.w(TAG, "buildCastMediaItem: no filename for mediaId=$mediaId")
-            return null
+        val castItem = CastMediaItemFactory.build(
+            original,
+            address,
+            filename = audio?.filename,
+            hasLocalFile = audio?.hasLocalCopy == true,
+        )
+        if (castItem == null) {
+            Log.w(TAG, "buildCastMediaItem: nothing on the phone to cast for mediaId=${original.mediaId}")
         }
-
-        // Verify the file exists locally — Cast streams from the phone, so if the file isn't
-        // downloaded the receiver would 404 and idle.
-        if (repository.localAudioFile(filename)?.isFile != true) {
-            Log.w(TAG, "buildCastMediaItem: local file missing for '$filename'")
-            return null
-        }
-
-        val mimeType = when (filename.substringAfterLast('.', "").lowercase()) {
-            "mp3"        -> MimeTypes.AUDIO_MPEG
-            "m4b", "m4a" -> MimeTypes.AUDIO_MP4
-            "flac"       -> MimeTypes.AUDIO_FLAC
-            "ogg"        -> MimeTypes.AUDIO_OGG
-            "aac"        -> MimeTypes.AUDIO_AAC
-            "wav"        -> "audio/wav"
-            else         -> MimeTypes.AUDIO_MPEG
-        }
-
-        // URL-encode the filename so spaces and other special chars survive the URL parse on
-        // the receiver. Don't encode the path token (it's already hex).
-        val encodedFilename = Uri.encode(filename)
-        val streamUrl = "http://$ip:$port/$token/$encodedFilename"
-
-        // Artwork is intentionally not set — the Cast receiver runs in a Chrome browser context
-        // and can't fetch a content:// URI, and we don't have a public-LAN cover image to
-        // substitute. The Default Media Receiver tolerates missing artwork (just shows its
-        // default icon).
-        // Not $streamUrl: it carries the same path token (issue #231).
-        Log.d(TAG, "buildCastMediaItem: mimeType=$mimeType")
-        return original.buildUpon()
-            .setUri(streamUrl)
-            .setMimeType(mimeType)
-            .setMediaMetadata(
-                original.mediaMetadata.buildUpon()
-                    .setArtworkUri(null)
-                    .build()
-            )
-            .build()
+        return castItem
     }
 
     /**
@@ -985,31 +955,12 @@ class AudioPlayerService : MediaLibraryService() {
     /**
      * Rebuilds a MediaItem for ExoPlayer, used when switching back from Cast to
      * local playback. Points at the downloaded file if there is one and at the
-     * server otherwise; null if the mediaId is unrecognised.
-     *
-     * The one path that *has* to look the book up, because all it is given is a
-     * mediaId. A standalone audiobook survives a missing Room row — its id is in
-     * the mediaId, which is all the stream URL needs (issue #338) — while a pair
-     * still cannot, since only the row knows which audiobook it points at.
+     * server otherwise; null if the book could not be resolved (see
+     * [lookupPlayableAudio] for which books survive a missing Room row).
      */
-    private fun buildLocalMediaItem(original: MediaItem): MediaItem? {
-        val uri = when (val id = MediaId.parse(original.mediaId)) {
-            is MediaId.Pair -> {
-                val pair = runBlocking { repository.getPairById(id.pairId) }
-                mediaUriFor(
-                    pair?.audiobookFilename?.let { repository.localAudioFile(it) },
-                    pair?.audiobookId ?: 0,
-                )
-            }
-            is MediaId.Audiobook -> {
-                val audio = runBlocking { repository.getAudiobookById(id.audiobookId) }
-                mediaUriFor(
-                    audio?.filename?.let { repository.localAudioFile(it) },
-                    id.audiobookId,
-                )
-            }
-            null -> null
-        } ?: return null
+    private fun buildLocalMediaItem(original: MediaItem, audio: PlayableAudio?): MediaItem? {
+        val resolved = audio ?: return null
+        val uri = mediaUriFor(resolved.localFile, resolved.audiobookId) ?: return null
         return original.buildUpon().setUri(uri).build()
     }
 
@@ -1199,28 +1150,27 @@ class AudioPlayerService : MediaLibraryService() {
     // Sleep timer
     // =========================================================
 
+    /**
+     * The wait, the fade and the pause are [runSleepTimer]'s (issue #225);
+     * this only turns the command into a job on the service scope. The target
+     * is resolved after the wait, so a Cast switch mid-countdown fades whatever
+     * player is current by then.
+     */
     private fun handleSleepTimer(minutes: Int) {
         sleepTimerJob?.cancel()
-        if (minutes <= 0) return
-
+        val schedule = SleepTimerSchedule.forMinutes(minutes) ?: return
         sleepTimerJob = serviceScope.launch {
-            val totalMs = minutes * 60 * 1000L
-            val waitMs = maxOf(0L, totalMs - 30_000L)
-            delay(waitMs)
-
-            val fadeSteps = 30
-            val fadeDuration = minOf(30_000L, totalMs)
-            val fadeInterval = fadeDuration / fadeSteps
-            val player = mediaLibrarySession?.player ?: return@launch
-
-            for (i in fadeSteps downTo 0) {
-                if (!player.isPlaying) return@launch
-                player.volume = 1.0f * i / fadeSteps
-                delay(fadeInterval)
-            }
-            player.pause()
-            player.volume = 1.0f
+            runSleepTimer(schedule) { mediaLibrarySession?.player?.let(::SleepTimerPlayer) }
         }
+    }
+
+    /** [SleepTimerTarget] over the session's current player. */
+    private class SleepTimerPlayer(private val player: Player) : SleepTimerTarget {
+        override val isPlaying: Boolean get() = player.isPlaying
+        override var volume: Float
+            get() = player.volume
+            set(value) { player.volume = value }
+        override fun pause() = player.pause()
     }
 
     // =========================================================
@@ -1437,10 +1387,8 @@ class AudioPlayerService : MediaLibraryService() {
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val all = autoSearchResults[query] ?: ImmutableList.of()
-            val from = (page * pageSize).coerceAtMost(all.size)
-            val to = (from + pageSize).coerceAtMost(all.size)
             return Futures.immediateFuture(
-                LibraryResult.ofItemList(ImmutableList.copyOf(all.subList(from, to)), params)
+                LibraryResult.ofItemList(ImmutableList.copyOf(autoSearchPage(all, page, pageSize)), params)
             )
         }
 
@@ -1476,7 +1424,7 @@ class AudioPlayerService : MediaLibraryService() {
                     )
                 serviceScope.launch(Dispatchers.IO) {
                     val placeholder = MediaItem.Builder().setMediaId(mediaId).build()
-                    val castItem = buildCastMediaItem(placeholder)
+                    val castItem = buildCastMediaItem(placeholder, lookupPlayableAudio(mediaId))
                     if (castItem == null) {
                         Log.w(TAG, "Cast resumption: cannot build cast item for $mediaId")
                         return@launch
@@ -1583,19 +1531,12 @@ class AudioPlayerService : MediaLibraryService() {
                     }
                 }
                 // Google Assistant / Android Auto pass startIndex = C.INDEX_UNSET (-1) when
-                // they want the player to use its default. getOrNull(-1) returns null, which
-                // would make us lose the bookmarked position embedded in the resolved item's
-                // extras and start from 0. Normalize to 0 (first item) for both lookup and
-                // the returned MediaItemsWithStartPosition.
-                val effectiveStartIndex =
-                    if (startIndex < 0 || startIndex >= resolvedItems.size) 0 else startIndex
+                // they want the player to use its default; the rules for both the
+                // index and the position are pure (AutoPlayRequest.kt, issue #225).
+                val effectiveStartIndex = autoEffectiveStartIndex(startIndex, resolvedItems.size)
                 val item = resolvedItems.getOrNull(effectiveStartIndex)
                 val resumeMs = item?.mediaMetadata?.extras?.getLong("resumePositionMs", 0L) ?: 0L
-                val resolvedPosition = if (startPositionMs != C.TIME_UNSET && startPositionMs > 0) {
-                    startPositionMs
-                } else {
-                    resumeMs
-                }
+                val resolvedPosition = autoStartPositionMs(startPositionMs, resumeMs)
                 diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems resolved effectiveStartIndex=$effectiveStartIndex resumeMs=$resumeMs resolvedPosition=$resolvedPosition mediaId=${item?.mediaId}")
                 future.set(
                     MediaSession.MediaItemsWithStartPosition(resolvedItems, effectiveStartIndex, resolvedPosition)
@@ -1620,32 +1561,20 @@ class AudioPlayerService : MediaLibraryService() {
         ImmutableList.copyOf(autoRootTabs())
 
     /** Pair row → browse row. Room only: no network on the browse path. */
-    private suspend fun autoBookFor(pair: BookPairEntity): AutoBook = AutoBook(
-        mediaId = MediaId.Pair(pair.id).value,
-        title = pair.audiobookTitle,
-        author = pair.audiobookAuthor,
-        series = pair.ebookSeries,
-        audiobookId = pair.audiobookId,
-        pairId = pair.id,
-        resumePositionMs = repository.getBookmark(pair.id)?.audioPositionMs?.toLong() ?: 0L,
-        durationMs = (pair.audiobookDurationSeconds ?: 0) * 1000L,
-        audioFilename = pair.audiobookFilename,
-        serverCoverPath = pair.audiobookCoverPath,
-    )
+    private suspend fun autoBookFor(pair: BookPairEntity): AutoBook =
+        pair.toAutoBook(resumePositionMs = pairResumeMs(pair.id))
 
     /** Standalone audiobook row → browse row. Room only, same as above. */
-    private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook = AutoBook(
-        mediaId = MediaId.Audiobook(audio.id).value,
-        title = audio.title,
-        author = audio.author,
-        series = audio.series,
-        audiobookId = audio.id,
-        resumePositionMs = repository.getProgressOnce("audiobook", audio.id)
-            ?.audioPositionMs?.toLong() ?: 0L,
-        durationMs = (audio.durationSeconds ?: 0) * 1000L,
-        audioFilename = audio.filename,
-        serverCoverPath = audio.coverFilename,
-    )
+    private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook =
+        audio.toAutoBook(resumePositionMs = audiobookResumeMs(audio.id))
+
+    /** The cached bookmark position for a pair; 0 when the book was never opened. */
+    private suspend fun pairResumeMs(pairId: Int): Long =
+        repository.getBookmark(pairId)?.audioPositionMs?.toLong() ?: 0L
+
+    /** The cached progress position for a standalone audiobook; 0 when never opened. */
+    private suspend fun audiobookResumeMs(audiobookId: Int): Long =
+        repository.getProgressOnce("audiobook", audiobookId)?.audioPositionMs?.toLong() ?: 0L
 
     /**
      * The playback source for a browse row: the download, else the stream
@@ -1766,24 +1695,23 @@ class AudioPlayerService : MediaLibraryService() {
      * "play Bartleby" with two Bartlebys picks the one being listened to, and a
      * blank query — Assistant's "play Tandem" — resumes the most recent book.
      */
-    private suspend fun autoSearchIndex(): List<AutoBook> {
+    private suspend fun loadAutoSearchIndex(): List<AutoBook> {
         val recentPairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) }
         val recentStandalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
             .map { autoBookFor(it) }
         val recent = continueListeningBooks(recentPairs, recentStandalone)
-        val recentIds = recent.map { it.mediaId }.toSet()
         // Uncapped on purpose: a node cap is a rendering limit, and applying it
         // here would make books past it unsayable.
         val all = mergedLibrary(
             pairs = repository.getPairsFlow().first().map { autoBookFor(it) },
             standalone = repository.getAudiobooksFlow().first().map { autoBookFor(it) },
         )
-        return recent + all.filterNot { it.mediaId in recentIds }
+        return autoSearchIndex(recent, all)
     }
 
     /** The books [autoSearch] picked, as playable items. Empty means no hits. */
     private suspend fun autoSearchBooks(query: String): List<AutoBook> {
-        val index = autoSearchIndex()
+        val index = loadAutoSearchIndex()
         val byId = index.associateBy { it.mediaId }
         return autoSearch(query, index.map { it.asSearchable() }).mapNotNull { byId[it.mediaId] }
     }
@@ -1864,36 +1792,19 @@ class AudioPlayerService : MediaLibraryService() {
      * A filename the app refuses to resolve (issue #177) no longer removes the
      * book from the browse tree: it means "not downloaded", and the stream URL
      * is built from the audiobook id, which never came from a filename.
+     *
+     * The item itself comes from the same [autoBookItem] the browse tree uses
+     * (issue #225); only the source selection stays here, because it stats
+     * the filesystem.
      */
     private fun buildPairMediaItem(
         pair: BookPairEntity,
         resumePositionMs: Long,
         coverUri: Uri?
     ): MediaItem? {
-        val extras = Bundle().apply {
-            putLong("resumePositionMs", resumePositionMs)
-            putLong("durationMs", (pair.audiobookDurationSeconds ?: 0) * 1000L)
-            putString("sourceType", "pair")
-            putInt("pairId", pair.id)
-        }
-        return MediaItem.Builder()
-            .setMediaId(MediaId.Pair(pair.id).value)
-            .setUri(
-                mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
-                    ?: return null
-            )
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(pair.audiobookTitle)
-                    .setArtist(pair.audiobookAuthor)
-                    .setArtworkUri(coverUri)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .setExtras(extras)
-                    .build()
-            )
-            .build()
+        val uri = mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
+            ?: return null
+        return autoBookItem(pair.toAutoBook(resumePositionMs), uri.toString(), coverUri)
     }
 
     /** Null for the same reason as [buildPairMediaItem] (issue #177). */
@@ -1902,26 +1813,8 @@ class AudioPlayerService : MediaLibraryService() {
         resumePositionMs: Long,
         coverUri: Uri?
     ): MediaItem? {
-        val extras = Bundle().apply {
-            putLong("resumePositionMs", resumePositionMs)
-            putLong("durationMs", (audio.durationSeconds ?: 0) * 1000L)
-            putString("sourceType", "standalone")
-            putInt("audiobookId", audio.id)
-        }
-        return MediaItem.Builder()
-            .setMediaId(MediaId.Audiobook(audio.id).value)
-            .setUri(mediaUriFor(repository.localAudioFile(audio.filename), audio.id) ?: return null)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(audio.title)
-                    .setArtist(audio.author)
-                    .setArtworkUri(coverUri)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .setExtras(extras)
-                    .build()
-            )
-            .build()
+        val uri = mediaUriFor(repository.localAudioFile(audio.filename), audio.id)
+            ?: return null
+        return autoBookItem(audio.toAutoBook(resumePositionMs), uri.toString(), coverUri)
     }
 }
