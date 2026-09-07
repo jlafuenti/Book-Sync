@@ -38,7 +38,14 @@ class LocalCastHttpServer(
     private val pathToken: String,
     /** Host to bind to; null lets NanoHTTPD bind to 0.0.0.0. */
     hostname: String? = null,
-) : NanoHTTPD(hostname, /* port = */ 0) {
+) : NanoHTTPD(hostname, /* port = */ 0), CastFileServer {
+
+    // The controller-facing lifecycle (issue #225). Non-daemon on purpose: the
+    // receiver streams for as long as the session lives, and a daemon thread
+    // would let the process exit mid-stream.
+    override fun open(readTimeoutMs: Int) = start(readTimeoutMs, /* daemon = */ false)
+    override fun close() = stop()
+    override fun boundPort(): Int = listeningPort
 
     companion object {
         private const val TAG = "LocalCastHttpServer"

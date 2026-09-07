@@ -309,10 +309,11 @@ class SyncWiringTest {
     }
 
     // ---------------------------------------------------------------------
-    // Issue #231. These cannot be behavioural tests: AudioPlayerService and
-    // LocalCastHttpServer are excluded from Kover and are Android-framework
-    // glue that JVM unit tests cannot instantiate, and there is no way to
-    // assert on what logcat received from here anyway.
+    // Issue #231. These cannot be behavioural tests: AudioPlayerService is
+    // excluded from Kover and is Android-framework glue that JVM unit tests
+    // cannot instantiate, and there is no way to assert on what logcat
+    // received from here anyway. The Cast pieces that left the service in
+    // issue #225 are scanned too — the controller owns the "started at" line.
     //
     // So read the source. The failure mode is exactly "someone interpolated a
     // secret into a log line again", which a text scan catches precisely.
@@ -327,6 +328,8 @@ class SyncWiringTest {
         for (path in listOf(
             "com/booksync/player/AudioPlayerService.kt",
             "com/booksync/player/LocalCastHttpServer.kt",
+            "com/booksync/player/LocalCastServerController.kt",
+            "com/booksync/player/CastMediaItemFactory.kt",
         )) {
             codeLines(source(path)).forEachIndexed { i, line ->
                 if (!line.contains("Log.")) return@forEachIndexed

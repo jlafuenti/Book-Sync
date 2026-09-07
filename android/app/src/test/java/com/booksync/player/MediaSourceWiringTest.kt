@@ -123,12 +123,17 @@ class MediaSourceWiringTest {
         // 401 (it cannot send the Bearer header) and idle.
         val body = functionBody(service, "buildCastMediaItem")
         assertTrue(
-            "buildCastMediaItem must keep pointing at the phone's LocalCastHttpServer.",
-            body.contains("localCastIp") && body.contains("localCastPathToken"),
+            "buildCastMediaItem must keep pointing at the phone's LocalCastHttpServer — " +
+                "the controller's address, through CastMediaItemFactory (issue #225).",
+            body.contains("castServer.address") && body.contains("CastMediaItemFactory.build("),
         )
         assertTrue(
             "buildCastMediaItem must still refuse when the file is not on the phone.",
-            codeLines(body).any { it.contains("localAudioFile") },
+            codeLines(body).any { it.contains("hasLocalCopy") },
+        )
+        assertTrue(
+            "The Cast lookup must stat the downloaded copy through localAudioFile.",
+            codeLines(functionBody(service, "lookupPlayableAudio")).any { it.contains("localAudioFile") },
         )
     }
 }
