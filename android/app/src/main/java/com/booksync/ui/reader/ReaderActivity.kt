@@ -20,7 +20,6 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ReaderPositionSnapshot
 import com.booksync.data.repository.toStoredPosition
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
-import com.booksync.data.sync.RestoreStep
 import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
 import com.google.android.material.appbar.MaterialToolbar
@@ -90,8 +89,6 @@ class ReaderActivity : AppCompatActivity() {
         // the view to the pre-change locator (re-layout finishes drawing in
         // ~200-400 ms; the go() must land after it or Readium re-lays again).
         private const val RELAYOUT_RESTORE_DELAY_MS = 800L
-        /** If audio moved less than this since the locator was captured, reuse it verbatim. */
-        private const val LOCATOR_REUSE_THRESHOLD_MS = 30_000
         private const val PREFS_NAME = "reader_display"
         private const val KEY_FONT_SIZE = "font_size"
         private const val KEY_THEME = "theme"
@@ -540,40 +537,6 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** Find which spine index contains the given text preview.
-     *  Searches outward from hintIdx to prefer nearby matches. */
-    private suspend fun findSpineIndexForText(previewText: String, hintIdx: Int = -1): Int? {
-        val pub = publication ?: return null
-        if (previewText.isEmpty()) return null
-        
-        // Strip leading chapter headings (e.g. "CHAPTER 28\n") since epub text has different formatting
-        val stripped = previewText.replace(Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE), "")
-        // Normalize newlines to spaces and collapse whitespace
-        val searchText = stripped.replace("\n", " ").replace(Regex("\\s+"), " ").take(60).trim()
-        
-        if (searchText.length < 10) {
-            Log.d(TAG, "findSpineIndexForText: search text too short after cleaning: '$searchText'")
-            return null
-        }
-        
-        val n = pub.readingOrder.size
-        // If we have a valid hint, search outward from it
-        val hint = if (hintIdx in 0 until n) hintIdx else n / 2
-        for (offset in 0 until n) {
-            for (candidate in listOf(hint + offset, hint - offset).distinct()) {
-                if (candidate in 0 until n) {
-                    val plainText = getChapterPlainText(candidate) ?: continue
-                    if (plainText.contains(searchText, ignoreCase = true)) {
-                        Log.d(TAG, "findSpineIndexForText: found '${searchText.take(40)}' at spine $candidate (hint=$hint)")
-                        return candidate
-                    }
-                }
-            }
-        }
-        Log.d(TAG, "findSpineIndexForText: no match for '${searchText.take(40)}'")
-        return null
-    }
-
     private suspend fun getChapterPlainText(chapterIndex: Int): String? {
         // Return cached value if available
         if (chapterTextCache.containsKey(chapterIndex)) return chapterTextCache[chapterIndex]
@@ -597,27 +560,31 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun findTextProgressionInChapter(chapterIndex: Int, textPreview: String): Double? {
-        val plainText = getChapterPlainText(chapterIndex) ?: return null
-        // Strip chapter heading and normalize whitespace
-        val stripped = textPreview.replace(Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE), "")
-        val cleanPreview = stripped.replace("\n", " ").replace(Regex("\\s+"), " ").trim().lowercase()
-        val cleanPlain = plainText.replace(Regex("\\s+"), " ").lowercase()
-        
-        val index = cleanPlain.indexOf(cleanPreview)
-        if (index >= 0) {
-            return index.toDouble() / cleanPlain.length
-        }
-        
-        // Approximate fallback if exact search misses (typos etc)
-        // Just look for the first 20 characters
-        val shortPreview = cleanPreview.take(20)
-        val shortIndex = cleanPlain.indexOf(shortPreview)
-        if (shortIndex >= 0) {
-            return shortIndex.toDouble() / cleanPlain.length
-        }
-        
-        return null
+    /**
+     * The restore ladder's view of the open book (issue #227): the reading
+     * order, each item's parsed text (through [getChapterPlainText]'s cache),
+     * and the chapter lengths [startPositionTracking] precomputes.
+     */
+    private val spineSource = object : SpineSource {
+        override val spineCount: Int get() = publication?.readingOrder?.size ?: 0
+        override suspend fun plainTextAt(index: Int): String? = getChapterPlainText(index)
+        override suspend fun chapterLengths(): LongArray =
+            chapterLengthsDeferred?.await() ?: super.chapterLengths()
+    }
+
+    /**
+     * Executes the ladder [planRestore] produces. Built lazily because the
+     * audio rung exists only for a paired book, and which mode this is comes
+     * from the intent in onCreate.
+     */
+    private val restoreExecutor: ReaderRestoreExecutor by lazy {
+        ReaderRestoreExecutor(
+            spineSource,
+            hintDecodes = { decodeHint(it) != null },
+            audio = if (isStandalone) null else AudioAnchorSource { audioMs ->
+                repository.audioToEpubText(pairId, audioMs)
+            },
+        )
     }
 
     // ============ Bar toggle ============
@@ -825,27 +792,11 @@ class ReaderActivity : AppCompatActivity() {
         if (readingOrder.isEmpty()) return
 
         lifecycleScope.launch {
-            // Get content-weighted chapter lengths (precomputed in background by startPositionTracking).
-            // Falls back to computing now if somehow not ready yet.
-            val lengths = chapterLengthsDeferred?.await()
-                ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
-
-            val totalLength = lengths.sum().coerceAtLeast(1)
-            val targetChar = (progress * totalLength).toLong().coerceIn(0, totalLength - 1)
-
-            // Find which spine item contains targetChar
-            var accumulated = 0L
-            var targetSpineIndex = readingOrder.size - 1
-            var targetProgression = 1.0
-            for (i in lengths.indices) {
-                val len = lengths[i]
-                if (accumulated + len > targetChar) {
-                    targetSpineIndex = i
-                    targetProgression = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
-                    break
-                }
-                accumulated += len
-            }
+            // The same content-weighted mapping the percent rung uses, run
+            // the other way: a slider fraction -> spine item + progression.
+            val spineTarget = restoreExecutor.targetForProgress(progress) ?: return@launch
+            val targetSpineIndex = spineTarget.index
+            val targetProgression = spineTarget.progression ?: 0.0
 
             Log.d(TAG, "goToProgress: ${(progress * 100).toInt()}%% -> spine=$targetSpineIndex, intraProgression=%.3f".format(targetProgression))
             val link = readingOrder[targetSpineIndex]
@@ -868,42 +819,36 @@ class ReaderActivity : AppCompatActivity() {
 
     private suspend fun getInitialLocator(pub: Publication): Locator? {
         return try {
-            val position = canonicalPosition
             val steps = planRestore(
-                position,
+                canonicalPosition,
                 spineCount = pub.readingOrder.size,
                 deviceId = repository.deviceId,
                 hintKind = HINT_READIUM_LOCATOR,
             )
             Log.d(TAG, "getInitialLocator: plan=${steps.map { it.kind }}")
 
-            for (step in steps) {
-                val locator = executeRestoreStep(pub, step, position)
-                if (locator != null) {
-                    Log.d(TAG, "getInitialLocator: restored via '${step.kind}'")
-                    // Monotonic — see PositionSavePolicy. An exception thrown
-                    // by a LATER step (caught below) can no longer demote this
-                    // back to Unresolved, unlike the old boolean flag.
-                    savePolicy.onRestoreOutcome(PositionSavePolicy.RestoreOutcome.Landed)
-                    return locator
+            // The ladder itself — which rung lands, and where — is
+            // ReaderRestoreExecutor's (issue #227); this adapter only turns
+            // the answer into a Readium locator and records the outcome.
+            val result = restoreExecutor.resolve(steps)
+            val target = result.target
+            val locator = target?.let { locatorFor(pub, it) }
+            if (target is RestoreTarget.Spine && locator != null) {
+                target.persistAsHintForAudioMs?.let { audioMs ->
+                    // Persist so the next open at this audio position takes the
+                    // exact-hint rung instead of redoing this lossy chain.
+                    repository.updateBookmarkLocator(pairId, locator.toJSON().toString(), audioMs)
                 }
-                Log.d(TAG, "getInitialLocator: step '${step.kind}' did not resolve")
             }
-
-            // No steps at all means the book is genuinely unread, and opening
-            // at the beginning is correct — a full save is safe. Steps that
-            // all failed mean we hold a position we could not resolve — the
-            // policy still allows a local metadata-only stamp (never the full
-            // anchors) until the user actually turns a page.
-            val outcome = if (steps.isEmpty())
-                PositionSavePolicy.RestoreOutcome.Unread
-            else
-                PositionSavePolicy.RestoreOutcome.Unresolved
-            savePolicy.onRestoreOutcome(outcome)
-            if (outcome == PositionSavePolicy.RestoreOutcome.Unresolved) {
-                Log.w(TAG, "getInitialLocator: position unresolved — full saves withheld until a page turn")
+            // Monotonic — see PositionSavePolicy. Recorded only once the
+            // locator (and any persist) is in hand, so an exception thrown
+            // on the way there is caught below as Unresolved, and a landing
+            // already recorded can never be demoted by it.
+            savePolicy.onRestoreOutcome(result.outcome)
+            if (locator != null) {
+                Log.d(TAG, "getInitialLocator: restored via '${result.landed?.kind}'")
             }
-            null
+            locator
         } catch (e: Exception) {
             Log.w(TAG, "Error getting initial locator", e)
             // Monotonic — a landed rung earlier in the ladder is not undone
@@ -913,107 +858,25 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** Try one rung of the ladder. Returns null when it doesn't resolve. */
-    private suspend fun executeRestoreStep(
-        pub: Publication,
-        step: RestoreStep,
-        position: StoredPosition?,
-    ): Locator? = when (step) {
-        is RestoreStep.Hint ->
-            runCatching { Locator.fromJSON(org.json.JSONObject(step.value)) }.getOrNull()
-
-        is RestoreStep.Text -> {
-            val seed = step.seedChapter ?: 0
-            val idx = findSpineIndexForText(step.text, seed)
-            if (idx != null && idx in pub.readingOrder.indices) {
-                pub.locatorFromLink(pub.readingOrder[idx])?.copy(
-                    locations = Locator.Locations(
-                        progression = findTextProgressionInChapter(idx, step.text) ?: 0.0
-                    )
-                )
-            } else null
-        }
-
-        is RestoreStep.Chapter ->
-            pub.readingOrder.getOrNull(step.chapter)?.let { pub.locatorFromLink(it) }
-
-        is RestoreStep.Percent -> locatorForProgress(pub, step.percent / 100.0)
-
-        // An audio rung cannot resolve without a sync map, and a standalone
-        // ebook has neither one nor an audiobook to have produced the position
-        // (issue #169). Guarded rather than left to return null by accident:
-        // audioToEpubText would otherwise query sync points for pair id 0.
-        is RestoreStep.Audio -> if (isStandalone) null else {
-            // Audio -> sync map -> preview -> the same text search as above.
-            val (syncChapter, previewText) = repository.audioToEpubText(
-                pairId, step.audioPositionMs)
-            val idx = findSpineIndexForText(previewText, syncChapter)
-                ?: syncChapter.takeIf { it in pub.readingOrder.indices }
-            if (idx != null && idx in pub.readingOrder.indices && previewText.isNotEmpty()) {
-                val computed = pub.locatorFromLink(pub.readingOrder[idx])?.copy(
-                    locations = Locator.Locations(
-                        progression = findTextProgressionInChapter(idx, previewText) ?: 0.0
-                    )
-                )
-                // Persist so the next open at this audio position takes the
-                // exact-hint rung instead of redoing this lossy chain.
-                if (computed != null) {
-                    repository.updateBookmarkLocator(
-                        pairId, computed.toJSON().toString(), step.audioPositionMs)
-                }
-                computed
-            } else null
-        }
-    }
-
-    /** Map a 0..1 book fraction onto a locator, weighting chapters by length. */
-    private suspend fun locatorForProgress(pub: Publication, progress: Double): Locator? {
-        val readingOrder = pub.readingOrder
-        if (readingOrder.isEmpty()) return null
-        val lengths = chapterLengthsDeferred?.await()
-            ?: LongArray(readingOrder.size) { i -> getChapterPlainText(i)?.length?.toLong() ?: 1000L }
-        val total = lengths.sum().coerceAtLeast(1)
-        val targetChar = (progress * total).toLong().coerceIn(0, total - 1)
-
-        var accumulated = 0L
-        var spineIndex = readingOrder.size - 1
-        var withinChapter = 1.0
-        for (i in lengths.indices) {
-            val len = lengths[i]
-            if (accumulated + len > targetChar) {
-                spineIndex = i
-                withinChapter = if (len > 0) (targetChar - accumulated).toDouble() / len else 0.0
-                break
-            }
-            accumulated += len
-        }
-        return pub.locatorFromLink(readingOrder[spineIndex])?.copy(
-            locations = Locator.Locations(progression = withinChapter.coerceIn(0.0, 1.0))
-        )
-    }
+    /** A stored Readium locator hint, or null when the value cannot be displayed. */
+    private fun decodeHint(value: String): Locator? =
+        runCatching { Locator.fromJSON(org.json.JSONObject(value)) }.getOrNull()
 
     /**
-     * Resolve a position from the portable anchor alone (chapter + sentence),
-     * used when the stored locator can't be trusted. Same preview -> spine ->
-     * progression chain the audiobook slow path uses; falls back to the start
-     * of the chapter when there's no usable preview text.
+     * Readium `Locator` construction for a restore target — the one thing
+     * the executor deliberately does not do. A spine target with no
+     * progression is the item's own locator (the chapter rung's "top of the
+     * chapter"); one with a progression replaces the locations wholesale,
+     * exactly as the text, percent and audio rungs always have.
      */
-    private suspend fun locatorFromChapterAnchor(pub: Publication, chapter: Int?): Locator? {
-        val chapterIdx = chapter?.takeIf { it in pub.readingOrder.indices } ?: return null
-        // Sentence resolution needs the sync map's per-sentence text, which only
-        // a pair has. A standalone ebook restores to the top of the chapter and
-        // relies on its locator hint for anything finer (issue #169).
-        val previewText = if (isStandalone) "" else {
-            val bookmark = repository.getBookmark(pairId)
-            repository.epubTextForSentence(pairId, chapterIdx, bookmark?.epubSentenceIndex)
+    private fun locatorFor(pub: Publication, target: RestoreTarget): Locator? = when (target) {
+        is RestoreTarget.Hint -> decodeHint(target.value)
+        is RestoreTarget.Spine -> {
+            val base = pub.readingOrder.getOrNull(target.index)?.let { pub.locatorFromLink(it) }
+            val progression = target.progression
+            if (base == null || progression == null) base
+            else base.copy(locations = Locator.Locations(progression = progression))
         }
-        val base = pub.locatorFromLink(pub.readingOrder[chapterIdx]) ?: return null
-        if (previewText.isEmpty()) return base
-        val resolvedIdx = findSpineIndexForText(previewText, chapterIdx) ?: chapterIdx
-        val link = pub.readingOrder.getOrNull(resolvedIdx) ?: return base
-        val resolvedBase = pub.locatorFromLink(link) ?: return base
-        val progressionVal = findTextProgressionInChapter(resolvedIdx, previewText) ?: 0.0
-        return resolvedBase.copy(locations = Locator.Locations(progression = progressionVal))
     }
 
     /**
