@@ -69,7 +69,7 @@ class PauseOwnershipWiringTest {
 
         // The 500 ms poll loop must no longer detect the pause edge and save:
         // that was the second write. It only mirrors state for the UI now.
-        val pollLoop = screen.substringAfter("private fun startPositionPolling()")
+        val pollLoop = screen.substringAfter("fun startPositionPolling()")
             .substringBefore("fun ensureMediaLoaded()")
         assertTrue(
             "startPositionPolling must not call saveBookmark — AudioPlayerService's " +
