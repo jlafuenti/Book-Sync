@@ -348,3 +348,25 @@ def _write_tags(filepath: str, file_meta: dict) -> tuple[bool, Optional[str]]:
     audio.save()
     logger.debug(f"[abs_metadata] Wrote tags back to {filepath}")
     return True, None
+
+
+async def load_abs_settings(db: AsyncSession) -> tuple[bool, str, str, str]:
+    """Load ABS config from DB settings. Returns (enabled, url, api_token, prefix).
+
+    The token is read from the encrypted credential store (source_key='abs');
+    the other fields stay in system_settings since they're non-secret.
+    """
+
+    result = await db.execute(
+        select(SystemSetting).where(
+            SystemSetting.key.in_(["abs_enabled", "abs_url", "abs_audiobooks_prefix"])
+        )
+    )
+    conf = {s.key: s.value for s in result.scalars().all()}
+    enabled = conf.get("abs_enabled", "false").lower() == "true"
+    url = conf.get("abs_url") or ""
+    token = (await get_abs_token(db)) or ""
+    prefix = conf.get("abs_audiobooks_prefix") or ""
+    return enabled, url, token, prefix
+
+
