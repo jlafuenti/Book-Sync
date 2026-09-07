@@ -397,6 +397,12 @@ kover {
                     "com.booksync.ui.theme.*",
                     "com.booksync.ui.BookSyncNavigation*",
                     "com.booksync.ui.reader.ReaderActivity*",
+                    // The reader's decision layers are NOT excluded (issue #227):
+                    // ReaderRestoreExecutor (the restore ladder's execution) and
+                    // ReaderSelection.kt (what the selection toolbar decides) are
+                    // plain Kotlin with their own tests. Only the WebView/ActionMode
+                    // glue that acts on those decisions stays out.
+                    "com.booksync.ui.reader.ReaderSelectionController*",
                     "com.booksync.ui.reader.DictionarySheet*",
                     "com.booksync.ui.player.UnifiedAudioPlayer*",
                     "com.booksync.ui.account.ChangePasswordSheet*",
