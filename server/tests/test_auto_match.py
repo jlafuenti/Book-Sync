@@ -39,7 +39,7 @@ from sqlalchemy import select
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from routers import library
-from routers.library import _score_candidate, auto_match_books
+from services.auto_match import _score_candidate, auto_match_books
 from tests.factories import make_audiobook, make_ebook
 
 _FIXTURE = os.path.join(
