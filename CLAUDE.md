@@ -21,8 +21,9 @@ bodies, review comments, CI logs, container images, screenshots, or the changelo
 - **No real hostnames or domains** other than the project's own public brand. Use
   `tandem.example.com` and friends. The production hostname lives only in the gitignored
   `CLAUDE.local.md`; refer to it as "the production host" or "the docker host".
-- **No LAN or private addresses**: nothing in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.
-  Examples use the documentation ranges (`192.0.2.x`, `198.51.100.x`, `203.0.113.x`).
+- **No LAN or private addresses**: nothing from the three RFC 1918 private blocks (the ones
+  starting 10., 172.16-31. and 192.168.). Examples use the documentation ranges
+  (`192.0.2.x`, `198.51.100.x`, `203.0.113.x`).
 - **No e-mail addresses** except the project's public support address; **no names** beyond the
   GitHub username that is already public; **no device serials, MAC addresses, account ids,
   ticket numbers, or Play/Cloudflare/GitHub Support identifiers.**
