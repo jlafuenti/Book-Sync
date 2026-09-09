@@ -472,8 +472,8 @@ def test_0017_backfills_and_constrains_a_stamped_database():
             "       (SELECT id FROM audiobooks LIMIT 1), 'SYNCED'"
         ))
         conn.execute(text(
-            "INSERT INTO transcription_queue (book_pair_id, status, retry_count) "
-            "SELECT (SELECT id FROM book_pairs LIMIT 1), 'pending', NULL"
+            "INSERT INTO transcription_queue (book_pair_id, status, priority, retry_count) "
+            "SELECT (SELECT id FROM book_pairs LIMIT 1), 'pending', 100, NULL"
         ))
 
     command.upgrade(cfg, "head")
