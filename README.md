@@ -20,7 +20,8 @@ lookups you switch on yourself.
   lock-screen controls. This is also the iPhone story: there is no iOS app.
 - **Android app** — Readium reader, Media3 player, offline downloads, background playback and
   Android Auto.
-- **Multiple users** — accounts with roles, admin approval for new sign-ups, per-user progress and
+- **Multiple users** — accounts with roles, invite-only sign-up by default (open and closed modes
+  too), per-user progress and
   bookmarks.
 - **Optional integrations, each off until you configure it** — Audiobookshelf, Google Books and
   Open Library metadata, and ACSM/Audible imports of content you bought yourself (those need an
