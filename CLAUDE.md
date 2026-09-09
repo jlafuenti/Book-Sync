@@ -11,6 +11,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `jetson/` — Lightweight FastAPI transcription server for Jetson Orin Nano (faster-whisper)
 - `android/` — Kotlin/Compose Android app
 
+## Personal information stays out of everything external-facing
+
+This repository is public. Nothing that identifies the owner, the owner's network, or the
+owner's accounts may appear anywhere a stranger can read: code, tests, fixtures, docs,
+comments, commit messages, branch names, pull-request titles and bodies, issue titles and
+bodies, review comments, CI logs, container images, screenshots, or the changelog. That means:
+
+- **No real hostnames or domains** other than the project's own public brand. Use
+  `tandem.example.com` and friends. The production hostname lives only in the gitignored
+  `CLAUDE.local.md`; refer to it as "the production host" or "the docker host".
+- **No LAN or private addresses**: nothing in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.
+  Examples use the documentation ranges (`192.0.2.x`, `198.51.100.x`, `203.0.113.x`).
+- **No e-mail addresses** except the project's public support address; **no names** beyond the
+  GitHub username that is already public; **no device serials, MAC addresses, account ids,
+  ticket numbers, or Play/Cloudflare/GitHub Support identifiers.**
+- **No secrets or secret-shaped values**, real or "obviously fake": tokens, keys, passwords,
+  the Jetson API key, `.env` contents. Placeholders only, and only in docs that explain how to
+  create them.
+- **No personal reading data**: no exported databases, no real library filenames, no real
+  bookmark or progress rows in fixtures. Fixtures are synthetic (`Axis Test`, `Bartleby`-style
+  public-domain titles are fine).
+- **No screenshots or logs that contain any of the above.** Redact before attaching, or
+  describe instead.
+
+Enforced, not just requested: `server/tests/test_repo_hygiene.py`,
+`server/tests/test_android_no_personal_hosts.py` and `server/tests/personal_identifiers.py`
+fail the build on the personal domain, private-range addresses and e-mail addresses in the
+tree, with a small allow-list for documentation examples. They cannot scan an issue body or a
+commit message, so those are on you: read anything you are about to post to GitHub as if you
+were a stranger, and if a value came from the live system (a log line, a `docker inspect`,
+a `psql` result, a path), mask it before it leaves the machine. When a mistake does land,
+say so immediately; history that has already been pushed needs a rewrite and GitHub
+Support's help to purge, which is far more expensive than not posting it.
+
 ## Live UI Access
 
 Optional and machine-local: if you have a running instance to verify against, put its
