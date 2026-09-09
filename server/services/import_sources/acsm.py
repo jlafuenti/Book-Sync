@@ -85,9 +85,22 @@ def _calibre_config_dir() -> Path:
     if override:
         return Path(override)
     candidate = Path(os.path.expanduser("~")) / ".config" / "calibre"
-    if not candidate.exists() and _LEGACY_CALIBRE_CONFIG_DIR.exists():
+    if not _dir_exists(candidate) and _dir_exists(_LEGACY_CALIBRE_CONFIG_DIR):
         return _LEGACY_CALIBRE_CONFIG_DIR
     return candidate
+
+
+def _dir_exists(path: Path) -> bool:
+    """`path.exists()` that treats "not allowed to look" as "not there".
+
+    The legacy candidate lives under /root; when the app runs as an
+    unprivileged user (issue #180) or in CI, /root is mode 0700 and the stat
+    raises PermissionError instead of answering False.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def _adobe_id_path() -> Path:

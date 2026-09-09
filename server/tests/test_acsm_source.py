@@ -93,6 +93,24 @@ def test_adobe_account_dir_falls_back_to_the_legacy_root_path(monkeypatch, tmp_p
     assert acsm._adobe_id_path() == legacy / "plugins" / "DeACSM" / "account"
 
 
+def test_an_unreadable_legacy_root_path_counts_as_absent(monkeypatch, tmp_path):
+    """On a CI runner (and on any host where the app is not root) `/root` is
+    mode 0700, so even asking whether the legacy directory exists raises
+    PermissionError. That must read as "not there", not as a crash — the
+    HOME candidate is the answer."""
+    monkeypatch.delenv("CALIBRE_CONFIG_DIRECTORY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    class Unreadable(type(Path("."))):
+        def exists(self, *a, **k):
+            raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(acsm, "_LEGACY_CALIBRE_CONFIG_DIR", Unreadable("/root/.config/calibre"))
+    expected = tmp_path / ".config" / "calibre" / "plugins" / "DeACSM" / "account"
+    assert acsm._adobe_id_path() == expected
+
+
 def test_no_module_hardcodes_the_root_calibre_config_as_its_only_candidate():
     """The three `calibre-debug -e` helper scripts locate DeACSM.zip themselves.
 
