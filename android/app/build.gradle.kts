@@ -257,11 +257,11 @@ android {
 
 dependencies {
     // Core Android
-    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("com.google.android.material:material:1.14.0")
 
     // Compose
     implementation(platform("androidx.compose:compose-bom:2025.05.00"))
@@ -273,15 +273,15 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.4")
 
     // Hilt (Dependency Injection)
-    implementation("com.google.dagger:hilt-android:2.59")
-    ksp("com.google.dagger:hilt-compiler:2.59")
-    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation("com.google.dagger:hilt-android:2.60.1")
+    ksp("com.google.dagger:hilt-compiler:2.60.1")
+    implementation("androidx.hilt:hilt-navigation-compose:1.4.0")
 
     // Networking (Retrofit + OkHttp)
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
     // Room (Local Database)
@@ -290,15 +290,15 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.4")
 
     // Media3 / ExoPlayer (Audio Playback)
-    implementation("androidx.media3:media3-exoplayer:1.7.1")
-    implementation("androidx.media3:media3-session:1.7.1")
-    implementation("androidx.media3:media3-ui:1.7.1")
-    implementation("androidx.media3:media3-cast:1.7.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-session:1.11.0")
+    implementation("androidx.media3:media3-ui:1.11.0")
+    implementation("androidx.media3:media3-cast:1.11.0")
     // Lets ExoPlayer stream through the app's own authenticated OkHttp client, so
     // AuthInterceptor supplies the Bearer header and TokenAuthenticator refreshes a
     // 401 mid-stream — no media token in the URL (issue #171). Same version as the
     // rest of Media3; mixing versions across media3 artifacts is unsupported.
-    implementation("androidx.media3:media3-datasource-okhttp:1.7.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.11.0")
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
@@ -310,28 +310,28 @@ dependencies {
 
     // WorkManager (Offline Sync)
     implementation("androidx.work:work-runtime-ktx:2.10.0")
-    implementation("androidx.hilt:hilt-work:1.2.0")
-    ksp("androidx.hilt:hilt-compiler:1.2.0")
+    implementation("androidx.hilt:hilt-work:1.4.0")
+    ksp("androidx.hilt:hilt-compiler:1.4.0")
 
     // DataStore (Preferences)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // EPUB Reading (Readium)
-    implementation("org.readium.kotlin-toolkit:readium-shared:3.1.2")
-    implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.2")
-    implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.2")
+    implementation("org.readium.kotlin-toolkit:readium-shared:3.3.0")
+    implementation("org.readium.kotlin-toolkit:readium-streamer:3.3.0")
+    implementation("org.readium.kotlin-toolkit:readium-navigator:3.3.0")
     
     // Image loading (cover art in cards)
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     // HTML Parsing
-    implementation("org.jsoup:jsoup:1.17.2")
+    implementation("org.jsoup:jsoup:1.23.2")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
     // mockk mocks final Kotlin classes (NetworkMonitor, TokenManager) and suspend
     // functions, which is what makes ViewModels unit-testable off-device.
-    testImplementation("io.mockk:mockk:1.14.2")
+    testImplementation("io.mockk:mockk:1.14.11")
     // Counts requests, which is what the refresh-recursion bug is about
     // (issue #143): a unit test can assert "exactly one refresh POST" in a way
     // a mocked Chain cannot.
@@ -340,12 +340,12 @@ dependencies {
     // against a populated v19 database (issue #314). Room's MigrationTestHelper
     // needs an instrumentation context and this module has no androidTest source
     // set, so CI would never run it; this does the same job on the JVM.
-    testImplementation("org.xerial:sqlite-jdbc:3.50.3.0")
+    testImplementation("org.xerial:sqlite-jdbc:3.53.4.0")
     // Version must track the kotlinx-coroutines-core the app resolves to (1.10.2) —
     // a mismatch breaks Dispatchers.setMain.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
