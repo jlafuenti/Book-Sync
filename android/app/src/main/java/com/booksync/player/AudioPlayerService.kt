@@ -490,7 +490,7 @@ class AudioPlayerService : MediaLibraryService() {
      * expected rewind/fast-forward behavior ([PlaybackOffsets.SKIP_MS], driven by ExoPlayer's
      * seek increment setup).
      */
-    private class AndroidAutoSeekMappingPlayer(delegate: Player) : ForwardingPlayer(delegate) {
+    internal class AndroidAutoSeekMappingPlayer(delegate: Player) : ForwardingPlayer(delegate) {
         override fun getAvailableCommands(): Player.Commands {
             val base = super.getAvailableCommands()
             return base.buildUpon()
@@ -501,16 +501,18 @@ class AudioPlayerService : MediaLibraryService() {
                 .build()
         }
 
+        // media3 1.11 removed the pre-1.0 aliases this used to override as well
+        // (`hasNext`, `seekToPreviousWindow`, `seekToNextWindow`). Nothing can
+        // call them any more, and the media-item overrides below carry the same
+        // behaviour, so their removal is a deletion rather than a port.
+        // AndroidAutoSeekMappingPlayerTest pins what remains.
         override fun hasPreviousMediaItem(): Boolean = true
-        @Suppress("OVERRIDE_DEPRECATION") override fun hasNext(): Boolean = true
         override fun hasNextMediaItem(): Boolean = true
 
         override fun seekToPrevious() { seekBack() }
         override fun seekToNext() { seekForward() }
         override fun seekToPreviousMediaItem() { seekBack() }
         override fun seekToNextMediaItem() { seekForward() }
-        @Suppress("OVERRIDE_DEPRECATION") override fun seekToPreviousWindow() { seekBack() }
-        @Suppress("OVERRIDE_DEPRECATION") override fun seekToNextWindow() { seekForward() }
     }
 
     /**
