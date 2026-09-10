@@ -3,7 +3,7 @@ name: Android tests
 # Only runs when the Android app (or the shared sync-parity fixtures it tests) changes.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without

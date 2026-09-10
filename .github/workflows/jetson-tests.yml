@@ -2,7 +2,7 @@ name: Jetson tests
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without

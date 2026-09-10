@@ -369,7 +369,7 @@ dictionary service behind the reader's "Define" action, and only when you use it
 
 ## Development & tests
 
-Tests run in CI on every push/PR. **Write a failing test first**, then make it pass.
+Tests run in CI on every PR and on every push to `main`. **Write a failing test first**, then make it pass.
 
 - **Server:** once per clone or worktree, `cd server && ./setup-testenv.sh` — it provisions the
   exact interpreter CI uses (`server/.python-version`, currently 3.12) with `uv`. Then:
