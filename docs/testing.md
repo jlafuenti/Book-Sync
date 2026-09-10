@@ -238,6 +238,12 @@ the four; the rest keep more slack on purpose, because a floor exists to catch a
 rather than to fail on noise. Ratcheting them is a change to a CI gate, so it belongs in its own
 PR rather than riding along with unrelated work.
 
+Branches went back down to **58** on 2026-09-09 (PR #447). The vitest 5 / `@vitest/coverage-v8`
+5 upgrade changed how branches are counted: the same suite that measured 78.16% branches under
+v4 measures 61.82% under v5 (69.39 statements / 61.82 branches / 60.96 functions / 73.01 lines),
+with no test removed. A tool upgrade that moves a metric is re-measured and the floor reset from
+the new number, the same `total − 3` rule as a ratchet up; it is not a backslide to chase.
+
 `npm run coverage` prints a per-file table; the largest near-zero entries in it are the
 highest-leverage backfill targets. **Read the current numbers off that table rather than
 this paragraph** — a list of percentages in a document goes stale the first time somebody
@@ -318,7 +324,7 @@ server:
 
 1. **Global floor (anti-backslide)** — vitest `coverage.thresholds` in the `test.coverage`
    block of `web/vite.config.js`, currently **65% lines / 65% statements / 50% functions /
-   75% branches** (pinned against that file by `server/tests/test_docs_contract.py`).
+   58% branches** (pinned against that file by `server/tests/test_docs_contract.py`).
    `npm run coverage` exits non-zero below any of them, and CI runs that on
    every push (not just PRs), so no separate workflow step is needed.
 2. **Patch coverage (stop-the-bleeding, PRs only)** — `diff-cover` requires **≥80%** coverage

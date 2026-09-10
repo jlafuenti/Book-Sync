@@ -78,6 +78,13 @@ export default defineConfig({
             // more slack, which is deliberate — the point of a floor is to
             // catch a backslide, not to fail on noise.
             //
+            // Branches was lowered to 58 on 2026-09-09 (PR #447): the vitest 5 /
+            // @vitest/coverage-v8 5 bump changed how branches are counted, and
+            // the same suite that measured 78.16% under v4 measures 61.82%
+            // under v5 (69.39 stmts / 61.82 branches / 60.96 funcs / 73.01
+            // lines). No test was lost; the metric moved. 58 is 61.82 − 3,
+            // per the ratchet rule in docs/testing.md.
+            //
             // NOTE: thresholds apply to whatever ran, so a filtered run
             // (`npx vitest run one.test.jsx --coverage`) will fail them spuriously.
             // Only the full `npm run coverage` is the gate.
@@ -85,7 +92,7 @@ export default defineConfig({
                 lines: 65,
                 statements: 65,
                 functions: 50,
-                branches: 75,
+                branches: 58,
             },
         },
     },
