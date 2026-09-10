@@ -274,8 +274,8 @@ dependencies {
 
     // Networking (Retrofit + OkHttp)
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:5.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
@@ -330,7 +330,7 @@ dependencies {
     // Counts requests, which is what the refresh-recursion bug is about
     // (issue #143): a unit test can assert "exactly one refresh POST" in a way
     // a mocked Chain cannot.
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
     // Real SQLite in JVM unit tests, so MIGRATION_19_20 can actually be executed
     // against a populated v19 database (issue #314). Room's MigrationTestHelper
     // needs an instrumentation context and this module has no androidTest source
