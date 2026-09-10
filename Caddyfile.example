@@ -117,7 +117,13 @@ tandem.example.com {
 		#   connect-src 'self'       every fetch goes to /api on this origin
 		#   manifest-src 'self'      /manifest.webmanifest
 		#   upgrade-insecure-requests  any stray http:// subresource is fetched
-		#                            over https instead
+		#                            over https instead. Browsers ignore this
+		#                            directive in a Report-Only policy and say so
+		#                            with a console *error* on every page load
+		#                            ("is ignored when delivered in a report-only
+		#                            policy"). That line is noise, not a violation;
+		#                            it stops the moment the header is renamed to
+		#                            the enforcing one.
 		Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'sha256-mHVtbWrVj3qtXqCU08T4et0kweo72ZuGqoYJ4DV5Gbc='; worker-src 'self'; style-src 'self' 'unsafe-inline' blob: https://fonts.googleapis.com; font-src 'self' data: blob: https://fonts.gstatic.com; img-src 'self' data: blob: https://books.google.com https://books.googleusercontent.com https://covers.openlibrary.org https://m.media-amazon.com https://assets.hardcover.app; media-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'; manifest-src 'self'; upgrade-insecure-requests"
 	}
 

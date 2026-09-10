@@ -394,7 +394,11 @@ vanish, and nothing tells the user why. So `Caddyfile.example` sends it as
 `Content-Security-Policy-Report-Only`, which logs what *would* be blocked without blocking it.
 Run that for a few days, use every part of the app (open an ebook, play an audiobook, run a
 metadata match, install the PWA), and watch the browser console: Chrome and Firefox print each
-violation as a `[Report Only] Refused to …` message. When there are none, rename the header to
+violation as a `[Report Only] Refused to …` message. One red line is expected and is not a
+violation: `The Content-Security-Policy directive 'upgrade-insecure-requests' is ignored when
+delivered in a report-only policy`. Browsers cannot report-only an upgrade, so they drop that
+directive and complain; it starts working, and the message stops, once the header is enforcing.
+Every other line is a real finding. When there are none, rename the header to
 `Content-Security-Policy` in the Caddyfile and reload Caddy. If a violation names a host you
 recognise (your Audiobookshelf server serving a cover, say), add it to the directive the message
 names; if it names something you don't, that is the policy doing its job.
