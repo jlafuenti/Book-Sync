@@ -28,6 +28,17 @@ class BuildConfigPinsTest {
     /** Lowest target Play accepts for new uploads as of 31 Aug 2026. */
     private val requiredSdk = 36
 
+    /**
+     * Lowest `compileSdk` the app's own dependencies will link against (issue
+     * #454). okhttp-android 5.5.0, androidx.core 1.19.0, androidx.lifecycle
+     * 2.11.0 and androidx.hilt 1.4.0 all fail `checkDebugAarMetadata` below
+     * this, which is why the app took no library update at all while it sat on
+     * 36. It is deliberately separate from [requiredSdk]: this one tracks what
+     * the dependencies demand, that one tracks what Play demands of
+     * `targetSdk`, and the whole point of #148 is that the two move apart.
+     */
+    private val requiredCompileSdk = 37
+
     private fun buildScript(): String {
         // Gradle runs unit tests with the module directory as the working dir;
         // walking upward also covers being run from `android/`.
@@ -89,6 +100,40 @@ class BuildConfigPinsTest {
             "compileSdk is $compile; it must be >= $requiredSdk to compile against " +
                 "the APIs targetSdk $requiredSdk implies.",
             compile!! >= requiredSdk,
+        )
+    }
+
+    @Test
+    fun `compileSdk meets the floor the dependencies link against`() {
+        val compile = sdkLevel("compileSdk")
+        assertTrue("app/build.gradle.kts declares no compileSdk", compile != null)
+        assertTrue(
+            "compileSdk is $compile; okhttp-android, androidx.core, " +
+                "androidx.lifecycle and androidx.hilt need >= $requiredCompileSdk " +
+                "and fail checkDebugAarMetadata below it (#454). Dropping back " +
+                "freezes every Android dependency again.",
+            compile!! >= requiredCompileSdk,
+        )
+    }
+
+    @Test
+    fun `targetSdk did not follow compileSdk upward`() {
+        // The failure #148 describes, now that the two genuinely differ: raising
+        // compileSdk for a dependency floor and letting targetSdk ride along
+        // changes runtime behaviour — permissions, foreground services,
+        // edge-to-edge, orientation — in a build nobody walked on a device.
+        // Raising targetSdk is allowed, but it has to be its own deliberate
+        // change with a device pass behind it, not a side effect of this one.
+        val target = sdkLevel("targetSdk")
+        val compile = sdkLevel("compileSdk")
+        assertTrue("app/build.gradle.kts declares no targetSdk", target != null)
+        assertTrue("app/build.gradle.kts declares no compileSdk", compile != null)
+        assertTrue(
+            "targetSdk is $target and compileSdk is $compile. targetSdk is pinned " +
+                "at $requiredSdk on purpose (#148, #454): if you meant to raise " +
+                "it, walk the behaviour changes on a device and update this test " +
+                "in that change.",
+            target!! == requiredSdk,
         )
     }
 
