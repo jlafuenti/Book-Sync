@@ -15,6 +15,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: server
@@ -101,6 +102,7 @@ jobs:
     # against requirements.txt that is not explicitly allow-listed — with a
     # written justification — in server/audit-ignore.txt.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: server
@@ -131,6 +133,7 @@ jobs:
     # (upgrade / downgrade / reversibility / drift) plus an explicit
     # `alembic upgrade head` + `alembic check` gate for clear logs.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: server

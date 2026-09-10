@@ -104,6 +104,59 @@ def test_every_workflow_declares_top_level_permissions(name):
     )
 
 
+# ---------------------------------------------------------------------------
+# #451 — every job has a timeout
+# ---------------------------------------------------------------------------
+#
+# A hung step holds a runner for GitHub's default of six hours. With a handful
+# of concurrent runners, one hang (pytest-cov 7 on PR #405) stalls every other
+# PR's checks behind it. The longest job on main runs about nine minutes;
+# nothing needs more than an hour.
+
+_JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
+_TIMEOUT_RE = re.compile(r"^    timeout-minutes:\s*(\d+)\s*$")
+
+
+def _jobs_with_timeouts(name: str) -> dict[str, int | None]:
+    """Map each job id in a workflow to its `timeout-minutes`, or None."""
+    jobs: dict[str, int | None] = {}
+    current = None
+    in_jobs = False
+    for line in _workflow_lines(name):
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if line and not line.startswith(" "):
+            in_jobs = False
+            continue
+        match = _JOB_RE.match(line)
+        if match:
+            current = match.group(1)
+            jobs[current] = None
+            continue
+        match = _TIMEOUT_RE.match(line)
+        if match and current is not None:
+            jobs[current] = int(match.group(1))
+    return jobs
+
+
+@pytest.mark.parametrize("name", _workflow_names())
+def test_every_job_has_a_bounded_timeout(name):
+    jobs = _jobs_with_timeouts(name)
+    assert jobs, f".github/workflows/{name} defines no jobs"
+    for job, minutes in jobs.items():
+        assert minutes is not None, (
+            f".github/workflows/{name} job `{job}` has no `timeout-minutes:`; a hung "
+            "step would hold a runner for six hours and stall every other PR."
+        )
+        assert 0 < minutes <= 60, (
+            f".github/workflows/{name} job `{job}` sets timeout-minutes={minutes}; "
+            "keep it at three times the job's normal duration, and under an hour."
+        )
+
+
 # `uses: owner/repo@ref` — the ref is what we care about. Local (`./…`) and
 # docker (`docker://…`) references have no tag to pin and are exempt.
 _USES_RE = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")
