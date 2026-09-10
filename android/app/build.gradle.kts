@@ -110,7 +110,12 @@ androidComponents {
 
 android {
     namespace = "com.booksync"
-    compileSdk = 36
+    // 37, not 36, because okhttp-android 5.5.0, androidx.core 1.19.0,
+    // androidx.lifecycle 2.11.0 and androidx.hilt 1.4.0 all fail
+    // checkDebugAarMetadata below it (issue #454) — the app could take no
+    // library update at all while this sat on 36. targetSdk stays at 36; see
+    // the note on it below and BuildConfigPinsTest.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.booksync"

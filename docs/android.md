@@ -62,16 +62,28 @@ cd android && ./gradlew :app:testDebugUnitTest
 
 ### SDK levels
 
-`minSdk` is 26 (Android 8.0). `compileSdk` and `targetSdk` are both pinned to **36** in
-`android/app/build.gradle.kts` — `targetSdk` explicitly, so that bumping `compileSdk` for an
-unrelated reason cannot silently change runtime behaviour (permissions, foreground-service rules,
-edge-to-edge, orientation handling all key off it).
+`minSdk` is 26 (Android 8.0). `compileSdk` is **37** and `targetSdk` is pinned to **36** in
+`android/app/build.gradle.kts`. They are deliberately different, and each moves for its own
+reason:
+
+- **`compileSdk` follows what the dependencies link against.** okhttp-android 5.5.0,
+  `androidx.core` 1.19.0, `androidx.lifecycle` 2.11.0 and `androidx.hilt` 1.4.0 all fail
+  `checkDebugAarMetadata` below 37, which left the app unable to take *any* library update while
+  it sat on 36 (issue #454). Raising it is a build-time change and needs no device pass.
+- **`targetSdk` is a behaviour switch, so it is pinned explicitly** — permissions,
+  foreground-service rules, edge-to-edge and orientation handling all key off it, and bumping
+  `compileSdk` for an unrelated reason must not drag it along (issue #148).
 
 Google Play raises the floor for new apps and updates every year, roughly at the end of August;
-API 36 became the minimum on 2026-08-31. When it moves again, raise both values together and
-re-check the behaviour changes for the new level —
+API 36 became the minimum on 2026-08-31. When it moves again, raise `targetSdk` in its own change
+and walk the behaviour changes for the new level on a device —
 [target API level requirements](https://developer.android.com/google/play/requirements/target-sdk).
-`BuildConfigPinsTest` fails if either value drops below the floor.
+`BuildConfigPinsTest` fails if `targetSdk` leaves 36 without that deliberate step, if `compileSdk`
+drops below the dependency floor, or if either falls below Play's floor.
+
+The toolchain moves with `compileSdk`: AGP 9.0.x caps at `compileSdk` 36, so 37 requires
+**AGP 9.4.0**, which in turn requires **Gradle 9.6.0** (`android/gradle/wrapper/`). AGP 9.4 is
+built for Java 17 bytecode, so CI's JDK 17 still runs it.
 
 ## Pointing the app at your server
 
