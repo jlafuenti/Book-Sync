@@ -10,4 +10,4 @@
 # build with:  docker compose build --build-arg INSTALL_LOCAL_WHISPER=1
 # (see server/Dockerfile).
 torch>=2.0.0
-openai-whisper==20240930
+openai-whisper==20250625
