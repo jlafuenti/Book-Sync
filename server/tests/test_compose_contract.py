@@ -22,7 +22,10 @@ _REPO_ROOT = os.path.dirname(_SERVER_DIR)
 COMPOSE_TEMPLATES = [
     os.path.join(_REPO_ROOT, "docker-compose.example.yml"),
     os.path.join(_REPO_ROOT, "jetson", "docker-compose.example.yml"),
+    os.path.join(_REPO_ROOT, "docker-compose.demo.yml"),
 ]
+
+_DEMO_TEMPLATE = COMPOSE_TEMPLATES[2]
 
 
 def _services(path: str) -> dict[str, list[str]]:
@@ -731,3 +734,59 @@ def test_the_secrets_readme_documents_every_secret_file():
             f"secrets/README.md does not give the {needle!r} step — the point "
             "of the file is that the operator can follow it verbatim."
         )
+
+
+# ---------------------------------------------------------------------------
+# #147 — the public demo stack
+# ---------------------------------------------------------------------------
+#
+# The demo runs as a second stack beside the real one, on a host that is also
+# running the operator's own containers. Two properties keep that arrangement
+# from being a bad idea, and neither is visible in a diff.
+
+
+def test_the_demo_stack_runs_published_images_rather_than_building():
+    """
+    A `build:` here would pin the demo to whatever was last built by hand on the
+    host, which is the exact drift the publish workflow exists to remove — and
+    Watchtower cannot update a locally built image, so the stack would quietly
+    stop tracking main while still looking healthy.
+    """
+    services = _services(_DEMO_TEMPLATE)
+    assert services, "no services parsed out of docker-compose.demo.yml"
+
+    for name, body in services.items():
+        text = "\n".join(body)
+        assert "build:" not in text, (
+            f"docker-compose.demo.yml service `{name}` declares `build:`. The "
+            "demo must run the images published by .github/workflows/"
+            "publish-images.yml, or it stops tracking main."
+        )
+
+
+def test_watchtower_only_touches_containers_that_opt_in():
+    """
+    Watchtower updates *every* running container on the host by default. This
+    host also runs the operator's production Tandem stack and unrelated
+    services, so an unscoped Watchtower would pull `main` images over production
+    and restart things that have nothing to do with Tandem.
+
+    The guard is label scoping: Watchtower runs with `--label-enable`, and only
+    the demo's own services carry the opt-in label.
+    """
+    services = _services(_DEMO_TEMPLATE)
+    watchtower = next(
+        (body for name, body in services.items() if "watchtower" in name.lower()),
+        None,
+    )
+    assert watchtower is not None, (
+        "docker-compose.demo.yml declares no watchtower service; the demo would "
+        "never pick up a new image (#147)."
+    )
+
+    text = "\n".join(watchtower)
+    assert "--label-enable" in text or "WATCHTOWER_LABEL_ENABLE" in text, (
+        "The watchtower service is not label-scoped. Without --label-enable it "
+        "updates every container on the host, including the operator's "
+        "production stack. This is the single most dangerous line in this file."
+    )

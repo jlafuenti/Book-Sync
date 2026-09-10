@@ -44,6 +44,16 @@ docker compose run --rm server alembic stamp head
 When the template changes, diff `docker-compose.example.yml` against your copy and port over what
 you want.
 
+**The public demo stack upgrades itself, and this is not it.** If you also run the demo
+(`docker-compose.demo.yml`, [demo-server.md](demo-server.md)), leave it alone: it pulls images
+built from `main` by `.github/workflows/publish-images.yml` and restarts itself hourly. Two
+consequences worth knowing before you run anything above in the wrong directory. Its Watchtower is
+label-scoped (`--label-enable`), so it will not touch the containers of the stack you are upgrading
+here — that scoping is the only thing standing between an unattended `main` image and your
+production containers, and `server/tests/test_compose_contract.py` fails the build if it is
+removed. And because the demo tracks `main` continuously, it is normally *ahead* of this
+deployment rather than in step with it.
+
 **DRM plugins are opt-in.** A deployment that uses the ACSM or Audible import sources must build
 the server image with `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` — the default image
 ships without the DeACSM/DeDRM Calibre plugins, and `.acsm` conversion is unavailable without
