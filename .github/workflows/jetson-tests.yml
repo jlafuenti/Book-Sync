@@ -15,6 +15,7 @@ permissions:
 jobs:
   jetson-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: jetson
