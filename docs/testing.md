@@ -142,7 +142,7 @@ Coverage is measured with `pytest-cov` and enforced by **two independent gates**
 `pytest` job of `.github/workflows/tests.yml`:
 
 1. **Global floor (anti-backslide)** — `pytest --cov=. --cov-fail-under=30`. Fails the build if
-   total coverage drops below **30%**. Runs on every push and PR. This only stops backsliding;
+   total coverage drops below **30%**. Runs on every PR and on every push to `main`. This only stops backsliding;
    it is deliberately a few points under the actual total.
 
 2. **Patch coverage (stop-the-bleeding, PRs only)** — `diff-cover` requires **≥80%** coverage of
@@ -326,7 +326,7 @@ server:
    block of `web/vite.config.js`, currently **65% lines / 65% statements / 50% functions /
    58% branches** (pinned against that file by `server/tests/test_docs_contract.py`).
    `npm run coverage` exits non-zero below any of them, and CI runs that on
-   every push (not just PRs), so no separate workflow step is needed.
+   every PR and on every push to `main`, so no separate workflow step is needed.
 2. **Patch coverage (stop-the-bleeding, PRs only)** — `diff-cover` requires **≥80%** coverage
    of the lines a PR adds or changes.
 

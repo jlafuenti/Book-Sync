@@ -157,6 +157,44 @@ def test_every_job_has_a_bounded_timeout(name):
         )
 
 
+# ---------------------------------------------------------------------------
+# Test suites run once per change, not twice
+# ---------------------------------------------------------------------------
+#
+# `push: branches: ["**"]` plus `pull_request` ran every suite twice for each
+# push to a PR branch — one run per event — which doubled runner load and, with
+# a handful of hosted runners, pushed the nine-minute server suite past its
+# thirty-minute timeout during a Dependabot wave. The pull_request run is the
+# one the ruleset's required checks read, so the push trigger only needs main
+# (the post-merge run). gitleaks is the exception and keeps every branch push:
+# a branch push is how a secret usually lands, and it costs seconds.
+
+_PUSH_BRANCHES_RE = re.compile(
+    r"^on:\s*\n(?:.*\n)*?\s+push:\s*\n\s+branches:\s*\[([^\]]*)\]",
+    re.MULTILINE,
+)
+
+
+@pytest.mark.parametrize("name", [n for n in _workflow_names() if n != "gitleaks.yml"])
+def test_test_suites_run_on_pull_request_and_only_main_pushes(name):
+    text = "\n".join(_workflow_lines(name))
+    assert re.search(r"^\s+pull_request:", text, re.MULTILINE), (
+        f".github/workflows/{name} must run on pull_request; that run is what the "
+        "main ruleset's required checks read."
+    )
+    match = _PUSH_BRANCHES_RE.search(text)
+    assert match, (
+        f".github/workflows/{name} has no `push:` trigger with a `branches:` list; "
+        "use `push:\n  branches: [main]` so a PR push runs each suite once."
+    )
+    branches = [b.strip().strip("\"'") for b in match.group(1).split(",") if b.strip()]
+    assert branches == ["main"], (
+        f".github/workflows/{name} pushes run on {branches}; restrict to `[main]` — "
+        "the pull_request event already covers every PR branch, and running both "
+        "doubles runner load for no extra signal."
+    )
+
+
 # `uses: owner/repo@ref` — the ref is what we care about. Local (`./…`) and
 # docker (`docker://…`) references have no tag to pin and are exempt.
 _USES_RE = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)")

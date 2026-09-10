@@ -3,7 +3,7 @@ name: Web tests
 # Only runs when the web app (or this workflow) changes.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without
