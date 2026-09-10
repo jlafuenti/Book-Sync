@@ -4,15 +4,7 @@ name: Android tests
 on:
   push:
     branches: ["**"]
-    paths:
-      - "android/**"
-      - "server/tests/fixtures/sync_parity/**"
-      - ".github/workflows/android-tests.yml"
   pull_request:
-    paths:
-      - "android/**"
-      - "server/tests/fixtures/sync_parity/**"
-      - ".github/workflows/android-tests.yml"
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without
 # this block it inherits the repository-wide default, which a settings change

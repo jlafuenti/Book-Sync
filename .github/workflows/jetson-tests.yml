@@ -3,11 +3,7 @@ name: Jetson tests
 on:
   push:
     branches: ["**"]
-    paths:
-      - "jetson/**"
   pull_request:
-    paths:
-      - "jetson/**"
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without
 # this block it inherits the repository-wide default, which a settings change
@@ -17,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
+  jetson-tests:
     runs-on: ubuntu-latest
     defaults:
       run:
