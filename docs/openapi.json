@@ -6899,6 +6899,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response List Sources Endpoint Api Import Sources Get",
@@ -9539,6 +9540,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Settings Api Settings  Get",
                   "type": "object"
                 }
@@ -9564,6 +9566,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "New Settings",
                 "type": "object"
               }
@@ -9576,6 +9579,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Update Settings Api Settings  Put",
                   "type": "object"
                 }
