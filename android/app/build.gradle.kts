@@ -341,9 +341,15 @@ dependencies {
     // needs an instrumentation context and this module has no androidTest source
     // set, so CI would never run it; this does the same job on the JVM.
     testImplementation("org.xerial:sqlite-jdbc:3.53.4.0")
-    // Version must track the kotlinx-coroutines-core the app resolves to (1.10.2) —
-    // a mismatch breaks Dispatchers.setMain.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    // Version must track the kotlinx-coroutines-core the app resolves to — a
+    // mismatch breaks Dispatchers.setMain. Held at 1.10.2 deliberately: the
+    // android-minor-and-patch group proposed 1.11.0, but nothing moves
+    // coroutines-core off 1.10.2 (check with `./gradlew :app:dependencyInsight
+    // --configuration debugRuntimeClasspath --dependency kotlinx-coroutines-core`),
+    // so taking it would leave the test artifact ahead of the runtime it patches.
+    // The suite happened to pass that way, which is exactly why this is pinned
+    // rather than left to chance. Move both together when core moves.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
