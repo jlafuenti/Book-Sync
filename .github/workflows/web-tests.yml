@@ -4,13 +4,7 @@ name: Web tests
 on:
   push:
     branches: ["**"]
-    paths:
-      - "web/**"
-      - ".github/workflows/web-tests.yml"
   pull_request:
-    paths:
-      - "web/**"
-      - ".github/workflows/web-tests.yml"
 
 # The GITHUB_TOKEN this workflow gets: read the code, nothing else. Without
 # this block it inherits the repository-wide default, which a settings change
