@@ -544,6 +544,9 @@ _PERSONAL_DATA_ALLOWLIST = {
     ("docs/android.md", "private_ip"): "documented example LAN address",
     ("docs/operations.md", "private_ip"): "documented example subnet",
     # -- Production code whose subject *is* the address ranges.
+    ("server/tests/test_compose_contract.py", "private_ip"): (
+        "asserts the RFC 1918 ranges themselves — the demo must trust all three"
+    ),
     ("server/services/url_safety.py", "private_ip"): (
         "the SSRF blocklist: these ranges are the thing it refuses to fetch"
     ),

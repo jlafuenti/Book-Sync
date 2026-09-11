@@ -44,10 +44,16 @@ services:
       # No real host may be committed (server/tests/test_repo_hygiene.py).
       - CORS_ORIGINS=${DEMO_PUBLIC_URL:?set DEMO_PUBLIC_URL in .env}
       # Two proxies sit in front of this service: cloudflared, then nginx.
-      # Trusting Docker's bridge ranges covers both hops, so the login rate
-      # limit keys on the real client rather than on nginx. Never `*`.
-      # docs/operations.md, "Reverse proxy".
-      - FORWARDED_ALLOW_IPS=172.16.0.0/12
+      # Trusting them lets uvicorn read X-Forwarded-For, so the login rate
+      # limit keys on the real client rather than on nginx.
+      #
+      # All three private ranges, because which one Docker uses depends on the
+      # host's `default-address-pools`, not on this file — a host whose pool
+      # sat outside Docker's usual default matched neither hop, and every
+      # visitor shared one rate-limit bucket. This is safe only because nothing
+      # untrusted can reach uvicorn: `server` publishes no port and its only
+      # network is internal. Never `*`. docs/operations.md, "Reverse proxy".
+      - FORWARDED_ALLOW_IPS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       # Everyone uses the one published account, so nobody signs up. This env
       # override forces registration closed whatever the `registration_mode`
       # row says, so a slip on the System page cannot reopen it. There is no
