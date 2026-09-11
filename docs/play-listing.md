@@ -124,9 +124,10 @@ that flow were added — keep this section in step with the detail it records.
 
 Console field: **App content → Privacy policy**. It must be a public, login-free
 URL that outlives any single deployment, so it is *not* served from an operator's
-server. The repo publishes [privacy.md](privacy.md) via GitHub Pages:
+server. The public site (issue #418) publishes [privacy.md](privacy.md) itself,
+built from this file rather than a copy of it:
 
-> `https://<github-user>.github.io/Book-Sync/privacy.html`
+> `https://tandembook.com/privacy/`
 
 Before submitting, open it in a logged-out browser (or a private window) and
 confirm it renders — Play's crawler gets no more access than that.

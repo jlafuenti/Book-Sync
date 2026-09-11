@@ -126,7 +126,7 @@ is the last time it changed; the full history is in git.
 
 ## Contact
 
-Questions about the app itself: `<contact email — to be filled in>`
+Questions about the app itself: `support@tandembook.com`
 
 Questions about your account, your library or your data: **the operator of the server you
 sign in to**. We cannot see it and cannot act on it.
