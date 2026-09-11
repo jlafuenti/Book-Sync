@@ -1011,3 +1011,18 @@ def test_the_transcription_override_only_grants_network_access():
             f"The override adds `{network}`, which is internal — it would grant "
             "no access at all."
         )
+
+
+def test_the_demo_web_port_is_loopback_only():
+    """
+    `web` publishes one port, for admin work over SSH. It must bind loopback:
+    anything wider exposes the stack directly, around the tunnel and its TLS.
+    """
+    ports = _list_block(_services(_DEMO_TEMPLATE)["web"], "ports:")
+    assert ports, "docker-compose.demo.yml's web service publishes no port."
+    for entry in ports:
+        value = entry.strip().strip('"').strip("'")
+        assert value.startswith("127.0.0.1:"), (
+            f"web publishes `{value}`. Bind 127.0.0.1 so the port is reachable "
+            "from the host only, never around the tunnel."
+        )
