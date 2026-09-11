@@ -125,9 +125,11 @@ services:
     security_opt:
       - no-new-privileges:true
     # Host loopback only, for admin work over SSH. The public path is the
-    # tunnel, which reaches `web` by name over `frontend`.
+    # tunnel, which reaches `web` by name over `frontend`. 3002, not 3001: a
+    # host running another Tandem stack commonly has its web on 3001 already,
+    # and a clash here stops `web` — and `cloudflared`, which depends on it.
     ports:
-      - "127.0.0.1:3001:3000"
+      - "127.0.0.1:3002:3000"
     networks:
       - backend
       - frontend
