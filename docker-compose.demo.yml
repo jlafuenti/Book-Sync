@@ -151,6 +151,10 @@ services:
     image: cloudflare/cloudflared:latest
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+    # The image defaults to uid 65532, which cannot read the token: Compose
+    # mounts secret files with their host owner and mode (600), not 0444. Run
+    # as the same uid that owns the secret files, like server and web.
+    user: "${PUID:-1000}:${PGID:-1000}"
     command: tunnel --no-autoupdate run --token-file /run/secrets/tunnel_token
     cap_drop:
       - ALL

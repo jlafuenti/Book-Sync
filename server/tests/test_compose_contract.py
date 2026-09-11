@@ -1026,3 +1026,35 @@ def test_the_demo_web_port_is_loopback_only():
             f"web publishes `{value}`. Bind 127.0.0.1 so the port is reachable "
             "from the host only, never around the tunnel."
         )
+
+
+# Services that read a secret without running as PUID, and why that still works.
+_SECRET_READERS_STARTING_AS_ROOT = {
+    # The official postgres image's entrypoint starts as root, reads
+    # POSTGRES_PASSWORD_FILE, then drops to the postgres user.
+    "db",
+}
+
+
+def test_every_demo_service_that_reads_a_secret_can_read_it():
+    """
+    Compose without Swarm bind-mounts each secret file with its *host* mode and
+    owner — `600 1000:1000` here, checked inside a running container — not the
+    `0444` root-owned file Swarm produces. A container can therefore read a
+    secret only if it runs as the file's owner, or starts as root.
+
+    The first deployment of this stack found that the hard way: the cloudflared
+    image defaults to uid 65532, could not open its token file, and crash-looped
+    with "permission denied" while every other service looked healthy.
+    """
+    for name, body in _services(_DEMO_TEMPLATE).items():
+        if not _list_block(body, "secrets:"):
+            continue
+        if name in _SECRET_READERS_STARTING_AS_ROOT:
+            continue
+        assert 'user: "${PUID:-1000}:${PGID:-1000}"' in body, (
+            f"docker-compose.demo.yml service `{name}` reads a secret but does not "
+            'run as `user: "${PUID:-1000}:${PGID:-1000}"`. Compose mounts secret '
+            "files with their host owner and mode (600), so any other uid gets "
+            "permission denied."
+        )
