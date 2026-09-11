@@ -94,8 +94,7 @@ you fill it in. Enter your server's origin — e.g. `https://tandem.example.com`
 URL is read per request by `BaseUrlInterceptor`).
 
 A build made with the `tandem.demo*` settings below also offers **Try the demo** on that first
-screen — one tap to a public demo server, for anyone who has not set one up yet. See
-[demo-server.md](demo-server.md).
+screen — one tap to a public demo server, for anyone who has not set one up yet.
 
 You can change it later from **Account → Server URL**. Doing so **signs you out**:
 the previous server's tokens are cleared rather than sent to the new host. Your
@@ -156,8 +155,8 @@ The three `tandem.demo*` settings are all-or-nothing (issue #147): set all three
 screen grows a **Try the demo** button that connects to that server and signs in with that account
 in one tap; leave any of them blank — as a clean clone does — and no button is rendered at all.
 `BuildConfigPinsTest` fails the build if any of the three is ever written into `build.gradle.kts`
-as a literal instead of being read from a setting. Standing up the server they point at, and the
-reason a *public* demo exists, are in [demo-server.md](demo-server.md).
+as a literal instead of being read from a setting. A public demo exists because Play reviewers and
+closed-test testers have no server of their own (#147).
 
 **The demo password ships inside the APK**, where anyone can read it. That is accepted: the account
 is `role=user` on a server holding nothing but public-domain books. Never point these settings at a
