@@ -1058,3 +1058,41 @@ def test_every_demo_service_that_reads_a_secret_can_read_it():
             "files with their host owner and mode (600), so any other uid gets "
             "permission denied."
         )
+
+
+def test_the_demo_proxy_trust_does_not_depend_on_the_hosts_docker_address_pool():
+    """
+    Which subnets Docker hands the demo's networks is the host's choice, not the
+    template's: the daemon's `default-address-pools` decides. The first real
+    deployment ran on a host whose pool sat outside Docker's usual default, so
+    trusting only that default matched neither proxy hop — uvicorn
+    ignored X-Forwarded-For, logged every visitor as the nginx container, and the
+    login rate limit became one bucket for the whole internet. It looked fine in
+    every static check and failed only at runtime.
+
+    So the demo trusts all three RFC 1918 ranges. That is safe here and only
+    here because nothing untrusted can reach uvicorn: the server publishes no
+    port and sits on an internal network, so its only peer is nginx — and a
+    client cannot forge past the tunnel, since Cloudflare appends the real
+    address to the right of anything it sends.
+    """
+    import ipaddress
+
+    server = _services(_DEMO_TEMPLATE)["server"]
+    raw = _env_vars(server).get("FORWARDED_ALLOW_IPS", "").strip().strip('"').strip("'")
+    trusted = [ipaddress.ip_network(part.strip()) for part in raw.split(",") if part.strip()]
+
+    for private in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
+        net = ipaddress.ip_network(private)
+        assert any(net.subnet_of(t) for t in trusted), (
+            f"FORWARDED_ALLOW_IPS=`{raw}` does not cover {private}. Docker may put "
+            "the demo's networks in any private range, depending on the host's "
+            "address pools; an uncovered one silently disables the per-client "
+            "login rate limit."
+        )
+
+    assert not _list_block(server, "ports:"), (
+        "The demo server publishes a port. Trusting every private range is only "
+        "safe while nothing but nginx can connect to uvicorn — a published port "
+        "would let a local client forge X-Forwarded-For."
+    )
