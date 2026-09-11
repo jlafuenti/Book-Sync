@@ -38,7 +38,7 @@ does not use the app, does not stay opted in, and gives you nothing to show for
 the fourteen days.
 
 So **the public demo server is a prerequisite for the closed test**, not just for
-the App access form. Stand it up first — [demo-server.md](demo-server.md) — and
+the App access form. Stand it up first, and
 build the closed-test artifact with the demo settings so testers get the **Try the
 demo** button rather than an empty address field.
 
@@ -101,10 +101,9 @@ things that must be true before a submission is worth making.
       public URL and the Data safety form has to match it: the `dictionaryapi.dev`
       lookups from the reader, the device name, and the fact that all other data
       goes to a server the user runs.
-- [ ] **#147 — App access.** The demo server, the `playreview` credentials and the
+- [ ] **#147 — App access.** The demo server, the demo account's credentials and the
       "enter the server address first" instructions, entered in
-      Play Console → App content → App access. Text to paste is in
-      [demo-server.md](demo-server.md).
+      Play Console → App content → App access.
 - [ ] **#172 — Android Auto opt-in: decided YES.** Opting in adds the car app
       quality checklist to every submission, and a failure there blocks the whole
       release rather than only the Auto feature. Since the answer is yes, walk the

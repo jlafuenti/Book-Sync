@@ -1,0 +1,210 @@
+# The public demo stack (issue #147).
+#
+# A Play reviewer who cannot get past the login screen is an "app not
+# functional" rejection, and the closed-test testers (#173) hit the same wall.
+# This is the small public server they sign in to: public-domain books only, one
+# read-only account whose password is published on purpose, and nothing on it
+# that matters if it is abused.
+#
+# It shares nothing with any other Tandem deployment — its own database, book
+# directories, secrets and networks. Run it from its own directory so Compose
+# gives it its own project name, with the public URL in a `.env` beside it:
+#
+#     echo "DEMO_PUBLIC_URL=https://demo.example.com" > .env
+#     docker compose -f docker-compose.demo.yml up -d
+#
+# Images come from GHCR, built from `main` by .github/workflows/publish-images.yml,
+# and every service here — database included — is kept current by the watchtower
+# service below. Nothing is built on the host: a locally built image is one
+# Watchtower cannot update, which is how a demo silently stops tracking main.
+#
+# Network isolation. The demo is internet-facing with a published login, so if
+# its server is ever compromised it must not be able to reach anything else the
+# host can. `server` and `db` sit on `backend`, an internal network with no
+# outside access at all. `web` bridges `backend` and `frontend`; `cloudflared`
+# reaches `web` over `frontend` and needs outbound access to reach the tunnel.
+# Transcription is the one thing that needs the server to reach out, and
+# docker-compose.demo.transcribe.yml grants that temporarily.
+
+services:
+  server:
+    image: ghcr.io/jlafuenti/tandem-server:main
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - APP_ENV=prod
+      # Required. The web container proxies /api/ to this service, so the app
+      # is same-origin and this only has to name the public hostname. `:?`
+      # stops Compose when it is missing instead of starting with a placeholder.
+      # No real host may be committed (server/tests/test_repo_hygiene.py).
+      - CORS_ORIGINS=${DEMO_PUBLIC_URL:?set DEMO_PUBLIC_URL in .env}
+      # Two proxies sit in front of this service: cloudflared, then nginx.
+      # Trusting Docker's bridge ranges covers both hops, so the login rate
+      # limit keys on the real client rather than on nginx. Never `*`.
+      # docs/operations.md, "Reverse proxy".
+      - FORWARDED_ALLOW_IPS=172.16.0.0/12
+      # Everyone uses the one published account, so nobody signs up. This env
+      # override forces registration closed whatever the `registration_mode`
+      # row says, so a slip on the System page cannot reopen it. There is no
+      # `REGISTRATION_MODE` variable: that is a database row, and config.py
+      # silently ignores unknown variables.
+      - ALLOW_PUBLIC_REGISTRATION=false
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
+      - CREDENTIAL_ENC_KEYS_FILE=/run/secrets/credential_enc_keys
+      - EBOOK_DIR=/data/ebooks
+      - AUDIOBOOK_DIR=/data/audiobooks
+      - APP_DATA_DIR=/data/app
+      - IMPORTS_DIR=/data/imports
+    secrets:
+      - postgres_password
+      - jwt_secret_key
+      - credential_enc_keys
+    # Host directories, not named volumes: the library is loaded by hand, and a
+    # named volume is created owned by root, which this unprivileged server
+    # cannot write to. `chown -R 1000:1000` the sources before first start.
+    volumes:
+      - ./library/ebooks:/data/ebooks
+      - ./library/audiobooks:/data/audiobooks
+      - ./data:/data/app
+      - ./data/imports:/data/imports
+      - ./backups:/backups
+    networks:
+      - backend
+    depends_on:
+      - db
+    restart: unless-stopped
+    # A public URL is the one surface a stranger can push on, so cap it.
+    mem_limit: 2g
+    pids_limit: 512
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  db:
+    # Watchtower updates this too, which is only safe because the tag pins a
+    # major version: `16-alpine` receives Postgres 16 patch releases, never 17.
+    # A major upgrade needs a dump and restore, so it stays a deliberate change
+    # of this tag. Pinned by test_the_demo_database_is_pinned_to_a_major_version.
+    image: postgres:16-alpine
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    environment:
+      - POSTGRES_USER=booksync
+      - POSTGRES_DB=booksync
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - demo_db:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U booksync -d booksync" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    image: ghcr.io/jlafuenti/tandem-web:main
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Host loopback only, for admin work over SSH. The public path is the
+    # tunnel, which reaches `web` by name over `frontend`.
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      - server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/index.html | grep -q 'id=\"root\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cloudflared:
+    # Publishes `web` through a Cloudflare Tunnel: outbound only, so the host
+    # opens no inbound port, and TLS is terminated by Cloudflare. Point the
+    # tunnel's public hostname at http://web:3000. The token is a secret file,
+    # not an environment value, because `docker inspect` prints environments.
+    image: cloudflare/cloudflared:latest
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    command: tunnel --no-autoupdate run --token-file /run/secrets/tunnel_token
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - tunnel_token
+    networks:
+      - frontend
+    depends_on:
+      - web
+    restart: unless-stopped
+
+  watchtower:
+    # The maintained fork. containrrr/watchtower was archived in December 2025
+    # and stops working once Docker raises its minimum API version.
+    image: nickfedor/watchtower:latest
+    # Watchtower updates itself as well.
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    # --label-enable is the load-bearing flag, not a preference.
+    #
+    # Watchtower's default is to update EVERY running container on the Docker
+    # host. On any host that runs other containers — another Tandem deployment
+    # included — an unscoped watchtower would pull images over them and restart
+    # things that have nothing to do with this stack. With --label-enable it
+    # touches only the services above, which opt in by label. Pinned by
+    # test_watchtower_only_touches_containers_that_opt_in.
+    #
+    # --cleanup drops superseded images so hourly pulls do not fill the disk.
+    command: --label-enable --cleanup --interval 3600
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+networks:
+  # No route out of the host at all, LAN included. Pinned by
+  # test_the_demo_server_and_database_have_no_outside_network.
+  backend:
+    internal: true
+  frontend:
+    driver: bridge
+
+volumes:
+  demo_db:
+
+# Same file-based convention as docker-compose.example.yml (#180): secrets never
+# appear in `environment:`, and a missing or empty file is a startup error naming
+# the variable rather than a silent fallback. Create them before first start —
+# docs/operations.md, "Secrets".
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  jwt_secret_key:
+    file: ./secrets/jwt_secret_key
+  credential_enc_keys:
+    file: ./secrets/credential_enc_keys
+  tunnel_token:
+    file: ./secrets/tunnel_token

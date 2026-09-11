@@ -175,7 +175,24 @@ _PUSH_BRANCHES_RE = re.compile(
 )
 
 
-@pytest.mark.parametrize("name", [n for n in _workflow_names() if n != "gitleaks.yml"])
+# Workflows that are deliberately not test suites, and why. This is a denylist
+# rather than an allowlist on purpose: a new *suite* that forgot its triggers
+# would slip through an allowlist silently, whereas a new non-suite workflow
+# fails here until someone writes down why it is exempt.
+_NOT_TEST_SUITES = {
+    # A branch push is how a secret usually lands, and the scan costs seconds,
+    # so this one keeps every push rather than just main's.
+    "gitleaks.yml",
+    # Publishes container images. Running it on `pull_request` would build and
+    # push images from code that has not merged — anyone who can open a PR could
+    # publish an image the demo stack then pulls (#147).
+    "publish-images.yml",
+}
+
+
+@pytest.mark.parametrize(
+    "name", [n for n in _workflow_names() if n not in _NOT_TEST_SUITES]
+)
 def test_test_suites_run_on_pull_request_and_only_main_pushes(name):
     text = "\n".join(_workflow_lines(name))
     assert re.search(r"^\s+pull_request:", text, re.MULTILINE), (
@@ -394,3 +411,77 @@ def test_contributing_names_every_test_suite():
     text = _read("CONTRIBUTING.md")
     for needle in ("setup-testenv.sh", "pytest", "vitest", "gradlew"):
         assert needle in text, f"CONTRIBUTING.md never mentions `{needle}`"
+
+
+# ---------------------------------------------------------------------------
+# #147 — container images for the public demo stack
+# ---------------------------------------------------------------------------
+#
+# The demo server exists because a Play reviewer who cannot get past the login
+# screen is an "app not functional" rejection. It is kept current by Watchtower
+# pulling images this workflow publishes, so if publishing silently stops, the
+# demo drifts from `main` and nobody finds out until a reviewer meets a stale
+# build. These pin the parts that would fail quietly.
+
+_PUBLISH_WORKFLOW = "publish-images.yml"
+
+
+def _publish_workflow_text() -> str:
+    path = os.path.join(_WORKFLOW_DIR, _PUBLISH_WORKFLOW)
+    assert os.path.isfile(path), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} is missing. The demo stack (#147) "
+        "updates itself by pulling images built from main; without this workflow "
+        "there is nothing to pull and the demo silently pins to whatever was "
+        "deployed by hand."
+    )
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_the_publish_workflow_builds_both_deployed_images():
+    """A demo missing either half is not a demo: no API, or no web UI."""
+    text = _publish_workflow_text()
+    for image in ("server", "web"):
+        assert re.search(rf"^\s+.*\b{image}\b", text, re.MULTILINE), (
+            f"{_PUBLISH_WORKFLOW} does not appear to build the `{image}` image. "
+            "The demo stack runs both; publishing one leaves the other pinned to "
+            "whatever the host last built by hand."
+        )
+
+
+def test_the_publish_workflow_runs_on_a_schedule_and_on_demand():
+    """
+    Watchtower pulls on its own timer, so the images have to be rebuilt on one
+    too — a push-only trigger means a quiet week leaves the demo on a stale base
+    image with whatever CVEs it accumulated. `workflow_dispatch` is what makes a
+    fix reachable without waiting for the next tick.
+    """
+    text = _publish_workflow_text()
+    assert re.search(r"^\s+schedule:", text, re.MULTILINE), (
+        f"{_PUBLISH_WORKFLOW} has no `schedule:` trigger; the demo would only "
+        "rebuild when someone happens to push to main."
+    )
+    assert re.search(r"^\s+workflow_dispatch:", text, re.MULTILINE), (
+        f"{_PUBLISH_WORKFLOW} has no `workflow_dispatch:`; there would be no way "
+        "to publish a fix without waiting for the schedule."
+    )
+
+
+def test_the_publish_workflow_asks_for_package_write_only_on_the_job():
+    """
+    Top-level `permissions: contents: read` is the repo-wide rule (#189). Pushing
+    to GHCR needs `packages: write`, and that widening belongs on the one job
+    that pushes — a token that can write packages for the length of the whole
+    workflow is a wider blast radius than the task needs.
+    """
+    text = _publish_workflow_text()
+    assert "packages: write" in text, (
+        f"{_PUBLISH_WORKFLOW} never requests `packages: write`, so the push to "
+        "GHCR will be denied."
+    )
+    top_level = text.split("jobs:")[0]
+    assert "packages: write" not in top_level, (
+        f"{_PUBLISH_WORKFLOW} grants `packages: write` at the top level. Declare "
+        "it on the publishing job instead, so every other job in the file keeps "
+        "a read-only token."
+    )

@@ -159,7 +159,7 @@ android {
         // `demoAccountOrNull` in ServerUrlPolicy.kt. The demo account must be
         // role `user` on a server that holds nothing but public-domain books —
         // these credentials go into the Play Console, and anyone who installs
-        // the build has them. docs/demo-server.md is the whole setup.
+        // the build has them.
         buildConfigField(
             "String",
             "DEMO_URL",

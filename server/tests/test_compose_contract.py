@@ -22,7 +22,10 @@ _REPO_ROOT = os.path.dirname(_SERVER_DIR)
 COMPOSE_TEMPLATES = [
     os.path.join(_REPO_ROOT, "docker-compose.example.yml"),
     os.path.join(_REPO_ROOT, "jetson", "docker-compose.example.yml"),
+    os.path.join(_REPO_ROOT, "docker-compose.demo.yml"),
 ]
+
+_DEMO_TEMPLATE = COMPOSE_TEMPLATES[2]
 
 
 def _services(path: str) -> dict[str, list[str]]:
@@ -730,4 +733,281 @@ def test_the_secrets_readme_documents_every_secret_file():
         assert needle in text, (
             f"secrets/README.md does not give the {needle!r} step — the point "
             "of the file is that the operator can follow it verbatim."
+        )
+
+
+# ---------------------------------------------------------------------------
+# #147 — the public demo stack
+# ---------------------------------------------------------------------------
+#
+# The demo is a public, self-updating stack. Two properties keep that from being
+# a bad idea, and neither is visible in a diff.
+
+
+def test_the_demo_stack_runs_published_images_rather_than_building():
+    """
+    A `build:` here would pin the demo to whatever was last built by hand on the
+    host, which is the exact drift the publish workflow exists to remove — and
+    Watchtower cannot update a locally built image, so the stack would quietly
+    stop tracking main while still looking healthy.
+    """
+    services = _services(_DEMO_TEMPLATE)
+    assert services, "no services parsed out of docker-compose.demo.yml"
+
+    for name, body in services.items():
+        text = "\n".join(body)
+        assert "build:" not in text, (
+            f"docker-compose.demo.yml service `{name}` declares `build:`. The "
+            "demo must run the images published by .github/workflows/"
+            "publish-images.yml, or it stops tracking main."
+        )
+
+
+def test_watchtower_only_touches_containers_that_opt_in():
+    """
+    Watchtower updates *every* running container on the Docker host by default.
+    On any host that runs other containers — another Tandem deployment included
+    — an unscoped Watchtower would pull images over them and restart things
+    that have nothing to do with the demo.
+
+    The guard is label scoping: Watchtower runs with `--label-enable`, and only
+    the demo's own services carry the opt-in label.
+    """
+    services = _services(_DEMO_TEMPLATE)
+    watchtower = next(
+        (body for name, body in services.items() if "watchtower" in name.lower()),
+        None,
+    )
+    assert watchtower is not None, (
+        "docker-compose.demo.yml declares no watchtower service; the demo would "
+        "never pick up a new image (#147)."
+    )
+
+    text = "\n".join(watchtower)
+    assert "--label-enable" in text or "WATCHTOWER_LABEL_ENABLE" in text, (
+        "The watchtower service is not label-scoped. Without --label-enable it "
+        "updates every container on the Docker host, including any other "
+        "deployment running there. This is the single most dangerous line in "
+        "this file."
+    )
+
+
+_DEMO_TRANSCRIBE_OVERRIDE = os.path.join(_REPO_ROOT, "docker-compose.demo.transcribe.yml")
+
+
+def _declared_networks(path: str) -> dict[str, list[str]]:
+    """`name: [stripped lines]` for every entry in the top-level `networks:` mapping."""
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+
+    out: dict[str, list[str]] = {}
+    in_section = False
+    current = None
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent == 0:
+            in_section = stripped.rstrip() == "networks:"
+            current = None
+            continue
+        if not in_section:
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            current = stripped[:-1]
+            out[current] = []
+        elif current is not None:
+            out[current].append(stripped)
+    return out
+
+
+def _is_internal(network_body: list[str]) -> bool:
+    return any(line.replace(" ", "") == "internal:true" for line in network_body)
+
+
+def test_the_demo_library_is_mounted_from_the_host():
+    """
+    The books have to be put on disk by hand, so they live in host directories.
+    A named volume here is invisible to anyone following the setup steps — the
+    server would scan an empty directory — and it is created owned by root,
+    which a server running as uid 1000 with every capability dropped cannot
+    write to.
+    """
+    server = _services(_DEMO_TEMPLATE)["server"]
+    targets = {m.split(":")[1]: m.split(":")[0] for m in _mounts(server) if ":" in m}
+
+    for target in ("/data/ebooks", "/data/audiobooks", "/data/app"):
+        assert target in targets, (
+            f"docker-compose.demo.yml does not mount anything at {target}."
+        )
+        source = targets[target]
+        assert source.startswith(("./", "/")), (
+            f"{target} is mounted from `{source}`, a named volume. Mount a host "
+            "directory so the library can be loaded and its ownership set."
+        )
+
+
+def test_the_demo_server_trusts_only_its_proxy_hops():
+    """
+    Two proxies sit in front of the demo server (the tunnel, then nginx). Unless
+    uvicorn trusts them, every visitor looks like the nginx container: the
+    5-a-minute login limit becomes one global bucket and a few bad logins from
+    anyone lock out everyone, reviewer included. `*` would be worse — it trusts a
+    header any client can forge. docs/operations.md, "Reverse proxy".
+    """
+    env = _env_vars(_services(_DEMO_TEMPLATE)["server"])
+    assert "FORWARDED_ALLOW_IPS" in env, (
+        "The demo server does not set FORWARDED_ALLOW_IPS; behind its proxies "
+        "every client shares one rate-limit bucket."
+    )
+    value = env["FORWARDED_ALLOW_IPS"].strip().strip('"').strip("'")
+    assert value != "*", (
+        "FORWARDED_ALLOW_IPS=* trusts X-Forwarded-For from anywhere, letting any "
+        "client dodge the login rate limit."
+    )
+
+
+def test_the_demo_server_and_database_have_no_outside_network():
+    """
+    The demo is internet-facing with a published login. If its server is ever
+    compromised, it must not be able to reach anything else on the network the
+    host sits on. So `server` and `db` join only internal networks — and must
+    name at least one, because a service with no `networks:` key silently joins
+    the default network, which has full outbound access.
+    """
+    services = _services(_DEMO_TEMPLATE)
+    networks = _declared_networks(_DEMO_TEMPLATE)
+
+    for name in ("server", "db"):
+        joined = _list_block(services[name], "networks:")
+        assert joined, (
+            f"docker-compose.demo.yml service `{name}` names no networks, so it "
+            "joins the default network and can reach anything outbound."
+        )
+        for network in joined:
+            assert network in networks, f"`{name}` joins undeclared network `{network}`"
+            assert _is_internal(networks[network]), (
+                f"`{name}` joins `{network}`, which is not `internal: true`. The "
+                "demo server and database must have no outside network access; "
+                "transcription gets it temporarily through "
+                "docker-compose.demo.transcribe.yml."
+            )
+
+
+def test_every_demo_service_opts_in_to_watchtower():
+    """The demo is meant to keep itself entirely current, database included."""
+    for name, body in _services(_DEMO_TEMPLATE).items():
+        assert any("com.centurylinklabs.watchtower.enable=true" in line for line in body), (
+            f"docker-compose.demo.yml service `{name}` does not opt in to Watchtower, "
+            "so it will silently stop receiving updates."
+        )
+
+
+def test_the_demo_database_is_pinned_to_a_major_version():
+    """
+    Watchtower updates the database too. That is only safe while the image tag
+    names a major version: `postgres:16-alpine` receives 16.x patch releases,
+    whereas `latest` would one day hand a live data directory to a newer major
+    that cannot read it.
+    """
+    image = next(
+        line.split(":", 1)[1].strip()
+        for line in _services(_DEMO_TEMPLATE)["db"]
+        if line.startswith("image:")
+    )
+    tag = image.rsplit(":", 1)[1] if ":" in image else "latest"
+    assert tag[:1].isdigit(), (
+        f"The demo database image is `{image}`. With Watchtower updating it, the "
+        "tag must pin a major version (e.g. `postgres:16-alpine`)."
+    )
+
+
+def test_the_demo_does_not_use_the_archived_watchtower():
+    """
+    `containrrr/watchtower` was archived in December 2025. It stops working once
+    the Docker Engine raises its minimum API version, and an archived image will
+    never follow — a demo that updates itself would quietly stop doing so.
+    """
+    for name, body in _services(_DEMO_TEMPLATE).items():
+        for line in body:
+            if line.startswith("image:"):
+                assert "containrrr/watchtower" not in line, (
+                    f"docker-compose.demo.yml service `{name}` uses the archived "
+                    "containrrr/watchtower. Use the maintained fork, "
+                    "nickfedor/watchtower."
+                )
+
+
+def test_the_tunnel_token_is_a_secret_file():
+    """
+    The tunnel token lets whoever holds it publish content under the demo's
+    hostname. In `environment:` it is printed in full by `docker inspect`; as a
+    secret file it is not. Same rule as every other secret (#180).
+    """
+    services = _services(_DEMO_TEMPLATE)
+    tunnel = next(
+        (body for name, body in services.items() if "cloudflared" in name.lower()),
+        None,
+    )
+    assert tunnel is not None, "docker-compose.demo.yml declares no cloudflared service."
+
+    text = "\n".join(tunnel)
+    assert "TUNNEL_TOKEN=" not in text and "TUNNEL_TOKEN:" not in text, (
+        "The tunnel token is set in the environment, where `docker inspect` shows it."
+    )
+    assert "--token-file" in text, (
+        "cloudflared should read its token with `--token-file` from a secret."
+    )
+    assert "tunnel_token" in _declared_secrets(_DEMO_TEMPLATE), (
+        "No `tunnel_token` secret is declared for cloudflared to read."
+    )
+
+
+def test_the_demo_public_url_must_be_supplied():
+    """
+    The public hostname is deployment-specific, and no real host may be
+    committed. Reading it from `DEMO_PUBLIC_URL` with `:?` makes Compose refuse
+    to start without it, rather than running with a placeholder CORS origin
+    that breaks the web app in a way that looks like a server fault.
+    """
+    env = _env_vars(_services(_DEMO_TEMPLATE)["server"])
+    assert "${DEMO_PUBLIC_URL:?" in env.get("CORS_ORIGINS", ""), (
+        "CORS_ORIGINS should be `${DEMO_PUBLIC_URL:?...}`, so a missing public "
+        "URL stops Compose instead of starting with a placeholder."
+    )
+
+
+def test_the_transcription_override_only_grants_network_access():
+    """
+    Transcription needs the server to reach the transcription worker, which the
+    base stack deliberately forbids. The override is the temporary exception, so
+    it must do exactly one thing — attach `server` to an outbound network — and
+    nothing that would outlive the job: no ports, no mounts, no environment.
+    """
+    assert os.path.isfile(_DEMO_TRANSCRIBE_OVERRIDE), (
+        "docker-compose.demo.transcribe.yml is missing; there is no way to give "
+        "the isolated demo server temporary access to a transcription worker."
+    )
+    services = _services(_DEMO_TRANSCRIBE_OVERRIDE)
+    assert list(services) == ["server"], (
+        f"The transcription override touches {sorted(services)}; it should touch "
+        "only `server`."
+    )
+
+    body = services["server"]
+    keys = {line.split(":", 1)[0] for line in body if not line.startswith("- ")}
+    assert keys == {"networks"}, (
+        f"The transcription override sets {sorted(keys)} on the server. It should "
+        "add network access and nothing else."
+    )
+
+    networks = _declared_networks(_DEMO_TRANSCRIBE_OVERRIDE)
+    added = _list_block(body, "networks:")
+    assert added, "The transcription override adds no network to the server."
+    for network in added:
+        assert network in networks, f"The override joins undeclared network `{network}`"
+        assert not _is_internal(networks[network]), (
+            f"The override adds `{network}`, which is internal — it would grant "
+            "no access at all."
         )

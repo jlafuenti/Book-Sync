@@ -41,10 +41,8 @@ Supply a working server URL and test credentials, plus a one-line explanation
 that sign-in is impossible without them. Do not paste credentials into this file
 — it is public. They belong in the Console's App access section.
 
-The server to supply is the public demo, never the personal one, and the text to
-paste into the form is written out in [demo-server.md](demo-server.md) — which
-also covers standing the demo up and the `playreview` account it needs (issue
-#147). The release path this listing is part of, including the closed-test
+The server to supply is the public demo, never the personal one, together with
+the demo account it needs (issue #147). The release path this listing is part of, including the closed-test
 requirement that has to be satisfied before any of it reaches production, is in
 [release.md](release.md) (issue #173).
 

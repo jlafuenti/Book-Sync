@@ -1,0 +1,26 @@
+# Temporary outbound network access for the demo server — transcription only.
+#
+# docker-compose.demo.yml keeps `server` on an internal network with no route
+# out, so it cannot reach a transcription worker. This override attaches it to
+# an ordinary network for as long as the transcription jobs need, and does
+# nothing else: no ports, no mounts, no environment
+# (test_the_transcription_override_only_grants_network_access).
+#
+# Grant:
+#     docker compose -f docker-compose.demo.yml -f docker-compose.demo.transcribe.yml up -d server
+#
+# Revoke — the same service without this file, which recreates it on `backend` only:
+#     docker compose -f docker-compose.demo.yml up -d server
+#
+# Revoke as soon as the jobs finish, and clear the worker URL and key in
+# System -> Transcription Settings too. A public server that can reach a
+# transcription worker is one that can be made to spend its GPU.
+
+services:
+  server:
+    networks:
+      - transcribe
+
+networks:
+  transcribe:
+    driver: bridge
