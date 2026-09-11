@@ -743,9 +743,15 @@ secrets:
 - **One trailing newline (or CRLF) is stripped**, and nothing else. Every way of writing a secret to
   a file adds one; leading and interior whitespace could be part of the value, so it is left alone.
 
-Compose mounts secret files mode `0444`, owned by root — readable by the unprivileged uid the
-`server` container runs as (see "Running as a non-root user" above), which is what makes the two
-changes compatible.
+Compose (without Swarm) bind-mounts each secret file with its **host** mode and owner — not a
+`0444` root-owned copy, which is what Swarm produces. Created as below, the files are `600` and owned
+by you, so a container can read them only if it runs as that same uid (the `PUID` from "Running as a
+non-root user" above) or starts as root. That is what makes the two changes compatible: `server`
+runs as `PUID`, and the official `postgres` image starts as root and reads its password file before
+dropping privileges. **Any other service given a secret must also run as `PUID`** — an image with
+its own default uid gets `permission denied` and restarts in a loop while the rest of the stack
+looks healthy. If your login uid differs from `PUID`, `chown` the files to `PUID` after creating
+them.
 
 ### What ships
 
