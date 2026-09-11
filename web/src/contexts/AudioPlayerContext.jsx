@@ -324,6 +324,21 @@ export function AudioPlayerProvider({ children }) {
         audio.addEventListener('error', onError)
 
         return () => {
+            // Issue #469: both of these live in refs and are otherwise cleared
+            // only when re-scheduled or when they fire, so unmounting left them
+            // running. A leaked seek flush writes a position for the book the
+            // user has just left -- the silent wrong-position write that
+            // docs/position-sync-contract.md exists to prevent -- and a leaked
+            // sleep timer pauses a detached element minutes later. The
+            // heartbeat interval below already clears itself this way.
+            if (seekFlushTimerRef.current) {
+                clearTimeout(seekFlushTimerRef.current)
+                seekFlushTimerRef.current = null
+            }
+            if (sleepTimerRef.current) {
+                clearTimeout(sleepTimerRef.current)
+                sleepTimerRef.current = null
+            }
             audio.removeEventListener('play', onPlay)
             audio.removeEventListener('pause', onPause)
             audio.removeEventListener('canplay', onCanPlay)

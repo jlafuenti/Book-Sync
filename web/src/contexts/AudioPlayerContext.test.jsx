@@ -846,6 +846,64 @@ describe('AudioPlayerProvider onEnded', () => {
     })
 })
 
+// Issue #469: two timers are scheduled into refs and cleared only when they are
+// re-scheduled or fire — never on unmount. A leaked seek flush writes a position
+// for a book the user has already left, which is the silent wrong-position
+// failure docs/position-sync-contract.md exists to prevent. It is also what made
+// this suite fail at random under load: the 1s debounce lands inside whichever
+// test happens to be running a second later, and the write carries the *previous*
+// test's book (scope 'audiobook', id 7) into an assertion about a different one.
+describe('AudioPlayerProvider unmount teardown', () => {
+    // Load under real timers — the src swap resolves through promises that
+    // waitFor polls — then fake the clock so the pending timer is a fake one
+    // that can be advanced deterministically instead of slept through.
+    async function loadedPlayer() {
+        const { unmount } = render(<AudioPlayerProvider><Harness /></AudioPlayerProvider>)
+        fireEvent.click(screen.getByText('play'))
+        await waitFor(() => expect(getAudiobookStreamUrlMock).toHaveBeenCalledTimes(1))
+        const audio = audioInstances[0]
+        audio.duration = 600
+        act(() => audio.dispatchEvent(new Event('canplay')))
+        vi.useFakeTimers({
+            toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'],
+            shouldClearNativeTimers: true,
+        })
+        return { audio, unmount }
+    }
+
+    it('does not flush a pending seek after the provider unmounts', async () => {
+        try {
+            const { audio, unmount } = await loadedPlayer()
+            audio.currentTime = 100
+            fireEvent.click(screen.getByText('skip-fwd'))  // schedules the 1s debounce
+
+            // Anything written during load is not what this test is about.
+            updatePositionMock.mockReset().mockResolvedValue({})
+            unmount()
+            act(() => { vi.advanceTimersByTime(5000) })
+
+            expect(updatePositionMock).not.toHaveBeenCalled()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('does not fire a sleep timer after the provider unmounts', async () => {
+        try {
+            const { unmount } = await loadedPlayer()
+            fireEvent.click(screen.getByText('sleep-1min'))
+
+            updatePositionMock.mockReset().mockResolvedValue({})
+            unmount()
+            act(() => { vi.advanceTimersByTime(2 * 60 * 1000) })
+
+            expect(updatePositionMock).not.toHaveBeenCalled()
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+})
+
 // Issue #62: lock-screen / notification / hardware-key controls. The OS drives
 // the *same* context functions the on-screen transport uses, so the two never
 // disagree about skip amounts, resume rewind, or which format a save claims.
