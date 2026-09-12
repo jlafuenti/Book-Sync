@@ -45,6 +45,7 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
+import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
@@ -212,9 +213,22 @@ fun DownloadedScreen(
                                         series = pair.ebookSeries,
                                         seriesIndex = pair.ebookSeriesIndex,
                                     ),
+                                    // Was `if (ebookDownloaded) reader else player`,
+                                    // which ignored `bookmarks.source` entirely — so
+                                    // a book you had been listening to opened in the
+                                    // reader from this tab alone (issue #484). Every
+                                    // other surface asks the resolver; this one now
+                                    // does too.
                                     onClick = {
-                                        if (pair.ebookDownloaded) onPairBookSelect(pair.id)
-                                        else onPairAudioSelect(pair.id)
+                                        overflowScope.launch {
+                                            when (viewModel.resolvePairOpenTarget(pair)) {
+                                                PairOpenTarget.Player -> onPairAudioSelect(pair.id)
+                                                // Everything here is on the device, so
+                                                // Details cannot arise; the reader stays
+                                                // the fallback it always was.
+                                                else -> onPairBookSelect(pair.id)
+                                            }
+                                        }
                                     },
                                     onOverflow = {
                                         overflowScope.launch {

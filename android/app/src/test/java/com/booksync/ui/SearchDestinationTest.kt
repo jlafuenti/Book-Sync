@@ -70,16 +70,22 @@ class SearchDestinationTest {
         assertEquals("reader/84", dest)
     }
 
+    /**
+     * **Changed in issue #484.** This used to assert `reader/84`, on the stated
+     * grounds that "search has no details route for a pair" — which was never
+     * true: `Routes.bookDetailsPair` exists and Library has used it all along.
+     * The consequence was not cosmetic. `ReaderScreen` fetches the EPUB on open
+     * (issue #171), so routing a nothing-downloaded pair to the reader started
+     * a download the user had not asked for, from a tap that was only meant to
+     * open the book. Details is where both offers are visible.
+     */
     @Test
-    fun `a pair with nothing downloaded still opens the reader`() {
-        // Details is what resolvePairOpenTarget returns when neither side is on
-        // the device. Search has no details route for a pair, and the reader is
-        // where it went before, so this is deliberately unchanged behaviour.
+    fun `a pair with nothing downloaded opens its details screen`() {
         val dest = Routes.searchDestination(
             item("pair_84", pairId = 84, isEbook = true, isAudiobook = true),
             PairOpenTarget.Details,
         )
-        assertEquals("reader/84", dest)
+        assertEquals("book_details/pair/84", dest)
     }
 
     @Test

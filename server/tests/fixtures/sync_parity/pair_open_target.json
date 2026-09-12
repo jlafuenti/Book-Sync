@@ -42,6 +42,30 @@
     "expected": "audiobook"
   },
   {
+    "name": "a_streamable_audiobook_claim_resumes_the_player",
+    "why": "Issue #484. `available` means what this client can OPEN, and on Android that stopped meaning 'downloaded' when issue #171 added streaming — an audiobook plays straight off the server. A listener who streamed a book and came back found the reader instead, because the claim was checked against the download flag. The claim is honoured against what can be opened.",
+    "source": "audiobook",
+    "available": { "ebook": true, "audiobook": true },
+    "local": { "ebook": false, "audiobook": false },
+    "expected": "audiobook"
+  },
+  {
+    "name": "nothing_local_and_no_claim_goes_to_details_even_when_openable",
+    "why": "The other half of issue #484, and why `local` had to exist alongside `available`. With no claim to follow, a first tap must not commit to a stream or a download nobody asked for — on Android the reader fetches its EPUB on open, so treating 'openable' as good enough silently downloaded a book the user had merely tapped. Only something already on the device is opened unasked; otherwise the tap lands on details, where both offers are visible.",
+    "source": null,
+    "available": { "ebook": true, "audiobook": true },
+    "local": { "ebook": false, "audiobook": false },
+    "expected": "details"
+  },
+  {
+    "name": "a_claimed_ebook_that_is_not_local_can_still_be_fetched",
+    "why": "Mirror of the audiobook claim: having read this book before is the claim, and the reader downloads the EPUB on open, so the claim is still honourable without a local copy. Deliberately unlike the no-claim case above — the difference between the two is consent, not capability.",
+    "source": "ebook",
+    "available": { "ebook": true, "audiobook": true },
+    "local": { "ebook": false, "audiobook": false },
+    "expected": "ebook"
+  },
+  {
     "name": "nothing_available_goes_to_details",
     "why": "Neither format can be opened, so the tap lands on the details screen instead of a dead reader/player.",
     "source": "audiobook",

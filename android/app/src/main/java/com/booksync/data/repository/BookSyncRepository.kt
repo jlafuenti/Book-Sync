@@ -109,10 +109,12 @@ class BookSyncRepository @Inject constructor(
     suspend fun getPairById(pairId: Int): BookPairEntity? = library.getPairById(pairId)
 
     /** See [LibraryRepository.resolvePairOpenTarget]. */
-    suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget = library.resolvePairOpenTarget(pair)
+    suspend fun resolvePairOpenTarget(pair: BookPairEntity, isOnline: Boolean): PairOpenTarget =
+        library.resolvePairOpenTarget(pair, isOnline)
 
     /** See [LibraryRepository.resolvePairOpenTarget]. */
-    suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget = library.resolvePairOpenTarget(pairId)
+    suspend fun resolvePairOpenTarget(pairId: Int, isOnline: Boolean): PairOpenTarget =
+        library.resolvePairOpenTarget(pairId, isOnline)
 
     /** See [LibraryRepository.progressSummaryForPair]. */
     suspend fun progressSummaryForPair(pair: BookPairEntity): ProgressSummary =

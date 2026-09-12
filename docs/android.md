@@ -187,6 +187,17 @@ existed with nothing anywhere to start it.
 ebook that is not on the device fetches it and opens the reader by itself, with progress and a
 Cancel button rather than a prompt to press Download first.
 
+**Which format a cover tap opens.** `bookmarks.source` — the format last actually consumed —
+decides, and the rule is shared with the web through
+`server/tests/fixtures/sync_parity/pair_open_target.json`. It asks two questions, not one
+(issue #484): the claim is honoured against what can be **opened** (downloaded, or streamable
+while online), because following a claim acts on a choice already made; with no claim, only
+something already **on the device** is opened. A pair with nothing local and no history lands on
+its details screen instead, where the stream and the download are both offered — routing it to
+the reader would start a download from a tap that only meant "open this". Every surface asks
+`resolvePairOpenTarget`; the Downloaded tab used to decide for itself and ignored `source`
+entirely.
+
 **Downloading is for offline — and for Cast.** Books can be downloaded from a book's detail page,
 from the player's "Download for offline" button, and managed on the Downloaded screen. For a pair
 you can fetch the ebook, the audio, or both — plus the pair's sync map, so switching between

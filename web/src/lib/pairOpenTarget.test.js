@@ -20,11 +20,26 @@ const CASES = JSON.parse(fs.readFileSync(FIXTURE, 'utf-8'))
 
 describe('resolvePairOpenTarget parity vectors', () => {
     it.each(CASES.map(c => [c.name, c]))('%s', (_name, testCase) => {
+        // `local` defaults to `available`, which is what the web always passes:
+        // a format present on the pair is present, full stop. Android is the
+        // client where the two diverge (issue #484) — a book it can stream is
+        // openable without being on the device.
+        const local = testCase.local ?? testCase.available
         const target = resolvePairOpenTarget(testCase.source, {
             hasEbook: testCase.available.ebook,
             hasAudiobook: testCase.available.audiobook,
+            localEbook: local.ebook,
+            localAudiobook: local.audiobook,
         })
         expect(target, testCase.why).toBe(testCase.expected)
+    })
+
+    it('exercises the openable-but-not-local split the second axis exists for', () => {
+        // Without at least one such vector the `local` parameter is untested and
+        // the web silently keeps its old single-axis behaviour.
+        expect(CASES.some(c => c.local && (
+            c.local.ebook !== c.available.ebook || c.local.audiobook !== c.available.audiobook
+        ))).toBe(true)
     })
 
     it('covers both sources, the absent source, and the details fallback', () => {
@@ -43,5 +58,14 @@ describe('resolvePairOpenTarget defaults', () => {
         // Defensive: an unknown wire value must not route anywhere odd.
         expect(resolvePairOpenTarget('podcast', { hasEbook: true, hasAudiobook: true }))
             .toBe('ebook')
+    })
+
+    it('defaults local to openable, so existing callers are unchanged', () => {
+        // The web passes neither `localEbook` nor `localAudiobook`; every
+        // call site in web/src relies on this default.
+        expect(resolvePairOpenTarget(null, { hasEbook: true, hasAudiobook: true }))
+            .toBe('ebook')
+        expect(resolvePairOpenTarget(null, { hasEbook: false, hasAudiobook: true }))
+            .toBe('audiobook')
     })
 })

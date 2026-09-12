@@ -122,6 +122,7 @@ data class SearchResultItem(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    private val networkMonitor: com.booksync.data.util.NetworkMonitor,
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
 ) : ViewModel() {
@@ -381,7 +382,7 @@ class SearchViewModel @Inject constructor(
      * and Library already make. Search is the one surface that used to skip it.
      */
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
-        repository.resolvePairOpenTarget(pairId)
+        repository.resolvePairOpenTarget(pairId, networkMonitor.isOnline.value)
 
     /**
      * Resolve the row, *then* enqueue the download (issue #338).

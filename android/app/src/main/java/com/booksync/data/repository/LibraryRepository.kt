@@ -330,24 +330,42 @@ class LibraryRepository @Inject constructor(
     suspend fun getPairById(pairId: Int): BookPairEntity? = bookPairDao.getPairById(pairId)
 
     /**
-     * Decide where a pair-tap should land:
-     *  - If the user has a bookmark, honor `source` ("audiobook" → Player, "ebook" → Reader)
-     *    provided that side is downloaded.
-     *  - Otherwise prefer ebook → audiobook → details (matches LibraryScreen.openItem fallback).
+     * Decide where a pair-tap should land.
+     *
+     * Mirrors `web/src/lib/pairOpenTarget.js`; both are driven by the shared
+     * golden vectors in `server/tests/fixtures/sync_parity/pair_open_target.json`.
+     *
+     * **Two axes** (issue #484). This used to ask one question — is the format
+     * downloaded — which was the same as "can it be opened" until issue #171
+     * added streaming. Conflating them was wrong in both directions: a book the
+     * user had *streamed* reopened in the reader, because the claim was checked
+     * against a download flag it would never satisfy; and a pair they had merely
+     * tapped opened the reader, which fetches an EPUB nobody asked for.
+     *
+     * So the claim (`bookmarks.source`) is honoured against what can be opened —
+     * downloaded, or streamable while [isOnline] — because following a claim is
+     * acting on a choice already made. With no claim, only a local copy is
+     * opened: a first tap must not commit to a transfer, and lands on the
+     * details screen where both offers are visible.
      */
-    suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget {
+    suspend fun resolvePairOpenTarget(pair: BookPairEntity, isOnline: Boolean): PairOpenTarget {
         val source = bookmarkDao.getBookmark(scope, pair.id)?.source
+        // The player streams (MediaSourceSelector) and the reader fetches its
+        // EPUB on open (ReaderScreen), so with a connection either format can be
+        // opened whether or not it is here.
+        val canOpenEbook = pair.ebookDownloaded || isOnline
+        val canOpenAudiobook = pair.audiobookDownloaded || isOnline
         return when {
-            source == "audiobook" && pair.audiobookDownloaded -> PairOpenTarget.Player
-            source == "ebook"     && pair.ebookDownloaded     -> PairOpenTarget.Reader
-            pair.ebookDownloaded                              -> PairOpenTarget.Reader
-            pair.audiobookDownloaded                          -> PairOpenTarget.Player
-            else                                              -> PairOpenTarget.Details
+            source == "audiobook" && canOpenAudiobook -> PairOpenTarget.Player
+            source == "ebook"     && canOpenEbook     -> PairOpenTarget.Reader
+            pair.ebookDownloaded                      -> PairOpenTarget.Reader
+            pair.audiobookDownloaded                  -> PairOpenTarget.Player
+            else                                      -> PairOpenTarget.Details
         }
     }
 
-    suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
-        getPairById(pairId)?.let { resolvePairOpenTarget(it) } ?: PairOpenTarget.Details
+    suspend fun resolvePairOpenTarget(pairId: Int, isOnline: Boolean): PairOpenTarget =
+        getPairById(pairId)?.let { resolvePairOpenTarget(it, isOnline) } ?: PairOpenTarget.Details
 
     // ---- Is there anything to reset, and is it finished? (issue #484) ------
     //

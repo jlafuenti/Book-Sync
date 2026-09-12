@@ -72,7 +72,7 @@ class ResolvePairOpenTargetTest {
         coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("ebook")
 
         val target = repository().resolvePairOpenTarget(
-            pair(ebookDownloaded = true, audiobookDownloaded = true))
+            pair(ebookDownloaded = true, audiobookDownloaded = true), isOnline = false)
 
         assertEquals(PairOpenTarget.Reader, target)
     }
@@ -82,7 +82,7 @@ class ResolvePairOpenTargetTest {
         coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
 
         val target = repository().resolvePairOpenTarget(
-            pair(ebookDownloaded = true, audiobookDownloaded = true))
+            pair(ebookDownloaded = true, audiobookDownloaded = true), isOnline = false)
 
         assertEquals(PairOpenTarget.Player, target)
     }
@@ -93,22 +93,26 @@ class ResolvePairOpenTargetTest {
 
         assertEquals(
             PairOpenTarget.Reader,
-            repository().resolvePairOpenTarget(pair(ebookDownloaded = true, audiobookDownloaded = true)))
+            repository().resolvePairOpenTarget(
+                pair(ebookDownloaded = true, audiobookDownloaded = true), isOnline = false))
         assertEquals(
             PairOpenTarget.Player,
-            repository().resolvePairOpenTarget(pair(ebookDownloaded = false, audiobookDownloaded = true)))
+            repository().resolvePairOpenTarget(
+                pair(ebookDownloaded = false, audiobookDownloaded = true), isOnline = false))
         assertEquals(
             PairOpenTarget.Details,
-            repository().resolvePairOpenTarget(pair(ebookDownloaded = false, audiobookDownloaded = false)))
+            repository().resolvePairOpenTarget(
+                pair(ebookDownloaded = false, audiobookDownloaded = false), isOnline = false))
     }
 
     @Test
-    fun `source names a format that is not downloaded falls back to the downloaded one`() = runTest {
-        // e.g. the audiobook was deleted locally after the last audio save.
+    fun `offline, a source naming a format that is not downloaded falls back`() = runTest {
+        // e.g. the audiobook was deleted locally after the last audio save, and
+        // there is no connection to stream it over.
         coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
 
         val target = repository().resolvePairOpenTarget(
-            pair(ebookDownloaded = true, audiobookDownloaded = false))
+            pair(ebookDownloaded = true, audiobookDownloaded = false), isOnline = false)
 
         assertEquals(PairOpenTarget.Reader, target)
     }
@@ -130,9 +134,65 @@ class ResolvePairOpenTargetTest {
         )
 
         val target = repository().resolvePairOpenTarget(
-            pair(ebookDownloaded = true, audiobookDownloaded = true))
+            pair(ebookDownloaded = true, audiobookDownloaded = true), isOnline = false)
 
         assertEquals(PairOpenTarget.Reader, target)
+    }
+
+    // ---- #484: openable is not the same as downloaded ----
+
+    /**
+     * The complaint this fixes: stream a book, come back, tap its cover, and
+     * land in the *reader*. `source` said audiobook and the claim was checked
+     * against `audiobookDownloaded`, which a streamed book never satisfies, so
+     * the claim was skipped and the ladder fell through to the ebook.
+     */
+    @Test
+    fun `online, a claimed audiobook resumes the player without being downloaded`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
+
+        val target = repository().resolvePairOpenTarget(
+            pair(ebookDownloaded = true, audiobookDownloaded = false), isOnline = true)
+
+        assertEquals(PairOpenTarget.Player, target)
+    }
+
+    /**
+     * And the opposite direction, which is the same rule: with no claim to
+     * follow, being online must NOT be treated as a reason to open something.
+     * The reader fetches its EPUB on open, so routing there on a first tap
+     * downloads a book the user only tapped — exactly what was reported.
+     */
+    @Test
+    fun `online, a pair with nothing downloaded and no claim goes to details`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns null
+
+        val target = repository().resolvePairOpenTarget(
+            pair(ebookDownloaded = false, audiobookDownloaded = false), isOnline = true)
+
+        assertEquals(PairOpenTarget.Details, target)
+    }
+
+    /** A claim is consent, so the ebook may be fetched when it names one. */
+    @Test
+    fun `online, a claimed ebook opens the reader and lets it fetch the file`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("ebook")
+
+        val target = repository().resolvePairOpenTarget(
+            pair(ebookDownloaded = false, audiobookDownloaded = false), isOnline = true)
+
+        assertEquals(PairOpenTarget.Reader, target)
+    }
+
+    /** Offline the two axes collapse back together and nothing changes. */
+    @Test
+    fun `offline, a claimed audiobook that is not downloaded cannot be resumed`() = runTest {
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("audiobook")
+
+        val target = repository().resolvePairOpenTarget(
+            pair(ebookDownloaded = false, audiobookDownloaded = false), isOnline = false)
+
+        assertEquals(PairOpenTarget.Details, target)
     }
 
     /**
@@ -174,12 +234,28 @@ class ResolvePairOpenTargetTest {
                 else -> error("$name: unknown expected target '$e'")
             }
 
+            val local = obj["local"]?.jsonObject ?: available
+            val openEbook = available["ebook"]!!.jsonPrimitive.boolean
+            val openAudio = available["audiobook"]!!.jsonPrimitive.boolean
+            val localEbook = local["ebook"]!!.jsonPrimitive.boolean
+            val localAudio = local["audiobook"]!!.jsonPrimitive.boolean
+
+            // Android has one network flag, not one per format: openable ==
+            // downloaded || online. A vector where only *one* format gains
+            // openability from being online is therefore inexpressible here —
+            // fail loudly rather than quietly testing something else.
+            val isOnline = (openEbook && !localEbook) || (openAudio && !localAudio)
+            require((localEbook || isOnline) == openEbook && (localAudio || isOnline) == openAudio) {
+                "$name: Android cannot express available=$available with local=$local — " +
+                    "being online makes both formats openable at once"
+            }
+
             coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns source?.let { bookmark(it) }
 
-            val target = repository().resolvePairOpenTarget(pair(
-                ebookDownloaded = available["ebook"]!!.jsonPrimitive.boolean,
-                audiobookDownloaded = available["audiobook"]!!.jsonPrimitive.boolean,
-            ))
+            val target = repository().resolvePairOpenTarget(
+                pair(ebookDownloaded = localEbook, audiobookDownloaded = localAudio),
+                isOnline = isOnline,
+            )
 
             assertEquals("$name: $why", expected, target)
         }
@@ -190,13 +266,13 @@ class ResolvePairOpenTargetTest {
         coEvery { bookPairDao.getPairById(84) } returns pair(ebookDownloaded = true)
         coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 84) } returns bookmark("ebook")
 
-        assertEquals(PairOpenTarget.Reader, repository().resolvePairOpenTarget(84))
+        assertEquals(PairOpenTarget.Reader, repository().resolvePairOpenTarget(84, isOnline = false))
     }
 
     @Test
     fun `resolvePairOpenTarget by pairId returns Details when the pair is unknown locally`() = runTest {
         coEvery { bookPairDao.getPairById(999) } returns null
 
-        assertEquals(PairOpenTarget.Details, repository().resolvePairOpenTarget(999))
+        assertEquals(PairOpenTarget.Details, repository().resolvePairOpenTarget(999, isOnline = false))
     }
 }
