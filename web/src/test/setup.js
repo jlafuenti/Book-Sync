@@ -1,9 +1,23 @@
 import '@testing-library/jest-dom/vitest'
 import { afterEach, vi } from 'vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 
 // Unmount React trees between tests.
 afterEach(() => cleanup())
+
+// Issue #471: Testing Library's default is 1000ms per findBy*/waitFor, which is
+// ample on a developer machine and not ample on a 2-core CI runner sharing
+// itself with a worker per core. The suite had been failing a *different* test
+// on each run — SystemPage on one PR, TranscriptionPage.retry twice on main —
+// on diffs that could not have caused it.
+//
+// This weakens no assertion: a passing test still resolves as fast as it ever
+// did, and only a failing one waits longer before reporting. The cost is that a
+// genuinely broken test takes 5s rather than 1s to say so.
+//
+// It does NOT cover a synchronous getBy* that runs before the render it needs
+// has committed — those never consult this value. Those are fixed per site.
+configure({ asyncUtilTimeout: 5000 })
 
 // jsdom has no media engine — HTMLMediaElement methods throw "Not implemented"
 // (e.g. AudioPlayerContext calling audio.pause() on unmount). Stub them.

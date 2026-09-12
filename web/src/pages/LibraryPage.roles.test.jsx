@@ -83,7 +83,12 @@ describe('LibraryPage Verify control is editor-gated (issue #263)', () => {
         renderAs('editor')
         await waitFor(() => expect(getLibraryFacetsMock).toHaveBeenCalled())
 
-        fireEvent.click(screen.getByText('Maintenance'))
+        // Issue #471: the waitFor above settles when the facets request is
+        // *made*, not when the render it feeds has committed, so on a loaded
+        // runner the page is still showing "Loading library...". getByText does
+        // not retry and is not governed by asyncUtilTimeout — it throws on the
+        // first miss — so no timeout setting can rescue it. findByText waits.
+        fireEvent.click(await screen.findByText('Maintenance'))
         fireEvent.click(screen.getByText('Verify Files'))
 
         await waitFor(() => expect(verifyFilesMock).toHaveBeenCalled())
