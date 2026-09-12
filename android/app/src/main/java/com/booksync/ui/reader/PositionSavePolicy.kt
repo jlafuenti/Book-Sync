@@ -67,6 +67,20 @@ class PositionSavePolicy {
     }
 
     /**
+     * Whether the displayed position is something the user chose rather than
+     * where the restore ladder put them (issue #477).
+     *
+     * A save still happens either way — this does not gate [verdictForSave].
+     * What it gates is the *audio* half: `ReaderActivity` passes it into
+     * [ReaderPositionSnapshot.skipSyncPointLookup], because resolving a
+     * sync-point match from a page nobody navigated to can only overwrite a
+     * real listening position with a guess. That is how a four-and-a-half-hour
+     * position became 340 ms: the ladder landed confidently on a title page and
+     * the save mapped it back through the sync map.
+     */
+    fun hasUserNavigated(): Boolean = userNavigated
+
+    /**
      * What the next save call should do.
      *
      * [atStartOfBook] is the hard safety net (issue #61/#40 fix 1b): Readium's

@@ -97,7 +97,14 @@ object Routes {
     const val SEARCH      = "search"
     const val SETTINGS    = "settings"                // kept for legacy intents
     const val DIAGNOSTICS = "diagnostics/{channel}"
-    const val READER               = "reader/{pairId}"
+    /**
+     * `handoffAudioMs` is set only by "Switch to Reader" in the player: the
+     * audiobook's position at the moment the user switched, so the reader can
+     * open the page that goes with it instead of the stored ebook coordinate,
+     * which only a reader save updates and can be hours stale. Absent (0) for
+     * every ordinary open.
+     */
+    const val READER               = "reader/{pairId}?handoffAudioMs={handoffAudioMs}"
     /** A standalone (unpaired) ebook — no pair, no sync map (issue #169). */
     const val READER_STANDALONE    = "reader/standalone/{ebookId}"
     const val PLAYER               = "player/{pairId}"
@@ -125,7 +132,11 @@ object Routes {
         return if (params.isEmpty()) LIBRARY else "$LIBRARY?${params.joinToString("&")}"
     }
 
-    fun reader(pairId: Int)  = "reader/$pairId"
+    // Only the handoff adds the argument; every ordinary open builds exactly
+    // the route it always did, which `SearchDestinationTest` pins. The query
+    // parameter is optional on the pattern, so both forms match.
+    fun reader(pairId: Int, handoffAudioMs: Long = 0L) =
+        if (handoffAudioMs > 0) "reader/$pairId?handoffAudioMs=$handoffAudioMs" else "reader/$pairId"
     fun readerStandalone(ebookId: Int) = "reader/standalone/$ebookId"
     fun player(pairId: Int)  = "player/$pairId"
     fun playerStandalone(audiobookId: Int) = "player/standalone/$audiobookId"
@@ -364,11 +375,15 @@ fun BookSyncNavigation() {
 
         composable(
             Routes.READER,
-            arguments = listOf(navArgument("pairId") { type = NavType.IntType }),
+            arguments = listOf(
+                navArgument("pairId") { type = NavType.IntType },
+                navArgument("handoffAudioMs") { type = NavType.LongType; defaultValue = 0L },
+            ),
         ) { backStackEntry ->
             val pairId = backStackEntry.arguments?.getInt("pairId") ?: return@composable
             ReaderScreen(
                 pairId = pairId,
+                handoffAudioMs = backStackEntry.arguments?.getLong("handoffAudioMs") ?: 0L,
                 onBack = { navController.popBackStack() },
                 onSwitchToAudio = {
                     navController.navigate(Routes.player(pairId)) {
@@ -386,8 +401,11 @@ fun BookSyncNavigation() {
             PlayerScreen(
                 pairId = pairId,
                 onBack = { navController.popBackStack() },
-                onSwitchToReader = {
-                    navController.navigate(Routes.reader(pairId)) {
+                onSwitchToReader = { audioMs ->
+                    // Carry the position the user is actually at, so the reader
+                    // opens the matching page rather than the stored (possibly
+                    // hours-stale) ebook coordinate.
+                    navController.navigate(Routes.reader(pairId, audioMs)) {
                         popUpTo(Routes.MAIN)
                     }
                 },
@@ -414,7 +432,7 @@ fun BookSyncNavigation() {
             PlayerScreen(
                 pairId = -1,            // sentinel: no pair (ViewModel uses audiobookId from SavedStateHandle)
                 onBack = { navController.popBackStack() },
-                onSwitchToReader = { }, // not applicable for standalone
+                onSwitchToReader = { _ -> }, // not applicable for standalone
             )
         }
 
