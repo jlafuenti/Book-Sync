@@ -60,6 +60,13 @@ export default defineConfig({
         environment: 'jsdom',
         globals: true,
         setupFiles: './src/test/setup.js',
+        // Issue #471: vitest's 5000ms default is the whole test body, and it
+        // has to stay comfortably above the 5000ms asyncUtilTimeout set in
+        // src/test/setup.js. At equal values a slow findBy* is killed by the
+        // body timeout first, which reports "Test timed out in 5000ms" instead
+        // of naming the element that never appeared — the useful half of the
+        // message. 15s leaves room for a test with more than one such wait.
+        testTimeout: 15000,
         coverage: {
             provider: 'v8',
             reporter: ['text', 'cobertura'],
