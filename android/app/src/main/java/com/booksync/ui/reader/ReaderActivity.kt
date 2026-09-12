@@ -1103,13 +1103,27 @@ class ReaderActivity : AppCompatActivity() {
                         if (guess.trim().length > 10) return result(guess, 'estimated');
                     }
 
-                    // No matching iframe — try all frames (chapter may load directly in WebView)
+                    // No matching iframe — try every other frame first.
                     for (var i = 0; i < frames.length; i++) {
                         try {
                             var text = getVisibleText(frames[i].contentDocument);
                             if (text.trim().length > 10) return result(text, 'dom');
                         } catch(e) {}
                     }
+
+                    // Then this WebView's own document. The comment above used
+                    // to promise this case ("chapter may load directly in
+                    // WebView") while the loop it introduced searched `frames`
+                    // again, so a build that renders the chapter directly —
+                    // with no iframes at all — always fell through to 'none'.
+                    // Every "Switch to Audio" then handed over on the chapter
+                    // anchor instead of the sentence on screen, which is the
+                    // whole of what issue #114 added.
+                    var own = getVisibleText(document);
+                    if (own.trim().length > 10) return result(own, 'dom');
+                    var ownGuess = scrollBasedText(document);
+                    if (ownGuess.trim().length > 10) return result(ownGuess, 'estimated');
+
                     return result('', 'none');
                 })()
             """.trimIndent()
