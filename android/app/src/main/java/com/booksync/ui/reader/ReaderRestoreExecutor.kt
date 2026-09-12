@@ -12,6 +12,13 @@ private const val FALLBACK_CHAPTER_LENGTH = 1000L
 private val LEADING_HEADING = Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", RegexOption.IGNORE_CASE)
 
 /**
+ * Below this many spine items there is nothing to sample: the probes would
+ * overlap the match itself, and "appears in most of a three-item book" says
+ * nothing. See `isBoilerplate` (issue #477).
+ */
+private const val MIN_SPINE_FOR_BOILERPLATE_CHECK = 6
+
+/**
  * What the restore ladder needs to know about the open book, and nothing
  * else (issue #227). `ReaderActivity` implements it over a Readium
  * `Publication`; tests implement it over a list of strings.
@@ -205,6 +212,10 @@ class ReaderRestoreExecutor(
                 if (candidate in 0 until n) {
                     val plainText = spine.plainTextAt(candidate) ?: continue
                     if (plainText.contains(searchText, ignoreCase = true)) {
+                        if (isBoilerplate(searchText, foundAt = candidate, n = n)) {
+                            Log.d(TAG, "findSpineIndexForText: '${searchText.take(40)}' runs through the whole book — not an anchor")
+                            return null
+                        }
                         Log.d(TAG, "findSpineIndexForText: found '${searchText.take(40)}' at spine $candidate (hint=$hint)")
                         return candidate
                     }
@@ -213,6 +224,37 @@ class ReaderRestoreExecutor(
         }
         Log.d(TAG, "findSpineIndexForText: no match for '${searchText.take(40)}'")
         return null
+    }
+
+    /**
+     * Whether [searchText] runs through the whole book rather than naming a
+     * place in it (issue #477).
+     *
+     * A Calibre-split EPUB repeats the title line at the top of every spine
+     * file, so a stored preview of that line matches every item and the outward
+     * search returns whichever happens to be nearest — in the reported case the
+     * title page, from a bookmark whose real position was four and a half hours
+     * into the audiobook. A confident landing there is worse than no landing:
+     * the save that follows resolves a sync-point match from it, and wrote an
+     * audio position of 340 ms over one of 16,348,540 ms.
+     *
+     * Three widely separated probes separate boilerplate from ordinary
+     * repetition. A sentence that genuinely recurs in a chapter or two will not
+     * be in most of the book, so it still resolves; a running header is in all
+     * of it. Requiring two hits rather than one keeps a coincidental match in a
+     * single probed chapter from discarding a real anchor.
+     *
+     * Runs *after* the outward search on purpose, so the seed chapter is still
+     * the first item read — `ReaderRestoreExecutorTest` pins that.
+     */
+    private suspend fun isBoilerplate(searchText: String, foundAt: Int, n: Int): Boolean {
+        if (n < MIN_SPINE_FOR_BOILERPLATE_CHECK) return false
+        val probes = listOf(0, n / 2, n - 1).distinct().filter { it != foundAt }
+        if (probes.size < 2) return false
+        val hits = probes.count { idx ->
+            spine.plainTextAt(idx)?.contains(searchText, ignoreCase = true) == true
+        }
+        return hits >= 2
     }
 
     /**

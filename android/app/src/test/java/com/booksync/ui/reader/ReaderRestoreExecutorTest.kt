@@ -491,6 +491,42 @@ class ReaderRestoreExecutorTest {
         assertNull(executor.executeStep(RestoreStep.Audio(1_000)))
     }
 
+    // ------------------------------------------------- boilerplate previews
+
+    /**
+     * Issue #477. A Calibre-split EPUB repeats the book's title line at the top
+     * of every spine file, so a stored preview of that line is present in all
+     * 84 items. The outward search took the nearest hit — the title page — and
+     * reported a confident landing, after which a full save resolved a
+     * sync-point match from it and rewrote a 4h32m listening position to 340ms.
+     *
+     * Text that appears throughout the book names no position, so the rung must
+     * decline and let the ladder fall through rather than land on front matter.
+     */
+    @Test
+    fun `a preview repeated throughout the book names no position`() = runTest {
+        val titleLine = "Liveship Traders 3 - Ship of Destiny"
+        val spine = FakeSpine(List(84) { i -> "$titleLine chapter $i body text, unique words here $i" })
+        val executor = ReaderRestoreExecutor(spine)
+
+        assertNull(
+            "a preview present in every chapter is boilerplate, not an anchor",
+            executor.findSpineIndexForText(titleLine, hintIdx = 1),
+        )
+    }
+
+    @Test
+    fun `the boilerplate check does not reject a phrase that recurs in a few chapters`() = runTest {
+        // The guard above must not fire on ordinary repetition — a sentence that
+        // genuinely appears twice still resolves to the nearer chapter, which is
+        // what `text search walks outward from the seed` pins.
+        val preview = "althea counted the ships at anchor"
+        val spine = spineOf(12, mapOf(1 to preview, 9 to preview))
+        val executor = ReaderRestoreExecutor(spine)
+
+        assertEquals(9, executor.findSpineIndexForText(preview, hintIdx = 7))
+    }
+
     // ---------------------------------------------------------------- errors
 
     @Test

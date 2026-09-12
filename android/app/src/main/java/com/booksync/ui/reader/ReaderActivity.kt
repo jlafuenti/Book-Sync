@@ -989,7 +989,15 @@ class ReaderActivity : AppCompatActivity() {
             // (see syncSelectedTextToAudio) — resolving a sync-point match
             // here too could overwrite that fresher, deliberately-chosen
             // audio position with a stale automatic guess.
-            skipSyncPointLookup = sentenceSyncPending,
+            //
+            // The same reasoning covers a session the user never navigated
+            // (issue #477): the page on screen is where the restore ladder put
+            // them, not somewhere they chose, so an audio position derived from
+            // it can only replace a real one with a guess. A ladder that landed
+            // confidently on a title page turned 4h32m of listening into 340ms
+            // exactly this way. Turning a single page makes the position the
+            // user's own and re-enables the lookup.
+            skipSyncPointLookup = sentenceSyncPending || !savePolicy.hasUserNavigated(),
         )
         repository.saveReaderPosition(snapshot)
     }

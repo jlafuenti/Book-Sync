@@ -3,6 +3,8 @@ package com.booksync.ui.reader
 import com.booksync.ui.reader.PositionSavePolicy.RestoreOutcome
 import com.booksync.ui.reader.PositionSavePolicy.SaveVerdict
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -107,6 +109,32 @@ class PositionSavePolicyTest {
         policy.onRestoreOutcome(RestoreOutcome.Unresolved)
         policy.onUserNavigation()
         assertEquals(SaveVerdict.FullSave, policy.verdictForSave(atStartOfBook = false))
+    }
+
+    /**
+     * Issue #477. A reader session where the user never turned a page is
+     * showing the restore ladder's guess, not a place anyone chose. Resolving a
+     * sync-point match from that page and writing the audio position it implies
+     * can only overwrite a real listening position with a guess — which is how
+     * a 4h32m position became 340ms. The save still happens; the audio half of
+     * it is what must be withheld, and `ReaderActivity` asks this before
+     * setting `ReaderPositionSnapshot.skipSyncPointLookup`.
+     */
+    @Test
+    fun `a session with no page turn must not derive an audio position`() {
+        val policy = PositionSavePolicy()
+        policy.onRestoreOutcome(RestoreOutcome.Landed)
+
+        assertFalse("nothing the user chose has happened yet", policy.hasUserNavigated())
+    }
+
+    @Test
+    fun `turning a page makes the displayed position the user's own`() {
+        val policy = PositionSavePolicy()
+        policy.onRestoreOutcome(RestoreOutcome.Landed)
+        policy.onUserNavigation()
+
+        assertTrue("a page turn is a chosen position", policy.hasUserNavigated())
     }
 
     @Test
