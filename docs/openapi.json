@@ -4999,6 +4999,13 @@
             "title": "Failed Transcription",
             "type": "array"
           },
+          "implausible_pair": {
+            "items": {
+              "$ref": "#/components/schemas/TroubleshootPairItem"
+            },
+            "title": "Implausible Pair",
+            "type": "array"
+          },
           "missing": {
             "items": {
               "$ref": "#/components/schemas/TroubleshootItem"
@@ -5059,6 +5066,7 @@
           "unsupported_format",
           "multi_file_audiobook",
           "sync_map_missing",
+          "implausible_pair",
           "duplicate",
           "missing_cover",
           "orphaned_cover",

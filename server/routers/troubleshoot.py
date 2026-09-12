@@ -40,7 +40,7 @@ from schemas import (
     LibraryScanProgress, MultiFileDismissResult, MultiFileRemoveTracksResult,
     ReplaceFileResult, RequeueResult, SyncMapAuditResponse, TroubleshootIssues,
 )
-from services import chapter_repair, library_verify
+from services import chapter_repair, library_verify, pair_plausibility
 from services import sync_map_audit as sync_map_audit_service
 from services.position_service import (
     demote_pair_positions,
@@ -245,6 +245,34 @@ async def get_issues(
                 "detail": "Marked synced but has no sync map — re-queue to rebuild it",
             })
 
+    # Pairs whose audio length cannot account for the ebook's text (issue #458).
+    # Recorded at pair creation rather than computed here: the verdict depends on
+    # the files as they were when paired, and recomputing it on every page load
+    # would re-derive the same answer for a whole library on a rate-limited read.
+    implausible_pair = []
+    pair_by_id = {p.id: p for p in all_pairs}
+    plausibility_rows = (await db.execute(
+        select(LibraryCheckResult).where(
+            LibraryCheckResult.item_type == "pair",
+            LibraryCheckResult.check_type == pair_plausibility.CHECK_TYPE,
+            LibraryCheckResult.ok == False,  # noqa: E712
+        )
+    )).scalars().all()
+    for r in plausibility_rows:
+        pair = pair_by_id.get(r.item_id)
+        if pair is None:
+            continue            # pair deleted since the check ran
+        eb = eb_by_id.get(pair.ebook_id)
+        ab = ab_by_id.get(pair.audiobook_id)
+        implausible_pair.append({
+            "pair_id": pair.id,
+            "ebook_id": pair.ebook_id,
+            "audiobook_id": pair.audiobook_id,
+            "title": (eb.title if eb else None) or (ab.title if ab else f"Pair {pair.id}"),
+            "author": (eb.author if eb else None) or (ab.author if ab else None),
+            "detail": r.detail or "Audio length does not fit this ebook",
+        })
+
     # Duplicate files (same content hash) within each media type.
     duplicate = []
     by_hash = defaultdict(list)
@@ -330,6 +358,7 @@ async def get_issues(
         "unsupported_format": unsupported,
         "multi_file_audiobook": multi_file,
         "sync_map_missing": sync_map_missing,
+        "implausible_pair": implausible_pair,
         "duplicate": duplicate,
         "missing_cover": missing_cover,
         "orphaned_cover": orphaned_cover,

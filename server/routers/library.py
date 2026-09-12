@@ -764,6 +764,15 @@ async def create_pair(
     if audio_obj:
         audio_obj.acknowledged = True
 
+    # Is this pairing plausible at all (issue #458)? Before the auto-transcribe
+    # check below on purpose: if the audio cannot account for the ebook's text,
+    # the warning is already recorded by the time the pair reaches the queue, so
+    # it can be seen rather than discovered hours of GPU time later. It records a
+    # finding and does not block — abridgements and genuine samples exist, and a
+    # false positive that refuses a real book is worse than one that warns.
+    from services.pair_plausibility import record_pair_plausibility
+    await record_pair_plausibility(db, pair, ebook_obj, audio_obj)
+
     # Check auto-transcribe setting
     setting_result = await db.execute(select(SystemSetting).where(SystemSetting.key == "auto_transcribe_enabled"))
     setting = setting_result.scalar_one_or_none()

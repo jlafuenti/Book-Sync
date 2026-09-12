@@ -28,6 +28,12 @@ const CATEGORIES = [
     // No in-app fix by design: merge in Audiobookshelf, then Rescan.
     { key: 'multi_file_audiobook', label: 'Multi-file audiobooks (unsupported)', kind: 'multi_file', tone: 'warning' },
     { key: 'sync_map_missing', label: 'Synced pairs missing a sync map', kind: 'transcription', tone: 'warning' },
+    // Issue #458: the audiobook is implausibly short (or long) for the ebook it
+    // is paired with — a truncated download, or the wrong file matched. The
+    // finding is the *pairing*, so these are pair rows like the two around them;
+    // `transcription` kind renders them non-selectable, since the fix is to
+    // replace the file and rescan rather than to delete anything from here.
+    { key: 'implausible_pair', label: 'Pairs whose audio length does not fit the ebook', kind: 'transcription', tone: 'warning' },
     { key: 'duplicate', label: 'Duplicate files', kind: 'dup', tone: 'warning' },
     { key: 'missing_cover', label: 'Missing covers', kind: 'cover', tone: 'warning' },
     { key: 'orphaned_cover', label: 'Orphaned cover files', kind: 'orphan', tone: 'warning' },

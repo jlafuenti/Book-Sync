@@ -54,6 +54,9 @@ CATEGORY_KEYS = {
     "ebook_unreadable", "unsupported_format", "multi_file_audiobook",
     "sync_map_missing", "duplicate", "missing_cover", "orphaned_cover",
     "failed_transcription", "failed_acsm",
+    # Issue #458 — the pair is the finding, not either file on its own, so this
+    # carries PAIR_KEYS like failed_transcription rather than an item row.
+    "implausible_pair",
 }
 
 SCAN_PROGRESS_KEYS = {

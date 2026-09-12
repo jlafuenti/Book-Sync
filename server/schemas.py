@@ -936,6 +936,10 @@ class TroubleshootCategories(StrictResponse):
     unsupported_format: List[TroubleshootItem]
     multi_file_audiobook: List[TroubleshootFolderItem]
     sync_map_missing: List[TroubleshootPairItem]
+    #: Issue #458 — the audiobook's length cannot account for the ebook's text
+    #: (a truncated download, or the wrong file matched). Keyed by pair, because
+    #: the finding is the pairing rather than either file on its own.
+    implausible_pair: List[TroubleshootPairItem]
     duplicate: List[TroubleshootItem]
     missing_cover: List[TroubleshootItem]
     orphaned_cover: List[TroubleshootFileItem]
