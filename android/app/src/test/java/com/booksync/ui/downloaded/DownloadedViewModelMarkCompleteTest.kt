@@ -6,6 +6,8 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.repository.BookSyncRepository
 import io.mockk.coVerify
+import com.booksync.data.util.NetworkMonitor
+import kotlinx.coroutines.flow.MutableStateFlow
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -53,8 +55,11 @@ class DownloadedViewModelMarkCompleteTest {
     private fun newViewModel(): DownloadedViewModel {
         val serverUrlManager = mockk<ServerUrlManager>()
         every { serverUrlManager.currentUrl } returns "https://tandem.example.com"
+        val networkMonitor = mockk<NetworkMonitor>()
+        every { networkMonitor.isOnline } returns MutableStateFlow(true)
         return DownloadedViewModel(
             repository = repository,
+            networkMonitor = networkMonitor,
             serverUrlManager = serverUrlManager,
             tokenManager = mockk(relaxed = true),
             context = mockk(relaxed = true),

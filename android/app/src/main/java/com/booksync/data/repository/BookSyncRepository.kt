@@ -114,6 +114,18 @@ class BookSyncRepository @Inject constructor(
     /** See [LibraryRepository.resolvePairOpenTarget]. */
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget = library.resolvePairOpenTarget(pairId)
 
+    /** See [LibraryRepository.progressSummaryForPair]. */
+    suspend fun progressSummaryForPair(pair: BookPairEntity): ProgressSummary =
+        library.progressSummaryForPair(pair)
+
+    /** See [LibraryRepository.progressSummaryForEbook]. */
+    suspend fun progressSummaryForEbook(ebookId: Int): ProgressSummary =
+        library.progressSummaryForEbook(ebookId)
+
+    /** See [LibraryRepository.progressSummaryForAudiobook]. */
+    suspend fun progressSummaryForAudiobook(audiobookId: Int): ProgressSummary =
+        library.progressSummaryForAudiobook(audiobookId)
+
     /** See [LibraryRepository.getEbookById]. */
     suspend fun getEbookById(ebookId: Int): EBookEntity? = library.getEbookById(ebookId)
 

@@ -17,6 +17,7 @@ import com.booksync.R
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.LastOpenedTimes
 import com.booksync.data.repository.PairOpenTarget
+import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
@@ -427,6 +428,17 @@ class LibraryViewModel @Inject constructor(
      */
     suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget =
         repository.resolvePairOpenTarget(pair)
+
+    /**
+     * Whether this item has a position to reset and whether it is finished
+     * (issue #484) — read when its overflow sheet opens, one item at a time.
+     */
+    suspend fun progressSummary(item: LibraryItem): ProgressSummary = when {
+        item.pair != null -> repository.progressSummaryForPair(item.pair)
+        item.ebook != null -> repository.progressSummaryForEbook(item.ebook.id)
+        item.audiobook != null -> repository.progressSummaryForAudiobook(item.audiobook.id)
+        else -> ProgressSummary(hasProgress = false, isComplete = false)
+    }
 
     fun downloadAll(pair: BookPairEntity)         = enqueue(pair.id, "ALL",       "download_pair_${pair.id}")
     fun downloadEbook(pair: BookPairEntity)       = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")

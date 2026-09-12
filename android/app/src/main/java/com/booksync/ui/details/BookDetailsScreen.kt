@@ -191,6 +191,29 @@ fun BookDetailsScreen(
                 Column {
                     val pair = ui.pair
                     if (pair != null) {
+                        // The primary button streams the audiobook when nothing
+                        // is downloaded (issue #484), so reading needs a row of
+                        // its own. ReaderScreen fetches the EPUB on open, which
+                        // is why this is offered with or without a local copy —
+                        // but only with a connection to fetch it over.
+                        if (!pair.ebookDownloaded && ui.isOnline) {
+                            ActionRow(
+                                title = "Read",
+                                description = "Fetches the ebook, then opens the reader.",
+                                trailingIcon = Icons.Default.Book,
+                                onClick = { onRead(pair.id) },
+                            )
+                        }
+                        if (primaryAction(ui) == PrimaryAction.Listen && !pair.ebookDownloaded &&
+                            !pair.audiobookDownloaded
+                        ) {
+                            ActionRow(
+                                title = "Download pair",
+                                description = "Ebook, audiobook and sync map, for offline listening and casting.",
+                                trailingIcon = Icons.Default.Download,
+                                onClick = { viewModel.downloadPair() },
+                            )
+                        }
                         if (!pair.ebookDownloaded) {
                             ActionRow(
                                 title = "Download ebook only",
@@ -207,12 +230,18 @@ fun BookDetailsScreen(
                                 onClick = { viewModel.downloadAudiobookOnly() },
                             )
                         }
-                        ActionRow(
-                            title = "Refresh sync data",
-                            description = "Re-download the latest sync map.",
-                            trailingIcon = Icons.Default.Sync,
-                            onClick = { viewModel.refreshSyncData() },
-                        )
+                        // Re-downloads the *cached* map, so it needs one to
+                        // re-download (issue #484). `DownloadedScreen` already
+                        // gated on this flag; this screen did not, so the same
+                        // pair offered the row on one surface and not the other.
+                        if (pair.syncMapDownloaded) {
+                            ActionRow(
+                                title = "Refresh sync data",
+                                description = "Re-download the latest sync map.",
+                                trailingIcon = Icons.Default.Sync,
+                                onClick = { viewModel.refreshSyncData() },
+                            )
+                        }
                         if (pair.ebookDownloaded) {
                             ActionRow(
                                 title = "Delete ebook",
@@ -270,21 +299,27 @@ fun BookDetailsScreen(
                         )
                     }
 
-                    ActionRow(
-                        title = "Reset progress",
-                        onClick = {
-                            pending = PendingConfirm(
-                                title = "Reset progress?",
-                                body = "This clears your bookmark and position.",
-                                action = { viewModel.resetProgress() },
-                            )
-                        },
-                    )
-                    ActionRow(
-                        title = "Mark complete",
-                        trailingIcon = Icons.Default.Check,
-                        onClick = { viewModel.markComplete() },
-                    )
+                    // Both were unconditional (issue #484): offered on a book
+                    // that had never been opened, and on one already finished.
+                    if (ui.progress.hasProgress) {
+                        ActionRow(
+                            title = "Reset progress",
+                            onClick = {
+                                pending = PendingConfirm(
+                                    title = "Reset progress?",
+                                    body = "This clears your bookmark and position.",
+                                    action = { viewModel.resetProgress() },
+                                )
+                            },
+                        )
+                    }
+                    if (!ui.progress.isComplete) {
+                        ActionRow(
+                            title = "Mark complete",
+                            trailingIcon = Icons.Default.Check,
+                            onClick = { viewModel.markComplete() },
+                        )
+                    }
                     // Editor-gated on the server; hidden rather than disabled,
                     // because a disabled row still advertises a capability this
                     // user does not have (issue #170).
@@ -522,11 +557,23 @@ fun primaryAction(ui: BookDetailsUi): PrimaryAction? = when {
     ui.downloadPercent != null -> null
     ui.pair != null && ui.pair.ebookDownloaded         -> PrimaryAction.Read
     ui.pair != null && ui.pair.audiobookDownloaded     -> PrimaryAction.Listen
+    // Nothing on the device: the audiobook streams (issues #171, #484), so the
+    // page offers to start the book rather than to wait out a transfer first.
+    // This screen used to have no path to the player at all for such a pair —
+    // not here, not anywhere in the secondary list — which made the obvious
+    // place to start a book the one place you could not. Download moves one row
+    // down, to what it now is: the offline-and-Cast option. With no connection
+    // there is nothing to stream and it becomes the offer again.
+    ui.pair != null && ui.isOnline                     -> PrimaryAction.Listen
     ui.pair != null                                    -> PrimaryAction.DownloadPair
+    // No streaming counterpart for an *unpaired* ebook: StandaloneReaderScreen
+    // has no download shell and assumes its caller checked, so the file has to
+    // be fetched first. A paired ebook is different — ReaderScreen fetches it.
     ui.ebook != null && !ui.ebook.isDownloaded         -> PrimaryAction.DownloadEbook
     ui.ebook != null                                   -> PrimaryAction.ReadStandalone
-    ui.audiobook != null && !ui.audiobook.isDownloaded -> PrimaryAction.DownloadAudiobook
-    ui.audiobook != null                               -> PrimaryAction.ListenStandalone
+    ui.audiobook != null && (ui.audiobook.isDownloaded || ui.isOnline) ->
+        PrimaryAction.ListenStandalone
+    ui.audiobook != null                               -> PrimaryAction.DownloadAudiobook
     else -> null
 }
 

@@ -15,6 +15,7 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.ProgressSummary
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -69,6 +70,15 @@ data class BookDetailsUi(
     val downloadPercent: Int? = null,           // 0..100 when actively downloading
     val message: String? = null,                // transient snackbar text
     val extendedMeta: BookExtendedMeta? = null, // description, series, etc. (network-fetched)
+    /**
+     * Live network state (issue #484). The primary button asks what can be
+     * *opened*, and since issue #171 an audiobook that is not on the device can
+     * be opened whenever there is a connection. Defaults false so an unknown
+     * state offers the download rather than a stream that would fail.
+     */
+    val isOnline: Boolean = false,
+    /** Whether there is a position to reset, and whether the book is finished. */
+    val progress: ProgressSummary = ProgressSummary(hasProgress = false, isComplete = false),
 ) {
     val title: String
         get() = pair?.ebookTitle ?: ebook?.title ?: audiobook?.title ?: ""
@@ -98,6 +108,7 @@ data class BookDetailsUi(
 class BookDetailsViewModel @Inject constructor(
     private val repository: BookSyncRepository,
     private val api: BookSyncApi,
+    networkMonitor: com.booksync.data.util.NetworkMonitor,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
@@ -160,6 +171,15 @@ class BookDetailsViewModel @Inject constructor(
     // null if the device is offline.
     private val _extendedMeta = MutableStateFlow<BookExtendedMeta?>(null)
 
+    /**
+     * Whether there is a position to reset and whether the book is finished
+     * (issue #484). Re-read whenever the entity changes, which covers a reset
+     * or a "mark complete" performed from this very screen.
+     */
+    private val _progress = MutableStateFlow(ProgressSummary(hasProgress = false, isComplete = false))
+
+    private val onlineFlow = networkMonitor.isOnline
+
     // ------------------------------------------------------------------
     // Combined UI state.
     // ------------------------------------------------------------------
@@ -181,12 +201,40 @@ class BookDetailsViewModel @Inject constructor(
             )
         },
         _extendedMeta,
-    ) { base, meta -> base.copy(extendedMeta = meta) }
+        onlineFlow,
+        _progress,
+    ) { base, meta, online, progress ->
+        base.copy(extendedMeta = meta, isOnline = online, progress = progress)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), BookDetailsUi())
 
     init {
         observeDownloadProgress()
         loadExtendedMetadata()
+        observeProgress()
+    }
+
+    /**
+     * Keep [_progress] in step with the entity (issue #484).
+     *
+     * Reading it once on open would leave "Reset progress" on screen after the
+     * user has just used it, and "Mark complete" on a book they just completed.
+     */
+    private fun observeProgress() {
+        viewModelScope.launch {
+            when (val t = target) {
+                is DetailsTarget.Pair -> pairFlow.collect { pair ->
+                    _progress.value = pair?.let { repository.progressSummaryForPair(it) }
+                        ?: ProgressSummary(hasProgress = false, isComplete = false)
+                }
+                is DetailsTarget.Ebook -> ebookFlow.collect {
+                    _progress.value = repository.progressSummaryForEbook(t.ebookId)
+                }
+                is DetailsTarget.Audiobook -> audioFlow.collect {
+                    _progress.value = repository.progressSummaryForAudiobook(t.audiobookId)
+                }
+            }
+        }
     }
 
     /**

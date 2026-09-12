@@ -71,6 +71,16 @@ sealed class OverflowTarget {
         val isTranscribed: Boolean,
         val isQueuedOrTranscribing: Boolean,
         val isComplete: Boolean,
+        /**
+         * A sync map is cached on this device (issue #484).
+         *
+         * Distinct from [isTranscribed], which says the *server* holds a
+         * transcript. "Refresh sync data" re-downloads the cached map, so
+         * without one there is nothing for it to refresh.
+         */
+        val syncMapCached: Boolean = false,
+        /** There is a position to reset (issue #484). */
+        val hasProgress: Boolean = false,
         val hasMismatchWarning: Boolean = false,
         val mismatchDetails: List<String> = emptyList(),
     ) : OverflowTarget()
@@ -81,6 +91,8 @@ sealed class OverflowTarget {
         override val subtitle: String?,
         val isDownloaded: Boolean,
         val isPaired: Boolean,
+        val isComplete: Boolean = false,
+        val hasProgress: Boolean = false,
     ) : OverflowTarget()
 
     data class Audiobook(
@@ -89,6 +101,8 @@ sealed class OverflowTarget {
         override val subtitle: String?,
         val isDownloaded: Boolean,
         val isPaired: Boolean,
+        val isComplete: Boolean = false,
+        val hasProgress: Boolean = false,
     ) : OverflowTarget()
 
     /**
@@ -155,21 +169,79 @@ fun pairMenuActions(
     isOnline: Boolean,
 ): List<PairAction> = buildList {
     if (!target.hasEbookDownloaded || !target.hasAudiobookDownloaded) add(PairAction.DownloadPair)
-    if (target.hasEbookDownloaded) add(PairAction.Read)
-    if (target.hasAudiobookDownloaded) add(PairAction.Listen)
+    // Openable, not downloaded (issue #484). The audiobook streams and the
+    // reader fetches its EPUB on open, so with a connection both formats can be
+    // started whether or not they are on the device.
+    if (target.hasEbookDownloaded || isOnline) add(PairAction.Read)
+    if (target.hasAudiobookDownloaded || isOnline) add(PairAction.Listen)
     if (target.hasEbookDownloaded || target.hasAudiobookDownloaded) add(PairAction.DeletePair)
 
     when {
-        target.isTranscribed -> add(PairAction.RefreshSyncData)
+        // A transcribed pair is never offered transcription again — but with no
+        // map cached there is nothing to refresh either, so this arm can add
+        // nothing at all. It must still claim the `when`, or the `else` below
+        // would offer to re-transcribe (issue #484).
+        target.isTranscribed -> if (target.syncMapCached) add(PairAction.RefreshSyncData)
         target.isQueuedOrTranscribing -> add(PairAction.CancelTranscription)
         else -> add(PairAction.Transcribe)
     }
 
     if (!target.isComplete) add(PairAction.MarkComplete)
-    add(PairAction.ResetProgress)
+    if (target.hasProgress) add(PairAction.ResetProgress)
 
     // Last, and separated from the delete by the rows above.
     if (canUnlink) add(PairAction.UnlinkPair)
+}
+
+/**
+ * One row of an unpaired ebook's or audiobook's overflow menu.
+ *
+ * [Open] renders as "Read" for an ebook and "Listen" for an audiobook — one
+ * slot, because only one of the two can ever apply to a given target.
+ */
+enum class StandaloneAction {
+    ViewDetails,
+    Open,
+    Download,
+    Delete,
+    MarkComplete,
+    ResetProgress,
+    PairWith,
+}
+
+/**
+ * Which rows an unpaired ebook's overflow menu shows, in order (issue #484).
+ *
+ * Pure for the same reason as [pairMenuActions]: these rules used to live
+ * inside the `@Composable`, where Compose's Kover exclusion put them out of
+ * reach of any test, and all three of the faults #484 describes were in here.
+ */
+fun ebookMenuActions(target: OverflowTarget.Ebook): List<StandaloneAction> = buildList {
+    add(StandaloneAction.ViewDetails)
+    // No streaming counterpart here, unlike [audiobookMenuActions]. A *paired*
+    // ebook opens through ReaderScreen, which fetches its EPUB on open (issue
+    // #171); an unpaired one opens through StandaloneReaderScreen, which has no
+    // download shell and assumes the caller checked. Offering Read for a book
+    // that is not on the device would open an empty reader.
+    if (target.isDownloaded) add(StandaloneAction.Open)
+    if (target.isDownloaded) add(StandaloneAction.Delete) else add(StandaloneAction.Download)
+    if (!target.isComplete) add(StandaloneAction.MarkComplete)
+    if (target.hasProgress) add(StandaloneAction.ResetProgress)
+    if (!target.isPaired) add(StandaloneAction.PairWith)
+}
+
+/** Which rows an unpaired audiobook's overflow menu shows, in order (issue #484). */
+fun audiobookMenuActions(
+    target: OverflowTarget.Audiobook,
+    isOnline: Boolean,
+): List<StandaloneAction> = buildList {
+    add(StandaloneAction.ViewDetails)
+    // Openable, not downloaded: the player streams (issue #171/#484).
+    if (target.isDownloaded || isOnline) add(StandaloneAction.Open)
+    if (target.isDownloaded) add(StandaloneAction.Delete) else add(StandaloneAction.Download)
+    if (!target.isComplete) add(StandaloneAction.MarkComplete)
+    if (target.hasProgress) add(StandaloneAction.ResetProgress)
+    if (!target.isPaired) add(StandaloneAction.PairWith)
 }
 
 data class OverflowActions(
@@ -520,28 +592,28 @@ private fun EbookActions(
     onConfirmDelete: () -> Unit,
     onConfirmReset: () -> Unit,
 ) {
-    actions.onViewDetails?.let {
-        ActionRow(Icons.Default.Info, "View details", onClick = it)
-    }
-    actions.onRead?.takeIf { target.isDownloaded }?.let {
-        ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
-    }
-    if (!target.isDownloaded) {
-        actions.onDownloadEbook?.let {
-            ActionRow(Icons.Default.CloudDownload, "Download ebook", onClick = it)
-        }
-    } else {
-        ActionRow(Icons.Default.Delete, "Delete ebook", destructive = true, onClick = onConfirmDelete)
-    }
-    actions.onMarkComplete?.let {
-        ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
-    }
-    actions.onResetProgress?.let {
-        ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
-    }
-    if (!target.isPaired) {
-        actions.onPairWith?.let {
-            ActionRow(Icons.Default.Link, "Pair with audiobook…", onClick = it)
+    for (action in ebookMenuActions(target)) {
+        when (action) {
+            StandaloneAction.ViewDetails -> actions.onViewDetails?.let {
+                ActionRow(Icons.Default.Info, "View details", onClick = it)
+            }
+            StandaloneAction.Open -> actions.onRead?.let {
+                ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
+            }
+            StandaloneAction.Download -> actions.onDownloadEbook?.let {
+                ActionRow(Icons.Default.CloudDownload, "Download ebook", onClick = it)
+            }
+            StandaloneAction.Delete ->
+                ActionRow(Icons.Default.Delete, "Delete ebook", destructive = true, onClick = onConfirmDelete)
+            StandaloneAction.MarkComplete -> actions.onMarkComplete?.let {
+                ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
+            }
+            StandaloneAction.ResetProgress -> actions.onResetProgress?.let {
+                ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
+            }
+            StandaloneAction.PairWith -> actions.onPairWith?.let {
+                ActionRow(Icons.Default.Link, "Pair with audiobook…", onClick = it)
+            }
         }
     }
 }
@@ -553,28 +625,28 @@ private fun AudiobookActions(
     onConfirmDelete: () -> Unit,
     onConfirmReset: () -> Unit,
 ) {
-    actions.onViewDetails?.let {
-        ActionRow(Icons.Default.Info, "View details", onClick = it)
-    }
-    actions.onListen?.takeIf { target.isDownloaded }?.let {
-        ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
-    }
-    if (!target.isDownloaded) {
-        actions.onDownloadAudiobook?.let {
-            ActionRow(Icons.Default.CloudDownload, "Download audiobook", onClick = it)
-        }
-    } else {
-        ActionRow(Icons.Default.Delete, "Delete audiobook", destructive = true, onClick = onConfirmDelete)
-    }
-    actions.onMarkComplete?.let {
-        ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
-    }
-    actions.onResetProgress?.let {
-        ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
-    }
-    if (!target.isPaired) {
-        actions.onPairWith?.let {
-            ActionRow(Icons.Default.Link, "Pair with ebook…", onClick = it)
+    for (action in audiobookMenuActions(target, actions.isOnline)) {
+        when (action) {
+            StandaloneAction.ViewDetails -> actions.onViewDetails?.let {
+                ActionRow(Icons.Default.Info, "View details", onClick = it)
+            }
+            StandaloneAction.Open -> actions.onListen?.let {
+                ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
+            }
+            StandaloneAction.Download -> actions.onDownloadAudiobook?.let {
+                ActionRow(Icons.Default.CloudDownload, "Download audiobook", onClick = it)
+            }
+            StandaloneAction.Delete ->
+                ActionRow(Icons.Default.Delete, "Delete audiobook", destructive = true, onClick = onConfirmDelete)
+            StandaloneAction.MarkComplete -> actions.onMarkComplete?.let {
+                ActionRow(Icons.Default.CheckCircle, "Mark complete", onClick = it)
+            }
+            StandaloneAction.ResetProgress -> actions.onResetProgress?.let {
+                ActionRow(Icons.Default.Replay, "Reset progress", onClick = onConfirmReset)
+            }
+            StandaloneAction.PairWith -> actions.onPairWith?.let {
+                ActionRow(Icons.Default.Link, "Pair with ebook…", onClick = it)
+            }
         }
     }
 }
