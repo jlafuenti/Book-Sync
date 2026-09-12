@@ -17,6 +17,8 @@ import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
 import com.booksync.data.remote.VersionCompat
 import com.booksync.data.repository.PairOpenTarget
+import com.booksync.data.repository.preferCapturedAt
+import com.booksync.data.repository.parseSyncTimestamp
 import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -158,7 +160,19 @@ class HomeViewModel @Inject constructor(
                     val posMs = bookmark?.audioPositionMs ?: 0
                     val totalSec = pair.audiobookDurationSeconds ?: 0
                     val percent = if (totalSec > 0) (posMs / 1000f / totalSec) * 100f else 0f
-                    val updatedAt = bookmark?.updatedAt?.toLongOrNull() ?: 0L
+                    // Issue #476. `BookmarkEntity.updatedAt` holds epoch millis
+                    // when saved on this device and ISO-8601 when it came from the
+                    // server; `toLongOrNull()` read only the first, so anything
+                    // last touched on the web or another device scored 0 and sank
+                    // to the bottom of the row meant to surface it. This is the
+                    // same read `LibraryRepository.lastOpenedTimesFlow` has always
+                    // done — prefer the capture time, then parse either shape —
+                    // which is why Library's "Recently opened" was right and this
+                    // was not. The standalone branches below need no change: the
+                    // server mapper already stores their `updatedAt` as millis.
+                    val updatedAt = bookmark?.let {
+                        parseSyncTimestamp(preferCapturedAt(it.capturedAt, it.updatedAt))
+                    } ?: 0L
                     items += HomeItem(
                         id = "pair_${pair.id}",
                         title = pair.ebookTitle ?: pair.audiobookTitle,
