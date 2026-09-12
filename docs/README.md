@@ -9,6 +9,7 @@ or if a link here points at a file that does not exist.
 
 | Doc | Covers |
 |---|---|
+| [account-deletion.md](account-deletion.md) | How to delete an account and its data, wherever the account lives — the URL the Play Console requires |
 | [library-conventions.md](library-conventions.md) | Supported formats, folder/filename patterns, metadata precedence, auto-pairing rules, format conversion |
 | [import-sources.md](import-sources.md) | ACSM (Adobe ADEPT) and Audible import pipelines, and the opt-in `INSTALL_DRM_PLUGINS` build flag |
 | [transcription.md](transcription.md) | Provider modes, queue behavior, off-hours window, what affects runtime |
@@ -39,7 +40,7 @@ or if a link here points at a file that does not exist.
 |---|---|
 | [terms.md](terms.md) | Terms of use for a hosted Tandem server — served at `/terms` and linked from both registration forms |
 | [releasing.md](releasing.md) | Cutting a release: version bump, tag, GitHub Release, deploy, and the rollback runbook |
-| [privacy.md](privacy.md) | The privacy policy, published from here via GitHub Pages — what leaves the device, and who holds it |
+| [privacy.md](privacy.md) | The privacy policy, published from here to the public site — what leaves the device, and who holds it |
 | [play-listing.md](play-listing.md) | Draft Play Store listing text, the Data safety form answers (including the `/account-deletion` link Play requires) and the content-rating notes — kept in the repo so they are reviewable |
 | [release.md](release.md) | The Play release path: closed-test requirement, timeline, and the prerequisites to clear first |
 | [history-rewrite-runbook.md](history-rewrite-runbook.md) | One-time git history rewrite to run immediately before the repo is made public |

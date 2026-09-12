@@ -435,8 +435,8 @@ def _privacy_text() -> str:
     path = os.path.join(_REPO_ROOT, *_PRIVACY_REL.split("/"))
     assert os.path.isfile(path), (
         "docs/privacy.md is missing. Play requires a publicly reachable privacy "
-        "policy URL for every submission (issue #150), and it is published from "
-        "this file via GitHub Pages."
+        "policy URL for every submission (issue #150), and the public site (#418) "
+        "publishes this very file."
     )
     with open(path, encoding="utf-8") as fh:
         return fh.read()
@@ -789,4 +789,44 @@ def test_readme_links_at_the_edge_proxy_section():
     assert "docs/operations.md#edge-proxy" in _read(os.path.join(_REPO_ROOT, "README.md")), (
         "README.md's reverse-proxy paragraph does not link at "
         "docs/operations.md#edge-proxy."
+    )
+
+
+# ---------------------------------------------------------------------------
+# #418 — the public website
+# ---------------------------------------------------------------------------
+#
+# The Play Console will not accept a submission without a reachable privacy
+# policy and account-deletion URL. Those pages are published from this
+# repository's Markdown, so the text the tests below guard is the text that
+# reaches the public page.
+
+
+def test_no_doc_still_claims_the_policy_is_published_via_github_pages():
+    """
+    GitHub Pages was never set up; #418 chose Cloudflare Pages. A doc that names
+    the wrong publisher sends the next person looking for a setting that does not
+    exist — and, worse, implies the policy is already reachable when it is not.
+    """
+    offenders = []
+    for name in sorted(os.listdir(os.path.join(_REPO_ROOT, "docs"))):
+        if not name.endswith(".md"):
+            continue
+        with open(os.path.join(_REPO_ROOT, "docs", name), encoding="utf-8") as fh:
+            if re.search(r"github pages", fh.read(), re.IGNORECASE):
+                offenders.append(f"docs/{name}")
+    assert not offenders, f"these still claim GitHub Pages publishing: {offenders}"
+
+
+def test_the_privacy_policy_gives_a_real_contact():
+    """
+    Play requires a contact on the privacy policy. The file shipped with a
+    placeholder, which would have been published verbatim.
+    """
+    text = _privacy_text()
+    assert "to be filled in" not in text.lower(), (
+        "docs/privacy.md still carries the placeholder contact address."
+    )
+    assert re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text), (
+        "docs/privacy.md names no contact address at all."
     )
