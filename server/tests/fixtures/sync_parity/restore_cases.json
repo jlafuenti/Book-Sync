@@ -67,25 +67,25 @@
   },
   {
     "name": "audio_moved_far_from_where_locator_was_captured",
-    "why": "On an audiobook-source position the locator only describes the page if the audio has not moved on.",
+    "why": "On an audiobook-source position the locator only describes the page if the audio has not moved on. The chapter is stale for exactly the same reason and by the same measure, so the audio rung — the one coordinate still current — is tried before it (issue #479). Dropping the hint but trusting the chapter is how a book opened hours from where it was being listened to.",
     "position": {
       "anchor_revision": 7, "source": "audiobook", "audio_position_ms": 900000,
       "epub_chapter": 12,
       "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": 100000}]
     },
     "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
-    "expected": ["chapter", "audio"]
+    "expected": ["audio", "chapter"]
   },
   {
     "name": "audio_barely_moved_keeps_the_locator",
-    "why": "Audio drift within the reuse threshold does not invalidate the page.",
+    "why": "Audio drift within the reuse threshold does not invalidate the page, so the hint still leads and nothing lossier is reached in practice. Behind it the audiobook ordering still applies (issue #479): the fallbacks are only consulted when the precise hint fails, which is when the page is least trustworthy.",
     "position": {
       "anchor_revision": 7, "source": "audiobook", "audio_position_ms": 105000,
       "epub_chapter": 12,
       "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": 100000}]
     },
     "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
-    "expected": ["hint", "chapter", "audio"]
+    "expected": ["hint", "audio", "chapter"]
   },
   {
     "name": "web_written_position_seen_by_the_phone",
@@ -133,6 +133,19 @@
     "position": {"anchor_revision": 3, "source": "audiobook", "audio_position_ms": 54373980},
     "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
     "expected": ["audio"]
+  },
+  {
+    "name": "listening_for_hours_with_a_stale_page",
+    "why": "Taken from a real device (issue #479): four and a half hours into the audiobook, with the ebook coordinate still at chapter 1 and a preview left from the last time it was read. Only a reader save refreshes the ebook half, so it can be arbitrarily old while `source` says the audiobook is what is being consumed. Every ebook rung resolves — wrongly — so trying them first opened the book near the start, and the save that followed wrote that back over the real position. No case here covered a position whose two halves disagreed, which is why the ordering survived this long.",
+    "position": {
+      "anchor_revision": 4, "source": "audiobook", "audio_position_ms": 16348540,
+      "epub_chapter": 1, "epub_sentence_index": 0,
+      "epub_text_preview": "a running header that begins every file",
+      "epub_progress_percent": 0.13,
+      "hints": []
+    },
+    "context": {"spine_count": 84, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["audio", "text", "chapter", "percent"]
   },
   {
     "name": "chapter_zero_is_a_real_position",

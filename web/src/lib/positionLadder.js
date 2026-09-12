@@ -58,6 +58,31 @@ export function planRestore(position, { spineCount, deviceId, hintKind }) {
     const hint = usableHint(position, deviceId, hintKind)
     if (hint) steps.push({ kind: 'hint', value: hint.value })
 
+    const audioMs = position.audio_position_ms
+    const audioStep = (audioMs != null && audioMs > 0)
+        ? { kind: 'audio', audioPositionMs: audioMs }
+        : null
+
+    // When the audiobook is the live format, its position is the only coordinate
+    // known to be current (issue #479). Only a reader save refreshes
+    // epub_chapter / epub_text_preview / epub_progress_percent, so after a few
+    // hours of listening they describe wherever the book was last *read* — and
+    // they still resolve, so trying them first opens the book there and the save
+    // that follows can write it back over the real position.
+    //
+    // `usableHint` already applies exactly this reasoning, dropping a locator
+    // captured more than LOCATOR_REUSE_THRESHOLD_MS away from where the audio
+    // now is. The ebook rungs are stale for the same reason; they simply carry
+    // no capture-time stamp to measure it with, so the ordering carries the rule
+    // instead.
+    //
+    // The hint still leads when it qualifies: it is freshness-checked and exact,
+    // whereas the audio rung re-derives the page through the sync map and is
+    // lossier. So this only changes which fallback is reached when the precise
+    // answer is unavailable — the case where the page is least trustworthy.
+    const listening = position.source === 'audiobook' && audioStep != null
+    if (listening) steps.push(audioStep)
+
     const preview = (position.epub_text_preview || '').trim()
     const chapter = position.epub_chapter
     const chapterNavigable = chapter != null && chapter >= 0 && chapter < spineCount
@@ -76,10 +101,7 @@ export function planRestore(position, { spineCount, deviceId, hintKind }) {
     // 0% is indistinguishable from an unread book, so it is not an anchor.
     if (percent != null && percent > 0) steps.push({ kind: 'percent', percent })
 
-    const audioMs = position.audio_position_ms
-    if (audioMs != null && audioMs > 0) {
-        steps.push({ kind: 'audio', audioPositionMs: audioMs })
-    }
+    if (audioStep != null && !listening) steps.push(audioStep)
 
     return steps
 }
