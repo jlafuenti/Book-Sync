@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.settings import SystemSetting
+from services.pair_plausibility import record_pair_plausibility
 from utils import utcnow
 
 
@@ -268,6 +269,13 @@ async def auto_match_books(db: AsyncSession) -> int:
             matched += 1
             await db.flush() # Flush to get the ID
             new_pair_ids.append(pair.id)
+            # Issue #458. This path matters more than the manual one: a
+            # truncated download is usually auto-matched, not hand-paired, and
+            # the result reaches `synced` without anything having asked whether
+            # the pairing made sense. Comparing two numbers already on the rows
+            # costs nothing here, which is why the check is file-size based —
+            # parsing each EPUB would add minutes to a whole-library scan.
+            await record_pair_plausibility(db, pair, ebook, best_match)
 
     if auto_transcribe and new_pair_ids:
         from services.queue_manager import add_to_queue

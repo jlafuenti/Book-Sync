@@ -49,7 +49,7 @@ function issuesWithChapterEncodingBad(rows, extra = {}) {
     const categories = {
         missing: [], zero_byte: [], chapter_encoding_bad: rows, audio_corrupt: [],
         ebook_drm: [], ebook_unreadable: [], unsupported_format: [], multi_file_audiobook: [],
-        sync_map_missing: [],
+        sync_map_missing: [], implausible_pair: [],
         duplicate: [], missing_cover: [], orphaned_cover: [], failed_transcription: [], failed_acsm: [],
         ...extra,
     }
