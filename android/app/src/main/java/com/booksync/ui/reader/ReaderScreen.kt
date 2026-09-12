@@ -189,6 +189,8 @@ fun ReaderScreen(
     pairId: Int,
     onBack: () -> Unit,
     onSwitchToAudio: () -> Unit,
+    /** Non-zero only when the player handed over — see Routes.READER. */
+    handoffAudioMs: Long = 0L,
     viewModel: ReaderViewModel = hiltViewModel(),
 ) {
     val pair by viewModel.pair.collectAsState()
@@ -229,6 +231,12 @@ fun ReaderScreen(
             hasLaunched = true
             val intent = Intent(context, ReaderActivity::class.java).apply {
                 putExtra(ReaderActivity.EXTRA_PAIR_ID, pairId)
+                // Only present when the player handed over; the reader opens
+                // the page for this audio position instead of the stored
+                // ebook coordinate.
+                if (handoffAudioMs > 0) {
+                    putExtra(ReaderActivity.EXTRA_HANDOFF_AUDIO_MS, handoffAudioMs)
+                }
             }
             launcher.launch(intent)
         }

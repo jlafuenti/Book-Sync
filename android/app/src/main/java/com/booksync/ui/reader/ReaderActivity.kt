@@ -66,6 +66,13 @@ class ReaderActivity : AppCompatActivity() {
         const val EXTRA_PAIR_ID = "pairId"
 
         /**
+         * The audiobook's position when the user pressed "Switch to Reader".
+         * Present only for that handoff; absent for every ordinary open, which
+         * restores from the shared ladder alone. See [withHandoffAnchor].
+         */
+        const val EXTRA_HANDOFF_AUDIO_MS = "handoffAudioMs"
+
+        /**
          * A standalone (unpaired) ebook — issue #169. Mutually exclusive with
          * [EXTRA_PAIR_ID]: with this set there is no pair, no sync map and no
          * audio to hand off to, and the position lives under the `ebook` scope.
@@ -764,11 +771,14 @@ class ReaderActivity : AppCompatActivity() {
 
     private suspend fun getInitialLocator(pub: Publication): Locator? {
         return try {
-            val steps = planRestore(
-                canonicalPosition,
-                spineCount = pub.readingOrder.size,
-                deviceId = repository.deviceId,
-                hintKind = HINT_READIUM_LOCATOR,
+            val steps = withHandoffAnchor(
+                planRestore(
+                    canonicalPosition,
+                    spineCount = pub.readingOrder.size,
+                    deviceId = repository.deviceId,
+                    hintKind = HINT_READIUM_LOCATOR,
+                ),
+                handoffAudioMs = intent.getLongExtra(EXTRA_HANDOFF_AUDIO_MS, 0L).toInt(),
             )
             Log.d(TAG, "getInitialLocator: plan=${steps.map { it.kind }}")
 

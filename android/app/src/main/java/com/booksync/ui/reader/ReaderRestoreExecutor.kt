@@ -19,6 +19,29 @@ private val LEADING_HEADING = Regex("^(CHAPTER\\s+\\d+|PROLOGUE)[\\s\\n,.]*", Re
 private const val MIN_SPINE_FOR_BOILERPLATE_CHECK = 6
 
 /**
+ * Put an explicit player-to-reader handoff ahead of the stored ladder.
+ *
+ * Switching from the player says where the user *is*: the audiobook is at this
+ * millisecond and they want the page that goes with it. The stored ebook
+ * coordinate can be hours stale — only a reader save updates it — so trying it
+ * first opens the wrong page. The reverse direction has always worked this way:
+ * `ReaderActivity.syncAudioToPage` maps the page the user is on to an audio
+ * position rather than trusting the stored one. This is the missing mirror of
+ * it, and without it "Switch to Reader" landed on the title page of a book
+ * being listened to four and a half hours in.
+ *
+ * Only ever *prepends*, and only for an explicit handoff: an ordinary open
+ * passes 0 and gets the shared planner's ladder untouched, so nothing about
+ * the cross-platform restore decision changes. A handoff that cannot resolve
+ * (no sync map yet) falls through to exactly the same rungs as before.
+ */
+fun withHandoffAnchor(steps: List<RestoreStep>, handoffAudioMs: Int): List<RestoreStep> {
+    if (handoffAudioMs <= 0) return steps
+    val rest = steps.filterNot { it is RestoreStep.Audio && it.audioPositionMs == handoffAudioMs }
+    return listOf(RestoreStep.Audio(handoffAudioMs)) + rest
+}
+
+/**
  * What the restore ladder needs to know about the open book, and nothing
  * else (issue #227). `ReaderActivity` implements it over a Readium
  * `Publication`; tests implement it over a list of strings.
@@ -238,23 +261,32 @@ class ReaderRestoreExecutor(
      * the save that follows resolves a sync-point match from it, and wrote an
      * audio position of 340 ms over one of 16,348,540 ms.
      *
-     * Three widely separated probes separate boilerplate from ordinary
-     * repetition. A sentence that genuinely recurs in a chapter or two will not
-     * be in most of the book, so it still resolves; a running header is in all
-     * of it. Requiring two hits rather than one keeps a coincidental match in a
-     * single probed chapter from discarding a real anchor.
+     * Counts how much of the spine carries the text rather than sampling it.
+     * Sampling was tried first and failed on the very book that prompted this:
+     * Calibre splits it into a cover, alternating title-only separator pages
+     * and real chapters, so the line heads half the spine and three probes
+     * caught one hit. Counting to a quarter of the book tells a running header
+     * apart from a sentence that happens to recur in a chapter or two, which
+     * must still resolve.
+     *
+     * Stops as soon as the threshold is passed, so the walk is bounded, and the
+     * reader has already parsed every item by the time a restore runs.
      *
      * Runs *after* the outward search on purpose, so the seed chapter is still
      * the first item read — `ReaderRestoreExecutorTest` pins that.
      */
     private suspend fun isBoilerplate(searchText: String, foundAt: Int, n: Int): Boolean {
         if (n < MIN_SPINE_FOR_BOILERPLATE_CHECK) return false
-        val probes = listOf(0, n / 2, n - 1).distinct().filter { it != foundAt }
-        if (probes.size < 2) return false
-        val hits = probes.count { idx ->
-            spine.plainTextAt(idx)?.contains(searchText, ignoreCase = true) == true
+        val limit = n / 4
+        var hits = 0
+        for (i in 0 until n) {
+            if (i == foundAt) continue
+            if (spine.plainTextAt(i)?.contains(searchText, ignoreCase = true) == true) {
+                hits++
+                if (hits > limit) return true
+            }
         }
-        return hits >= 2
+        return false
     }
 
     /**

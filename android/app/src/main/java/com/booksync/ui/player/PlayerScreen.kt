@@ -1039,7 +1039,8 @@ private enum class PlayerTab { CHAPTERS, HISTORY }
 fun PlayerScreen(
     pairId: Int,
     onBack: () -> Unit,
-    onSwitchToReader: () -> Unit,
+    /** Receives the audio position at the moment of the switch — see Routes.READER. */
+    onSwitchToReader: (Long) -> Unit,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -1140,7 +1141,7 @@ fun PlayerScreen(
                     )
                     // Switch to Reader (not available for standalone audiobooks — no paired ebook)
                     if (!isStandalone) {
-                        IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader() }) {
+                        IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader(positionMs) }) {
                             Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
                         }
                     }

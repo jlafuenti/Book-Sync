@@ -505,12 +505,27 @@ class ReaderRestoreExecutorTest {
      */
     @Test
     fun `a preview repeated throughout the book names no position`() = runTest {
+        // Modelled on the real book from #477 rather than on something
+        // convenient: Calibre splits it into a cover, then alternating 52-char
+        // separator pages that carry only the title line and real chapters that
+        // do not. The title therefore appears in *half* the spine, not all of
+        // it — an earlier version of this guard sampled three positions and saw
+        // only one hit, so it never fired and the reader still landed on the
+        // title page.
         val titleLine = "Liveship Traders 3 - Ship of Destiny"
-        val spine = FakeSpine(List(84) { i -> "$titleLine chapter $i body text, unique words here $i" })
+        val spine = FakeSpine(
+            List(84) { i ->
+                when {
+                    i == 0 -> "Cover"
+                    i % 2 == 1 -> "Ship of Destiny $titleLine"
+                    else -> "Ship of Destiny CHAPTER $i - ${filler(i).repeat(3)}"
+                }
+            },
+        )
         val executor = ReaderRestoreExecutor(spine)
 
         assertNull(
-            "a preview present in every chapter is boilerplate, not an anchor",
+            "a line that heads half the spine is boilerplate, not an anchor",
             executor.findSpineIndexForText(titleLine, hintIdx = 1),
         )
     }
@@ -525,6 +540,47 @@ class ReaderRestoreExecutorTest {
         val executor = ReaderRestoreExecutor(spine)
 
         assertEquals(9, executor.findSpineIndexForText(preview, hintIdx = 7))
+    }
+
+    // --------------------------------------------- player -> reader handoff
+
+    /**
+     * "Switch to Reader" used to navigate with no anchor at all, leaving the
+     * reader to restore from the bookmark's ebook half — which only a reader
+     * save ever updates. Listening for hours therefore opened the reader at
+     * whatever page was last *read*, or at the title page when that coordinate
+     * was stale. The reverse direction never had this problem: `syncAudioToPage`
+     * maps the page in front of the user, not a stored guess.
+     */
+    @Test
+    fun `a handoff from the player tries its audio position first`() {
+        val stored = listOf(
+            RestoreStep.Text("a stale preview from the last time it was read", 1),
+            RestoreStep.Chapter(1),
+            RestoreStep.Audio(500),
+        )
+
+        val plan = withHandoffAnchor(stored, handoffAudioMs = 16_355_289)
+
+        assertEquals(RestoreStep.Audio(16_355_289), plan.first())
+        assertEquals("the rest of the ladder is still the fallback", 4, plan.size)
+    }
+
+    @Test
+    fun `an ordinary open is left exactly as the shared planner decided`() {
+        val stored = listOf(RestoreStep.Text("a preview", 3), RestoreStep.Chapter(3))
+
+        assertEquals(stored, withHandoffAnchor(stored, handoffAudioMs = 0))
+    }
+
+    @Test
+    fun `a handoff does not leave a duplicate of its own audio rung`() {
+        val stored = listOf(RestoreStep.Chapter(2), RestoreStep.Audio(16_355_289))
+
+        val plan = withHandoffAnchor(stored, handoffAudioMs = 16_355_289)
+
+        assertEquals(2, plan.size)
+        assertEquals(RestoreStep.Audio(16_355_289), plan.first())
     }
 
     // ---------------------------------------------------------------- errors
