@@ -14,6 +14,7 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.worker.DownloadWorker
 import io.mockk.coEvery
 import io.mockk.coVerify
+import com.booksync.data.util.NetworkMonitor
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -74,8 +75,11 @@ class SearchDownloadTest {
     private fun newViewModel(): SearchViewModel {
         val tokenManager = mockk<com.booksync.data.remote.TokenManager>(relaxed = true)
         every { tokenManager.getRole() } returns flowOf("admin")
+        val networkMonitor = mockk<NetworkMonitor>()
+        every { networkMonitor.isOnline } returns MutableStateFlow(true)
         return SearchViewModel(
             repository = repository,
+            networkMonitor = networkMonitor,
             tokenManager = tokenManager,
             context = mockk(relaxed = true),
         )

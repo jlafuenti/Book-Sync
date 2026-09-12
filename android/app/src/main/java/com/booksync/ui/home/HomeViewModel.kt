@@ -280,10 +280,10 @@ class HomeViewModel @Inject constructor(
      * Falls back to today's preference (ebook → audiobook → details).
      */
     suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget =
-        repository.resolvePairOpenTarget(pair)
+        repository.resolvePairOpenTarget(pair, isOnline.value)
 
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
-        repository.resolvePairOpenTarget(pairId)
+        repository.resolvePairOpenTarget(pairId, isOnline.value)
 
     /** See [com.booksync.data.repository.LibraryRepository.progressSummaryForPair] (issue #484). */
     suspend fun progressSummary(pair: BookPairEntity): ProgressSummary =

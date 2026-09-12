@@ -177,9 +177,22 @@ object Routes {
         pairTarget: PairOpenTarget? = null,
     ): String? {
         item.pairId?.let { pairId ->
-            // Details is unreachable for a pair from search — there is no pair
-            // details route here — so it falls in with Reader.
-            return if (pairTarget == PairOpenTarget.Player) player(pairId) else reader(pairId)
+            // Details is a real destination here (issue #484). It used to fall
+            // in with Reader on the stated grounds that search had no pair
+            // details route — `bookDetailsPair` has existed all along, and
+            // Library has always used it. That was not a cosmetic mistake:
+            // `ReaderScreen` fetches the EPUB on open (issue #171), so sending a
+            // nothing-downloaded pair to the reader began a download nobody had
+            // asked for.
+            //
+            // An unresolved lookup still falls back to the reader: `null` means
+            // the suspend call against Room failed or has not finished, which is
+            // not the same as knowing there is nothing on the device.
+            return when (pairTarget) {
+                PairOpenTarget.Player -> player(pairId)
+                PairOpenTarget.Details -> bookDetailsPair(pairId)
+                else -> reader(pairId)
+            }
         }
         val id = item.numericId ?: return null
         return when {

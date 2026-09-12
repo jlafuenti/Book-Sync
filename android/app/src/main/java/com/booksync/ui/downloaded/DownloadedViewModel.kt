@@ -15,6 +15,7 @@ import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.library.LibraryItem
@@ -112,6 +113,16 @@ class DownloadedViewModel @Inject constructor(
      */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), networkMonitor.isOnline.value)
+
+    /**
+     * Which format a tap on this pair should open (issue #484).
+     *
+     * This tab used to decide for itself — reader if the ebook was downloaded,
+     * player otherwise — which ignored `bookmarks.source` completely, so a book
+     * being listened to opened in the reader from here and nowhere else.
+     */
+    suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget =
+        repository.resolvePairOpenTarget(pair, isOnline.value)
 
     /** See [com.booksync.data.repository.LibraryRepository.progressSummaryForPair] (issue #484). */
     suspend fun progressSummaryForPair(pair: BookPairEntity): ProgressSummary =

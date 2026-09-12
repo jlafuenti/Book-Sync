@@ -103,13 +103,20 @@ fun HomeScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    // Route a pair tap to whichever medium the user last used (bookmark.source).
-    // Falls back to today's preference (reader) when there is no prior bookmark.
+    // Route a pair tap to whichever medium the user last used (bookmark.source),
+    // and to the details screen when there is nothing on the device to open.
+    //
+    // Details used to be folded in with Reader here (issue #484). Library
+    // honoured it; Home did not, and because `ReaderScreen` fetches the EPUB on
+    // open (issue #171) that fold turned a tap on a never-opened book into a
+    // download of a format the user had not chosen. The details screen offers
+    // both, which is what a tap with nothing to go on should do.
     val openPair: (Int) -> Unit = { pairId ->
         scope.launch {
             when (viewModel.resolvePairOpenTarget(pairId)) {
-                PairOpenTarget.Reader, PairOpenTarget.Details -> onOpenPairReader(pairId)
+                PairOpenTarget.Reader -> onOpenPairReader(pairId)
                 PairOpenTarget.Player -> onOpenPairPlayer(pairId)
+                PairOpenTarget.Details -> onOpenPairDetails(pairId)
             }
         }
         Unit

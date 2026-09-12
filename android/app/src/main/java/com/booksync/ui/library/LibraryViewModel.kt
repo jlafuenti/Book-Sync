@@ -427,7 +427,7 @@ class LibraryViewModel @Inject constructor(
      * (bookmark.source). Falls back to today's preference (ebook → audiobook → details).
      */
     suspend fun resolvePairOpenTarget(pair: BookPairEntity): PairOpenTarget =
-        repository.resolvePairOpenTarget(pair)
+        repository.resolvePairOpenTarget(pair, isOnline.value)
 
     /**
      * Whether this item has a position to reset and whether it is finished
