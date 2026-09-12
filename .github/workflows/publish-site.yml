@@ -1,0 +1,65 @@
+name: Publish site
+
+# The public website serves privacy.md, terms.md and account-deletion.md from
+# this repository — it fetches them at build time rather than keeping copies, so
+# there is one source of truth and the tests here are what guard it.
+#
+# The consequence is that editing one of those files does NOT change the
+# published page. The site only picks the edit up the next time it builds, which
+# otherwise happens when someone remembers. That gap matters more than it looks:
+# the privacy policy and the account-deletion URL are the two pages the Play
+# Console reads, so "the repo says one thing and the live page says another" is a
+# compliance problem, and it is silent — nothing fails, the page is just stale.
+#
+# This posts to a build hook whenever one of those three files lands on main.
+#
+# Deliberately NOT triggered by `pull_request`: that would publish those pages
+# from a branch that has not merged. `server/tests/test_ci_contract.py` records
+# that exemption, and pins the two properties below, rather than leaving either
+# to look like an oversight.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/privacy.md
+      - docs/terms.md
+      - docs/account-deletion.md
+  # A rebuild has to be possible without an edit — to pick up a change made at
+  # the other end, or to retry a build that failed.
+  workflow_dispatch:
+
+# Nothing here reads the repository or writes anything back; the job's only
+# action is an outbound POST. Repo-wide default is read-only (#189).
+permissions:
+  contents: read
+
+jobs:
+  publish-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout: the job needs no files. The build hook is an opaque URL,
+      # and the site fetches the documents itself.
+      - name: Trigger the site build
+        env:
+          # Passed through the environment, never on the command line. The hook
+          # is a bare POST whose only protection is being unguessable, and this
+          # repository's action logs are public — a URL in `curl`'s argv reaches
+          # them on `set -x` or a failure trace. Pinned by test_ci_contract.py.
+          HOOK_URL: ${{ secrets.SITE_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOOK_URL}" ]; then
+            echo "::notice::SITE_DEPLOY_HOOK_URL is not set; skipping the site rebuild."
+            echo "Add the repository secret to enable it. Nothing here failed."
+            exit 0
+          fi
+          # --fail turns an HTTP error into a non-zero exit; without it curl
+          # reports success on a 404 and the stale page survives unnoticed.
+          # Only the status code is printed — never the body, which can echo
+          # the request, and never the URL.
+          code="$(curl --silent --show-error --fail \
+                       --output /dev/null --write-out '%{http_code}' \
+                       --retry 3 --retry-delay 5 --max-time 60 \
+                       --request POST "${HOOK_URL}")"
+          echo "Build hook accepted the request (HTTP ${code})."

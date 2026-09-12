@@ -187,7 +187,78 @@ _NOT_TEST_SUITES = {
     # push images from code that has not merged — anyone who can open a PR could
     # publish an image the demo stack then pulls (#147).
     "publish-images.yml",
+    # Triggers a rebuild of the public website, which serves privacy.md,
+    # terms.md and account-deletion.md. Running it on `pull_request` would
+    # publish those pages from a branch that has not merged — the same hazard as
+    # publish-images.yml, and worse in kind: the privacy policy and the
+    # account-deletion URL are the two pages Play reads, so an unmerged edit
+    # would be live on a legally meaningful page.
+    "publish-site.yml",
 }
+
+
+# ---------------------------------------------------------------------------
+# The site rebuild must not leak its hook, and must not fire from a branch
+# ---------------------------------------------------------------------------
+#
+# The website is built elsewhere and pulls the three shared documents from this
+# repository at build time, so an edit here does not reach the published page
+# until that build runs again. The workflow closes that gap. Two properties are
+# worth pinning rather than remembering:
+#
+# The hook URL is a bare POST with no authentication beyond being unguessable —
+# anyone holding it can trigger unlimited builds — so it lives in a secret and
+# must never be interpolated anywhere it would be echoed. `curl` is given the
+# URL through an environment variable rather than on the command line, because
+# `set -x`, a non-zero exit or a future `echo` would otherwise put it in a log
+# that is public on this repository.
+#
+# And it must never run on `pull_request`; see _NOT_TEST_SUITES above.
+
+_SITE_WORKFLOW = "publish-site.yml"
+
+
+def test_the_site_rebuild_never_runs_from_an_unmerged_branch():
+    assert _SITE_WORKFLOW in _workflow_names(), (
+        f".github/workflows/{_SITE_WORKFLOW} is missing; it is what keeps the "
+        "published privacy policy from drifting behind docs/privacy.md."
+    )
+    text = "\n".join(_workflow_lines(_SITE_WORKFLOW))
+    assert not re.search(r"^\s+pull_request:", text, re.MULTILINE), (
+        f".github/workflows/{_SITE_WORKFLOW} runs on pull_request, which would "
+        "publish the privacy policy and account-deletion pages from a branch "
+        "that has not merged."
+    )
+    match = _PUSH_BRANCHES_RE.search(text)
+    assert match, f".github/workflows/{_SITE_WORKFLOW} has no `push:` branches list"
+    branches = [b.strip().strip("\"'") for b in match.group(1).split(",") if b.strip()]
+    assert branches == ["main"], (
+        f".github/workflows/{_SITE_WORKFLOW} pushes run on {branches}; only main "
+        "has merged content."
+    )
+
+
+def test_the_site_rebuild_keeps_its_hook_out_of_the_logs():
+    lines = _workflow_lines(_SITE_WORKFLOW)
+    text = "\n".join(lines)
+    assert "secrets." in text, (
+        f".github/workflows/{_SITE_WORKFLOW} names no secret; the hook URL must "
+        "not be written into the file."
+    )
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "secrets." not in stripped:
+            continue
+        assert re.match(r"^[A-Z_]+:\s*\$\{\{\s*secrets\.[A-Z_]+\s*\}\}$", stripped), (
+            f".github/workflows/{_SITE_WORKFLOW} interpolates a secret outside an "
+            f"`env:` assignment: {stripped!r}. Pass it to curl through the "
+            "environment — a secret on a command line reaches the log on `set -x` "
+            "or a non-zero exit, and this repository's logs are public."
+        )
+    assert not re.search(r"curl[^\n]*\$\{\{", text), (
+        f".github/workflows/{_SITE_WORKFLOW} interpolates a secret directly into "
+        "the curl command line; read it from the environment instead."
+    )
 
 
 @pytest.mark.parametrize(
