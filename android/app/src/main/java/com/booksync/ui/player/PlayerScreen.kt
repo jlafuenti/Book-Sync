@@ -57,7 +57,10 @@ import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT
 import com.booksync.player.AudioPlayerService
 import com.booksync.player.MediaId
 import com.booksync.player.MediaSourceSelector
+import com.booksync.player.PlaybackFailure
 import com.booksync.player.PlaybackOffsets
+import com.booksync.player.PlaybackRecovery
+import com.booksync.player.playbackFailureFor
 import com.booksync.player.toUri
 import com.booksync.ui.theme.Tandem
 import com.booksync.worker.DownloadWorker
@@ -190,6 +193,95 @@ class PlayerViewModel @Inject constructor(
     val downloadError = _downloadError.asStateFlow()
 
     fun clearDownloadError() { _downloadError.value = null }
+
+    /**
+     * The playback failure the listener is currently looking at (issue #475).
+     *
+     * A download failing has always had a message; a *playback* failure had
+     * none, because nothing observed one — the service's `Player.Listener`
+     * implemented everything except `onPlayerError`, so a dead decoder, a
+     * truncated file and an unreachable server all left the screen showing
+     * cover art, `0:00` and a Play button that did nothing.
+     *
+     * Named to match the web player's `playbackError` / `retryPlayback` /
+     * `clearPlaybackError` (issue #214), which has told listeners this for
+     * months.
+     */
+    private val _playbackError = MutableStateFlow<PlaybackFailure?>(null)
+    val playbackError = _playbackError.asStateFlow()
+
+    /**
+     * The player reported [errorCode] — decide what to say and what to offer.
+     *
+     * Called from the MediaController listener's `onPlayerError`. The remedy
+     * depends on this book and not on the code alone: unreadable bytes mean
+     * "download it again" for a book on the phone and "try again" for one being
+     * streamed, so the lookup happens here where the entity is known.
+     */
+    fun onPlaybackError(errorCode: Int) {
+        val downloaded = _pair.value?.audiobookDownloaded == true ||
+            _standaloneAudio.value?.isDownloaded == true
+        _playbackError.value = playbackFailureFor(errorCode, isDownloaded = downloaded)
+    }
+
+    /**
+     * Playback started or stopped.
+     *
+     * Sound arriving is the one unambiguous proof that the failure on screen is
+     * over, so it clears there. A *stop* clears nothing: a player that has
+     * failed also stops, and taking the message down on that path is how the
+     * failure would go quiet again.
+     */
+    fun onPlayingChanged(isPlaying: Boolean) {
+        _isPlaying.value = isPlaying
+        if (isPlaying) _playbackError.value = null
+    }
+
+    fun clearPlaybackError() { _playbackError.value = null }
+
+    /**
+     * Replace a local copy the player could not read.
+     *
+     * The delete is the load-bearing half. `DownloadWorker` skips a book whose
+     * entity already says `isDownloaded`, so enqueuing a download over a broken
+     * copy finishes instantly and changes nothing — verified on an emulator
+     * against a corrupted file: the work reported SUCCESS and the same bad bytes
+     * were still on disk. A button that succeeds and fixes nothing is barely
+     * better than the silence this whole change replaces.
+     */
+    fun redownloadAudiobook() {
+        _playbackError.value = null
+        viewModelScope.launch {
+            val standalone = _standaloneAudio.value
+            if (standalone != null) {
+                repository.deleteStandaloneAudiobook(standalone)
+                _standaloneAudio.value = repository.getAudiobookById(standalone.id)
+                    ?: standalone.copy(isDownloaded = false)
+                downloadStandaloneAudiobook()
+            } else {
+                val pair = _pair.value ?: return@launch
+                repository.deleteAudiobook(pair)
+                downloadAudiobook()
+            }
+        }
+    }
+
+    /**
+     * Ask the player again, from the banner.
+     *
+     * The message comes down first: if the attempt fails, `onPlayerError` puts
+     * it straight back with whatever the new failure is, and if the controller
+     * is gone there is nothing left for a stale banner to describe. `prepare()`
+     * is what actually retries — a player holding an error ignores `play()`
+     * until its media source is re-prepared.
+     */
+    fun retryPlayback() {
+        _playbackError.value = null
+        val ctrl = controller ?: return
+        ensureMediaLoaded()
+        ctrl.prepare()
+        ctrl.play()
+    }
 
     /** Download the standalone audiobook (used from PlayerScreen when isStandalone). */
     fun downloadStandaloneAudiobook() {
@@ -401,7 +493,18 @@ class PlayerViewModel @Inject constructor(
                 // Listen for state changes
                 mediaController.addListener(object : Player.Listener {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        _isPlaying.value = isPlaying
+                        onPlayingChanged(isPlaying)
+                    }
+                    /**
+                     * The failure the app never used to observe (issue #475).
+                     *
+                     * MediaController forwards the session player's error, so
+                     * this covers ExoPlayer and Cast alike — the same reason
+                     * AudioPlayerService's own listener logs it rather than
+                     * trying to reach a screen that may not exist.
+                     */
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                        onPlaybackError(error.errorCode)
                     }
                     override fun onPlaybackParametersChanged(params: androidx.media3.common.PlaybackParameters) {
                         _speed.value = params.speed
@@ -1062,6 +1165,7 @@ fun PlayerScreen(
     val historyItems       by viewModel.history.collectAsState()
     val downloadProgress   by viewModel.downloadProgress.collectAsState()
     val downloadError      by viewModel.downloadError.collectAsState()
+    val playbackFailure    by viewModel.playbackError.collectAsState()
 
     // Resolved title/author — prefer standalone audio entity, fall back to pair
     val displayTitle  = standaloneAudio?.title  ?: pair?.audiobookTitle  ?: "Audiobook"
@@ -1244,7 +1348,11 @@ fun PlayerScreen(
             // offline listening, and Cast, which serves the phone's own copy. It
             // only turns into a warning offline, the one state where the controls
             // really are dead.
-            if (!isDownloaded) {
+            // `|| downloadProgress != null` covers the re-download of a book the
+            // entity still calls downloaded (issue #475): without it the listener
+            // taps "Download again", the banner goes, and nothing visible happens
+            // for the minute the transfer takes.
+            if (!isDownloaded || downloadProgress != null) {
                 val hintIsError = !isOnline
                 Spacer(Modifier.height(10.dp))
                 Column(
@@ -1298,6 +1406,97 @@ fun PlayerScreen(
                             Spacer(Modifier.size(6.dp))
                             Text("Download for offline", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
+                    }
+                }
+            }
+
+            // ── Playback failure (issue #475) ────────────────────────────────
+            // Sits directly above the transport, because the transport is what
+            // the listener is staring at when nothing happens. It used to stay
+            // exactly as it looks when idle — cover art, 0:00, a Play button —
+            // whatever had gone wrong. Deliberately not a Toast like the
+            // download error above: this carries an action, and a message that
+            // fades after three seconds leaves the same dead end behind.
+            playbackFailure?.let { failure ->
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.input)
+                        .background(colors.statusError.copy(alpha = 0.15f))
+                        .padding(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Warning,
+                            null,
+                            tint = colors.statusError,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            failure.message,
+                            color = colors.statusError,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = { viewModel.clearPlaybackError() },
+                            modifier = Modifier.size(24.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                "Dismiss",
+                                tint = colors.statusError,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                    // One offer, the one that can actually work. A missing codec
+                    // gets neither button: re-fetching the same bytes and asking
+                    // the same absent decoder again are both dead ends, and an
+                    // action that cannot succeed is worse than none.
+                    val action: (@Composable () -> Unit)? = when (failure.recovery) {
+                        PlaybackRecovery.RETRY -> {
+                            {
+                                Button(
+                                    onClick = { viewModel.retryPlayback() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = colors.accent,
+                                        contentColor = colors.textPrimary,
+                                    ),
+                                ) {
+                                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Try again", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                        PlaybackRecovery.REDOWNLOAD -> {
+                            {
+                                Button(
+                                    // Not downloadAudiobook(): the worker skips a
+                                    // book already marked downloaded, so the broken
+                                    // copy has to go first.
+                                    onClick = { viewModel.redownloadAudiobook() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = colors.accent,
+                                        contentColor = colors.textPrimary,
+                                    ),
+                                ) {
+                                    Icon(Icons.Default.Download, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Download again", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                        PlaybackRecovery.NONE -> null
+                    }
+                    action?.let {
+                        Spacer(Modifier.height(8.dp))
+                        it()
                     }
                 }
             }

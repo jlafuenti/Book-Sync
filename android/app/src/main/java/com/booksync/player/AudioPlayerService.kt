@@ -345,6 +345,31 @@ class AudioPlayerService : MediaLibraryService() {
                     )
                 }
             }
+            /**
+             * Playback failed (issue #475).
+             *
+             * This listener is attached to both the local player and the Cast
+             * player, and it is the only observer a failure gets when there is
+             * no screen: in Android Auto, from the notification, or with the
+             * app in the background. The phone's player screen maps the same
+             * error into a banner of its own through its MediaController — the
+             * service cannot reach a UI that may not exist, so it records
+             * instead.
+             *
+             * Before this, nothing implemented `onPlayerError` anywhere, so the
+             * failure was not merely unsurfaced: it was never observed, and the
+             * only evidence it happened at all was a `PlaybackState {state=
+             * ERROR(7)}` line in logcat that no user will ever see.
+             */
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                Log.e(TAG, "playback failed errorCode=${error.errorCode} (${error.errorCodeName})", error)
+                diagnosticLogger.w(
+                    LogChannel.AUTO, TAG,
+                    "playback failed errorCode=${error.errorCode} " +
+                        "(${error.errorCodeName}) " +
+                        "item=${mediaLibrarySession?.player?.currentMediaItem?.mediaId}",
+                )
+            }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // A different book: don't make its first heartbeat wait out the
                 // previous book's push window (issue #65).
