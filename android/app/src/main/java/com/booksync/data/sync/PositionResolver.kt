@@ -121,6 +121,29 @@ fun planRestore(
 
     usableHint(position, deviceId, hintKind)?.let { steps.add(RestoreStep.Hint(it.value)) }
 
+    val audioMs = position.audioPositionMs
+    val audioStep = if (audioMs != null && audioMs > 0) RestoreStep.Audio(audioMs) else null
+
+    // When the audiobook is the live format, its position is the only coordinate
+    // known to be current (issue #479). Only a reader save refreshes
+    // epubChapter / epubTextPreview / epubProgressPercent, so after a few hours
+    // of listening they describe wherever the book was last *read* — and they
+    // still resolve, so trying them first opens the book there and the save that
+    // follows can write it back over the real position.
+    //
+    // `usableHint` already applies exactly this reasoning, dropping a locator
+    // captured more than LOCATOR_REUSE_THRESHOLD_MS away from where the audio
+    // now is. The ebook rungs are stale for the same reason; they simply carry
+    // no capture-time stamp to measure it with, so the ordering carries the rule
+    // instead.
+    //
+    // The hint still leads when it qualifies: it is freshness-checked and exact,
+    // whereas the audio rung re-derives the page through the sync map and is
+    // lossier. So this only changes which fallback is reached when the precise
+    // answer is unavailable — the case where the page is least trustworthy.
+    val listening = position.source == "audiobook" && audioStep != null
+    if (listening) steps.add(audioStep!!)
+
     val preview = position.epubTextPreview?.trim().orEmpty()
     val chapter = position.epubChapter
     val chapterNavigable = chapter != null && chapter >= 0 && chapter < spineCount
@@ -135,8 +158,7 @@ fun planRestore(
     // 0% is indistinguishable from an unread book, so it is not an anchor.
     if (percent != null && percent > 0f) steps.add(RestoreStep.Percent(percent))
 
-    val audioMs = position.audioPositionMs
-    if (audioMs != null && audioMs > 0) steps.add(RestoreStep.Audio(audioMs))
+    if (audioStep != null && !listening) steps.add(audioStep)
 
     return steps
 }

@@ -98,6 +98,34 @@ def plan_restore(
     if hint:
         steps.append(RestoreStep(kind="hint", value=hint["value"]))
 
+    audio_ms = position.get("audio_position_ms")
+    audio_step = (
+        RestoreStep(kind="audio", audio_position_ms=audio_ms)
+        if audio_ms is not None and audio_ms > 0
+        else None
+    )
+
+    # When the audiobook is the live format, its position is the only coordinate
+    # known to be current (issue #479). Only a reader save refreshes
+    # epub_chapter / epub_text_preview / epub_progress_percent, so after a few
+    # hours of listening they describe wherever the book was last *read* — and
+    # they still resolve, so trying them first opens the book there and the save
+    # that follows can write it back over the real position.
+    #
+    # `_usable_hint` already applies exactly this reasoning, dropping a locator
+    # captured more than LOCATOR_REUSE_THRESHOLD_MS away from where the audio
+    # now is. The ebook rungs are stale for the same reason; they simply carry
+    # no capture-time stamp to measure it with, so the ordering carries the rule
+    # instead.
+    #
+    # The hint still leads when it qualifies: it is freshness-checked and exact,
+    # whereas the audio rung re-derives the page through the sync map and is
+    # lossier. So this only changes which fallback is reached when the precise
+    # answer is unavailable — the case where the page is least trustworthy.
+    listening = position.get("source") == "audiobook" and audio_step is not None
+    if listening:
+        steps.append(audio_step)
+
     preview = (position.get("epub_text_preview") or "").strip()
     chapter = position.get("epub_chapter")
     chapter_navigable = chapter is not None and 0 <= chapter < spine_count
@@ -117,9 +145,8 @@ def plan_restore(
     if percent is not None and percent > 0:
         steps.append(RestoreStep(kind="percent", percent=percent))
 
-    audio_ms = position.get("audio_position_ms")
-    if audio_ms is not None and audio_ms > 0:
-        steps.append(RestoreStep(kind="audio", audio_position_ms=audio_ms))
+    if audio_step is not None and not listening:
+        steps.append(audio_step)
 
     return steps
 
