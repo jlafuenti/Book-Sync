@@ -17,6 +17,7 @@ import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
 import com.booksync.data.remote.VersionCompat
 import com.booksync.data.repository.PairOpenTarget
+import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
@@ -283,6 +284,23 @@ class HomeViewModel @Inject constructor(
 
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
         repository.resolvePairOpenTarget(pairId)
+
+    /** See [com.booksync.data.repository.LibraryRepository.progressSummaryForPair] (issue #484). */
+    suspend fun progressSummary(pair: BookPairEntity): ProgressSummary =
+        repository.progressSummaryForPair(pair)
+
+    /**
+     * The Continue row's own items, which may be a pair, a standalone ebook or a
+     * standalone audiobook (issue #484).
+     */
+    suspend fun progressSummary(item: HomeItem): ProgressSummary = when (item.mediaType) {
+        HomeItem.MediaType.PAIR ->
+            item.pairId?.let { id -> repository.getPairById(id)?.let { repository.progressSummaryForPair(it) } }
+        HomeItem.MediaType.EBOOK ->
+            item.ebookId?.let { repository.progressSummaryForEbook(it) }
+        HomeItem.MediaType.AUDIOBOOK ->
+            item.audiobookId?.let { repository.progressSummaryForAudiobook(it) }
+    } ?: ProgressSummary(hasProgress = false, isComplete = false)
 
     fun downloadBoth(pair: BookPairEntity)         = enqueue(pair.id, "ALL", "download_pair_${pair.id}")
     fun downloadBothById(pairId: Int)              = enqueue(pairId,  "ALL", "download_pair_$pairId")

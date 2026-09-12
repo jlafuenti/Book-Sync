@@ -45,6 +45,9 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.ui.components.BookCard
 import com.booksync.ui.components.BookCardVariant
+import com.booksync.data.repository.ProgressSummary
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import com.booksync.ui.components.CardOverflowMenu
 import com.booksync.ui.components.EmptyState
 import com.booksync.ui.components.FilterPill
@@ -87,6 +90,8 @@ fun DownloadedScreen(
     // Overflow sheet state — one active target at a time.
     var overflow by remember { mutableStateOf<OverflowSelection?>(null) }
     val canEdit by viewModel.canEdit.collectAsState()
+    val isOnline by viewModel.isOnline.collectAsState()
+    val overflowScope = rememberCoroutineScope()
     overflow?.let { sel ->
         val target = when (sel) {
             is OverflowSelection.Pair     -> sel.toOverflowTarget()
@@ -94,7 +99,7 @@ fun DownloadedScreen(
             is OverflowSelection.Audio    -> sel.toOverflowTarget()
         }
         val actions = when (sel) {
-            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect, onOpenPairDetails, canEdit)
+            is OverflowSelection.Pair  -> sel.buildActions(viewModel, onPairBookSelect, onPairAudioSelect, onOpenPairDetails, canEdit, isOnline)
             is OverflowSelection.Ebook -> sel.buildActions(viewModel, onEbookSelect, onOpenEbookDetails)
             is OverflowSelection.Audio -> sel.buildActions(viewModel, onAudiobookSelect, onOpenAudiobookDetails)
         }
@@ -211,7 +216,11 @@ fun DownloadedScreen(
                                         if (pair.ebookDownloaded) onPairBookSelect(pair.id)
                                         else onPairAudioSelect(pair.id)
                                     },
-                                    onOverflow = { overflow = OverflowSelection.Pair(pair) },
+                                    onOverflow = {
+                                        overflowScope.launch {
+                                            overflow = OverflowSelection.Pair(pair, viewModel.progressSummaryForPair(pair))
+                                        }
+                                    },
                                     downloadPercent = downloading[pair.id],
                                 )
                             }
@@ -228,7 +237,11 @@ fun DownloadedScreen(
                                         seriesIndex = ebook.seriesIndex,
                                     ),
                                     onClick = { onEbookSelect(ebook.id) },
-                                    onOverflow = { overflow = OverflowSelection.Ebook(ebook) },
+                                    onOverflow = {
+                                        overflowScope.launch {
+                                            overflow = OverflowSelection.Ebook(ebook, viewModel.progressSummaryForEbook(ebook.id))
+                                        }
+                                    },
                                 )
                             }
                             item.audiobook != null -> {
@@ -254,7 +267,11 @@ fun DownloadedScreen(
                                         seriesIndex = audio.seriesIndex,
                                     ),
                                     onClick = { onAudiobookSelect(audio.id) },
-                                    onOverflow = { overflow = OverflowSelection.Audio(audio) },
+                                    onOverflow = {
+                                        overflowScope.launch {
+                                            overflow = OverflowSelection.Audio(audio, viewModel.progressSummaryForAudiobook(audio.id))
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -271,7 +288,12 @@ fun DownloadedScreen(
 // --------------------------------------------------------------------------
 
 private sealed class OverflowSelection {
-    data class Pair(val pair: BookPairEntity) : OverflowSelection() {
+    abstract val progress: ProgressSummary
+
+    data class Pair(
+        val pair: BookPairEntity,
+        override val progress: ProgressSummary,
+    ) : OverflowSelection() {
         fun toOverflowTarget() = OverflowTarget.Pair(
             pairId = pair.id,
             title = pair.ebookTitle,
@@ -280,7 +302,9 @@ private sealed class OverflowSelection {
             hasAudiobookDownloaded = pair.audiobookDownloaded,
             isTranscribed = pair.status == "synced",
             isQueuedOrTranscribing = pair.status == "transcribing",
-            isComplete = false,
+            isComplete = progress.isComplete,
+            syncMapCached = pair.syncMapDownloaded,
+            hasProgress = progress.hasProgress,
         )
 
         fun buildActions(
@@ -289,10 +313,15 @@ private sealed class OverflowSelection {
             onListenClick: (Int) -> Unit,
             onOpenDetails: (Int) -> Unit,
             canEdit: Boolean,
+            isOnline: Boolean,
         ) = OverflowActions(
+            isOnline           = isOnline,
             onViewDetails      = { onOpenDetails(pair.id) },
             onRead             = if (pair.ebookDownloaded)     ({ onReadClick(pair.id) })   else null,
-            onListen           = if (pair.audiobookDownloaded) ({ onListenClick(pair.id) }) else null,
+            // A pair can be listed here with only its ebook downloaded; the
+            // audiobook half still streams (issue #484).
+            onListen           = if (pair.audiobookDownloaded || isOnline)
+                                     ({ onListenClick(pair.id) }) else null,
             onDownloadPair     = if (!pair.ebookDownloaded || !pair.audiobookDownloaded)
                                      ({ vm.downloadAll(pair) }) else null,
             // One delete for a pair (issue #333); the per-format rows live on
@@ -307,13 +336,18 @@ private sealed class OverflowSelection {
         )
     }
 
-    data class Ebook(val ebook: EBookEntity) : OverflowSelection() {
+    data class Ebook(
+        val ebook: EBookEntity,
+        override val progress: ProgressSummary,
+    ) : OverflowSelection() {
         fun toOverflowTarget() = OverflowTarget.Ebook(
             ebookId = ebook.id,
             title = ebook.title,
             subtitle = ebook.author,
             isDownloaded = true,
             isPaired = false,
+            isComplete = progress.isComplete,
+            hasProgress = progress.hasProgress,
         )
 
         fun buildActions(
@@ -327,13 +361,18 @@ private sealed class OverflowSelection {
         )
     }
 
-    data class Audio(val audio: AudioBookEntity) : OverflowSelection() {
+    data class Audio(
+        val audio: AudioBookEntity,
+        override val progress: ProgressSummary,
+    ) : OverflowSelection() {
         fun toOverflowTarget() = OverflowTarget.Audiobook(
             audiobookId = audio.id,
             title = audio.title,
             subtitle = audio.author,
             isDownloaded = true,
             isPaired = false,
+            isComplete = progress.isComplete,
+            hasProgress = progress.hasProgress,
         )
 
         fun buildActions(

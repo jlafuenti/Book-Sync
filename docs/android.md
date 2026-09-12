@@ -175,6 +175,14 @@ The rule is in `player/MediaSourceSelector.kt` and is the only place the app dec
 downloaded file if there is one, the server otherwise.** A downloaded book never touches the
 network.
 
+**Where a stream starts.** "Listen" on a book's overflow menu, and the detail page's primary
+button, which reads "Listen" for a pair with nothing on the device. Both ask whether the book can
+be *opened* rather than whether it has been downloaded — `pairMenuActions` /
+`audiobookMenuActions` in `ui/components/CardOverflowMenu.kt` and `primaryAction` in
+`ui/details/BookDetailsScreen.kt`. With no connection those rows disappear and the download is
+the offer again. Until issue #484 they all asked `audiobookDownloaded` instead, so streaming
+existed with nothing anywhere to start it.
+
 **Ebooks download on open.** An EPUB is small and Readium wants a real file, so opening a paired
 ebook that is not on the device fetches it and opens the reader by itself, with progress and a
 Cancel button rather than a prompt to press Download first.

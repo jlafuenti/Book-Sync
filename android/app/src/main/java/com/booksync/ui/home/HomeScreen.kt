@@ -50,6 +50,7 @@ import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.PairOpenTarget
+import com.booksync.data.repository.ProgressSummary
 import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
@@ -195,11 +196,14 @@ fun HomeScreen(
                             }
                         },
                         onItemOverflow = { item ->
-                            overflowTarget = item.toOverflowTarget(
-                                recentlyAdded = recentlyAdded,
-                                newPairs = newPairs,
-                                activeTxPairIds = activeTxPairIds,
-                            )
+                            scope.launch {
+                                overflowTarget = item.toOverflowTarget(
+                                    recentlyAdded = recentlyAdded,
+                                    newPairs = newPairs,
+                                    activeTxPairIds = activeTxPairIds,
+                                    progress = viewModel.progressSummary(item),
+                                )
+                            }
                         },
                     )
                 }
@@ -217,7 +221,10 @@ fun HomeScreen(
                         showNewBadge = false,
                         onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
-                            overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
+                            scope.launch {
+                                overflowTarget =
+                                    pair.toPairOverflowTarget(activeTxPairIds, viewModel.progressSummary(pair))
+                            }
                         },
                     )
                 }
@@ -240,7 +247,10 @@ fun HomeScreen(
                         showNewBadge = true,
                         onPairClick = { pair -> openPair(pair.id) },
                         onPairOverflow = { pair ->
-                            overflowTarget = pair.toPairOverflowTarget(activeTxPairIds)
+                            scope.launch {
+                                overflowTarget =
+                                    pair.toPairOverflowTarget(activeTxPairIds, viewModel.progressSummary(pair))
+                            }
                         },
                     )
                 }
@@ -511,7 +521,10 @@ private fun BookPairEntity.hasMetadataMismatch(): Boolean {
 // Transcribe / Cancel transcription / Refresh sync data.
 // ==========================================================================
 
-private fun BookPairEntity.toPairOverflowTarget(activeTxPairIds: Set<Int>): OverflowTarget.Pair =
+private fun BookPairEntity.toPairOverflowTarget(
+    activeTxPairIds: Set<Int>,
+    progress: ProgressSummary = ProgressSummary(hasProgress = false, isComplete = false),
+): OverflowTarget.Pair =
     OverflowTarget.Pair(
         pairId = id,
         title = ebookTitle,
@@ -520,7 +533,10 @@ private fun BookPairEntity.toPairOverflowTarget(activeTxPairIds: Set<Int>): Over
         hasAudiobookDownloaded = audiobookDownloaded,
         isTranscribed = status == "synced",
         isQueuedOrTranscribing = id in activeTxPairIds || status == "transcribing",
-        isComplete = false,
+        isComplete = progress.isComplete,
+        // Local cache, not the server-side transcription state above (issue #484).
+        syncMapCached = syncMapDownloaded,
+        hasProgress = progress.hasProgress,
         hasMismatchWarning = hasMetadataMismatch(),
     )
 
@@ -528,12 +544,13 @@ private fun HomeItem.toOverflowTarget(
     recentlyAdded: List<BookPairEntity>,
     newPairs: List<BookPairEntity>,
     activeTxPairIds: Set<Int>,
+    progress: ProgressSummary = ProgressSummary(hasProgress = false, isComplete = false),
 ): OverflowTarget = when (mediaType) {
     HomeItem.MediaType.PAIR -> {
         // Resolve the live pair from the flows we already collect so we can
         // use the same full-fidelity builder Recently Added / New Pairs use.
         val pair = (recentlyAdded + newPairs).firstOrNull { it.id == pairId }
-        pair?.toPairOverflowTarget(activeTxPairIds)
+        pair?.toPairOverflowTarget(activeTxPairIds, progress)
             ?: OverflowTarget.Pair(
                 pairId = pairId ?: 0,
                 title = title,
@@ -542,7 +559,8 @@ private fun HomeItem.toOverflowTarget(
                 hasAudiobookDownloaded = audiobookDownloaded,
                 isTranscribed = false,
                 isQueuedOrTranscribing = false,
-                isComplete = false,
+                isComplete = progress.isComplete,
+                hasProgress = progress.hasProgress,
             )
     }
     HomeItem.MediaType.EBOOK -> OverflowTarget.Ebook(
@@ -556,6 +574,8 @@ private fun HomeItem.toOverflowTarget(
         // conservatively assume the user has the file to read it.
         isDownloaded = true,
         isPaired = true,
+        isComplete = progress.isComplete,
+        hasProgress = progress.hasProgress,
     )
     HomeItem.MediaType.AUDIOBOOK -> OverflowTarget.Audiobook(
         audiobookId = audiobookId ?: 0,
@@ -563,6 +583,8 @@ private fun HomeItem.toOverflowTarget(
         subtitle = author,
         isDownloaded = true,
         isPaired = true,
+        isComplete = progress.isComplete,
+        hasProgress = progress.hasProgress,
     )
 }
 
@@ -589,8 +611,11 @@ private fun buildHomeOverflowActions(
         is OverflowTarget.Pair -> OverflowActions(
             isOnline      = isOnline,
             onViewDetails = { onOpenPairDetails(target.pairId) },
-            onRead        = if (target.hasEbookDownloaded) { { onOpenPairReader(target.pairId) } } else null,
-            onListen      = if (target.hasAudiobookDownloaded) { { onOpenPairPlayer(target.pairId) } } else null,
+            // The callbacks stay wired whenever the row could apply; which rows
+            // actually show is `pairMenuActions`' job, and it now asks whether
+            // the format is *openable* rather than downloaded (issue #484).
+            onRead        = if (target.hasEbookDownloaded || isOnline) { { onOpenPairReader(target.pairId) } } else null,
+            onListen      = if (target.hasAudiobookDownloaded || isOnline) { { onOpenPairPlayer(target.pairId) } } else null,
             onDownloadPair = if (!target.hasEbookDownloaded || !target.hasAudiobookDownloaded)
                 { { vm.downloadBothById(target.pairId) } } else null,
         )
@@ -603,7 +628,8 @@ private fun buildHomeOverflowActions(
         is OverflowTarget.Audiobook -> OverflowActions(
             isOnline         = isOnline,
             onViewDetails    = { onOpenAudiobookDetails(target.audiobookId) },
-            onListen         = if (target.isDownloaded) { { onOpenAudiobook(target.audiobookId) } } else null,
+            // A standalone audiobook streams too (issue #484).
+            onListen         = if (target.isDownloaded || isOnline) { { onOpenAudiobook(target.audiobookId) } } else null,
             onDownloadAudiobook = if (!target.isDownloaded) { { /* audiobook entity not in scope on home */ } } else null,
         )
         // Home has no series-grouped grid; series overflow is library-only.

@@ -15,6 +15,8 @@ import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.ProgressSummary
+import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.library.LibraryItem
 import com.booksync.ui.library.LibrarySort
 import com.booksync.ui.library.lastOpenedFor
@@ -83,6 +85,7 @@ internal fun downloadedComparatorFor(
 @HiltViewModel
 class DownloadedViewModel @Inject constructor(
     private val repository: BookSyncRepository,
+    networkMonitor: NetworkMonitor,
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
@@ -101,6 +104,24 @@ class DownloadedViewModel @Inject constructor(
             .map { hasMinRole(it, "editor") }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+
+    /**
+     * Live network state (issue #484). Everything on this screen is on the
+     * device, but a *pair* can be listed here with only one half downloaded —
+     * and the missing half's audiobook still streams.
+     */
+    val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), networkMonitor.isOnline.value)
+
+    /** See [com.booksync.data.repository.LibraryRepository.progressSummaryForPair] (issue #484). */
+    suspend fun progressSummaryForPair(pair: BookPairEntity): ProgressSummary =
+        repository.progressSummaryForPair(pair)
+
+    suspend fun progressSummaryForEbook(ebookId: Int): ProgressSummary =
+        repository.progressSummaryForEbook(ebookId)
+
+    suspend fun progressSummaryForAudiobook(audiobookId: Int): ProgressSummary =
+        repository.progressSummaryForAudiobook(audiobookId)
 
     private val workManager = WorkManager.getInstance(context)
 

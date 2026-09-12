@@ -111,7 +111,7 @@ class BookDetailsPrimaryActionTest {
     }
 
     @Test
-    fun `a pair prefers the reader, then the player, then the download`() {
+    fun `a pair prefers the reader, then the player`() {
         assertEquals(
             PrimaryAction.Read,
             primaryAction(BookDetailsUi(loading = false, pair = pair(true, true))),
@@ -120,9 +120,57 @@ class BookDetailsPrimaryActionTest {
             PrimaryAction.Listen,
             primaryAction(BookDetailsUi(loading = false, pair = pair(false, true))),
         )
+    }
+
+    // ---- #484: this screen had no way to reach the player -----------------
+
+    /**
+     * A pair with nothing downloaded used to offer only "Download pair", and
+     * nothing else on the page navigated to the player either — so the details
+     * screen, the obvious place to start a book, was the one surface from which
+     * an undownloaded book could not be played at all. The player streams it
+     * (issue #171); only this button stood in the way.
+     */
+    @Test
+    fun `a pair with nothing downloaded offers to stream it`() {
+        assertEquals(
+            PrimaryAction.Listen,
+            primaryAction(BookDetailsUi(loading = false, pair = pair(false, false), isOnline = true)),
+        )
+    }
+
+    /** Offline there is nothing to stream, so the download is the only offer. */
+    @Test
+    fun `offline, a pair with nothing downloaded still offers the download`() {
         assertEquals(
             PrimaryAction.DownloadPair,
-            primaryAction(BookDetailsUi(loading = false, pair = pair(false, false))),
+            primaryAction(BookDetailsUi(loading = false, pair = pair(false, false), isOnline = false)),
+        )
+    }
+
+    /** Same rule for an unpaired audiobook: it streams too. */
+    @Test
+    fun `a standalone audiobook that is not downloaded offers to stream it`() {
+        assertEquals(
+            PrimaryAction.ListenStandalone,
+            primaryAction(
+                BookDetailsUi(loading = false, audiobook = audiobook(downloaded = false), isOnline = true),
+            ),
+        )
+    }
+
+    /**
+     * **Not** symmetrical for an unpaired ebook. `StandaloneReaderScreen` has no
+     * download shell — it assumes the caller checked — so an online ebook that
+     * is not on the device must still offer the download, not the reader.
+     */
+    @Test
+    fun `a standalone ebook that is not downloaded is never opened over the network`() {
+        assertEquals(
+            PrimaryAction.DownloadEbook,
+            primaryAction(
+                BookDetailsUi(loading = false, ebook = ebook(downloaded = false), isOnline = true),
+            ),
         )
     }
 

@@ -349,6 +349,34 @@ class LibraryRepository @Inject constructor(
     suspend fun resolvePairOpenTarget(pairId: Int): PairOpenTarget =
         getPairById(pairId)?.let { resolvePairOpenTarget(it) } ?: PairOpenTarget.Details
 
+    // ---- Is there anything to reset, and is it finished? (issue #484) ------
+    //
+    // Read when an overflow sheet opens or the details screen loads — one item
+    // at a time, so these are point lookups rather than another library-wide
+    // flow. The menus used to offer "Reset progress" unconditionally and "Mark
+    // complete" always, because neither fact had a way to reach them.
+
+    /** Both halves of a pair, plus the pair's own bookmark. */
+    suspend fun progressSummaryForPair(pair: BookPairEntity): ProgressSummary = progressSummaryOf(
+        bookmark = bookmarkDao.getBookmark(scope, pair.id),
+        rows = listOf(
+            userProgressDao.getProgress(scope, "ebook", pair.ebookId),
+            userProgressDao.getProgress(scope, "audiobook", pair.audiobookId),
+        ),
+    )
+
+    /** An unpaired ebook: no bookmark row exists, only its progress row. */
+    suspend fun progressSummaryForEbook(ebookId: Int): ProgressSummary = progressSummaryOf(
+        bookmark = null,
+        rows = listOf(userProgressDao.getProgress(scope, "ebook", ebookId)),
+    )
+
+    /** An unpaired audiobook. */
+    suspend fun progressSummaryForAudiobook(audiobookId: Int): ProgressSummary = progressSummaryOf(
+        bookmark = null,
+        rows = listOf(userProgressDao.getProgress(scope, "audiobook", audiobookId)),
+    )
+
     /** Get a single ebook by ID. */
     suspend fun getEbookById(ebookId: Int): EBookEntity? = eBookDao.getEBookById(ebookId)
 

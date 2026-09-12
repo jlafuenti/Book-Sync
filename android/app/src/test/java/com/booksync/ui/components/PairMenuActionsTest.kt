@@ -34,6 +34,8 @@ class PairMenuActionsTest {
         transcribed: Boolean = true,
         queued: Boolean = false,
         complete: Boolean = false,
+        syncMapCached: Boolean = true,
+        hasProgress: Boolean = true,
     ) = OverflowTarget.Pair(
         pairId = 84,
         title = "The Mad Ship",
@@ -43,6 +45,8 @@ class PairMenuActionsTest {
         isTranscribed = transcribed,
         isQueuedOrTranscribing = queued,
         isComplete = complete,
+        syncMapCached = syncMapCached,
+        hasProgress = hasProgress,
     )
 
     // ---- #333: one delete, not two ----
@@ -112,15 +116,97 @@ class PairMenuActionsTest {
 
     // ---- the rest of the menu, so the refactor cannot quietly drop a row ----
 
+    // ---- #484: openable, not downloaded ----
+
+    /**
+     * Before issue #171 "is it on the device" and "can I open it" were the same
+     * question, so gating these rows on the download flag was right. Streaming
+     * made them different questions and nothing revisited this menu: the only
+     * row that reaches the player stayed behind `hasAudiobookDownloaded`, so a
+     * book the player would happily stream offered no way to start it. The only
+     * route left was to open the ebook and use the reader's switch-to-audiobook
+     * action, which is not a route anyone would find.
+     */
     @Test
-    fun `read and listen follow what is downloaded`() {
+    fun `read and listen follow what can be opened, not what is downloaded`() {
         val both = pairMenuActions(pair(), true, true)
         assertTrue(both.contains(PairAction.Read))
         assertTrue(both.contains(PairAction.Listen))
 
-        val ebookOnly = pairMenuActions(pair(audio = false), true, true)
-        assertTrue(ebookOnly.contains(PairAction.Read))
-        assertFalse(ebookOnly.contains(PairAction.Listen))
+        val nothingLocal = pairMenuActions(pair(ebook = false, audio = false), true, isOnline = true)
+        assertTrue(
+            "the audiobook streams — this is the missing option the menu never offered",
+            nothingLocal.contains(PairAction.Listen),
+        )
+        assertTrue(
+            "the reader fetches the EPUB on open (issue #171), so this works too",
+            nothingLocal.contains(PairAction.Read),
+        )
+    }
+
+    /**
+     * The other half of the same rule: offline, "openable" collapses back to
+     * "on the device". Offering a stream with no network is the same defect in
+     * the opposite direction — an action that cannot succeed.
+     */
+    @Test
+    fun `offline, only what is on the device can be opened`() {
+        val offline = pairMenuActions(pair(ebook = false, audio = false), true, isOnline = false)
+        assertFalse(offline.contains(PairAction.Read))
+        assertFalse(offline.contains(PairAction.Listen))
+
+        val audioOnly = pairMenuActions(pair(ebook = false, audio = true), true, isOnline = false)
+        assertTrue(audioOnly.contains(PairAction.Listen))
+        assertFalse(audioOnly.contains(PairAction.Read))
+    }
+
+    /**
+     * "Re-download the latest sync map" — with no map cached there is nothing to
+     * re-download. `isTranscribed` means the *server* holds a transcript, which
+     * is a different fact; `DownloadedScreen` already gated on the local cache,
+     * so the same pair offered the row on one screen and not the other.
+     */
+    @Test
+    fun `there is nothing to refresh without a cached sync map`() {
+        assertFalse(
+            pairMenuActions(pair(syncMapCached = false), true, true)
+                .contains(PairAction.RefreshSyncData),
+        )
+        assertTrue(
+            pairMenuActions(pair(syncMapCached = true), true, true)
+                .contains(PairAction.RefreshSyncData),
+        )
+    }
+
+    /**
+     * The gate above must not fall through. The transcription rows are a
+     * three-way `when`, so dropping the refresh naively lands on `else ->
+     * Transcribe` and offers to transcribe a pair that already is transcribed.
+     */
+    @Test
+    fun `a transcribed pair is never offered transcription again`() {
+        val actions = pairMenuActions(pair(transcribed = true, syncMapCached = false), true, true)
+        assertFalse(actions.contains(PairAction.Transcribe))
+        assertFalse(actions.contains(PairAction.CancelTranscription))
+        assertFalse(actions.contains(PairAction.RefreshSyncData))
+    }
+
+    /**
+     * Reset progress was unconditional — `add(PairAction.ResetProgress)`, no
+     * condition at all — and the target carried no progress field, so the menu
+     * could not have decided even if it had tried. It was offered on books that
+     * had never been opened.
+     */
+    @Test
+    fun `a book with no progress is not offered a reset`() {
+        assertFalse(
+            pairMenuActions(pair(hasProgress = false), true, true)
+                .contains(PairAction.ResetProgress),
+        )
+        assertTrue(
+            pairMenuActions(pair(hasProgress = true), true, true)
+                .contains(PairAction.ResetProgress),
+        )
     }
 
     @Test

@@ -67,6 +67,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.PairOpenTarget
+import com.booksync.data.repository.ProgressSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
@@ -256,7 +257,17 @@ fun LibraryScreen(
                     serverUrl = viewModel.serverUrl,
                     downloadingPercent = downloading,
                     onItemClick = { item -> openItem(item, scope, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
-                    onItemOverflow = { item -> overflowTarget = item.toOverflowTarget(activeTxPairIds) },
+                    // Reading the stored position is a point lookup in Room, so
+                    // the sheet opens a frame later rather than offering a
+                    // "Reset progress" it cannot justify (issue #484).
+                    onItemOverflow = { item ->
+                        scope.launch {
+                            overflowTarget = item.toOverflowTarget(
+                                activeTxPairIds,
+                                viewModel.progressSummary(item),
+                            )
+                        }
+                    },
                 )
             }
         }
@@ -720,7 +731,10 @@ private fun LibraryItem.defaultBadge(): BadgeStatus? = when {
     else -> null
 }
 
-private fun LibraryItem.toOverflowTarget(activeTxPairIds: Set<Int> = emptySet()): OverflowTarget = when {
+private fun LibraryItem.toOverflowTarget(
+    activeTxPairIds: Set<Int> = emptySet(),
+    progress: ProgressSummary = ProgressSummary(hasProgress = false, isComplete = false),
+): OverflowTarget = when {
     pair != null -> OverflowTarget.Pair(
         pairId = pair.id,
         title = pair.ebookTitle,
@@ -731,7 +745,11 @@ private fun LibraryItem.toOverflowTarget(activeTxPairIds: Set<Int> = emptySet())
         // exists on the server; syncMapDownloaded only tracks the local cache.
         isTranscribed = pair.status == "synced",
         isQueuedOrTranscribing = pair.id in activeTxPairIds || pair.status == "transcribing",
-        isComplete = false,
+        isComplete = progress.isComplete,
+        // "Refresh sync data" re-downloads the cached map, so it needs the local
+        // flag, not the server-side one above (issue #484).
+        syncMapCached = pair.syncMapDownloaded,
+        hasProgress = progress.hasProgress,
     )
     ebook != null -> OverflowTarget.Ebook(
         ebookId = ebook.id,
@@ -739,6 +757,8 @@ private fun LibraryItem.toOverflowTarget(activeTxPairIds: Set<Int> = emptySet())
         subtitle = ebook.author,
         isDownloaded = ebook.isDownloaded,
         isPaired = false,                // standalone list is already unpaired
+        isComplete = progress.isComplete,
+        hasProgress = progress.hasProgress,
     )
     audiobook != null -> OverflowTarget.Audiobook(
         audiobookId = audiobook.id,
@@ -746,6 +766,8 @@ private fun LibraryItem.toOverflowTarget(activeTxPairIds: Set<Int> = emptySet())
         subtitle = audiobook.author,
         isDownloaded = audiobook.isDownloaded,
         isPaired = false,
+        isComplete = progress.isComplete,
+        hasProgress = progress.hasProgress,
     )
     else -> error("toOverflowTarget called on empty LibraryItem")
 }
@@ -811,7 +833,9 @@ private fun buildOverflowActions(
             OverflowActions(
                 isOnline              = isOnline,
                 onViewDetails         = audio?.let { a -> onOpenDetails?.let { cb -> { cb(LibraryItem(key = "audiobook_${a.id}", audiobook = a)) } } },
-                onListen              = if (target.isDownloaded) audio?.let { { onStandaloneAudioSelect(it.id) } } else null,
+                // Streams when it is not on the device (issue #484); the row
+                // itself is gated by audiobookMenuActions.
+                onListen              = if (target.isDownloaded || isOnline) audio?.let { { onStandaloneAudioSelect(it.id) } } else null,
                 onDownloadAudiobook   = if (!target.isDownloaded) audio?.let { { vm.downloadStandaloneAudiobook(it) } } else null,
                 onDeleteAudiobook     = if (target.isDownloaded) audio?.let { { vm.deleteStandaloneAudiobook(it) } } else null,
                 onMarkComplete        = audio?.let { { vm.markCompleteAudiobook(it.id) } },
