@@ -56,6 +56,39 @@ class PauseOwnershipWiringTest {
         )
     }
 
+    /**
+     * Issue #480. `CMD_USER_PAUSE` is sent only by the player screen, so a pause
+     * from the notification, the lock screen, Android Auto or a Bluetooth button
+     * left the flag unarmed and claimed nothing — listening through the surfaces
+     * people actually listen through never updated which format the book opens
+     * in next. Combined with a reader save always claiming `ebook`, the routing
+     * ratcheted one way.
+     *
+     * `onPlayerCommandRequest` is the media3 callback every controller's
+     * transport command passes through, and involuntary stops (audio-focus loss,
+     * a disconnect, the sleep timer) never reach it — so it separates exactly
+     * the cases the policy needs to tell apart.
+     */
+    @Test
+    fun `a transport pause from any controller arms the claim`() {
+        val service = codeLines(source("com/booksync/player/AudioPlayerService.kt"))
+        assertTrue(
+            "AudioPlayerService must override onPlayerCommandRequest — without it " +
+                "only the player screen's own CMD_USER_PAUSE can claim the format, " +
+                "and pausing from the notification or the car claims nothing.",
+            service.any { it.contains("onPlayerCommandRequest") },
+        )
+        assertTrue(
+            "The override must arm the policy on a play/pause transport command.",
+            service.any { it.contains("COMMAND_PLAY_PAUSE") },
+        )
+        assertTrue(
+            "Arming must go through the same one-shot the screen uses, so a single " +
+                "command cannot license every later stop.",
+            service.count { it.contains("pauseSavePolicy.onUserPauseCommand()") } >= 1,
+        )
+    }
+
     @Test
     fun `the player screen announces its pauses and writes no position on them`() {
         val screen = source("com/booksync/ui/player/PlayerScreen.kt")

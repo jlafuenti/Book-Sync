@@ -1221,6 +1221,43 @@ class AudioPlayerService : MediaLibraryService() {
 
         // --- Connection / custom commands (phone app) ---
 
+        /**
+         * A deliberate pause from any surface may claim the format (issue #480).
+         *
+         * The player screen announces itself with [CMD_USER_PAUSE] because it
+         * can. Every other surface a listener actually uses — the notification,
+         * the lock screen, Android Auto, a Bluetooth button — has no such
+         * channel, so its pause left [PauseSavePolicy] unarmed and claimed
+         * nothing. Listening through them therefore never changed which format
+         * the book opens in next, and because a reader save always claims
+         * `ebook`, routing ratcheted one way: a book opened once in the reader
+         * stayed routed there however much it was later listened to.
+         *
+         * Every controller's transport command passes through this callback,
+         * and the involuntary stops do not: audio-focus loss, a headphone
+         * disconnect and the sleep timer never reach it. So it separates
+         * precisely the cases the contract wants kept apart (§ "Who may claim
+         * `source`"), without the conservative default having to guess.
+         *
+         * Only a command that will actually stop playback arms it, through the
+         * same one-shot the screen uses — a single tap cannot license a later
+         * involuntary stop.
+         */
+        override fun onPlayerCommandRequest(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            playerCommand: Int,
+        ): Int {
+            if (playerCommand == Player.COMMAND_PLAY_PAUSE && session.player.isPlaying) {
+                diagnosticLogger.i(
+                    LogChannel.AUTO, TAG,
+                    "deliberate pause from pkg=${controller.packageName} — claiming the format",
+                )
+                pauseSavePolicy.onUserPauseCommand()
+            }
+            return super.onPlayerCommandRequest(session, controller, playerCommand)
+        }
+
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo
