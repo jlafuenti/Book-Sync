@@ -21,7 +21,9 @@ from routers.auth import (
     get_superadmin_user,
     rate_limited,
 )
+from schemas import StrictResponse
 from services import backup_service
+from services import update_check
 from services.cache import TTLValue
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -203,6 +205,41 @@ class RestoreRequest(BaseModel):
 async def get_backup_status(_: User = Depends(get_admin_user)):
     """Lightweight backup health: last successful run + staleness flag."""
     return BackupStatus(**backup_service.get_status())
+
+
+class UpdateCheckStatus(StrictResponse):
+    """Whether a newer Tandem release is published (issue #463).
+
+    A `StrictResponse` because it mirrors `update_check.get_status()`'s hand-built
+    dict: a key added there and not here fails validation in tests rather than
+    silently vanishing from the response.
+    """
+
+    enabled: bool
+    prompted: bool
+    status: str               # available | current | unknown
+    reason: Optional[str]     # why `unknown`, else null
+    running_version: str
+    latest_version: Optional[str]
+    release_url: Optional[str]
+    checked_at: Optional[str]
+
+
+@router.get("/update", response_model=UpdateCheckStatus)
+async def get_update_status(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    """The update check's latest answer. Never contacts GitHub itself.
+
+    The scheduler in `services/update_check.py` does the asking. Serving its
+    cached result keeps the System page off GitHub's latency and rate limit.
+    """
+    stored = await update_check.read_settings(db)
+    return UpdateCheckStatus(**update_check.get_status(
+        enabled=stored["update_check_enabled"],
+        prompted=stored["update_check_prompted"],
+    ))
 
 
 @router.get("/backups", response_model=BackupListResponse)

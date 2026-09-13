@@ -14,6 +14,14 @@ export async function getDiskUsage() {
     return jsonOrThrow(resp, 'Failed to fetch disk usage');
 }
 
+// ============ Update check (issue #463) ============
+
+/** Whether a newer Tandem release is published. Admin-only; never contacts GitHub itself. */
+export async function getUpdateStatus() {
+    const resp = await fetchWithAuth(`${API_BASE}/stats/update`);
+    return jsonOrThrow(resp, 'Failed to fetch update status');
+}
+
 // ============ Backups (issue #60) ============
 
 export async function getBackupStatus() {
