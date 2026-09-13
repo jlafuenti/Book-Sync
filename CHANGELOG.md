@@ -37,8 +37,6 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
-### Fixed
-
 - The library scan no longer descends into hidden (dot-prefixed) directories and files, or the
   Synology `@eaDir`/`#recycle` system folders — a hand-made `.recyclebin/`, a macOS `._*`
   resource fork or a hidden `.unimported-*` copy parked beside a real file could otherwise be
