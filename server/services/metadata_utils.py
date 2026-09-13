@@ -79,6 +79,34 @@ def _is_initial_token(token: str) -> bool:
     return len(bare) == 1 and bare.isalpha()
 
 
+# Synology creates these on every share it manages: `@eaDir` holds thumbnails
+# and search indexes, `#recycle` is its recycle bin. Neither is book content,
+# and both nest arbitrarily deep files that would otherwise import fine.
+_HIDDEN_SYSTEM_NAMES = {"@eadir", "#recycle"}
+
+
+def is_hidden_or_system_name(name: str) -> bool:
+    """Whether a single path segment (a directory or file name, not a full
+    path) should be invisible to the library scan (issue #525).
+
+    True for anything dot-prefixed -- Unix dotfiles, macOS `._*` AppleDouble
+    resource forks, a hand-made `.recyclebin` or `.unimported-*` parking spot,
+    sync-tool folders like `.stfolder` -- and for the NAS system folders
+    Synology creates unasked on every share, `@eaDir` and `#recycle` (matched
+    case-insensitively: SMB/CIFS mounts can fold case).
+
+    The one predicate every directory walk and folder listing in the scan path
+    filters through, so a hidden entry is treated the same way whether it is
+    skipped by pruning `os.walk`'s `dirs` in place or by filtering a plain
+    `os.listdir()` result.
+    """
+    if not name:
+        return False
+    if name.startswith("."):
+        return True
+    return name.lower() in _HIDDEN_SYSTEM_NAMES
+
+
 def normalize_author(author: str) -> Optional[str]:
     """
     Normalize author name to 'First Last' format.

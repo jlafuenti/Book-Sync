@@ -47,7 +47,7 @@ from services.metadata_extract import (
     compute_file_hash,
     extract_metadata,
 )
-from services.metadata_utils import MEDIA_FILL_IF_NULL_FIELDS
+from services.metadata_utils import MEDIA_FILL_IF_NULL_FIELDS, is_hidden_or_system_name
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +414,8 @@ def _multi_file_groups(folder: str, audiobook_dir: str):
     """
     try:
         names = [n for n in os.listdir(folder)
-                 if os.path.isfile(os.path.join(folder, n))]
+                 if not is_hidden_or_system_name(n)
+                 and os.path.isfile(os.path.join(folder, n))]
     except OSError:
         return []
     return multi_file_audiobooks.classify_folder(
@@ -430,10 +431,25 @@ def _walk_tree(root: str) -> List[Tuple[str, List[str]]]:
     sync helper lets the caller cross to a worker thread once (issue #203) —
     iterating the generator from the event loop would run those stat calls back
     on the loop, one directory at a time, which is the same bug in disguise.
+
+    Hidden and NAS-system entries never come back (issue #525): `dirs` is
+    pruned in place before `os.walk` descends into it, so a hand-made
+    `.recyclebin/`, an `@eaDir` or a `#recycle` folder is never even opened,
+    and any dot-prefixed file (an AppleDouble `._*` fork, a hidden
+    `.unimported-*` copy) is dropped from the filenames of a folder that is
+    otherwise walked normally. `services.metadata_utils.is_hidden_or_system_name`
+    is the one predicate both halves use, and it's the same one
+    `multi_file_audiobooks.classify_folder` filters through, so a hidden file
+    is invisible to ingestion and to multi-file detection alike.
     """
     if not os.path.isdir(root):
         return []
-    return [(directory, files) for directory, _dirs, files in os.walk(root)]
+    tree = []
+    for directory, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not is_hidden_or_system_name(d)]
+        visible_files = [f for f in files if not is_hidden_or_system_name(f)]
+        tree.append((directory, visible_files))
+    return tree
 
 
 def _classify_tree(tree: List[Tuple[str, List[str]]], audiobook_dir: str) -> list:

@@ -16,15 +16,6 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
-### Fixed
-
-- `normalize_author` no longer treats every comma as a `Last, First` separator. A co-author
-  list (`Ann Axis, Bob Bartleby`), a name with a suffix (`Ann Axis, Jr.`), an author with a
-  narrator tacked on, or a value with two or more commas is now left as-is instead of being
-  swapped into a fabricated name. This ran on every ingest and on `POST
-  /api/library/normalize`, so a rescan or a library-wide normalize used to re-mangle values
-  that had already been corrected by hand (issue #514).
-
 ### Added
 
 - The System page says when the transcription worker is behind the server. The Jetson worker
@@ -46,6 +37,18 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- `normalize_author` no longer treats every comma as a `Last, First` separator. A co-author
+  list (`Ann Axis, Bob Bartleby`), a name with a suffix (`Ann Axis, Jr.`), an author with a
+  narrator tacked on, or a value with two or more commas is now left as-is instead of being
+  swapped into a fabricated name. This ran on every ingest and on `POST
+  /api/library/normalize`, so a rescan or a library-wide normalize used to re-mangle values
+  that had already been corrected by hand (issue #514).
+- The library scan no longer descends into hidden (dot-prefixed) directories and files, or the
+  Synology `@eaDir`/`#recycle` system folders — a hand-made `.recyclebin/`, a macOS `._*`
+  resource fork or a hidden `.unimported-*` copy parked beside a real file could otherwise be
+  imported as its own book row. The multi-file audiobook detector and the targeted (post-upload)
+  scan use the same filter, so a hidden track can no longer make a normal folder look like a
+  multi-file audiobook either.
 - `PATCH /api/library/ebooks/{id}`, `PATCH /api/library/audiobooks/{id}` and
   `POST /api/library/pairs/{id}/resolve-discrepancies` now write metadata back to the EPUB or
   audio file in a worker thread (`asyncio.to_thread`) instead of blocking the event loop, so

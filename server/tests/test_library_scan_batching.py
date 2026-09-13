@@ -126,6 +126,32 @@ async def test_the_scan_response_shape_is_unchanged(db, library_dirs):
     assert resp.new_audiobooks == 0
 
 
+# --------------------------------------------- hidden entries (issue #525)
+
+
+async def test_a_full_scan_never_imports_hidden_or_nas_system_paths(db, library_dirs):
+    """A full scan must not turn an operator's hand-made recycle bin, an
+    AppleDouble resource fork, a hidden "not really imported" copy, or a
+    Synology system folder into book rows -- while still finding the real
+    file that sits right beside them."""
+    from services import library_scan
+
+    ebook_dir, _ = library_dirs
+    for sub in (".recyclebin", "Author", "@eaDir", "#recycle"):
+        (ebook_dir / sub).mkdir(parents=True, exist_ok=True)
+    write_epub(str(ebook_dir / ".recyclebin" / "Axis Test (epub).epub"), [("ch1.xhtml", CHAPTER)])
+    write_epub(str(ebook_dir / "Author" / "._Axis Test.epub"), [("ch1.xhtml", CHAPTER)])
+    write_epub(str(ebook_dir / "Author" / ".unimported-axis-test.epub"), [("ch1.xhtml", CHAPTER)])
+    write_epub(str(ebook_dir / "@eaDir" / "thumbnail.epub"), [("ch1.xhtml", CHAPTER)])
+    write_epub(str(ebook_dir / "#recycle" / "deleted.epub"), [("ch1.xhtml", CHAPTER)])
+    write_epub(str(ebook_dir / "Author" / "Axis Test.epub"), [("ch1.xhtml", CHAPTER)])
+
+    resp = await library_scan.scan_library_impl(db)
+
+    assert resp.new_ebooks == 1
+    assert (await db.execute(select(EBook.filename))).scalars().all() == ["Axis Test.epub"]
+
+
 # ----------------------------------------------------- the losing side of a race
 
 
