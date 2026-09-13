@@ -24,14 +24,21 @@ def test_normalize_author(raw, expected):
 
 
 @pytest.mark.parametrize("raw,expected", [
-    # 'Last, First' still swaps, including a first name with a middle
-    # initial (still a single first-name unit, one or two tokens).
+    # 'Last, First' still swaps, including a first name with a trailing
+    # middle name/initial (still a single first-name unit).
     ("Butcher, Jim", "Jim Butcher"),
     ("Modesitt, L. E.", "L. E. Modesitt"),
     ("Axis, Ann Marie", "Ann Marie Axis"),
+    # A multi-word surname before the comma still swaps, as long as the part
+    # after the comma is a single name -- either one token, or a lead token
+    # plus trailing initials only.
+    ("Le Guin, Ursula K.", "Ursula K. Le Guin"),
+    ("van Gogh, Vincent", "Vincent van Gogh"),
+    ("de la Cruz, Maria", "Maria de la Cruz"),
     # Two full names separated by a comma is a co-author list, not
-    # 'Last, First' -- both sides are themselves multi-word names, so it is
-    # left as-is rather than swapped (issue #514).
+    # 'Last, First' -- neither side is a single token nor a lead-plus-
+    # initials first name, so it is left as-is rather than swapped
+    # (issue #514).
     ("Ann Axis, Bob Bartleby", "Ann Axis, Bob Bartleby"),
     # A suffix after the comma is not a first name -- left as-is.
     ("Ann Axis, Jr.", "Ann Axis, Jr."),
