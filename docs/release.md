@@ -93,33 +93,44 @@ Fill this in as it happens; it is the answer to "when can we ship" and to
 ## Before the first submission
 
 Play prerequisites tracked as issues. None of these are release *steps*; they are
-things that must be true before a submission is worth making.
+things that must be true before a submission is worth making. Verified 2026-09-13.
 
-- [ ] **#146 — account deletion.** Accounts can be created but never deleted,
-      in-app or on the web. Play's account-deletion policy requires both an
-      in-app route and a web-accessible one. A rejection reason on its own.
-- [ ] **#150 — privacy policy and Data safety.** The policy has to exist at a
-      public URL and the Data safety form has to match it: the `dictionaryapi.dev`
-      lookups from the reader, the device name, and the fact that all other data
-      goes to a server the user runs.
-- [ ] **#147 — App access.** The demo server, the demo account's credentials and the
-      "enter the server address first" instructions, entered in
-      Play Console → App content → App access.
+- [x] **#146 — account deletion.** In-app (Account → Danger zone) and on the web
+      (`/account-deletion`, also published on the public site). Play's account-deletion
+      policy requires both routes.
+- [x] **#150 — privacy policy and Data safety.** The policy is live on the public site
+      (with the terms and the account-deletion page); the Data safety answers that
+      match it are in [play-listing.md](play-listing.md), still to be entered in the
+      Console.
+- [ ] **#147 — App access.** The demo server is live and kept current from `main`.
+      Still to do: enter its URL, the demo account and the "enter the server address
+      first" instructions in Play Console → App content → App access, and run the
+      issue's outside-LAN acceptance test with a *signed* build.
 - [ ] **#172 — Android Auto opt-in: decided YES.** Opting in adds the car app
       quality checklist to every submission, and a failure there blocks the whole
-      release rather than only the Auto feature. Since the answer is yes, walk the
-      media-app section of the checklist on the Desktop Head Unit before the first
-      submission — no auto-play on connect, browse content inside ~10 s, a clear
-      error state when the server is unreachable, playback resumption — and settle
-      voice search (`onSearch` is not implemented and `MEDIA_PLAY_FROM_SEARCH` has
-      no handler; either implement them or remove the intent filter).
-- [ ] Signed artifact. `bundleRelease` with the upload keystore configured in
-      `android/local.properties` — [android.md](android.md), "Release builds and
-      signing".
-- [ ] Listing text. [play-listing.md](play-listing.md); the "requires a
-      self-hosted Tandem server" line comes first in every field.
-- [ ] `targetSdk` at Play's current floor. Pinned by `BuildConfigPinsTest`; the
-      floor rises one API level a year.
+      release rather than only the Auto feature. Voice search is implemented
+      (`AutoSearch`, the session's `onSearch`, and the `MEDIA_PLAY_FROM_SEARCH`
+      handler), so the manifest no longer advertises anything it cannot do. What
+      remains is the twelve-row walk-through in [android.md](android.md), "Desktop
+      Head Unit walk-through", on the phone with the head-unit server on; record the
+      result in the table above.
+- [ ] Signed artifact. CI builds an **unsigned** `bundleRelease` on every PR, so the
+      R8 path is known good; a signed one needs the upload keystore, created once
+      outside the checkout and backed up off the machine, with its four properties
+      in `android/local.properties` — [android.md](android.md), "Release builds and
+      signing". Enrol in **Play App Signing** when the app is created in the Console,
+      so Google holds the app signing key and the upload key can be rotated. Keep
+      `mapping.txt` from every uploaded build.
+- [x] Listing text. [play-listing.md](play-listing.md); the "requires a
+      self-hosted Tandem server" line comes first in every field. Screenshots and
+      the feature graphic are still to be taken.
+- [x] `targetSdk` at Play's current floor. 36, pinned by `BuildConfigPinsTest`; the
+      floor rises one API level a year (36 is required from August 2026).
+
+**Order that respects the clock:** keystore → first closed-test upload (this starts
+nothing by itself, but the twelfth opted-in tester does, so upload early) → Console
+forms and the head-unit walk in parallel → outside-LAN demo test with that build →
+day 14 → production access.
 
 ## Policy pages
 

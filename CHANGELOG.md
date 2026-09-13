@@ -37,12 +37,20 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+### Fixed
+
 - The library scan no longer descends into hidden (dot-prefixed) directories and files, or the
   Synology `@eaDir`/`#recycle` system folders — a hand-made `.recyclebin/`, a macOS `._*`
   resource fork or a hidden `.unimported-*` copy parked beside a real file could otherwise be
   imported as its own book row. The multi-file audiobook detector and the targeted (post-upload)
   scan use the same filter, so a hidden track can no longer make a normal folder look like a
   multi-file audiobook either.
+- Clearing an ebook's series (`PATCH /api/library/ebooks/{id}` with `{"series": ""}`) now
+  actually sticks. `write_ebook_metadata` only removed the `calibre:series` /
+  `calibre:series_index` OPF metas when a series was being *set*, so an empty series left the old
+  tags in the file and the next library scan's fill-empty-fields step read them straight back
+  onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
+  string: delete both metas rather than leaving them untouched.
 
 ## [0.1.0] - 2026-09-13
 
