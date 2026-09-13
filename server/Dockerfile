@@ -1,7 +1,7 @@
 # Matches CI (.github/workflows/tests.yml) and docs/testing.md — dev, CI and
 # prod all run 3.12. This image was pinned to 3.11 while CI tested on 3.12
 # (issue #52); ship what you test.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # System dependencies for Whisper (ffmpeg), PostgreSQL client, Calibre,
 # curl (fetching the acsm-calibre-plugin release zip), and zip/unzip
