@@ -55,4 +55,4 @@ cryptography==50.0.1
 # does, and python:*-slim can't be relied on — pin it so the off-hours
 # transcription window (services/offhours.py) resolves zones identically
 # everywhere.
-tzdata==2024.2
+tzdata==2026.3
