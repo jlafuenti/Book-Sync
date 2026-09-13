@@ -66,9 +66,10 @@ Counting from the day the twelfth tester is opted in, not from the upload:
 **Roughly three weeks after the testers are in place, and none of it can be
 compressed.** The clock is wall-clock time, so it runs in parallel with the rest
 of the pre-launch work — which is the argument for starting the closed test with
-whatever build exists now rather than waiting for a perfect one. `versionCode`
-is still 1 (`android/app/build.gradle.kts`), so nothing has been uploaded and the
-clock has not started.
+whatever build exists now rather than waiting for a perfect one. Nothing
+has been uploaded to Play yet, so the clock has not started. (`versionCode` became
+100 at the 0.1.0 release under the scheme in `docs/releasing.md`, so its value is no
+longer the way to tell — the Play Console is.)
 
 ## Record it here
 

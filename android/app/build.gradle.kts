@@ -127,7 +127,8 @@ android {
         // floor for new apps and updates every year (API 36 from 2026-08-31):
         // https://developer.android.com/google/play/requirements/target-sdk
         targetSdk = 36
-        versionCode = 1
+        // MAJOR*10000 + MINOR*100 + PATCH (docs/releasing.md): 0.1.0 -> 100.
+        versionCode = 100
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

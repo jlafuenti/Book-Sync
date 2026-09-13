@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-13
+
+The first tagged release. `0.1.0` is the version string the code has carried since the beginning,
+and everything from the start of the project is covered by it: the transcription queue and
+alignment engine, the sentence-level position contract, the web app and PWA, the Android
+reader/player, multi-user accounts and roles, library scanning and auto-pairing, the import
+sources, and the backup/restore system. The entries below record what changed from the point this
+changelog was introduced.
+
 ### Upgrade notes
 
 - **The update check is off until an admin turns it on.** After upgrading, the System page asks
@@ -39,6 +48,10 @@ operator must do by hand rather than read about afterwards.
   already defines releases, so it announces deliberate releases rather than every commit. Opt-in,
   asked once on the System page; notify-only, since updating from inside the app would need the
   Docker socket (#463).
+- Troubleshoot: a pair whose audio cannot plausibly cover its ebook — two minutes of audio against
+  a full-length novel, say — is flagged instead of matching, transcribing and reaching `synced`
+  with a meaningless sync map. Judged from the EPUB's file size against the audio's duration, with a
+  deliberately wide band, because nothing stores a book's word count (#458).
 - Security headers at the edge: `Caddyfile.example` is now the complete internet-facing proxy
   recipe — TLS, HSTS, `nosniff`, frame denial, a minimal `Permissions-Policy`, no version
   advertising, and a Content-Security-Policy derived from the web sources, shipped Report-Only
@@ -78,6 +91,19 @@ operator must do by hand rather than read about afterwards.
   `start_url` (#350).
 - Repo: compose-template drift fixed, `docs/README.md` added as the single docs index, stale Jetson
   documentation and shipped implementation plans removed (#348).
+- Web: React 19 (#453).
+- The shared "which format does a tap open" rule (`web/src/lib/pairOpenTarget.js`, mirrored on
+  Android) separates a format that can be *opened* from one already *on the device*, so a book that
+  was streamed resumes in the player. The web passes neither new field and behaves exactly as
+  before (#486).
+- Dependency updates from Dependabot: on the server, a group of 16 minor and patch updates and
+  `aiofiles` 25.1, plus `openai-whisper` 20250625 for the opt-in local-Whisper image and the dev-only
+  `aiosqlite` 0.22; on the web, `react-markdown` 10.1 — whose escaping the no-raw-HTML rule relies
+  on, pinned by `BookDetailsPage.test.jsx` — and test tooling (#394, #395, #397, #406, #407, #408,
+  #429, #442).
+- Repo: a PR that changes `server/` or `web/` must now add an entry here, enforced by a `changelog`
+  CI check; the version itself moves only when a release is cut. `CONTRIBUTING.md` now describes
+  the branch ruleset actually in force.
 - Tests: golden vectors for auto-matching and the real pipeline in the queue-manager tests (#353);
   Android test backfill with the Kover floor raised to 40 (#337); `PlayerViewModel`'s restore,
   poll loop and download mirror and the interceptor edges are driven directly, floor raised to
@@ -89,6 +115,15 @@ operator must do by hand rather than read about afterwards.
   session, and user deletion cascades instead of leaving orphan rows (#340).
 - Server: the integrity gate reports what it actually checked, the remote transcription timeout is
   honoured, and unattributed sync hints are no longer written (#346).
+- Position restore: when the audiobook is the format being listened to, its position is tried before
+  the ebook's chapter, text and percentage — which only a reader save refreshes — so a book listened
+  to for hours no longer reopens at a page last read long before (#479).
+- Web: the audio player clears its seek-flush and sleep timers when it unmounts, so neither can fire
+  into a player that has gone (#469).
+- EPUB write-back works again: tag editing takes its XML tree builders from the standard library
+  (#428).
+- ACSM import: an unreadable home directory — `/root` under a non-root container — counts as having
+  no Calibre configuration instead of failing the import (#443).
 - Web: handoff resume rewind, visible stream failures instead of a silent stall, and source-driven
   pair routing (#351).
 
@@ -102,20 +137,14 @@ operator must do by hand rather than read about afterwards.
   `DATABASE_URL` from the Postgres password so one secret feeds both containers (#180).
 - Editor-only pair actions are gated by role, and the two overlapping delete controls collapsed
   into one (#360).
-- Allow-listed GHSA-6gmq-8vp8-gcm6 (xmldom, via epubjs) so the web audit gate reflects a real
-  decision rather than blocking every merge (#345).
+- The reader's XML parser is patched: an npm override lifts `@xmldom/xmldom` to 0.8.15, fixing the
+  serialization advisories reached through epub.js 0.3.x, and the audit allow-list that had been
+  ignoring them is removed, so dropping the override now fails CI instead of passing silently.
+  epub.js stays on 0.3.93 — 0.4.2 depends on the abandoned unscoped `xmldom`, which has a critical
+  advisory and no fixed version (#345, #447).
 
 ### Removed
 
 - `SERVER_HOST` / `SERVER_PORT` settings. Nothing outside `server/config.py` ever read them — the
   listen address is fixed on uvicorn's command line in `server/entrypoint.sh` — so they advertised
   a knob that did nothing (#182).
-
-## [0.1.0]
-
-The version string the code has carried since the beginning, and the number the first tag will
-publish. **No `v0.1.0` tag exists yet**; when it is cut, the Unreleased section above folds into
-this one with its date. Everything from the start of the project up to the entries above is
-covered by it: the transcription queue and alignment engine, the sentence-level position contract,
-the web app and PWA, the Android reader/player, multi-user accounts and roles, library scanning
-and auto-pairing, the import sources, and the backup/restore system.

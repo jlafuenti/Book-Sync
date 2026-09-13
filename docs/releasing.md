@@ -42,8 +42,9 @@ versionCode = MAJOR*10000 + MINOR*100 + PATCH
 ```
 
 `0.1.0` → **100**; `0.2.0` → 200; `1.2.3` → 10203. Bump both fields in the same edit.
-`versionCode` is still `1` today, which is how you can tell nothing has ever been uploaded to Play
-— the first upload is also the first use of this scheme, and `1 → 100` is a legal step.
+`versionCode` moved from `1` to `100` at the 0.1.0 release, the first use of this scheme, before
+anything had been uploaded to Play — `1 → 100` is a legal step because no upload ever used `1`.
+Its value no longer tells you whether an upload has happened; the Play Console does.
 
 ## Cutting it
 
