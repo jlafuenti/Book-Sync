@@ -294,6 +294,22 @@ describe('bulkRepairChapterEncoding()', () => {
     })
 })
 
+describe('update check (issue #463)', () => {
+    it('getUpdateStatus() fetches the admin status endpoint', async () => {
+        localStorage.setItem('tandem_token', 'access-1')
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ({ enabled: false, status: 'unknown' }),
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { getUpdateStatus } = await import('./api')
+        const result = await getUpdateStatus()
+
+        expect(fetchMock).toHaveBeenCalledWith('/api/stats/update', expect.anything())
+        expect(result).toEqual({ enabled: false, status: 'unknown' })
+    })
+})
+
 describe('backups', () => {
     it('getBackupStatus() fetches the status endpoint', async () => {
         localStorage.setItem('tandem_token', 'access-1')
@@ -1845,6 +1861,7 @@ describe('every section surfaces the server detail, and falls back to its own me
         ['Queue', 'updateQueuePriority', a => a.updateQueuePriority(1, 2), 'Failed to update priority'],
         ['Sync', 'getSyncMap', a => a.getSyncMap(1), 'Failed to get sync map'],
         ['Stats', 'getDiskUsage', a => a.getDiskUsage(), 'Failed to fetch disk usage'],
+        ['Stats', 'getUpdateStatus', a => a.getUpdateStatus(), 'Failed to fetch update status'],
         ['Backups', 'listBackups', a => a.listBackups(), 'Failed to list backups'],
         ['Backups', 'getBackupStatus', a => a.getBackupStatus(), 'Failed to fetch backup status'],
         ['Progress', 'getAllProgress', a => a.getAllProgress(), 'Failed to fetch all progress'],

@@ -18,6 +18,10 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
+- **The update check is off until an admin turns it on.** After upgrading, the System page asks
+  "Check for updates automatically?". Enabling it makes the server ask `api.github.com` for the
+  latest Tandem release every few hours; GitHub sees the server's address and nothing else is sent.
+  It can be changed later under System → Updates (#463).
 - **Secrets move out of compose `environment:` and into files.** An existing install has to create
   `secrets/jwt_secret_key`, `secrets/postgres_password` and `secrets/credential_enc_keys` holding
   **the values it already uses** — not new ones — and switch the compose file to the `*_FILE`
@@ -29,6 +33,12 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- Update check: the System page says when a newer Tandem release is published — "Tandem X.Y.Z is
+  available", with a link to the release notes and the upgrade steps. It compares the running
+  `APP_VERSION` with GitHub's latest *release* using semantic versioning, the way `docs/releasing.md`
+  already defines releases, so it announces deliberate releases rather than every commit. Opt-in,
+  asked once on the System page; notify-only, since updating from inside the app would need the
+  Docker socket (#463).
 - Security headers at the edge: `Caddyfile.example` is now the complete internet-facing proxy
   recipe — TLS, HSTS, `nosniff`, frame denial, a minimal `Permissions-Policy`, no version
   advertising, and a Content-Security-Policy derived from the web sources, shipped Report-Only

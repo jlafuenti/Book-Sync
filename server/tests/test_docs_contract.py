@@ -430,6 +430,12 @@ _PRIVACY_REL = "docs/privacy.md"
 # with it.
 _DECLARED_THIRD_PARTY_HOST = "api.dictionaryapi.dev"
 
+# Deliberately a separate constant (issue #463). The update check is the *server*
+# contacting GitHub, opt-in by its operator — not something the app does on its
+# own — so it must not be folded into the host above, which is tied to Play's
+# Data safety answers and the Android host guard.
+_DECLARED_SERVER_UPDATE_HOST = "api.github.com"
+
 
 def _privacy_text() -> str:
     path = os.path.join(_REPO_ROOT, *_PRIVACY_REL.split("/"))
@@ -453,6 +459,24 @@ def test_privacy_policy_exists_and_is_linked():
             f"{rel} does not link docs/privacy.md. A policy nobody can find from "
             "the front page is not a published policy."
         )
+
+
+def test_privacy_policy_names_the_update_check():
+    """An opt-in server feature that contacts a third party must say so by name.
+
+    `services/update_check.py` asks GitHub for the latest release when an
+    operator enables it, and GitHub sees the server's address. A policy that
+    leaves it out would be incomplete about what can leave a server.
+    """
+    text = _privacy_text()
+    assert _DECLARED_SERVER_UPDATE_HOST in text, (
+        f"docs/privacy.md must name {_DECLARED_SERVER_UPDATE_HOST} — the update "
+        "check contacts it when a server's operator enables it."
+    )
+    assert "off unless" in text, (
+        "docs/privacy.md must say the update check is off unless enabled — "
+        "that it is opt-in is the promise, not a detail."
+    )
 
 
 def test_privacy_policy_names_the_dictionary_lookup():

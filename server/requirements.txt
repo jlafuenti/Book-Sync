@@ -41,6 +41,11 @@ rapidfuzz==3.14.6
 pydantic[email]==2.13.5
 pydantic-settings==2.15.0
 httpx==0.28.1
+# The update check (issue #463) compares release versions with packaging.version,
+# so `0.10.0` sorts after `0.9.0`. Pinned because nothing else in this file pulls
+# it in: it only imported locally because dev tooling (pytest) brings it along,
+# which would have passed every test and failed in the production image.
+packaging==26.3
 markdownify==1.2.3
 slowapi==0.1.10
 audible==0.12.0

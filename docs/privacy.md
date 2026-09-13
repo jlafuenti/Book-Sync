@@ -78,6 +78,19 @@ Google's own privacy policy. Audio itself is served either from your server, or 
 book you have downloaded — directly from your phone over your local network to the
 receiver, on a short-lived address that never leaves your LAN.
 
+### From your server, only if its operator turns it on: update checks
+
+This one is not the app. A Tandem server can check whether a newer release of Tandem has
+been published, so its System page can say so. **It is off unless the server's operator
+enables it**, and the System page asks before it does anything.
+
+- When enabled, the **server** asks `api.github.com` for the latest Tandem release, every
+  few hours. The request carries no account, no book, no reading position and nothing
+  about any user — only the question "what is the latest release?".
+- GitHub sees the **server's** address, as with any web request. Your phone is not
+  involved and your device's address is not sent.
+- Turning it off stops the requests entirely; nothing is sent while it is off.
+
 ## What is stored on your device
 
 - Your sign-in tokens and the server address you entered.

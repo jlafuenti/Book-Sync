@@ -8,12 +8,14 @@ import {
     forceDeleteUnsupportedFile, forceDeleteAllUnsupportedFiles,
     getCalibreStatus, getEbooks, getAudiobooks, getPairs, getTranscriptionQueue,
     getBackupStatus, listBackups, restoreBackup, createBackup, deleteBackup, downloadBackup,
-    getUsers,
+    getUsers, getUpdateStatus,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import { UserManagementSection } from './UserManagementPage'
 import EbookReader from '../components/EbookReader'
 import Modal from '../components/Modal'
+import UpdateCheckBanner from '../components/UpdateCheckBanner'
+import UpdateCheckSettings from '../components/UpdateCheckSettings'
 import useIsMobile from '../hooks/useIsMobile'
 import './SystemPage.css'
 
@@ -1370,6 +1372,32 @@ function SystemPage({ tab }) {
         return () => { cancelled = true }
     }, [showUnsupported, canAdmin])
 
+    // Update check (issue #463). A side fetch for the same reason as the
+    // pending count above: it is advisory, and GitHub being down — or the
+    // endpoint failing — must never blank the dashboard.
+    const [updateStatus, setUpdateStatus] = useState(null)
+    const loadUpdateStatus = useCallback(() => {
+        if (showUnsupported || !canAdmin) return
+        Promise.resolve()
+            .then(() => getUpdateStatus())
+            .then(setUpdateStatus)
+            .catch(() => {})
+    }, [showUnsupported, canAdmin])
+    useEffect(() => { loadUpdateStatus() }, [loadUpdateStatus])
+
+    // The prompt's two answers. Enabling makes the server run one check at once,
+    // so re-reading straight away shows "Checking for updates…" rather than the
+    // prompt again.
+    const answerUpdatePrompt = useCallback(async (enable) => {
+        try {
+            await updateSettings(enable
+                ? { update_check_enabled: true, update_check_prompted: true }
+                : { update_check_prompted: true })
+        } finally {
+            loadUpdateStatus()
+        }
+    }, [loadUpdateStatus])
+
     const totalBooks = counts ? counts.ebooks + counts.audiobooks : 0
     const pairRate = counts ? Math.round(counts.pairs / Math.max(counts.ebooks, 1) * 100) : 0
 
@@ -1402,7 +1430,7 @@ function SystemPage({ tab }) {
             {/* Refresh button — top right */}
             <div className="system-toolbar">
                 <div className="system-toolbar-right">
-                    <button className="btn btn-secondary" onClick={loadStatus} disabled={statusLoading} style={{ fontSize: '0.8rem' }}>
+                    <button className="btn btn-secondary" onClick={() => { loadStatus(); loadUpdateStatus() }} disabled={statusLoading} style={{ fontSize: '0.8rem' }}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14" style={{ marginRight: 4 }}>
                             <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -1421,6 +1449,12 @@ function SystemPage({ tab }) {
                 </div>
             ) : (
                 <>
+                    <UpdateCheckBanner
+                        status={updateStatus}
+                        onEnable={() => answerUpdatePrompt(true)}
+                        onDecline={() => answerUpdatePrompt(false)}
+                    />
+
                     {/* ── Section: System Status ── */}
                     <div className="system-section-header">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18" className="system-section-icon">
@@ -1569,6 +1603,15 @@ function SystemPage({ tab }) {
                             <HardcoverSettingsSection />
                         </CollapsibleCard>
                     </div>
+
+                    {/* ── Section: Updates (admin only, issue #463) ── */}
+                    {canAdmin && (
+                        <div style={{ marginTop: 8, marginBottom: 24 }}>
+                            <CollapsibleCard title="Updates">
+                                <UpdateCheckSettings />
+                            </CollapsibleCard>
+                        </div>
+                    )}
 
                     {/* ── Section: Backups (admin only) — collapsed by default ── */}
                     {canAdmin && (

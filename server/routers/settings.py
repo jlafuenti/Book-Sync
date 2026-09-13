@@ -11,6 +11,7 @@ from models.user import User
 from services import credentials as credential_store
 from services import offhours
 from services import registration
+from services import update_check
 from services.filename_patterns import PatternError, validate_patterns
 from services.url_safety import assert_safe_url, UnsafeUrlError
 
@@ -113,6 +114,11 @@ DEFAULT_SETTINGS = {
     # fresh install), so the value below is only ever the fallback for a read
     # that happens before the seed.
     **registration.DEFAULTS,
+    # The update check (issue #463) — owned by services/update_check.py. Both
+    # off: when enabled the server contacts api.github.com, and docs/privacy.md
+    # promises no outbound call nobody asked for. `update_check_prompted` records
+    # whether the admin has answered the System page's prompt.
+    **update_check.DEFAULTS,
 }
 
 # ---------------------------------------------------------------------------
@@ -357,6 +363,11 @@ async def update_settings(
     # services/registration; drop it so a change here applies to the next
     # request rather than the one after it.
     registration.forget_cached_settings()
+    # Enabling the update check runs one immediately (issue #463), in the
+    # background: otherwise an admin waits up to six hours to learn it works,
+    # and this request must not wait on GitHub.
+    if str(new_settings.get("update_check_enabled", "")).lower() == "true":
+        update_check.kick()
     # The caller is an admin (get_admin_user above), so echo the full dict —
     # not the reader allow-list they would get from the route function.
     return await _all_settings(db)

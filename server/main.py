@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
     check_single_process(settings)
     logger.info(
         "Single-process mode: one queue manager, one import scheduler, one "
-        "backup scheduler (issue #252)."
+        "backup scheduler, one update check (issue #252)."
     )
     validate_credential_keys()
 
@@ -156,9 +156,15 @@ async def lifespan(app: FastAPI):
     from services import backup_service
     await backup_service.start()
 
+    # Start the update check (issue #463). It runs every tick but asks GitHub
+    # only while an admin has enabled it — off, it makes no request at all.
+    from services import update_check
+    await update_check.start()
+
     yield
 
     # Shutdown
+    await update_check.stop()
     await backup_service.stop()
     await import_scheduler.stop()
     await stop_queue_manager()

@@ -72,6 +72,13 @@ versionCode = MAJOR*10000 + MINOR*100 + PATCH
    gh release create v0.1.0 --title "Tandem 0.1.0" --notes-file <(sed -n '/## \[0.1.0\]/,/## \[/p' CHANGELOG.md)
    ```
 
+   **Publishing this Release is what running servers notice.** A server whose operator has
+   enabled the update check asks GitHub for `releases/latest` every few hours and, when its
+   version is newer than the server's `APP_VERSION`, shows "Tandem X.Y.Z is available" on the
+   System page with a link to these notes (issue #463). A tag with no Release is invisible to it,
+   and so are drafts and pre-releases — so the notes written here are the ones operators read
+   before upgrading.
+
    Attach the Android artifacts if this release includes an app build — `app-release.apk` for
    sideloading and, when it is also going to Play, the `.aab`. Build them per
    [android.md](android.md), "Release builds and signing".
