@@ -8,7 +8,7 @@ sqlalchemy[asyncio]==2.0.52
 asyncpg==0.31.0
 alembic==1.19.2
 # Sync driver used only by Alembic migrations (the app itself uses asyncpg).
-psycopg2-binary==2.9.12
+psycopg2-binary==2.9.13
 # PyJWT replaced python-jose (issue #157): same HS256 usage, and it drops the
 # transitive `ecdsa` dependency whose Minerva timing advisory (CVE-2024-23342)
 # has no fixed release and would otherwise need a permanent pip-audit ignore.
