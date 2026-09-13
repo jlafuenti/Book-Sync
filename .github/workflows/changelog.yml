@@ -1,0 +1,48 @@
+name: Changelog
+
+# A PR that changes what an operator deploys — server/ or web/, outside their
+# tests — must add a line under `## [Unreleased]` in CHANGELOG.md. Releases are
+# built from that section (docs/releasing.md), and the System page's update
+# check sends operators to those release notes. Nothing enforced it before:
+# one evening, eleven issues merged and none reached the changelog.
+#
+# The version number is deliberately not checked. It moves once, when a release
+# is cut, never per PR. The decision lives in .github/scripts/changelog_gate.py
+# so it can be tested (server/tests/test_changelog_gate.py); this file only
+# feeds it the diff and the labels.
+on:
+  pull_request:
+    # `labeled` / `unlabeled` are not in pull_request's default types. Without
+    # them, adding the skip label would never re-run the check and the PR would
+    # sit red with the escape hatch already applied.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # Deliberately NO `paths:` filter. A required check that is path-filtered
+    # never reports on an unrelated PR, and GitHub blocks that PR forever waiting
+    # for it. The job always runs and decides from the diff instead.
+    #
+    # And `pull_request`, never `pull_request_target`: that event runs with a
+    # write token and secrets against a fork's code, and this needs neither.
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The base commit has to be present to diff against.
+          fetch-depth: 0
+
+      - name: Require a changelog entry for deployable changes
+        # Labels are free text anyone with triage access can set, so they reach
+        # the shell through the environment, never interpolated into the script.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          git diff --name-only "$BASE_SHA"..."$HEAD_SHA" \
+            | python3 .github/scripts/changelog_gate.py --labels "$LABELS"
