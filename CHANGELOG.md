@@ -43,6 +43,11 @@ operator must do by hand rather than read about afterwards.
   imported as its own book row. The multi-file audiobook detector and the targeted (post-upload)
   scan use the same filter, so a hidden track can no longer make a normal folder look like a
   multi-file audiobook either.
+- `PATCH /api/library/ebooks/{id}`, `PATCH /api/library/audiobooks/{id}` and
+  `POST /api/library/pairs/{id}/resolve-discrepancies` now write metadata back to the EPUB or
+  audio file in a worker thread (`asyncio.to_thread`) instead of blocking the event loop, so
+  editing a book's metadata no longer stalls unrelated requests for the length of the file
+  rewrite.
 - Clearing an ebook's series (`PATCH /api/library/ebooks/{id}` with `{"series": ""}`) now
   actually sticks. `write_ebook_metadata` only removed the `calibre:series` /
   `calibre:series_index` OPF metas when a series was being *set*, so an empty series left the old
