@@ -37,6 +37,12 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- `normalize_author` no longer treats every comma as a `Last, First` separator. A co-author
+  list (`Ann Axis, Bob Bartleby`), a name with a suffix (`Ann Axis, Jr.`), an author with a
+  narrator tacked on, or a value with two or more commas is now left as-is instead of being
+  swapped into a fabricated name. This ran on every ingest and on `POST
+  /api/library/normalize`, so a rescan or a library-wide normalize used to re-mangle values
+  that had already been corrected by hand (issue #514).
 - The library scan no longer descends into hidden (dot-prefixed) directories and files, or the
   Synology `@eaDir`/`#recycle` system folders — a hand-made `.recyclebin/`, a macOS `._*`
   resource fork or a hidden `.unimported-*` copy parked beside a real file could otherwise be

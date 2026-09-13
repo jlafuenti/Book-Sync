@@ -63,6 +63,22 @@ MEDIA_FILL_IF_NULL_FIELDS: tuple[str, ...] = (
 )
 
 
+#: Name suffixes that can follow a comma without meaning 'Last, First'
+#: (issue #514) -- e.g. 'Ann Axis, Jr.'. Matched case-insensitively against
+#: the whole part after the comma, dot included, so both punctuated and
+#: unpunctuated spellings are covered.
+_AUTHOR_SUFFIXES = frozenset({
+    "jr", "jr.", "sr", "sr.", "ii", "iii", "iv",
+    "phd", "ph.d.", "md", "esq", "esq.",
+})
+
+
+def _is_initial_token(token: str) -> bool:
+    """A single letter, with or without a trailing period ('K' or 'K.')."""
+    bare = token[:-1] if token.endswith(".") else token
+    return len(bare) == 1 and bare.isalpha()
+
+
 # Synology creates these on every share it manages: `@eaDir` holds thumbnails
 # and search indexes, `#recycle` is its recycle bin. Neither is book content,
 # and both nest arbitrarily deep files that would otherwise import fine.
@@ -98,20 +114,62 @@ def normalize_author(author: str) -> Optional[str]:
     - 'Last, First' -> 'First Last'
     - 'Jim Butcher' -> 'Jim Butcher' (no change)
     - 'Butcher, Jim' -> 'Jim Butcher'
+    - 'Modesitt, L. E.' -> 'L. E. Modesitt' (first name plus initials)
+    - 'Le Guin, Ursula K.' -> 'Ursula K. Le Guin' (a trailing initial after
+      the first name still reads as one first-name unit)
+    - 'van Gogh, Vincent' / 'de la Cruz, Maria' -> a multi-word surname before
+      the comma still swaps, as long as the part after it is a single name
     - Extra whitespace is stripped.
+
+    A comma is only treated as a 'Last, First' separator when the value looks
+    like a single name written that way (issue #514): exactly one comma, the
+    part after it is not a suffix, and one of the following holds --
+    (a) the part after the comma is a single token ('van Gogh, Vincent');
+    (b) every token of the part after the comma beyond the first is itself an
+        initial, so a trailing middle name/initial doesn't stop the swap
+        ('Le Guin, Ursula K.', 'Modesitt, L. E.'); or
+    (c) the part before the comma is a single token, i.e. an ordinary
+        one-word surname ('Axis, Ann Marie').
+    A surname that is itself multiple words (condition (c) fails) only swaps
+    when the part after the comma also looks like one name via (a) or (b) --
+    a genuine surname like "Le Guin" or "van Gogh" clears that bar, while two
+    full names on either side of the comma do not. Anything else that
+    contains a comma is returned unchanged, with only whitespace collapsed --
+    never swapped or split -- because guessing wrong fabricates an author who
+    doesn't exist:
+    - a co-author list ('Ann Axis, Bob Bartleby' -- neither side is a single
+      token nor an initials-only tail)
+    - a suffix ('Ann Axis, Jr.')
+    - an author with a narrator tacked on ('Ann Axis, Narrator Name')
+    - two or more commas, or names joined with '&' / ' and '
+    Splitting and re-normalizing multi-author strings is out of scope for
+    this fix; see issue #514.
     """
     if not author: return None
     author = author.strip()
     if not author: return None
 
-    if "," in author:
-        parts = author.split(",", 1)
-        first = parts[1].strip()
-        last = parts[0].strip()
+    if "," not in author:
+        return author
+
+    if author.count(",") == 1 and "&" not in author and " and " not in author.lower():
+        last, first = (part.strip() for part in author.split(",", 1))
         if first and last:
-            return f"{first} {last}"
-        return last or first
-    return author
+            is_suffix = first.lower() in _AUTHOR_SUFFIXES
+            if not is_suffix:
+                first_tokens = first.split()
+                last_tokens = last.split()
+                single_first_token = len(first_tokens) == 1
+                trailing_initials = len(first_tokens) >= 2 and all(
+                    _is_initial_token(t) for t in first_tokens[1:]
+                )
+                single_last_token = len(last_tokens) == 1
+                if single_first_token or trailing_initials or single_last_token:
+                    return f"{first} {last}"
+        else:
+            return last or first
+
+    return re.sub(r'\s+', ' ', author).strip()
 
 
 def normalize_series(series: str) -> Optional[str]:
