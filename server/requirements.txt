@@ -24,7 +24,7 @@ aiofiles==25.1.0
 # arg in the Dockerfile. Not needed when transcription is offloaded to a remote
 # (Jetson) worker.
 numpy>=2.5.3,<3
-tqdm>=4.66
+tqdm>=4.70.0
 ebooklib==0.20
 # Pinned deliberately, though both arrive transitively (issue #265). EPUB/OPF
 # parsing relies on lxml >= 5 defaulting to resolve_entities='internal', and
