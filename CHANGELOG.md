@@ -35,6 +35,14 @@ operator must do by hand rather than read about afterwards.
   `tandem-web:X.Y.Z`, plus `latest`. Pulling them is now a documented deploy route beside
   building from source (`docs/releasing.md`).
 
+### Fixed
+
+- `PATCH /api/library/ebooks/{id}`, `PATCH /api/library/audiobooks/{id}` and
+  `POST /api/library/pairs/{id}/resolve-discrepancies` now write metadata back to the EPUB or
+  audio file in a worker thread (`asyncio.to_thread`) instead of blocking the event loop, so
+  editing a book's metadata no longer stalls unrelated requests for the length of the file
+  rewrite.
+
 ## [0.1.0] - 2026-09-13
 
 The first tagged release. `0.1.0` is the version string the code has carried since the beginning,
