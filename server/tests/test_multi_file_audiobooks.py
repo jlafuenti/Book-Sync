@@ -109,6 +109,17 @@ def test_untagged_files_without_track_names_are_not_flagged(tmp_path):
     assert classify_folder(str(folder), names, _tags({})) == []
 
 
+def test_hidden_files_are_ignored_and_do_not_flag_a_folder(tmp_path):
+    """A macOS AppleDouble resource fork (`._01.mp3`) sitting beside the one real,
+    untagged track it shadows must not be counted as a second track -- both
+    names read as track-shaped, so an unfiltered pair would satisfy the
+    untagged-tracks branch and wrongly flag a single real file (issue #525)."""
+    folder = tmp_path / "Herbert" / "Dune"
+    names = ["01.mp3", "._01.mp3"]
+    _touch(folder, names)
+    assert classify_folder(str(folder), names, _tags({})) == []
+
+
 def test_a_single_audio_file_is_never_flagged(tmp_path):
     folder = tmp_path / "Herbert" / "Dune"
     names = ["01.mp3"]
@@ -260,6 +271,26 @@ async def test_dismissal_survives_a_rescan_until_the_folder_changes(db, library_
     row = (await _folder_rows(db))[0]
     assert row.dismissed is False
     assert row.file_count == 4
+
+
+async def test_a_hidden_track_does_not_flag_a_folder_and_the_real_track_still_imports(
+    db, library_dirs
+):
+    """A folder holding one real track plus a hidden AppleDouble resource fork
+    for it is one audiobook, not a flagged multi-file folder (issue #525) —
+    and Troubleshoot Library's multi-file listing is fed straight from the
+    `multi_file_audiobook_folders` rows a scan writes, so nothing spurious
+    reaches it either."""
+    _, audio_dir = library_dirs
+    folder = audio_dir / "Herbert" / "Dune"
+    _touch(folder, ["01.mp3", "._01.mp3"])
+
+    resp = await _scan(db)
+
+    audiobooks = (await db.execute(select(AudioBook))).scalars().all()
+    assert [a.filename for a in audiobooks] == ["01.mp3"]
+    assert await _folder_rows(db) == []
+    assert resp.multi_file_folders == 0
 
 
 async def test_targeted_scan_skips_a_file_inside_a_flagged_folder(db, library_dirs):

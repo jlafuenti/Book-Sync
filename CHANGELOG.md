@@ -35,6 +35,15 @@ operator must do by hand rather than read about afterwards.
   `tandem-web:X.Y.Z`, plus `latest`. Pulling them is now a documented deploy route beside
   building from source (`docs/releasing.md`).
 
+### Fixed
+
+- The library scan no longer descends into hidden (dot-prefixed) directories and files, or the
+  Synology `@eaDir`/`#recycle` system folders — a hand-made `.recyclebin/`, a macOS `._*`
+  resource fork or a hidden `.unimported-*` copy parked beside a real file could otherwise be
+  imported as its own book row. The multi-file audiobook detector and the targeted (post-upload)
+  scan use the same filter, so a hidden track can no longer make a normal folder look like a
+  multi-file audiobook either.
+
 ## [0.1.0] - 2026-09-13
 
 The first tagged release. `0.1.0` is the version string the code has carried since the beginning,
