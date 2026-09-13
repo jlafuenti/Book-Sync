@@ -25,6 +25,7 @@ import defusedxml.ElementTree as ET
 import pytest
 
 from services import tag_writer
+from services.metadata_extract import _read_embedded_metadata
 from tests.factories import write_epub
 
 DC = "{http://purl.org/dc/elements/1.1/}"
@@ -110,6 +111,34 @@ def test_no_series_on_the_book_leaves_the_existing_calibre_meta_alone(epub):
     meta = _metadata(epub)
     assert _dc(meta, "title") == ["Retitled"]
     assert _calibre(meta) == {"calibre:series": "Keep", "calibre:series_index": "3.0"}
+
+
+def test_an_empty_string_series_removes_the_calibre_series_and_index_metas(epub):
+    """Issue #526: PATCH .../ebooks/{id} with {"series": ""} is how a user
+    clears a series. Before this fix, `write_ebook_metadata` only touched the
+    calibre:series* metas when a series was *set*, so the old tags survived in
+    the OPF and the next scan's fill-empty-fields step read them straight back
+    onto the row — the clear never stuck.
+    """
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series="Old", series_index=1.0))
+    assert _calibre(_metadata(epub)) == {"calibre:series": "Old", "calibre:series_index": "1.0"}
+
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series=""))
+
+    assert _calibre(_metadata(epub)) == {}
+    # And the scan's embedded-metadata read — the actual consumer of these
+    # tags — must not resurrect the series from anywhere else in the OPF.
+    reread = _read_embedded_metadata(epub, "ebook")
+    assert reread.get("series") is None
+    assert reread.get("series_index") is None
+
+
+def test_a_set_series_still_round_trips_through_the_real_extractor(epub):
+    tag_writer.write_ebook_metadata(epub, _book(title="T", series="The Series", series_index=2.0))
+
+    reread = _read_embedded_metadata(epub, "ebook")
+    assert reread["series"] == "The Series"
+    assert reread["series_index"] == 2.0
 
 
 def test_the_opf_is_found_by_extension_when_container_xml_is_unreadable(tmp_path):

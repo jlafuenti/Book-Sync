@@ -139,24 +139,31 @@ def write_ebook_metadata(filepath: str, book) -> None:
         clear_dc_tag("language", getattr(book, 'language', None))
         clear_dc_tag("date", getattr(book, 'publish_year', None))
         
-        # Calibre series meta tags
-        if getattr(book, 'series', None):
-            # Remove existing series tags
+        # Calibre series meta tags. `None` means "not touched" (leave whatever
+        # is in the OPF alone); `""` means the user explicitly cleared the
+        # series and the calibre:series* metas must go, or the next scan's
+        # fill-empty-fields step reads them straight back onto the row and
+        # undoes the clear (issue #526) — the audio writer already treats an
+        # empty string this way, this makes the EPUB path match it.
+        book_series = getattr(book, 'series', None)
+        if book_series is not None:
+            # Remove existing series tags either way: cleared, or about to be
+            # replaced by the new value below.
             for meta_tag in list(metadata):
                 if meta_tag.tag.endswith('meta'):
                     name_attr = meta_tag.attrib.get('name')
                     if name_attr in ('calibre:series', 'calibre:series_index'):
                         metadata.remove(meta_tag)
-                        
-            # Add new ones
-            series_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
-            series_meta.attrib['name'] = 'calibre:series'
-            series_meta.attrib['content'] = str(book.series)
-            
-            if getattr(book, 'series_index', None) is not None:
-                index_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
-                index_meta.attrib['name'] = 'calibre:series_index'
-                index_meta.attrib['content'] = str(book.series_index)
+
+            if book_series:
+                series_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+                series_meta.attrib['name'] = 'calibre:series'
+                series_meta.attrib['content'] = str(book_series)
+
+                if getattr(book, 'series_index', None) is not None:
+                    index_meta = SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+                    index_meta.attrib['name'] = 'calibre:series_index'
+                    index_meta.attrib['content'] = str(book.series_index)
                 
         # Write modified OPF back to a new zip file, then replace original
         modified_opf = ET.tostring(root, encoding='utf-8', xml_declaration=True)
