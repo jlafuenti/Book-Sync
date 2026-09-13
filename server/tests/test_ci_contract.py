@@ -194,6 +194,11 @@ _NOT_TEST_SUITES = {
     # account-deletion URL are the two pages Play reads, so an unmerged edit
     # would be live on a legally meaningful page.
     "publish-site.yml",
+    # A PR gate, not a test suite: it diffs a pull request against its base to
+    # check CHANGELOG.md was updated. A push to main has no base to diff, and by
+    # then the PR that produced it has already passed. Its own trigger rules are
+    # pinned in test_changelog_gate.py.
+    "changelog.yml",
 }
 
 

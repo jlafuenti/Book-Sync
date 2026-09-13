@@ -181,58 +181,44 @@ corresponding source. Keep that in mind if you are packaging this for someone el
 
 ## Branch protection (maintainer)
 
-Branch protection cannot live in a file in the repo, so the intended settings are recorded here.
-On a private free repo the API returns 403; the settings become available the moment the repo is
-public, which is exactly when nobody will remember what they were.
+Branch protection cannot live in a file in the repo, so the settings are recorded here.
 
-**Settings → Branches → `main`:**
+**`main` is protected by a repository ruleset named `main`**, not by classic branch protection —
+`GET repos/jlafuenti/Book-Sync/branches/main/protection` answers "Branch not protected", and that is
+expected. Do not run the classic `PUT .../branches/main/protection` endpoint: it would add a
+second, separate protection layer rather than change this one.
 
-- Require a pull request before merging — **0 required approvals** (single maintainer; the point
-  is to stop direct pushes, not to invent a reviewer).
-- Dismiss stale approvals when new commits are pushed.
-- Require conversation resolution before merging.
-- Require linear history.
-- **Block force pushes** and **block deletions**. This is the one that makes a mistyped
+**Settings → Rules → Rulesets → `main`** (targets the default branch, enforcement active):
+
+- **Block deletions** and **block force pushes** — the one that makes a mistyped
   `git push --force` recoverable.
-- Do not enforce for administrators — leaves an emergency path; everything above still applies to
-  the normal flow.
-- Required status checks: **`pytest`**, **`audit`**, **`migrations`** (Server tests) and
-  **`gitleaks`** (Secret scan).
+- **Require a pull request** — **0 required approvals** (single maintainer; the point is to stop
+  direct pushes, not to invent a reviewer). Merge and squash are both allowed; PRs here are merged
+  with a merge commit, which is why the ruleset does not require linear history.
+- **Required status checks**, `strict` off:
+  **`gitleaks`**, **`pytest`**, **`audit`**, **`migrations`**, **`vitest`**, **`unit-tests`**,
+  **`jetson-tests`** and **`changelog`**.
 
-One wrinkle worth knowing before you type that: **the Server and Jetson workflows both have a job
-called `pytest`**, and a required status check is matched by job name alone, not by workflow. The
-server job runs on every PR so the requirement is always satisfiable, but if that ambiguity ever
-matters, give one of them an explicit `name:` first and require that instead.
+**Every required check must run on every pull request.** A required check whose workflow is
+path-filtered never reports on a PR that touches none of its paths, and GitHub then blocks that PR
+forever on a status that will never arrive. None of the workflows above has a `paths:` filter for
+that reason; `changelog` in particular always runs and decides from the diff itself. Keep it that
+way when adding a check.
 
-**Do not require `vitest`, `unit-tests` or the Jetson `pytest`.** All three workflows are
-path-filtered (`web/**`, `android/**`, `jetson/**`), so on a PR that touches none of those paths
-the check never reports and GitHub blocks the merge on a status that will never arrive. Either
-leave them advisory, or convert a workflow to always-run with a no-op guard job first and then
-require it.
+**`changelog` can only be added once it has reported.** GitHub only offers a check in the ruleset
+after it has run at least once, so it is added after the PR that introduced it
+(`.github/workflows/changelog.yml`) had its first run.
+
+To change the required checks, read the ruleset, edit it, and write it back:
 
 ```bash
-gh api -X PUT repos/jlafuenti/Book-Sync/branches/main/protection --input - <<'JSON'
-{
-  "required_status_checks": {
-    "strict": false,
-    "contexts": ["pytest", "audit", "migrations", "gitleaks"]
-  },
-  "enforce_admins": false,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 0,
-    "dismiss_stale_reviews": true,
-    "require_code_owner_reviews": false
-  },
-  "restrictions": null,
-  "required_linear_history": true,
-  "allow_force_pushes": false,
-  "allow_deletions": false,
-  "required_conversation_resolution": true
-}
-JSON
+id=$(gh api repos/jlafuenti/Book-Sync/rulesets --jq '.[] | select(.name=="main") | .id')
+gh api repos/jlafuenti/Book-Sync/rulesets/$id > ruleset.json
+# edit the "required_status_checks" list in ruleset.json, then:
+gh api -X PUT repos/jlafuenti/Book-Sync/rulesets/$id --input ruleset.json
 ```
 
-`"strict": false` on purpose: `strict` requires every branch to be up to date with `main` before
+`strict` is off on purpose (`strict_required_status_checks_policy: false` in the ruleset): it requires every branch to be up to date with `main` before
 merging, which on a one-person repo means rebasing after each merge for no added safety.
 
 Two settings that are not branch protection but belong to the same pass, both under
