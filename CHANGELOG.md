@@ -37,8 +37,6 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
-### Fixed
-
 - `PATCH /api/library/ebooks/{id}`, `PATCH /api/library/audiobooks/{id}` and
   `POST /api/library/pairs/{id}/resolve-discrepancies` now write metadata back to the EPUB or
   audio file in a worker thread (`asyncio.to_thread`) instead of blocking the event loop, so
