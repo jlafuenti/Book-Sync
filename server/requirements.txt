@@ -49,7 +49,7 @@ packaging==26.3
 markdownify==1.2.3
 slowapi==0.1.10
 audible==0.12.0
-audible-cli>=0.3.0,<1.0
+audible-cli>=0.6.0,<1.0
 cryptography==50.0.1
 # zoneinfo needs an IANA database. Linux images usually ship one, Windows never
 # does, and python:*-slim can't be relied on — pin it so the off-hours
