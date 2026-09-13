@@ -2,4 +2,4 @@ fastapi>=0.141.1
 uvicorn[standard]>=0.52.4
 python-multipart>=0.0.9
 nltk>=3.10.3
-mutagen>=1.47
+mutagen>=1.48.1
