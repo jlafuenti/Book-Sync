@@ -5,7 +5,7 @@ All notable changes to Tandem are recorded here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 One version number covers the whole repository — server, web and Android move together. It is
-written out in three files by hand; [docs/releasing.md](docs/releasing.md) says which, and a test
+written out in four files by hand; [docs/releasing.md](docs/releasing.md) says which, and a test
 fails if they drift apart. `API_VERSION` in [`server/version.py`](server/version.py) is a
 *different* number with its own rule: it is the client-compatibility contract and moves only on a
 breaking API change.
@@ -15,6 +15,16 @@ irreversible migrations, removed endpoints, a minimum app version for a given se
 operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
+
+### Added
+
+- The System page says when the transcription worker is behind the server. The Jetson worker
+  now reports the release it was built from (`worker_version` on `/v1/health`, the fourth of
+  the version literals a release bumps together); the server asks its configured worker every
+  few hours and on every change of the worker URL, and the Updates card shows "The transcription
+  worker is on X — this server is Y" with the rebuild steps. A worker that predates the field is
+  reported as not reporting a version, never as current. This is a call to the operator's own
+  worker and is not gated by the GitHub update-check toggle.
 
 ### Changed
 

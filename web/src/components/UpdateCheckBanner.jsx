@@ -35,9 +35,50 @@ function Quiet({ children }) {
     )
 }
 
-export default function UpdateCheckBanner({ status, onEnable, onDecline }) {
-    if (!status) return null
+// The transcription worker (jetson/server.py) is deployed by hand, separately
+// from the server. It reports the release it was built from, the server
+// compares it with its own, and this says when the worker is behind. It is the
+// operator's own machine, so it renders whether or not the GitHub check is on.
+const WORKER_QUIET = {
+    unreachable: "Couldn't reach the transcription worker to read its version. It will try again later.",
+    unauthorized: "The transcription worker rejected this server's key, so its version could not be read — check the shared secret under Transcription.",
+    unreported: 'The transcription worker does not report a version; it predates this check. Rebuild it from the current release to be sure it matches.',
+    unrecognised_version: "The transcription worker reported a version that wasn't recognised.",
+}
 
+function WorkerLine({ worker }) {
+    if (!worker || !worker.configured) return null
+
+    if (worker.status === 'behind') {
+        return (
+            <div
+                className="alert alert-info"
+                role="status"
+                aria-label="Transcription worker"
+                style={{ marginBottom: 16, flexWrap: 'wrap' }}
+            >
+                <div style={{ flex: 1, minWidth: 220 }}>
+                    <strong>The transcription worker is on {worker.version}</strong>
+                    {' '}— this server is {worker.server_version}.
+                    <div style={{ fontSize: '0.85rem', marginTop: 4 }}>
+                        On the worker, check out the same release and rebuild:{' '}
+                        <code>git pull</code> then <code>docker compose up -d --build</code>{' '}
+                        (see <code>jetson/README.md</code>).
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    if (worker.status === 'current') {
+        return <Quiet>Transcription worker up to date · {worker.version}</Quiet>
+    }
+
+    const quiet = WORKER_QUIET[worker.reason]
+    return quiet ? <Quiet>{quiet}</Quiet> : null
+}
+
+function ReleaseLine({ status, onEnable, onDecline }) {
     if (!status.enabled && !status.prompted) {
         return (
             <div className="alert alert-info" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
@@ -88,4 +129,14 @@ export default function UpdateCheckBanner({ status, onEnable, onDecline }) {
 
     const quiet = QUIET_REASONS[status.reason]
     return quiet ? <Quiet>{quiet}</Quiet> : null
+}
+
+export default function UpdateCheckBanner({ status, onEnable, onDecline }) {
+    if (!status) return null
+    return (
+        <>
+            <ReleaseLine status={status} onEnable={onEnable} onDecline={onDecline} />
+            <WorkerLine worker={status.worker} />
+        </>
+    )
 }

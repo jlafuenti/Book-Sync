@@ -207,6 +207,21 @@ async def get_backup_status(_: User = Depends(get_admin_user)):
     return BackupStatus(**backup_service.get_status())
 
 
+class WorkerVersionStatus(StrictResponse):
+    """The transcription worker's version against this server's.
+
+    `status` is behind | current | unknown; `reason` says why unknown
+    (not_configured, unreachable, unauthorized, unreported, unrecognised_version).
+    """
+
+    configured: bool
+    status: str
+    reason: Optional[str]
+    version: Optional[str]
+    server_version: str
+    checked_at: Optional[str]
+
+
 class UpdateCheckStatus(StrictResponse):
     """Whether a newer Tandem release is published (issue #463).
 
@@ -223,6 +238,7 @@ class UpdateCheckStatus(StrictResponse):
     latest_version: Optional[str]
     release_url: Optional[str]
     checked_at: Optional[str]
+    worker: WorkerVersionStatus
 
 
 @router.get("/update", response_model=UpdateCheckStatus)

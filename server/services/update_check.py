@@ -36,6 +36,7 @@ from sqlalchemy import select
 
 from database import async_session
 from models.settings import SystemSetting
+from services import credentials as credential_store
 from utils import utcnow
 from version import APP_VERSION
 
@@ -70,6 +71,154 @@ Reason = Literal[
 
 def running_version() -> str:
     return APP_VERSION
+
+
+# ---------------------------------------------------------------------------
+# The transcription worker's version
+# ---------------------------------------------------------------------------
+#
+# The Jetson worker (jetson/server.py) is deployed by hand, separately from the
+# server, and nothing compared the two: a worker left behind after a server
+# upgrade fails in ways that do not name the cause. It reports the release it
+# was built from as `worker_version` on `/v1/health`; this asks for it on every
+# tick and the System page says when it is behind the server.
+#
+# Not gated by `update_check_enabled`. That toggle exists because GitHub is a
+# third party (docs/privacy.md); the worker is the operator's own machine and
+# the server already calls it for every transcription job.
+
+WORKER_HEALTH_PATH = "/v1/health"
+
+WorkerStatus = Literal["behind", "current", "unknown"]
+WorkerReason = Literal[
+    "not_configured",
+    "unreachable",
+    "unauthorized",
+    "unreported",
+    "unrecognised_version",
+]
+
+
+def worker_status(server: str, worker: Optional[str]) -> WorkerStatus:
+    """Whether the worker is behind the server it serves.
+
+    A worker *ahead* of the server is "current": the operator is mid-upgrade and
+    the server is the one about to move. Anything that does not parse is
+    "unknown", never "current" — the point is to catch stale workers.
+    """
+    current = _parse(server)
+    reported = _parse(worker)
+    if current is None or reported is None:
+        return "unknown"
+    return "behind" if reported < current else "current"
+
+
+def _initial_worker_state() -> dict[str, Any]:
+    return {
+        "configured": False,
+        "status": "unknown",
+        "reason": "not_configured",
+        "version": None,
+        "checked_at": None,
+    }
+
+
+_worker_state: dict[str, Any] = _initial_worker_state()
+
+
+def _record_worker_failure(reason: WorkerReason) -> None:
+    """Same rule as `_record_failure`: a blip must not erase a known answer."""
+    _worker_state["configured"] = True
+    _worker_state["checked_at"] = _now_iso()
+    if _worker_state["status"] in ("behind", "current"):
+        return
+    _worker_state["status"] = "unknown"
+    _worker_state["reason"] = reason
+    _worker_state["version"] = None
+
+
+async def _worker_target(db) -> tuple[str, str]:
+    """(url, key) of the configured worker, or ("", "") when there is none.
+
+    Both live where the transcription provider reads them: the URL in
+    `system_settings`, the shared secret in the credential store.
+    """
+    row = (await db.execute(
+        select(SystemSetting).where(SystemSetting.key == "transcription_remote_url")
+    )).scalar_one_or_none()
+    url = str(row.value).strip() if row is not None and row.value else ""
+    if not url:
+        return "", ""
+    try:
+        key = await credential_store.get_credential(db, "transcription_remote") or ""
+    except Exception as e:  # pragma: no cover - a broken credential store is its own alarm
+        logger.info(f"[update-check] worker key unavailable: {e}")
+        key = ""
+    return url.rstrip("/"), key
+
+
+async def probe_worker(url: str, key: str) -> None:
+    """Ask the worker once for its version and record the answer. Never raises."""
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(url + WORKER_HEALTH_PATH, headers=headers)
+    except httpx.HTTPError as e:
+        logger.info(f"[update-check] worker unreachable: {e}")
+        _record_worker_failure("unreachable")
+        return
+
+    if response.status_code in (401, 403):
+        _record_worker_failure("unauthorized")
+        return
+    if response.status_code != 200:
+        logger.info(f"[update-check] worker answered {response.status_code}")
+        _record_worker_failure("unreachable")
+        return
+
+    try:
+        body = response.json()
+    except ValueError:
+        _record_worker_failure("unreachable")
+        return
+
+    reported = body.get("worker_version") if isinstance(body, dict) else None
+    if not reported:
+        # A worker built before the field existed. Not "current": the whole
+        # point is to catch a stale worker, and this one is at least that old.
+        _record_worker_failure("unreported")
+        return
+
+    status = worker_status(APP_VERSION, str(reported))
+    if status == "unknown":
+        _record_worker_failure("unrecognised_version")
+        return
+
+    _worker_state.update({
+        "configured": True,
+        "status": status,
+        "reason": None,
+        "version": str(_parse(str(reported))),
+        "checked_at": _now_iso(),
+    })
+
+
+def worker_snapshot() -> dict[str, Any]:
+    return {**_worker_state, "server_version": APP_VERSION}
+
+
+async def _probe_configured_worker() -> None:
+    async with async_session() as db:
+        url, key = await _worker_target(db)
+    if url:
+        await probe_worker(url, key)
+    else:
+        _worker_state.update(_initial_worker_state())
+
+
+def kick_worker() -> asyncio.Task:
+    """Probe the worker once in the background — for the moment its URL is saved."""
+    return asyncio.create_task(_probe_configured_worker())
 
 
 def _parse(version: Optional[str]) -> Optional[Version]:
@@ -211,6 +360,7 @@ def get_status(enabled: bool, prompted: bool) -> dict[str, Any]:
         "enabled": enabled,
         "prompted": prompted,
         "running_version": APP_VERSION,
+        "worker": worker_snapshot(),
     }
     if not enabled:
         return {
@@ -236,8 +386,13 @@ def kick() -> asyncio.Task:
 async def _tick() -> None:
     async with async_session() as db:
         enabled = await is_enabled(db)
+        url, key = await _worker_target(db)
     if enabled:
         await check_now()
+    if url:
+        await probe_worker(url, key)
+    else:
+        _worker_state.update(_initial_worker_state())
 
 
 _task: Optional[asyncio.Task] = None

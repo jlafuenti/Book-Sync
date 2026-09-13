@@ -19,11 +19,12 @@ from version import APP_VERSION
 @pytest.fixture(autouse=True)
 def _fresh_state(monkeypatch):
     monkeypatch.setattr(uc, "_state", uc._initial_state())
+    monkeypatch.setattr(uc, "_worker_state", uc._initial_worker_state())
 
 
 _STATUS_KEYS = {
     "enabled", "prompted", "status", "reason",
-    "running_version", "latest_version", "release_url", "checked_at",
+    "running_version", "latest_version", "release_url", "checked_at", "worker",
 }
 
 
@@ -176,6 +177,60 @@ async def test_other_saves_do_not_run_a_check(
     admin = await make_user(username="admin", role="admin")
     async with make_client(settings_router.router) as c:
         r = await c.put("/api/settings/", json=payload, headers=auth_header(admin))
+
+    assert r.status_code == 200
+    assert kicked == []
+
+
+async def test_the_status_carries_the_transcription_worker(
+    make_client, make_user, auth_header, db,
+):
+    """The System page reads the worker's version from the same endpoint."""
+    uc._worker_state.update({
+        "configured": True, "status": "behind", "reason": None,
+        "version": "0.0.1", "checked_at": "2026-09-13T00:00:00Z",
+    })
+
+    admin = await make_user(username="admin", role="admin")
+    async with make_client(stats.router) as c:
+        r = await c.get("/api/stats/update", headers=auth_header(admin))
+
+    worker = r.json()["worker"]
+    assert worker["configured"] is True
+    assert worker["status"] == "behind"
+    assert worker["version"] == "0.0.1"
+    assert worker["server_version"] == uc.running_version()
+
+
+async def test_saving_a_worker_url_probes_it_once(
+    make_client, make_user, auth_header, monkeypatch,
+):
+    kicked = []
+    monkeypatch.setattr(uc, "kick_worker", lambda: kicked.append(True))
+
+    admin = await make_user(username="admin", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put(
+            "/api/settings/",
+            json={"transcription_remote_url": "http://worker.example:9000"},
+            headers=auth_header(admin),
+        )
+
+    assert r.status_code == 200
+    assert kicked == [True]
+
+
+async def test_an_unrelated_save_does_not_probe_the_worker(
+    make_client, make_user, auth_header, monkeypatch,
+):
+    kicked = []
+    monkeypatch.setattr(uc, "kick_worker", lambda: kicked.append(True))
+
+    admin = await make_user(username="admin", role="admin")
+    async with make_client(settings_router.router) as c:
+        r = await c.put(
+            "/api/settings/", json={"auto_transcribe_enabled": True}, headers=auth_header(admin),
+        )
 
     assert r.status_code == 200
     assert kicked == []

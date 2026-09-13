@@ -5522,6 +5522,9 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerVersionStatus"
           }
         },
         "required": [
@@ -5532,7 +5535,8 @@
           "running_version",
           "latest_version",
           "release_url",
-          "checked_at"
+          "checked_at",
+          "worker"
         ],
         "title": "UpdateCheckStatus",
         "type": "object"
@@ -5880,6 +5884,67 @@
           "format"
         ],
         "title": "VerifyRow",
+        "type": "object"
+      },
+      "WorkerVersionStatus": {
+        "additionalProperties": false,
+        "description": "The transcription worker's version against this server's.\n\n`status` is behind | current | unknown; `reason` says why unknown\n(not_configured, unreachable, unauthorized, unreported, unrecognised_version).",
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "server_version": {
+            "title": "Server Version",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "configured",
+          "status",
+          "reason",
+          "version",
+          "server_version",
+          "checked_at"
+        ],
+        "title": "WorkerVersionStatus",
         "type": "object"
       }
     },

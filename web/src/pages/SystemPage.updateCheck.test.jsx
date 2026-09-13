@@ -68,6 +68,7 @@ const status = (overrides) => ({
     latest_version: null,
     release_url: null,
     checked_at: null,
+    worker: { configured: false, status: 'unknown', reason: 'not_configured', version: null, server_version: '0.1.0', checked_at: null },
     ...overrides,
 })
 

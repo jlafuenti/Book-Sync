@@ -218,3 +218,28 @@ watch -n 5 'free -h; curl -s -H "Authorization: Bearer $TRANSCRIPTION_API_KEY" l
   If `docker compose up` had already run once before you fixed the name conflict, it may have
   created empty `<old-dirname>_whisper_models` / `<old-dirname>_booksync_checkpoints` volumes —
   safe to `docker volume rm` those once the real deployment is confirmed working.
+
+## Keeping the worker in step with the server
+
+The worker reports the release it was built from as `worker_version` on `/v1/health`
+(`WORKER_VERSION` in `server.py`, one of the four version literals a release bumps together —
+see `docs/releasing.md`). The main server asks for it every few hours, and again whenever the
+worker URL is saved, and the System page's Updates card says when the worker is **behind** the
+server:
+
+> The transcription worker is on 0.1.0 — this server is 0.2.0.
+
+Upgrade the worker the same way it was installed: on the Jetson, check out the same tag the
+server runs (or `git pull` if it tracks `main`) and rebuild:
+
+```bash
+cd ~/booksync-transcriber        # wherever the checkout lives
+git fetch --tags && git checkout v0.2.0
+docker compose up -d --build
+```
+
+Then confirm with the health endpoint — `worker_version` should match the server's
+`app_version` from `/api/health`. A worker built before this field existed shows on the System
+page as "does not report a version"; rebuilding it from the current release clears that. A
+worker *ahead* of the server is not flagged — that is the normal state halfway through an
+upgrade, when the worker was rebuilt first.

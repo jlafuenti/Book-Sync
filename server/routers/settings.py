@@ -368,6 +368,10 @@ async def update_settings(
     # and this request must not wait on GitHub.
     if str(new_settings.get("update_check_enabled", "")).lower() == "true":
         update_check.kick()
+    # A new worker URL is probed once straight away for the same reason; the
+    # version line on the System page would otherwise lag the setting by hours.
+    if "transcription_remote_url" in new_settings:
+        update_check.kick_worker()
     # The caller is an admin (get_admin_user above), so echo the full dict —
     # not the reader allow-list they would get from the route function.
     return await _all_settings(db)

@@ -45,6 +45,14 @@ except LookupError:
 # ---------------------------------------------------------------------------
 # Configuration via environment variables
 # ---------------------------------------------------------------------------
+# The release this worker was built from — one of the four version literals
+# docs/releasing.md bumps together (server/version.py APP_VERSION,
+# web/package.json, the Android versionName, and this). Reported by
+# /v1/health as `worker_version`; the main server compares it with its own
+# and the System page says when the worker is behind and needs a rebuild.
+# A contract test on the server side fails the build if the four disagree.
+WORKER_VERSION = "0.1.0"
+
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
@@ -1104,7 +1112,7 @@ def _format_duration(seconds: float) -> str:
 app = FastAPI(
     title="Tandem Transcription Server",
     description="faster-whisper transcription API for Jetson Orin Nano",
-    version="1.0.0",
+    version=WORKER_VERSION,
 )
 
 # No CORS middleware: the browser never talks to this server directly. The
@@ -1305,6 +1313,9 @@ def health():
 
     return {
         "status": "healthy",
+        # The release this worker was built from; the main server's update
+        # check reads it and the System page says when it is behind.
+        "worker_version": WORKER_VERSION,
         "model": WHISPER_MODEL,
         "compute_type": WHISPER_COMPUTE_TYPE,
         "device": WHISPER_DEVICE,

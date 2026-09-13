@@ -90,6 +90,10 @@ enables it**, and the System page asks before it does anything.
 - GitHub sees the **server's** address, as with any web request. Your phone is not
   involved and your device's address is not sent.
 - Turning it off stops the requests entirely; nothing is sent while it is off.
+- Separately, and whatever that setting says, the server asks **its own transcription worker**
+  — the machine its operator configured under Transcription — which version it runs, so the
+  System page can say when the worker needs updating. That is a request to the operator's own
+  machine, the same one every transcription already goes to; nothing goes anywhere else.
 
 ## What is stored on your device
 
