@@ -350,7 +350,7 @@ dependencies {
     // so taking it would leave the test artifact ahead of the runtime it patches.
     // The suite happened to pass that way, which is exactly why this is pinned
     // rather than left to chance. Move both together when core moves.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))

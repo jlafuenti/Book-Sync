@@ -536,6 +536,9 @@ def _dependabot_ignores() -> dict[tuple[str, str], list[str]]:
     ("docker", "/server", "python"),
     ("docker", "/web", "node"),
     ("docker-compose", "/", "postgres"),
+    # The test artifact must not run ahead of the coroutines-core it patches;
+    # the bot proposed it alone inside the android group twice (#457, #506).
+    ("gradle", "/android", "org.jetbrains.kotlinx:kotlinx-coroutines-test"),
 ])
 def test_dependabot_does_not_move_a_pinned_runtime_line_by_itself(ecosystem, directory, dependency):
     """Python follows .python-version and CI; Node stays on the active LTS line

@@ -53,6 +53,12 @@ updates:
     groups:
       android-minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # kotlinx-coroutines-test must not run ahead of the kotlinx-coroutines-core
+      # it patches (android/app/build.gradle.kts explains). Nothing moves core,
+      # so the bot keeps proposing the test artifact alone inside the group.
+      # Move both together by hand when core moves.
+      - dependency-name: "org.jetbrains.kotlinx:kotlinx-coroutines-test"
 
   # Keeps the SHA pins in .github/workflows/ current. Without this, pinning to a
   # commit means the actions silently stop receiving upstream fixes — the pins
