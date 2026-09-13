@@ -474,6 +474,81 @@ def test_ci_tests_the_web_app_on_the_image_s_node_line():
 
 
 # ---------------------------------------------------------------------------
+# The server image runs the Python line the suite is tested on
+# ---------------------------------------------------------------------------
+#
+# Three places name the server's Python: `server/.python-version` (what
+# setup-testenv.sh provisions), the `python-version` in tests.yml, and the
+# `FROM python:<line>-slim` in server/Dockerfile. Dependabot's docker block
+# proposed `python:3.14-slim` the hour it was enabled; taking it alone would
+# have shipped an image on a Python the suite had never run on. The line moves
+# in one PR that touches all three, and the Dependabot block ignores Python
+# minors and majors so the bot cannot move one of them by itself.
+
+
+def _python_version_file() -> str:
+    return _read("server/.python-version").strip()
+
+
+def _server_image_python_line() -> str:
+    match = re.search(r"^FROM python:(\d+\.\d+)-slim", _read("server/Dockerfile"), re.MULTILINE)
+    assert match, "server/Dockerfile has no `FROM python:<major>.<minor>-slim`"
+    return match.group(1)
+
+
+def _ci_python_lines() -> set[str]:
+    return set(re.findall(r'python-version:\s*"?(\d+\.\d+)', "\n".join(_workflow_lines("tests.yml"))))
+
+
+def test_the_server_image_runs_the_tested_python_line():
+    assert _server_image_python_line() == _python_version_file(), (
+        f"server/Dockerfile builds on python:{_server_image_python_line()}-slim but "
+        f"server/.python-version pins {_python_version_file()}; the suite has not "
+        "run on the image's Python. Move the three together (see docs/dependencies.md)."
+    )
+    assert _ci_python_lines() == {_python_version_file()}, (
+        f"tests.yml sets python-version {sorted(_ci_python_lines())} but "
+        f"server/.python-version pins {_python_version_file()}."
+    )
+
+
+def _dependabot_ignores() -> dict[tuple[str, str], list[str]]:
+    """(ecosystem, directory) -> the `dependency-name`s its block ignores."""
+    ignores: dict[tuple[str, str], list[str]] = {}
+    ecosystem = directory = None
+    for line in _read(_DEPENDABOT_REL).splitlines():
+        eco = re.match(r'^\s*-\s*package-ecosystem:\s*"?([^"\s]+)"?', line)
+        if eco:
+            ecosystem, directory = eco.group(1), None
+            continue
+        d = re.match(r'^\s*directory:\s*"?([^"\s]+)"?', line)
+        if d and ecosystem is not None and directory is None:
+            directory = d.group(1)
+            ignores.setdefault((ecosystem, directory), [])
+            continue
+        name = re.match(r'^\s*-\s*dependency-name:\s*"?([^"\s]+)"?', line)
+        if name and ecosystem is not None and directory is not None:
+            ignores[(ecosystem, directory)].append(name.group(1))
+    return ignores
+
+
+@pytest.mark.parametrize("ecosystem,directory,dependency", [
+    ("docker", "/server", "python"),
+    ("docker", "/web", "node"),
+    ("docker-compose", "/", "postgres"),
+])
+def test_dependabot_does_not_move_a_pinned_runtime_line_by_itself(ecosystem, directory, dependency):
+    """Python follows .python-version and CI; Node stays on the active LTS line
+    that CI also runs; a Postgres major is a planned migration. Dependabot may
+    still propose patch tags (`3.12.8-slim`), never the line."""
+    assert dependency in _dependabot_ignores().get((ecosystem, directory), []), (
+        f"{_DEPENDABOT_REL}: the `{ecosystem}` block for `{directory}` has no "
+        f"`ignore:` entry for `{dependency}`; the bot proposed the next line the "
+        "hour the block was enabled (#493, #494)."
+    )
+
+
+# ---------------------------------------------------------------------------
 # #189 — secret scanning
 # ---------------------------------------------------------------------------
 
