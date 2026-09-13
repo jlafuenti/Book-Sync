@@ -59,7 +59,17 @@ class Base(DeclarativeBase):
 
 
 async def get_db() -> AsyncSession:
-    """FastAPI dependency that yields a database session."""
+    """FastAPI dependency that yields a database session and commits after the handler.
+
+    Declare it as ``Depends(get_db, scope="function")`` (issue #524). Since
+    FastAPI 0.118 the code after a dependency's ``yield`` runs *after the
+    response has been sent* unless the dependency's scope is "function", so
+    with the default scope the commit below would happen after the client had
+    its 2xx: a read straight after a write returned the old row, and a commit
+    that failed had already been reported as success.
+    ``tests/test_get_db_scope.py`` walks every route and fails on a bare
+    ``Depends(get_db)``.
+    """
     async with async_session() as session:
         try:
             yield session

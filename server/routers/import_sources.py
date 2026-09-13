@@ -88,7 +88,7 @@ async def _serialize_source(db: AsyncSession, source_key: str) -> Dict[str, Any]
 
 @router.get("/sources", response_model=List[Dict[str, Any]])
 async def list_sources_endpoint(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     return [await _serialize_source(db, key) for key in list_sources().keys()]
@@ -104,7 +104,7 @@ class SourceConfigUpdate(BaseModel):
 async def update_source_config(
     source_key: str,
     payload: SourceConfigUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     if source_key not in list_sources():
@@ -125,7 +125,7 @@ async def update_source_config(
 @router.post("/sources/{source_key}/sync")
 async def trigger_sync(
     source_key: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     if source_key not in list_sources():
@@ -140,7 +140,7 @@ async def trigger_sync(
 @router.get("/sources/{source_key}/jobs")
 async def list_jobs(
     source_key: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     if source_key not in list_sources():
@@ -203,7 +203,7 @@ class AudibleLoginCompleteRequest(BaseModel):
 @router.post("/audible/login/complete")
 async def audible_login_complete(
     payload: AudibleLoginCompleteRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     try:
@@ -218,7 +218,7 @@ async def audible_login_complete(
 
 @router.post("/audible/disconnect")
 async def audible_disconnect(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     await AudibleSource.disconnect(db)
@@ -252,7 +252,7 @@ async def acsm_authorization_status(_: User = Depends(get_admin_user)):
 @router.post("/acsm/authorize")
 async def acsm_authorize(
     payload: AcsmAuthorizeRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     try:
@@ -281,7 +281,7 @@ async def acsm_authorize(
 
 @router.post("/acsm/deauthorize")
 async def acsm_deauthorize(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     deauthorize_adobe_id()
@@ -298,7 +298,7 @@ async def acsm_deauthorize(
 @router.post("/acsm/upload")
 async def acsm_upload(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     if not file.filename:

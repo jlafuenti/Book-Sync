@@ -145,7 +145,7 @@ def _scan_library_files(ebook_rows: List[dict], audiobook_rows: List[dict]) -> d
 
 @router.get("/issues", response_model=TroubleshootIssues)
 async def get_issues(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     # Editor: this page's own fix controls are editor-gated, so gating its data
     # at admin would lock out exactly the role it was built for (issue #283).
     #
@@ -453,7 +453,7 @@ class BulkDeleteRequest(BaseModel):
 async def bulk_delete(
     req: BulkDeleteRequest,
     delete_file: bool = Query(True),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     deleted = 0
@@ -470,7 +470,7 @@ async def replace_file(
     item_type: str,
     item_id: int,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Replace an item's underlying file in place (keeps the DB row and its
@@ -578,7 +578,7 @@ async def replace_file(
 @router.post("/repair-chapter-encoding/{item_id}", response_model=ChapterRepairResult)
 async def repair_chapter_encoding_endpoint(
     item_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Repair a single audiobook's non-UTF-8 chapter titles in place."""
@@ -603,7 +603,7 @@ class BulkRepairChapterEncodingRequest(BaseModel):
 @router.post("/bulk-repair-chapter-encoding", response_model=BulkChapterRepairResult)
 async def bulk_repair_chapter_encoding(
     req: BulkRepairChapterEncodingRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     import asyncio
@@ -625,7 +625,7 @@ async def bulk_repair_chapter_encoding(
 @router.post("/requeue/{pair_id}", response_model=RequeueResult)
 async def requeue_pair(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     pair = (await db.execute(select(BookPair).where(BookPair.id == pair_id))).scalar_one_or_none()
@@ -646,7 +646,7 @@ async def sync_map_audit(
     pair_id: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1, le=1000),
     flagged_only: bool = Query(False),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Which pairs' sync maps no longer describe the ebook on disk (issue #295).
@@ -736,7 +736,7 @@ async def _folder_or_404(db: AsyncSession, folder_id: int) -> MultiFileAudiobook
 @router.post("/multi-file/{folder_id}/dismiss", response_model=MultiFileDismissResult)
 async def multi_file_dismiss(
     folder_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Hide a flagged folder until its contents change (the next scan clears
@@ -751,7 +751,7 @@ async def multi_file_dismiss(
              response_model=MultiFileRemoveTracksResult)
 async def multi_file_remove_tracks(
     folder_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Delete the AudioBook rows that were imported one-per-track from this

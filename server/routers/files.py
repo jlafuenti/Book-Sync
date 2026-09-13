@@ -108,7 +108,7 @@ async def _resolve_media_user(
 async def get_user_for_cover(
     filename: str,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     token_query: Optional[str] = Query(None, alias="token"),
 ) -> User:
     """Auth dependency for cover serving: accepts a full access token via
@@ -119,7 +119,7 @@ async def get_user_for_cover(
 async def get_user_for_audiobook(
     audiobook_id: int,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     token_query: Optional[str] = Query(None, alias="token"),
 ) -> User:
     """Auth dependency for audio streaming: accepts a full access token via
@@ -147,7 +147,7 @@ MIME_TYPES = {
 @router.get("/ebook/{ebook_id}")
 async def download_ebook(
     ebook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Download an ebook file."""
@@ -192,7 +192,7 @@ async def get_cover(
 async def download_audiobook(
     audiobook_id: int,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_user_for_audiobook),
 ):
     """
@@ -275,7 +275,7 @@ def _range_response(
 @router.get("/syncmap/{pair_id}", response_model=SyncMapResponse)
 async def download_sync_map(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Download the sync map for a book pair (sentence-to-timestamp mapping)."""

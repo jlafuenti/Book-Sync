@@ -243,7 +243,7 @@ class UpdateCheckStatus(StrictResponse):
 
 @router.get("/update", response_model=UpdateCheckStatus)
 async def get_update_status(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """The update check's latest answer. Never contacts GitHub itself.
@@ -305,7 +305,7 @@ async def download_backup(backup_id: str, _: User = Depends(get_superadmin_user)
 @router.post("/restore")
 async def restore_backup(
     body: RestoreRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_superadmin_user),
 ):
     """Restore a selected backup's DB (and covers) over the live deployment."""

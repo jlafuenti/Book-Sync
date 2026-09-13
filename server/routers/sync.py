@@ -53,7 +53,7 @@ async def get_bookmark_log(
     # scoped to the caller's own bookmark, and throttling it would throttle
     # position sync itself.
     limit: int = Query(50, ge=1, le=BOOKMARK_LOG_MAX_LIMIT, description="Page size"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Get the bookmark change history for a book pair."""
@@ -83,7 +83,7 @@ async def get_bookmark_log(
 
 @router.get("/progress", response_model=List[ProgressResponse])
 async def get_all_progress(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Get all progress records for the current user, each carrying `source`.
@@ -132,7 +132,7 @@ async def get_all_progress(
 async def get_progress(
     media_type: ProgressType,
     media_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """The user's progress for a piece of media, or 204 when there is none.
@@ -254,7 +254,7 @@ async def _reset_position(db: AsyncSession, user_id: int, ref) -> None:
 async def reset_position(
     scope: PositionScope,
     ident: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Clear the user's position for a scope — the canonical reset.
@@ -275,7 +275,7 @@ async def reset_position(
 @router.delete("/progress/pair/{pair_id}")
 async def reset_pair_progress(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Alias for `DELETE /position/pair/{id}`, kept so existing clients don't
@@ -304,7 +304,7 @@ from services.sync_engine import audio_to_epub as _audio_to_epub  # noqa: E402
 async def match_text_to_audio(
     pair_id: int,
     body: TextMatchRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Match extracted EPUB text to an audio position using the sync map."""
@@ -340,7 +340,7 @@ async def match_text_to_audio(
 async def audio_position_to_epub(
     pair_id: int,
     audio_ms: int = Query(..., ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Resolve an audio position to its EPUB coordinates through the sync map.
@@ -398,7 +398,7 @@ async def audio_position_to_epub(
 async def get_position(
     scope: PositionScope,
     ident: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """The canonical position, or 204 when the user has none.
@@ -428,7 +428,7 @@ async def put_position(
     scope: PositionScope,
     ident: int,
     update: PositionUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Apply a whole position atomically.
