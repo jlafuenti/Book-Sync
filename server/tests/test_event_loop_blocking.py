@@ -209,3 +209,110 @@ async def test_the_scan_walks_the_library_off_the_event_loop(db, tmp_path, monke
 
     assert recorder.called, "the library was never walked"
     assert recorder.always_off_loop, "os.walk ran on the event loop thread"
+
+
+# ---------------------------------------------------------------------------
+# Metadata PATCH and resolve-discrepancies write files off the event loop too
+# (issue #523).
+# ---------------------------------------------------------------------------
+#
+# `_write_ebook_metadata` rewrites every entry of the EPUB zip and
+# `_write_audiobook_metadata` opens the file with mutagen and saves it, which
+# for an MP3 whose ID3 padding is too small rewrites the whole file. Both were
+# called bare from inside the `async def` handler -- the same shape the tests
+# above already pin for the scan/ingest path, just on the manual-edit path
+# instead. The sibling `/enrich-abs` endpoints got this right already
+# (`await asyncio.to_thread(write_metadata_to_file, ...)`); these three call
+# sites are the ones that did not.
+
+
+async def test_ebook_patch_writes_metadata_off_the_event_loop(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    from models.book import EBook
+    from routers import library
+
+    user = await make_user(username="patch-eb", role="editor")
+    book = EBook(title="Before", filename="b.epub", file_path="/x/eloop/b.epub")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    recorder = ThreadRecorder()
+    monkeypatch.setattr(library, "_write_ebook_metadata", lambda *a, **k: recorder.note())
+
+    async with make_client(library.router) as c:
+        resp = await c.patch(
+            f"/api/library/ebooks/{book.id}",
+            json={"title": "After"},
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert recorder.called, "_write_ebook_metadata was never called"
+    assert recorder.always_off_loop, "_write_ebook_metadata ran on the event loop thread"
+
+
+async def test_audiobook_patch_writes_metadata_off_the_event_loop(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    from models.book import AudioBook
+    from routers import library
+
+    user = await make_user(username="patch-ab", role="editor")
+    book = AudioBook(title="Before", filename="b.m4b", file_path="/x/eloop/b.m4b")
+    db.add(book)
+    await db.commit()
+    await db.refresh(book)
+
+    recorder = ThreadRecorder()
+    monkeypatch.setattr(library, "_write_audiobook_metadata", lambda *a, **k: recorder.note())
+
+    async with make_client(library.router) as c:
+        resp = await c.patch(
+            f"/api/library/audiobooks/{book.id}",
+            json={"title": "After"},
+            headers=auth_header(user),
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert recorder.called, "_write_audiobook_metadata was never called"
+    assert recorder.always_off_loop, "_write_audiobook_metadata ran on the event loop thread"
+
+
+async def test_resolve_discrepancies_writes_metadata_off_the_event_loop(
+    db, make_client, make_user, auth_header, monkeypatch
+):
+    """Both halves of a pair can be rewritten by one resolve call; both must
+    cross to a thread. This must not disturb the commit-before-write ordering
+    pinned by `tests/test_request_transactions.py` (issue #259)."""
+    from routers import library
+    from tests.factories import make_book_pair
+
+    user = await make_user(username="resolve-disc", role="editor")
+    pair = await make_book_pair(db, ebook_title="Old title", audiobook_title="Old title")
+
+    ebook_recorder = ThreadRecorder()
+    audio_recorder = ThreadRecorder()
+    monkeypatch.setattr(
+        library, "_write_ebook_metadata", lambda *a, **k: ebook_recorder.note()
+    )
+    monkeypatch.setattr(
+        library, "_write_audiobook_metadata", lambda *a, **k: audio_recorder.note()
+    )
+
+    async with make_client(library.router) as c:
+        resp = await c.post(
+            f"/api/library/pairs/{pair.id}/resolve-discrepancies",
+            headers=auth_header(user),
+            json={
+                "ebook_updates": {"title": "New title"},
+                "audiobook_updates": {"title": "New title"},
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert ebook_recorder.called, "_write_ebook_metadata was never called"
+    assert ebook_recorder.always_off_loop, "_write_ebook_metadata ran on the event loop thread"
+    assert audio_recorder.called, "_write_audiobook_metadata was never called"
+    assert audio_recorder.always_off_loop, "_write_audiobook_metadata ran on the event loop thread"
