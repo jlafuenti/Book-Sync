@@ -33,6 +33,14 @@ _TEST_SUFFIXES = (".test.js", ".test.jsx", ".test.ts", ".test.tsx")
 SKIP_LABEL = "skip-changelog"
 CHANGELOG = "CHANGELOG.md"
 
+# Bots that open PRs against deployable files and cannot write a changelog line.
+# Found by running this gate over real history before it was made required: nine
+# Dependabot bumps to requirements/package files would each have stalled until a
+# human intervened — for security updates, exactly the delay Dependabot removes.
+# Dependency updates are summarised in the release notes when a release is cut.
+# The exact identity only: `dependabot` alone is an ordinary account name.
+EXEMPT_AUTHORS = frozenset({"dependabot[bot]"})
+
 
 def _is_deployable(path: str) -> bool:
     path = path.strip()
@@ -48,13 +56,15 @@ def changelog_required(changed: list[str]) -> bool:
     return any(_is_deployable(p) for p in changed)
 
 
-def passes(changed: list[str], labels: list[str]) -> bool:
+def passes(changed: list[str], labels: list[str], author: str | None = None) -> bool:
     """The verdict for a PR.
 
-    Only the root `CHANGELOG.md` counts, and only the exact label skips: a
-    near-miss either way would disable the gate without anyone noticing.
+    Only the root `CHANGELOG.md` counts, and only the exact label or bot identity
+    skips: a near-miss either way would disable the gate without anyone noticing.
     """
     if not changelog_required(changed):
+        return True
+    if author in EXEMPT_AUTHORS:
         return True
     if SKIP_LABEL in labels:
         return True
@@ -64,14 +74,19 @@ def passes(changed: list[str], labels: list[str]) -> bool:
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CI glue
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--labels", default="", help="comma-separated PR labels")
+    parser.add_argument("--author", default="", help="login of the PR's author")
     args = parser.parse_args(argv)
 
     changed = [line for line in sys.stdin.read().splitlines() if line.strip()]
     labels = [label.strip() for label in args.labels.split(",") if label.strip()]
 
-    if passes(changed, labels):
+    author = args.author.strip() or None
+
+    if passes(changed, labels, author):
         if not changelog_required(changed):
             print("No server/ or web/ change outside tests — no changelog entry needed.")
+        elif author in EXEMPT_AUTHORS:
+            print(f"Opened by {author}; dependency updates are summarised at release.")
         elif SKIP_LABEL in labels:
             print(f"Skipped by the `{SKIP_LABEL}` label.")
         else:

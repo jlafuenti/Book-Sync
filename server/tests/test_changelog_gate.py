@@ -149,6 +149,32 @@ def test_only_the_exact_label_skips():
     assert gate.passes(["web/src/App.jsx"], labels=["no-changelog"]) is False
 
 
+def test_a_dependabot_pr_is_exempt():
+    """Dependabot cannot write a changelog line, and it touches deployable files.
+
+    Found by running the gate over real history before it was made required:
+    nine of the merged PRs since the changelog last moved were Dependabot bumps
+    to `server/requirements.txt` or `web/package.json`. As a required check, the
+    gate would have stalled every one of them until a human intervened — which,
+    for security updates, is the delay Dependabot exists to remove. Dependency
+    updates are summarised in the release notes when a release is cut instead.
+    """
+    changed = ["server/requirements.txt", "web/package.json", "web/package-lock.json"]
+    assert _gate().passes(changed, labels=[], author="dependabot[bot]") is True
+
+
+def test_a_person_bumping_a_dependency_still_needs_an_entry():
+    """The exemption is for the bot, not for dependency files."""
+    assert _gate().passes(["server/requirements.txt"], labels=[], author="someone") is False
+
+
+def test_a_look_alike_author_is_not_exempt():
+    """Only the exact bot identity. `dependabot` alone is an ordinary account name."""
+    gate = _gate()
+    assert gate.passes(["server/requirements.txt"], labels=[], author="dependabot") is False
+    assert gate.passes(["server/requirements.txt"], labels=[], author="not-dependabot[bot]") is False
+
+
 def test_touching_a_nested_changelog_does_not_count():
     """Only the root `CHANGELOG.md` is the one releases are built from."""
     assert _gate().passes(["web/src/App.jsx", "web/CHANGELOG.md"], labels=[]) is False
@@ -213,3 +239,10 @@ def test_the_workflow_never_uses_pull_request_target():
 
 def test_the_workflow_runs_the_script():
     assert "changelog_gate.py" in _workflow()
+
+
+def test_the_workflow_tells_the_script_who_opened_the_pr():
+    """Without the author the Dependabot exemption never applies, and every bump stalls."""
+    text = _workflow()
+    assert "github.event.pull_request.user.login" in text
+    assert "--author" in text

@@ -43,6 +43,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # Dependabot cannot write a changelog line; the script exempts it by
+          # this login rather than stalling every dependency bump.
+          AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           git diff --name-only "$BASE_SHA"..."$HEAD_SHA" \
-            | python3 .github/scripts/changelog_gate.py --labels "$LABELS"
+            | python3 .github/scripts/changelog_gate.py --labels "$LABELS" --author "$AUTHOR"
