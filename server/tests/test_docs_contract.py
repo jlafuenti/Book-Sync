@@ -383,6 +383,75 @@ def test_changelog_records_the_current_version():
 
 
 # ---------------------------------------------------------------------------
+# The release runbook has to deliver what the changelog gate promises, and
+# describe the deploy routes that actually exist.
+# ---------------------------------------------------------------------------
+
+
+def _releasing_doc() -> str:
+    with open(os.path.join(_REPO_ROOT, "docs", "releasing.md"), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_releasing_doc_summarises_dependabot_merges():
+    """The changelog gate exempts Dependabot "because dependency updates are
+    summarised at release". That is only true if cutting a release includes
+    the step; 0.1.0's summary was written by hand from memory."""
+    doc = _releasing_doc()
+    assert "Dependabot" in doc and "gh pr list" in doc, (
+        "docs/releasing.md has no step that lists the Dependabot PRs merged "
+        "since the previous tag and records them in the changelog. The gate in "
+        ".github/scripts/changelog_gate.py exempts those PRs on the promise "
+        "that this step exists."
+    )
+
+
+def test_releasing_doc_names_the_published_images():
+    """A release tag publishes ghcr.io/jlafuenti/tandem-{server,web}:X.Y.Z
+    (publish-images.yml); the runbook must offer that as a deploy route rather
+    than say there is no registry."""
+    doc = _releasing_doc()
+    assert "ghcr.io/jlafuenti/tandem-server" in doc, (
+        "docs/releasing.md does not mention the versioned images a release tag "
+        "publishes; an operator reading it would not know they can pull one."
+    )
+    assert "there is no registry" not in doc, (
+        "docs/releasing.md still says there is no registry; publish-images.yml "
+        "has published to ghcr.io since #464."
+    )
+
+
+def test_testing_doc_describes_the_xmldom_override_not_an_allow_list():
+    """#447 lifted @xmldom/xmldom with an npm override and #491 emptied the
+    audit-ci allow-list; the doc kept describing the allow-list as the standing
+    exception."""
+    doc = _testing_doc()
+    assert "standing web exception" not in doc, (
+        "docs/testing.md still describes an allow-listed xmldom advisory; the "
+        "allow-list in web/audit-ci.jsonc is empty and the fix is the `overrides` "
+        "entry in web/package.json."
+    )
+    assert "overrides" in doc, (
+        "docs/testing.md should say that @xmldom/xmldom is lifted by the "
+        "`overrides` field in web/package.json (pinned by "
+        "web/src/dependency-pins.test.js)."
+    )
+
+
+def test_contributing_points_at_the_dependency_policy():
+    """How dependency updates are taken (waves, majors alone, what needs a deploy
+    smoke) lived only in session notes; docs/dependencies.md is where it lives
+    now, and CONTRIBUTING.md is where a contributor would look for it."""
+    assert os.path.isfile(os.path.join(_REPO_ROOT, "docs", "dependencies.md")), (
+        "docs/dependencies.md is missing."
+    )
+    with open(os.path.join(_REPO_ROOT, "CONTRIBUTING.md"), encoding="utf-8") as fh:
+        assert "docs/dependencies.md" in fh.read(), (
+            "CONTRIBUTING.md does not link docs/dependencies.md."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Issue #185: the README gained a screenshots section. The images themselves are
 # pending, so this passes vacuously today and starts biting the moment someone
 # embeds one — a broken image on the front page of a public repo.

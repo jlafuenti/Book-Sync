@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
 # `npm ci` (not `npm install`) so the image installs exactly the tree CI tested
 # — the lockfile has to be copied with package.json, before the install, or

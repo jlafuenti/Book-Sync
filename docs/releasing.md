@@ -54,6 +54,18 @@ Its value no longer tells you whether an upload has happened; the Play Console d
 3. **Update `CHANGELOG.md`.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh
    empty `## [Unreleased]` above it, and add an `### Upgrade notes` subsection if the release
    contains an irreversible migration, a removed endpoint, or a minimum app version.
+
+   **Summarise the dependency updates.** The `changelog` CI gate exempts Dependabot PRs on the
+   promise that they are recorded here, so this is the step that keeps that promise. List what
+   merged since the previous tag (`v0.0.9` below stands for the last release):
+
+   ```bash
+   gh pr list --state merged --author app/dependabot --limit 100 --search "merged:>$(git log -1 --format=%cI v0.0.9)" --json number,title
+   ```
+
+   and add one `Changed` line naming the notable ones (a major, a runtime library, a base
+   image) with the rest as "and N minor/patch updates". Read each PR's body, not its title: a
+   grouped PR called "minor and patch" has carried a Kotlin major and a Readium minor.
 4. **Run the suites** the change touches — `docs/testing.md` has the commands. At minimum the
    server suite, because the version-agreement test lives there.
 5. **Merge to `main`** through a PR like any other change.
@@ -90,8 +102,10 @@ Its value no longer tells you whether an upload has happened; the Play Console d
 
 ## Deploying it
 
-Images are built from source on the host (`build: ./server`, `build: ./web` in the compose
-template) — there is no registry, so **the git tag is the version identifier**:
+Two routes. Either way **the git tag is the version identifier**; the release notes say what
+changed and whether a migration is involved.
+
+**Build from source at the tag** (the compose template's `build: ./server`, `build: ./web`):
 
 ```bash
 cd /path/to/Book-Sync
@@ -99,6 +113,21 @@ git fetch --tags
 git checkout v0.1.0
 docker compose up -d --build
 ```
+
+**Or pull the versioned image.** Pushing the `v0.1.0` tag makes `publish-images.yml` publish
+`ghcr.io/jlafuenti/tandem-server:0.1.0` and `ghcr.io/jlafuenti/tandem-web:0.1.0`, and moves
+`:latest` to them. A compose file that names those images (`image:` instead of `build:`, as
+`docker-compose.demo.yml` does) upgrades with:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Pin the version tag rather than `latest` on a server you care about; `latest` is for a demo or
+a throwaway. The `:main` tag is not a release — it follows every merge and is what the demo
+stack tracks through Watchtower. The published image has no local Whisper and no DRM plugins
+baked in; a deployment that needs either still builds from source with the build args in
+`docs/operations.md`.
 
 The entrypoint runs `alembic upgrade head` before uvicorn, so schema changes apply themselves; a
 failed migration stops the boot deliberately. See `docs/operations.md`, "Upgrading".

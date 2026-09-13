@@ -14,6 +14,11 @@ name: Publish images
 on:
   push:
     branches: [main]
+    # A release tag publishes the same images under the version and `latest`,
+    # so an operator can `docker pull ghcr.io/.../tandem-server:0.1.0` instead
+    # of building from source (docs/releasing.md, "Deploying it"). The `main`
+    # tag is not touched by a tag push (see the metadata step).
+    tags: ["v*"]
   # Watchtower pulls on its own timer, so the images need rebuilding on one too.
   # Without this a quiet week leaves the demo running a base image with whatever
   # CVEs it has picked up since the last push to main.
@@ -61,12 +66,17 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/tandem-${{ matrix.image }}
-          # `main` is what Watchtower follows. The sha tag is what makes a bad
-          # demo diagnosable: it names the commit the running container came
-          # from, which `main` alone cannot once it has moved on.
+          # `main` is what Watchtower follows, and only a push of the default
+          # branch may move it — a `v*` tag push must not rename the release
+          # commit's image `main`. The sha tag is what makes a bad demo
+          # diagnosable: it names the commit the running container came from,
+          # which `main` alone cannot once it has moved on. A tag push adds the
+          # release's own version (`0.1.0`, from `v0.1.0`) and `latest`.
           tags: |
-            type=raw,value=main
+            type=raw,value=main,enable={{is_default_branch}}
             type=sha,format=long
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

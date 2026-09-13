@@ -226,3 +226,6 @@ Two settings that are not branch protection but belong to the same pass, both un
 issue-template contact link both point at that form, and it 404s until it is enabled), and turn on
 **Dependabot alerts and security updates** (`.github/dependabot.yml` only opens version-update
 PRs; the security half needs the setting).
+
+How the update PRs themselves are handled — waves, majors on their own, which ecosystems need a
+deploy or an emulator pass before merging — is in [docs/dependencies.md](docs/dependencies.md).
