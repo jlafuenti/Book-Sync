@@ -23,7 +23,7 @@ aiofiles==25.1.0
 # opt-in build: see requirements-local.txt and the INSTALL_LOCAL_WHISPER build
 # arg in the Dockerfile. Not needed when transcription is offloaded to a remote
 # (Jetson) worker.
-numpy>=1.26,<2
+numpy>=2.5.3,<3
 tqdm>=4.66
 ebooklib==0.20
 # Pinned deliberately, though both arrive transitively (issue #265). EPUB/OPF
