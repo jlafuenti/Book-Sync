@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 async def list_users(
     filter: Optional[str] = Query(None, pattern="^(pending|active|inactive|all)$"),
     _: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """List all users with optional status filter."""
     query = select(User).order_by(User.created_at.desc())
@@ -47,7 +47,7 @@ async def get_audit_log(
     action: Optional[str] = None,
     user_id: Optional[int] = None,
     _: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """View audit log entries (admin only)."""
     query = select(AuditLog).order_by(desc(AuditLog.created_at))
@@ -114,7 +114,7 @@ async def get_audit_log(
 async def get_user(
     user_id: int,
     _: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Get a single user by ID."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -129,7 +129,7 @@ async def create_user(
     data: UserCreateAdmin,
     request: Request,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Admin creates a new user with a role and default password."""
     if data.role not in VALID_ROLES:
@@ -175,7 +175,7 @@ async def update_user(
     data: UserUpdateAdmin,
     request: Request,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Update a user's role or active status."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -220,7 +220,7 @@ async def approve_user(
     user_id: int,
     request: Request,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Approve a pending user account."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -250,7 +250,7 @@ async def reset_password(
     data: UserPasswordReset,
     request: Request,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Admin resets a user's password. User will be forced to change it on next login."""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -284,7 +284,7 @@ async def delete_user(
     user_id: int,
     request: Request,
     admin: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Delete a user account. Cannot delete superadmin."""
     result = await db.execute(select(User).where(User.id == user_id))

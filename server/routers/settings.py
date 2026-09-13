@@ -163,7 +163,7 @@ DERIVED_SETTING_KEYS = frozenset({"hardcover_configured"})
 
 @router.get("/", response_model=Dict[str, Any])
 async def get_settings(
-    db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    db: AsyncSession = Depends(get_db, scope="function"), user: User = Depends(get_current_user)
 ):
     """System settings: everything for an admin, an allow-list for everyone else."""
     full = await _all_settings(db)
@@ -223,7 +223,7 @@ async def _all_settings(db: AsyncSession) -> Dict[str, Any]:
 @router.put("/", response_model=Dict[str, Any])
 async def update_settings(
     new_settings: Dict[str, Any],
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user)
 ):
     """Update system settings."""
@@ -379,7 +379,7 @@ async def update_settings(
 @router.post("/test-abs")
 async def test_abs_connection(
     body: TestAbsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """Test the connection to an Audiobookshelf server."""
@@ -430,7 +430,7 @@ async def test_abs_connection(
 @router.post("/test-hardcover")
 async def test_hardcover_connection(
     body: TestHardcoverRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """Validate a Hardcover API token by running the trivial `me` query.
@@ -471,7 +471,7 @@ async def test_hardcover_connection(
 
 @router.post("/transcription-remote-key/generate")
 async def generate_transcription_remote_key(
-    db: AsyncSession = Depends(get_db), _: User = Depends(get_admin_user)
+    db: AsyncSession = Depends(get_db, scope="function"), _: User = Depends(get_admin_user)
 ):
     """
     Generate and persist a new shared secret for the Jetson transcription
@@ -488,7 +488,7 @@ async def generate_transcription_remote_key(
 @router.post("/test-remote")
 async def test_remote_connection(
     body: TestRemoteRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """

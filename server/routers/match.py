@@ -354,7 +354,7 @@ async def fetch_hardcover(query: str, author: Optional[str], db) -> List[MatchRe
 @router.post("/search", response_model=List[MatchResult])
 async def search_metadata(
     req: MatchRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     # Rate limited per user (issue #208). Unlike the other buckets this one is
     # not metering server CPU: every call spends the admin-configured Google
     # Books / Hardcover / Audible quota on the caller's behalf, and exhausting
@@ -431,7 +431,7 @@ async def _fetch_cover_safely(url: str) -> tuple[bytes, str]:
 @router.post("/apply-cover")
 async def apply_remote_cover(
     req: ApplyCoverRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user)
 ):
     """Download a remote cover URL and apply it to a book."""

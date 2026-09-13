@@ -59,7 +59,7 @@ QUEUE_HISTORY_MAX_LIMIT = 200
 @router.post("/{pair_id}/start", response_model=QueueItemResponse)
 async def start_transcription(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     # Editor floor (issue #207): starting a job spends the GPU for hours and
     # cancelling one discards work that may not be the canceller's.
     _: User = Depends(get_editor_user),
@@ -103,7 +103,7 @@ async def start_transcription(
 @router.get("/{pair_id}/status", response_model=TranscriptionStatusResponse)
 async def get_transcription_status(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Get the status of a transcription job (checks queue first, then DB)."""
@@ -135,7 +135,7 @@ async def get_transcription_status(
 @router.post("/{pair_id}/cancel")
 async def cancel_transcription(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     # Editor floor (issue #207): starting a job spends the GPU for hours and
     # cancelling one discards work that may not be the canceller's.
     _: User = Depends(get_editor_user),
@@ -185,7 +185,7 @@ async def cancel_transcription(
 
 @router.get("/queue", response_model=List[QueueItemResponse])
 async def get_queue(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Get the full transcription queue with positions."""
@@ -227,7 +227,7 @@ async def get_queue(
 @router.post("/queue/batch", response_model=List[QueueItemResponse])
 async def batch_add_to_queue(
     body: QueueAddRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """Add multiple book pairs to the transcription queue at once."""
@@ -298,7 +298,7 @@ async def update_queue_priority(
 @router.post("/queue/{item_id}/run-now", response_model=QueueItemResponse)
 async def run_queue_item_now(
     item_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """
@@ -336,7 +336,7 @@ async def run_queue_item_now(
 @router.post("/queue/{item_id}/requeue", response_model=QueueItemResponse)
 async def requeue_queue_item(
     item_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     # Editor floor, matching /start and /cancel (#207): a retry spends the GPU
     # for hours, so it sits at the same rung as starting a job for the first
     # time rather than at the admin-only queue-plumbing controls.
@@ -389,7 +389,7 @@ async def requeue_queue_item(
 
 @router.get("/offhours", response_model=OffHoursStatusResponse)
 async def get_offhours_status(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Current off-hours window state, for the queue page's banner."""
@@ -415,7 +415,7 @@ async def get_queue_history(
     # lookup on each of them. 200 matches the other capped read endpoints.
     limit: int = Query(50, ge=1, le=QUEUE_HISTORY_MAX_LIMIT, description="Page size"),
     offset: int = Query(0, ge=0, description="Rows to skip"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(rate_limited(search_reads)),
 ):
     """Get all historical queue items (completed, failed, cancelled), newest first."""
@@ -469,7 +469,7 @@ async def get_queue_history(
 async def update_transcription_text(
     pair_id: int,
     update_data: SyncMapTextUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -515,7 +515,7 @@ async def update_transcription_text(
 @router.post("/{pair_id}/realign")
 async def realign_pair(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """

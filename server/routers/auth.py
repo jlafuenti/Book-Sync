@@ -251,7 +251,7 @@ PASSWORD_RESET_ALLOWED_ROUTES = frozenset({
 async def get_current_user(
     request: Request,
     token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> User:
     """FastAPI dependency: extract and validate the current user from JWT."""
     credentials_exception = HTTPException(
@@ -453,7 +453,7 @@ def _registration_received() -> RegistrationResponse:
 
 
 @router.get("/registration", response_model=RegistrationModeResponse)
-async def registration_mode(db: AsyncSession = Depends(get_db)):
+async def registration_mode(db: AsyncSession = Depends(get_db, scope="function")):
     """How this server treats a stranger: `open`, `invite` or `closed`.
 
     Unauthenticated by necessity -- the web and Android login screens read it
@@ -471,7 +471,7 @@ async def registration_mode(db: AsyncSession = Depends(get_db)):
     response_model=RegistrationResponse,
 )
 @limiter.limit("5/minute")
-async def register(user_data: UserCreate, request: Request, db: AsyncSession = Depends(get_db)):
+async def register(user_data: UserCreate, request: Request, db: AsyncSession = Depends(get_db, scope="function")):
     """Submit an access request. Account must be approved by an admin before login."""
     # Reads the registration settings and refreshes the cache the per-IP bucket's
     # suppliers read, so the limit applied below is the one on file right now.
@@ -609,7 +609,7 @@ async def _invite_usernames(db: AsyncSession, invites) -> dict:
     response_model=InviteCreateResponse,
 )
 async def create_invite(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     admin: User = Depends(get_admin_user),
 ):
     """Mint a single-use invite and return its code -- the only time it exists
@@ -626,7 +626,7 @@ async def create_invite(
 
 @router.get("/invites", response_model=List[InviteResponse])
 async def list_invites(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_admin_user),
 ):
     """Every invite, newest first, without codes."""
@@ -638,7 +638,7 @@ async def list_invites(
 @router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_invite(
     invite_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     admin: User = Depends(get_admin_user),
 ):
     """Revoke an invite. Deleted rather than flagged: an unspent code that must
@@ -658,7 +658,7 @@ async def revoke_invite(
 
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
-async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
+async def login(credentials: UserLogin, request: Request, db: AsyncSession = Depends(get_db, scope="function")):
     """Authenticate a user and return JWT tokens."""
     # Per-username throttle (issue #296), checked before the user is even looked
     # up: the whole point is to refuse without spending a bcrypt verify, and
@@ -730,7 +730,7 @@ async def login(credentials: UserLogin, request: Request, db: AsyncSession = Dep
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db)):
+async def refresh_token(body: TokenRefresh, db: AsyncSession = Depends(get_db, scope="function")):
     """Refresh an access token using a valid refresh token."""
     # Issue #264: bound *rejected* refreshes. Each one costs a DB lookup, and
     # this endpoint is unauthenticated. Successful refreshes are not counted —
@@ -872,7 +872,7 @@ VALID_THEMES = {"blueprint", "forest-night", "ember", "aurora", "slate"}
 async def update_me(
     body: UserUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Update the current user's profile preferences."""
     if body.theme is not None:
@@ -889,7 +889,7 @@ async def change_password(
     body: PasswordChange,
     request: Request,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Change the current user's password. Clears must_reset_password flag."""
     # Issue #264. This endpoint verifies the current password, so without a
@@ -954,7 +954,7 @@ async def delete_me(
     body: AccountDelete,
     request: Request,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Delete the caller's own account and everything belonging to it (#146).
 
@@ -1062,7 +1062,7 @@ async def logout(
     request: Request,
     body: Optional[LogoutRequest] = None,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Sign this device out, leaving the account's other devices signed in
     (issue #250).
@@ -1116,7 +1116,7 @@ async def logout(
 async def logout_all(
     request: Request,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Sign out on every device — the behaviour `logout` had before issue #250,
     kept as something the user asks for rather than something that happens to

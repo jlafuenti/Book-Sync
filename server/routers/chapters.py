@@ -30,7 +30,7 @@ router = APIRouter(
 @router.get("/{book_id}/chapters", response_model=List[Chapter])
 async def get_audiobook_chapters(
     book_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """
@@ -94,7 +94,7 @@ async def get_audiobook_chapters(
 async def update_audiobook_chapters(
     book_id: int,
     chapters: List[Chapter],
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """

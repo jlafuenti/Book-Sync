@@ -132,7 +132,7 @@ COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 @router.post("/normalize")
 async def normalize_library_metadata(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -246,7 +246,7 @@ async def _library_job(name: str):
 
 @router.post("/scan", response_model=LibraryScanResponse)
 async def scan_library(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -263,7 +263,7 @@ async def scan_library(
 
 @router.post("/rescan-all", response_model=MessageResponse)
 async def rescan_all_files(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user)
 ):
     """
@@ -374,7 +374,7 @@ async def _rescan_all_impl(db: AsyncSession) -> dict:
 
 @router.post("/rehash")
 async def rehash_library(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Rehash the library; refuses with 409 while another job runs (issue #202)."""
@@ -452,7 +452,7 @@ async def _rehash_impl(db: AsyncSession) -> dict:
 async def rescan_book_file(
     book_type: str,
     book_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user)
 ):
     """
@@ -549,7 +549,7 @@ async def list_ebooks(
     page: int = _page_param(),
     limit: int = _limit_param(),
     q: Optional[str] = _q_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One page of ebooks, in library order, optionally narrowed by `q`."""
@@ -561,7 +561,7 @@ async def list_audiobooks(
     page: int = _page_param(),
     limit: int = _limit_param(),
     q: Optional[str] = _q_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One page of audiobooks, in library order, optionally narrowed by `q`."""
@@ -571,7 +571,7 @@ async def list_audiobooks(
 @router.get("/ebooks/{book_id}", response_model=EBookDetailResponse)
 async def get_ebook_detail(
     book_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Get a single ebook and its pair status."""
@@ -599,7 +599,7 @@ async def get_ebook_detail(
 @router.get("/audiobooks/{book_id}", response_model=AudioBookDetailResponse)
 async def get_audiobook_detail(
     book_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Get a single audiobook and its pair status."""
@@ -627,7 +627,7 @@ async def get_audiobook_detail(
 @router.get("/search", response_model=SearchResponse)
 async def search_library(
     q: str = Query(..., min_length=1, description="Search query for title, author, or series"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(rate_limited(search_reads)),
 ):
     """Global search across ebooks, audiobooks, and book pairs.
@@ -647,7 +647,7 @@ async def list_pairs(
     page: int = _page_param(),
     limit: int = _limit_param(),
     q: Optional[str] = _q_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One page of book pairs (matched ebook + audiobook), in library order."""
@@ -659,7 +659,7 @@ async def list_pairs(
 @router.get("/pairs/{pair_id}", response_model=BookPairResponse)
 async def get_pair(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One book pair by id — the listing's element, fetched directly.
@@ -692,7 +692,7 @@ async def list_library_items(
     dir: SortDir = Query(SortDir.ASC),
     page: int = _page_param(),
     limit: int = _limit_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One page of the mixed library list the Library page renders."""
@@ -706,7 +706,7 @@ async def list_library_items(
 async def library_facets(
     tab: LibraryTab = Query(LibraryTab.ALL),
     kind: Optional[LibraryItemKind] = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Filter-pill options for a tab (distinct authors / series with counts,
@@ -718,7 +718,7 @@ async def library_facets(
 @router.post("/pairs", response_model=BookPairResponse, status_code=status.HTTP_201_CREATED)
 async def create_pair(
     pair_data: BookPairCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Manually create a book pair (match an ebook with an audiobook)."""
@@ -793,7 +793,7 @@ async def create_pair(
 @router.delete("/pairs/{pair_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pair(
     pair_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Delete a book pair."""
@@ -844,7 +844,7 @@ async def delete_pair(
 @router.post("/upload/ebook", response_model=EBookResponse, status_code=status.HTTP_201_CREATED)
 async def upload_ebook(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Upload an ebook file to the library."""
@@ -876,7 +876,7 @@ async def upload_ebook(
 @router.post("/upload/audiobook", response_model=AudioBookResponse, status_code=status.HTTP_201_CREATED)
 async def upload_audiobook(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Upload an audiobook file to the library."""
@@ -932,7 +932,7 @@ class MetadataUpdate(BaseModel):
 async def update_ebook_metadata(
     book_id: int,
     meta: MetadataUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Manually update ebook metadata and write changes back to the file."""
@@ -963,7 +963,7 @@ async def update_ebook_metadata(
 async def upload_ebook_cover(
     book_id: int,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Upload a new cover image for an ebook."""
@@ -1004,7 +1004,7 @@ async def upload_ebook_cover(
 async def update_audiobook_metadata(
     book_id: int,
     meta: MetadataUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Manually update audiobook metadata and write changes back to the file."""
@@ -1035,7 +1035,7 @@ async def update_audiobook_metadata(
 async def upload_audiobook_cover(
     book_id: int,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Upload a new cover image for an audiobook."""
@@ -1077,7 +1077,7 @@ async def upload_audiobook_cover(
 async def debug_metadata(
     book_type: str,
     book_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -1203,7 +1203,7 @@ async def get_new_items(
     page: int = _page_param(),
     limit: int = _limit_param(),
     q: Optional[str] = _q_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Ebooks and audiobooks that haven't been acknowledged yet, newest first.
@@ -1233,7 +1233,7 @@ async def get_new_items(
 @router.post("/new-items/acknowledge")
 async def acknowledge_new_items(
     req: AcknowledgeItemsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Mark selected ebooks and/or audiobooks as acknowledged."""
@@ -1254,7 +1254,7 @@ async def get_new_pairs(
     page: int = _page_param(),
     limit: int = _limit_param(),
     q: Optional[str] = _q_param(),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """One page of book pairs that haven't been acknowledged yet, newest first."""
@@ -1266,7 +1266,7 @@ async def get_new_pairs(
 @router.post("/new-pairs/acknowledge")
 async def acknowledge_new_pairs(
     req: AcknowledgePairsRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Mark selected book pairs as acknowledged."""
@@ -1279,7 +1279,7 @@ async def acknowledge_new_pairs(
 
 @router.get("/pairs-discrepancies", response_model=List[MetadataDiscrepancy])
 async def get_metadata_discrepancies(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_current_user),
 ):
     """Find all book pairs with discrepancies in their shared metadata fields."""
@@ -1289,7 +1289,7 @@ async def get_metadata_discrepancies(
 async def resolve_metadata_discrepancy(
     pair_id: int,
     req: ResolveDiscrepancyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Apply resolutions to mismatched metadata fields on a pair."""
@@ -1333,7 +1333,7 @@ async def resolve_metadata_discrepancy(
 async def ignore_metadata_discrepancies(
     pair_id: int,
     req: IgnoreDiscrepancyRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Mark specific metadata fields as permanently ignored for a pair."""
@@ -1354,7 +1354,7 @@ async def ignore_metadata_discrepancies(
 async def delete_ebook(
     ebook_id: int,
     delete_file: bool = Query(False, description="Also delete the source file from disk"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Delete an ebook from the database.  Optionally delete the source file."""
@@ -1402,7 +1402,7 @@ async def delete_ebook(
 async def delete_audiobook(
     audiobook_id: int,
     delete_file: bool = Query(False, description="Also delete the source file from disk"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """Delete an audiobook from the database.  Optionally delete the source file."""
@@ -1484,7 +1484,7 @@ def _verify_row(item) -> dict:
 
 @router.get("/verify", response_model=VerifyFilesResponse)
 async def verify_files(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(rate_limited(expensive_reads, get_editor_user)),
 ):
     """
@@ -1535,7 +1535,7 @@ class CleanupRequest(BaseModel):
 @router.post("/cleanup", response_model=CleanupResponse)
 async def cleanup_orphans(
     req: CleanupRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -1586,7 +1586,7 @@ async def cleanup_orphans(
 
 @router.post("/enrich-abs")
 async def enrich_library_from_abs(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -1665,7 +1665,7 @@ async def _enrich_abs_impl(db: AsyncSession) -> dict:
 @router.post("/audiobooks/{audiobook_id}/enrich-abs")
 async def enrich_audiobook_from_abs(
     audiobook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     _: User = Depends(get_editor_user),
 ):
     """
@@ -1959,7 +1959,7 @@ async def _realign_relinked_pairs(pair_ids: List[int], db: AsyncSession) -> List
 
 @router.get("/unsupported", response_model=List[UnsupportedFileResponse])
 async def list_unsupported_files(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     # Editor, not admin: this list drives conversion, which is library
     # maintenance rather than infrastructure (issue #283).
     current_user: User = Depends(get_editor_user),
@@ -1996,7 +1996,7 @@ async def list_unsupported_files(
 @router.post("/unsupported/convert-all")
 async def convert_all_unsupported(
     delete_source: bool = False,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_editor_user),
 ):
     """Convert all unsupported ebooks (MOBI/AZW3) to EPUB."""
@@ -2049,7 +2049,7 @@ async def convert_all_unsupported(
 async def convert_unsupported_file(
     ebook_id: int,
     delete_source: bool = False,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_editor_user),
 ):
     """Convert a single unsupported ebook to EPUB using calibre or mobi library."""
@@ -2099,7 +2099,7 @@ async def convert_unsupported_file(
 @router.delete("/unsupported/{ebook_id}/source")
 async def delete_unsupported_source(
     ebook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_editor_user),
 ):
     """Delete the source MOBI/AZW3 file (only if an EPUB version already exists)."""
@@ -2139,7 +2139,7 @@ async def delete_unsupported_source(
 # so FastAPI doesn't try to interpret "force-all" as an integer ebook_id.
 @router.delete("/unsupported/force-all")
 async def force_delete_all_unsupported(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_editor_user),
 ):
     """Force-delete ALL unsupported ebooks (MOBI/AZW3) from the filesystem and library."""
@@ -2166,7 +2166,7 @@ async def force_delete_all_unsupported(
 @router.delete("/unsupported/{ebook_id}/force")
 async def force_delete_unsupported(
     ebook_id: int,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     current_user: User = Depends(get_editor_user),
 ):
     """Force-delete a single unsupported ebook from the filesystem and library, even if no EPUB exists."""

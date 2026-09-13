@@ -11,6 +11,18 @@ with it, silently changing the atomicity of every new caller. `services/position
 spell the rule out for itself to avoid exactly that; this is the same rule for everyone else
 (issue #259).
 
+## Declare it `Depends(get_db, scope="function")`
+
+Every use site says `db: AsyncSession = Depends(get_db, scope="function")`, never a bare
+`Depends(get_db)`. Since FastAPI 0.118 the code after a dependency's `yield` — which for
+`get_db` is the commit — runs *after the response has been sent* unless the dependency is
+declared with `scope="function"` (FastAPI 0.121+). With the default scope a client that reads
+straight after writing saw the old state (`DELETE /api/library/pairs/{id}` → 204, then `GET` →
+200 with the pair still there, then 404 a few seconds later), and a commit that failed was
+reported as success because the 2xx had already gone out (issue #524).
+`server/tests/test_get_db_scope.py` walks every route, nested dependencies included, and
+fails on a bare `Depends(get_db)`, so the scope cannot be forgotten on a new router.
+
 ## The three conventions
 
 | Where the code runs | Who opens the session | Who commits |
