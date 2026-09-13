@@ -1019,3 +1019,26 @@ def test_the_transcribe_endpoint_records_the_uploaded_size(
 
     assert resp.status_code == 200
     assert seen["size"] == len(body)
+
+
+# ---------------------------------------------------------------------------
+# The worker reports its version, so the main server can say when it is behind
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_the_worker_version(clean_state, client):
+    """`worker_version` is the release string this worker was built from. The
+    main server compares it with its own APP_VERSION and tells the operator on
+    the System page when the worker needs a rebuild; a worker that does not
+    report one is shown as "version unknown" there, never as current."""
+    body = client.get("/v1/health", headers=AUTH).json()
+    assert body["worker_version"] == jetson_server.WORKER_VERSION
+    parts = jetson_server.WORKER_VERSION.split(".")
+    assert len(parts) == 3 and all(p.isdigit() for p in parts), (
+        "WORKER_VERSION must be the plain MAJOR.MINOR.PATCH release string"
+    )
+
+
+def test_the_app_advertises_the_same_version(clean_state, client):
+    """OpenAPI's `version` and /v1/health's `worker_version` come from one literal."""
+    assert jetson_server.app.version == jetson_server.WORKER_VERSION

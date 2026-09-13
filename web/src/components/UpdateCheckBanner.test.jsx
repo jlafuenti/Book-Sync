@@ -134,3 +134,73 @@ describe('once answered', () => {
         expect(container).toBeEmptyDOMElement()
     })
 })
+
+/**
+ * The transcription worker's version. The server asks its configured worker
+ * for `worker_version` and compares it with its own; a worker left behind
+ * after a server upgrade is the failure nothing else names. This line renders
+ * whether or not the GitHub check is enabled — it is the operator's own
+ * machine, not a third party.
+ */
+const worker = (overrides) => ({
+    configured: true,
+    status: 'current',
+    reason: null,
+    version: '0.1.0',
+    server_version: '0.1.0',
+    checked_at: '2026-09-13T00:00:00Z',
+    ...overrides,
+})
+
+describe('the transcription worker', () => {
+    it('says when the worker is behind the server, and how to update it', () => {
+        renderBanner({ ...base, status: 'current', worker: worker({ status: 'behind', version: '0.1.0', server_version: '0.2.0' }) })
+        const alert = screen.getByRole('status', { name: /transcription worker/i })
+        expect(alert).toHaveTextContent(/worker is on 0\.1\.0/)
+        expect(alert).toHaveTextContent(/this server is 0\.2\.0/)
+        expect(alert).toHaveTextContent(/docker compose up -d --build/)
+    })
+
+    it('is quiet when the worker matches', () => {
+        renderBanner({ ...base, status: 'current', worker: worker() })
+        expect(screen.getByText(/Transcription worker up to date · 0\.1\.0/)).toBeInTheDocument()
+        expect(screen.queryByRole('status', { name: /transcription worker/i })).not.toBeInTheDocument()
+    })
+
+    it('says nothing about a worker when none is configured', () => {
+        renderBanner({ ...base, status: 'current', worker: worker({ configured: false, status: 'unknown', reason: 'not_configured', version: null }) })
+        expect(screen.queryByText(/transcription worker/i)).not.toBeInTheDocument()
+    })
+
+    it('says when the worker could not be reached, without alarm', () => {
+        renderBanner({ ...base, status: 'current', worker: worker({ status: 'unknown', reason: 'unreachable', version: null }) })
+        expect(screen.getByText(/Couldn.t reach the transcription worker/)).toBeInTheDocument()
+    })
+
+    it('does not call an old worker that reports no version current', () => {
+        renderBanner({ ...base, status: 'current', worker: worker({ status: 'unknown', reason: 'unreported', version: null }) })
+        expect(screen.getByText(/does not report a version/)).toBeInTheDocument()
+        expect(screen.queryByText(/up to date · /)).not.toBeInTheDocument()
+    })
+
+    it('says when the worker rejected the key', () => {
+        renderBanner({ ...base, status: 'current', worker: worker({ status: 'unknown', reason: 'unauthorized', version: null }) })
+        expect(screen.getByText(/rejected this server.s key/)).toBeInTheDocument()
+    })
+
+    it('still reports the worker when the GitHub check was declined', () => {
+        renderBanner({ ...base, enabled: false, prompted: true, worker: worker({ status: 'behind', version: '0.1.0', server_version: '0.2.0' }) })
+        expect(screen.getByRole('status', { name: /transcription worker/i })).toBeInTheDocument()
+    })
+
+    it('renders the release banner and the worker line together', () => {
+        renderBanner({ ...base, status: 'available', latest_version: '0.3.0', worker: worker({ status: 'behind', version: '0.1.0', server_version: '0.2.0' }) })
+        expect(screen.getByText(/Tandem 0\.3\.0 is available/)).toBeInTheDocument()
+        expect(screen.getByRole('status', { name: /transcription worker/i })).toBeInTheDocument()
+    })
+
+    it('tolerates a status without a worker field', () => {
+        renderBanner({ ...base, status: 'current' })
+        expect(screen.getByText(/Up to date · Tandem 0\.1\.0/)).toBeInTheDocument()
+    })
+})

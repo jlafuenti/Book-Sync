@@ -344,23 +344,36 @@ def _android_version_name() -> str:
     return match.group(1)
 
 
-def test_the_three_version_strings_agree():
-    """server/version.py, web/package.json and build.gradle.kts must match.
+_WORKER_VERSION_RE = re.compile(r'^WORKER_VERSION\s*=\s*"([^"]+)"', re.MULTILINE)
+
+
+def _jetson_worker_version() -> str:
+    path = os.path.join(_REPO_ROOT, "jetson", "server.py")
+    with open(path, encoding="utf-8") as fh:
+        match = _WORKER_VERSION_RE.search(fh.read())
+    assert match, f'no `WORKER_VERSION = "..."` found in {path}'
+    return match.group(1)
+
+
+def test_the_release_version_strings_agree():
+    """server/version.py, web/package.json, build.gradle.kts and jetson/server.py must match.
 
     They are bumped by hand, in that order, per docs/releasing.md. Nothing
     derives one from another, so this test *is* the wiring: it fails the moment
-    a release bumps two of the three, which is how a server would otherwise end
-    up reporting a version no client build ever had.
+    a release bumps some but not all of them, which is how a server would
+    otherwise end up reporting a version no client build ever had — or how the
+    worker would report "behind" against a server it was built alongside.
     """
     versions = {
         "server/version.py APP_VERSION": _app_version(),
         "web/package.json version": _web_version(),
         "android/app/build.gradle.kts versionName": _android_version_name(),
+        "jetson/server.py WORKER_VERSION": _jetson_worker_version(),
     }
     assert len(set(versions.values())) == 1, (
-        f"Release version strings disagree: {versions}. Bump all three (see "
+        f"Release version strings disagree: {versions}. Bump all four (see "
         "docs/releasing.md, 'Bump the version') — they are one release number, "
-        "written out three times because no build step shares them."
+        "written out four times because no build step shares them."
     )
 
 

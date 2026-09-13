@@ -10,22 +10,23 @@ that includes a Play upload.
 
 ## The version number
 
-One number covers the whole repo. It is written out in **three** places, by hand:
+One number covers the whole repo. It is written out in **four** places, by hand:
 
 | File | Field |
 |---|---|
 | `server/version.py` | `APP_VERSION` |
 | `web/package.json` | `version` |
 | `android/app/build.gradle.kts` | `versionName` (and `versionCode`, see below) |
+| `jetson/server.py` | `WORKER_VERSION` — reported by the worker's `/v1/health`; the server compares it with its own and the System page says when the worker is behind |
 
 **Why not one file the three read?** Because single-sourcing costs a build step in three
 toolchains — a `VERSION` file read at import time by Python, a prebuild script rewriting
 `package.json` or injecting `__APP_VERSION__` through Vite, and a Gradle read at configuration
 time — and each of those is a place a release can break silently. The failure it prevents is
-narrow: three literals *disagreeing*. So the literals stay, and
-`server/tests/test_docs_contract.py::test_the_three_version_strings_agree` fails the build the
-moment a bump touches two of the three. The cost is remembering three edits; the test is what
-remembers for you.
+narrow: the literals *disagreeing*. So the literals stay, and
+`server/tests/test_docs_contract.py::test_the_release_version_strings_agree` fails the build the
+moment a bump touches some of the four but not all. The cost is remembering four edits; the test is
+what remembers for you.
 
 `API_VERSION`, also in `server/version.py`, is a **different number with a different rule** — the
 client-compatibility contract, bumped only for a change a shipped app cannot survive. See the
@@ -50,7 +51,7 @@ Its value no longer tells you whether an upload has happened; the Play Console d
 
 1. **Decide the number.** Semver against the previous tag: breaking API change or a migration an
    operator cannot reverse → major (or minor, pre-1.0); new behaviour → minor; fixes only → patch.
-2. **Bump the three files** in the table above, plus `versionCode`.
+2. **Bump the four files** in the table above, plus `versionCode`.
 3. **Update `CHANGELOG.md`.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh
    empty `## [Unreleased]` above it, and add an `### Upgrade notes` subsection if the release
    contains an irreversible migration, a removed endpoint, or a minimum app version.

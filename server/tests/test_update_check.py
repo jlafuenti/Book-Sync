@@ -33,6 +33,7 @@ def _fresh_state(monkeypatch):
     """Module state is process-wide on purpose (the server is single-process);
     tests must not see each other's results."""
     monkeypatch.setattr(uc, "_state", uc._initial_state())
+    monkeypatch.setattr(uc, "_worker_state", uc._initial_worker_state())
 
 
 def _serve(monkeypatch, handler):
@@ -313,3 +314,183 @@ async def test_kick_schedules_a_check_without_blocking_the_caller(monkeypatch, d
     await asyncio.wait_for(task, timeout=1)
 
     assert started.is_set()
+
+
+# ---------------------------------------------------------------------------
+# The transcription worker's version
+# ---------------------------------------------------------------------------
+#
+# The Jetson worker is deployed by hand, separately from the server, and until
+# now nothing compared the two. A worker left behind after a server upgrade
+# fails in ways that do not name the cause. The scheduler asks the configured
+# worker for its `worker_version` (from `/v1/health`) on every tick and the
+# System page says when it is behind the server. This is the operator's own
+# machine, so it needs no opt-in: the server already calls it for every job.
+
+
+@pytest.mark.parametrize("server, worker, expected", [
+    ("0.2.0", "0.1.0", "behind"),
+    ("0.1.1", "0.1.0", "behind"),
+    ("0.10.0", "0.9.0", "behind"),      # numeric, not string, comparison
+    ("0.1.0", "0.1.0", "current"),
+    ("0.1.0", "0.2.0", "current"),      # a worker ahead of the server is not a problem to flag
+    ("0.1.0", None, "unknown"),
+    ("0.1.0", "", "unknown"),
+    ("0.1.0", "latest", "unknown"),
+])
+def test_worker_behind_current_or_unknown(server, worker, expected):
+    assert uc.worker_status(server, worker) == expected
+
+
+async def _configure_worker(db, monkeypatch, url="http://worker.example:9000", key="shared-secret"):
+    db.add(SystemSetting(key="transcription_remote_url", value=url))
+    await db.commit()
+
+    async def fake_key(_db, source_key):
+        assert source_key == "transcription_remote"
+        return key
+
+    monkeypatch.setattr(uc.credential_store, "get_credential", fake_key)
+
+
+def _worker_health(version):
+    payload = {"status": "healthy", "model_state": "unloaded"}
+    if version is not None:
+        payload["worker_version"] = version
+    return lambda request: httpx.Response(200, json=payload)
+
+
+async def test_no_worker_configured_means_no_probe(monkeypatch, db):
+    def handler(request):
+        raise AssertionError(f"probed {request.url} with no worker configured")
+
+    seen = _serve(monkeypatch, handler)
+    await uc._tick()
+
+    assert seen == []
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+    assert worker["configured"] is False
+    assert worker["status"] == "unknown"
+    assert worker["reason"] == "not_configured"
+
+
+async def test_a_configured_worker_is_asked_with_its_key_even_when_github_is_off(monkeypatch, db):
+    await _configure_worker(db, monkeypatch)
+    seen = _serve(monkeypatch, _worker_health("0.0.1"))
+
+    await uc._tick()
+
+    assert [str(r.url) for r in seen] == ["http://worker.example:9000/v1/health"]
+    assert seen[0].headers["authorization"] == "Bearer shared-secret"
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+    assert worker["configured"] is True
+    assert worker["status"] == "behind"
+    assert worker["version"] == "0.0.1"
+    assert worker["server_version"] == APP_VERSION
+    assert worker["checked_at"] is not None
+
+
+async def test_a_worker_on_the_server_s_version_is_current(monkeypatch, db):
+    await _configure_worker(db, monkeypatch)
+    _serve(monkeypatch, _worker_health(APP_VERSION))
+
+    await uc._tick()
+
+    assert uc.get_status(enabled=False, prompted=False)["worker"]["status"] == "current"
+
+
+async def test_a_worker_without_a_key_is_asked_without_a_header(monkeypatch, db):
+    await _configure_worker(db, monkeypatch, key="")
+    seen = _serve(monkeypatch, _worker_health(APP_VERSION))
+
+    await uc._tick()
+
+    assert "authorization" not in seen[0].headers
+
+
+async def test_an_older_worker_that_reports_no_version_is_unknown(monkeypatch, db):
+    """A worker built before this field existed answers /v1/health without it.
+    That is "unreported", never "current" — the point is to catch stale workers."""
+    await _configure_worker(db, monkeypatch)
+    _serve(monkeypatch, _worker_health(None))
+
+    await uc._tick()
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+
+    assert worker["status"] == "unknown"
+    assert worker["reason"] == "unreported"
+    assert worker["version"] is None
+
+
+async def test_an_unreachable_worker_is_unknown_and_does_not_raise(monkeypatch, db):
+    await _configure_worker(db, monkeypatch)
+
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    _serve(monkeypatch, handler)
+    await uc._tick()
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+
+    assert worker["status"] == "unknown"
+    assert worker["reason"] == "unreachable"
+
+
+async def test_a_worker_answering_401_is_unknown_with_a_reason(monkeypatch, db):
+    """A wrong shared secret must read as "check the key", not as "up to date"."""
+    await _configure_worker(db, monkeypatch)
+    _serve(monkeypatch, lambda request: httpx.Response(401, json={"detail": "bad key"}))
+
+    await uc._tick()
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+
+    assert worker["status"] == "unknown"
+    assert worker["reason"] == "unauthorized"
+
+
+async def test_a_failed_probe_does_not_erase_a_known_behind_worker(monkeypatch, db):
+    await _configure_worker(db, monkeypatch)
+    _serve(monkeypatch, _worker_health("0.0.1"))
+    await uc._tick()
+
+    def handler(request):
+        raise httpx.ConnectError("blip")
+
+    _serve(monkeypatch, handler)
+    await uc._tick()
+    worker = uc.get_status(enabled=False, prompted=False)["worker"]
+
+    assert worker["status"] == "behind"
+    assert worker["version"] == "0.0.1"
+
+
+async def test_the_github_check_and_the_worker_probe_run_in_the_same_tick(monkeypatch, db):
+    await _enable(db)
+    await _configure_worker(db, monkeypatch)
+
+    def handler(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={
+                "tag_name": f"v{APP_VERSION}",
+                "html_url": "https://github.com/jlafuenti/Book-Sync/releases/tag/x",
+            })
+        return _worker_health(APP_VERSION)(request)
+
+    seen = _serve(monkeypatch, handler)
+    await uc._tick()
+
+    assert sorted(r.url.host for r in seen) == ["api.github.com", "worker.example"]
+    status = uc.get_status(enabled=True, prompted=True)
+    assert status["status"] == "current"
+    assert status["worker"]["status"] == "current"
+
+
+async def test_kick_worker_probes_once_in_the_background(monkeypatch, db):
+    """Saving a new worker URL should not wait six hours to be checked."""
+    await _configure_worker(db, monkeypatch)
+    seen = _serve(monkeypatch, _worker_health("0.0.1"))
+
+    await uc.kick_worker()
+
+    assert len(seen) == 1
+    assert uc.get_status(enabled=False, prompted=False)["worker"]["status"] == "behind"
