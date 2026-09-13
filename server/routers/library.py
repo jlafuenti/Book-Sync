@@ -949,9 +949,11 @@ async def update_ebook_metadata(
         if value is not None:
             setattr(book, field, value)
     
-    # Write metadata back to the file
+    # Write metadata back to the file. Rewrites every entry of the EPUB zip,
+    # so it crosses to a thread rather than running on the event loop
+    # (issue #523).
     try:
-        _write_ebook_metadata(book.file_path, book)
+        await asyncio.to_thread(_write_ebook_metadata, book.file_path, book)
     except Exception as e:
         logger.warning(f"Failed to write metadata to ebook file: {e}")
     
@@ -1021,9 +1023,12 @@ async def update_audiobook_metadata(
         if value is not None:
             setattr(book, field, value)
     
-    # Write metadata back to the file
+    # Write metadata back to the file. Mutagen opens and saves the container,
+    # which for an MP3 whose ID3 padding is too small rewrites the whole
+    # file, so it crosses to a thread rather than running on the event loop
+    # (issue #523).
     try:
-        _write_audiobook_metadata(book.file_path, book)
+        await asyncio.to_thread(_write_audiobook_metadata, book.file_path, book)
     except Exception as e:
         logger.warning(f"Failed to write metadata to audiobook file: {e}")
     
@@ -1320,11 +1325,14 @@ async def resolve_metadata_discrepancy(
         # direction. Pinned by tests/test_request_transactions.py.
         await db.commit()
 
-        # Write back to files
+        # Write back to files. Each write crosses to a thread rather than
+        # running on the event loop (issue #523); the commit above still
+        # happens first, deliberately, so the ordering issue #259 relies on
+        # is unchanged.
         if ebook_changed:
-            _write_ebook_metadata(ebook.file_path, ebook)
+            await asyncio.to_thread(_write_ebook_metadata, ebook.file_path, ebook)
         if audio_changed:
-            _write_audiobook_metadata(audiobook.file_path, audiobook)
+            await asyncio.to_thread(_write_audiobook_metadata, audiobook.file_path, audiobook)
 
     return {"message": "Discrepancies resolved successfully"}
 

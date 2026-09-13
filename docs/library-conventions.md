@@ -71,6 +71,11 @@ Patterns are plain strings with angle-bracket tags, tried in order until one mat
 containing `/` is matched against the file's path relative to the library root; one without is
 matched against the filename alone (extension stripped).
 
+Hidden entries are skipped before any pattern is tried: any dot-prefixed directory or file (a
+hand-made `.recyclebin/`, a macOS `._*` resource fork, a hidden `.unimported-*` copy parked beside
+the real file) and the Synology system folders `@eaDir` and `#recycle` are pruned from the walk
+entirely, so nothing under them is ever imported.
+
 | Tag | Matches |
 |---|---|
 | `<Author>` | Anything up to a `/` |

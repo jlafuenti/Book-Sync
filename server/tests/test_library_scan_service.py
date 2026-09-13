@@ -83,6 +83,45 @@ def test_walk_tree_materialises_every_directory_and_is_empty_for_a_missing_root(
     assert library_scan._walk_tree(str(tmp_path / "absent")) == []
 
 
+def _all_files(tree):
+    return {os.path.basename(f) for _d, files in tree for f in files}
+
+
+def test_walk_tree_skips_hidden_entries_and_nas_system_folders(tmp_path):
+    # A hand-made recycle bin, and its contents, must not be descended into at all.
+    _touch(tmp_path / ".recyclebin" / "Axis Test (epub).epub")
+    # A macOS AppleDouble resource fork and a hand-parked "not really imported" copy,
+    # both hidden files sitting right beside a normal one in an ordinary folder.
+    _touch(tmp_path / "Author" / "._Axis Test.epub")
+    _touch(tmp_path / "Author" / ".unimported-axis-test.epub")
+    # Synology's NAS system folders.
+    _touch(tmp_path / "@eaDir" / "thumbnail.epub")
+    _touch(tmp_path / "#recycle" / "deleted.epub")
+    # The real file that must still be found despite its hidden siblings.
+    _touch(tmp_path / "Author" / "Axis Test.epub")
+
+    tree = library_scan._walk_tree(str(tmp_path))
+
+    assert _all_files(tree) == {"Axis Test.epub"}
+    # The hidden/system directories were pruned, not merely emptied of results —
+    # confirm none of them was even visited.
+    visited = {os.path.basename(d) for d, _files in tree}
+    assert visited.isdisjoint({".recyclebin", "@eaDir", "#recycle"})
+
+
+def test_multi_file_groups_ignores_hidden_audio_files(tmp_path, monkeypatch):
+    folder = tmp_path / "Dune"
+    _touch(folder / "01.mp3")
+    # A single hidden AppleDouble file beside one real track must not push the
+    # count to "two tracks" and flag the folder as a multi-file audiobook.
+    _touch(folder / "._01.mp3")
+    monkeypatch.setattr(library_scan.multi_file_audiobooks, "read_audio_tags", lambda p: {})
+
+    groups = library_scan._multi_file_groups(str(folder), str(tmp_path))
+
+    assert groups == []
+
+
 def test_multi_file_groups_reads_the_folder_and_tolerates_a_missing_one(tmp_path, monkeypatch):
     folder = tmp_path / "Dune"
     for i in range(1, 4):
