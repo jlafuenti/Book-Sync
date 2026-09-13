@@ -16,14 +16,6 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
-### Fixed
-
-- Database writes are committed before the response is sent. Under the pinned FastAPI the
-  session dependency's commit had been running *after* the response, so a client that read
-  straight after a write (the web app refreshing a list after an unpair, a phone re-syncing)
-  saw the old row, and a failed commit was reported as success. Every route now declares the
-  session with `scope="function"`, pinned by a test that walks the whole app (#524).
-
 ### Added
 
 - The System page says when the transcription worker is behind the server. The Jetson worker
@@ -45,6 +37,11 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Database writes are committed before the response is sent. Under the pinned FastAPI the
+  session dependency's commit had been running *after* the response, so a client that read
+  straight after a write (the web app refreshing a list after an unpair, a phone re-syncing)
+  saw the old row, and a failed commit was reported as success. Every route now declares the
+  session with `scope="function"`, pinned by a test that walks the whole app (#524).
 - `normalize_author` no longer treats every comma as a `Last, First` separator. A co-author
   list (`Ann Axis, Bob Bartleby`), a name with a suffix (`Ann Axis, Jr.`), an author with a
   narrator tacked on, or a value with two or more commas is now left as-is instead of being
