@@ -36,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.library_issue import MultiFileAudiobookFolder
+from services.metadata_utils import is_hidden_or_system_name
 from utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,16 @@ def classify_folder(
 
     Returns an empty list when nothing in the folder is a multi-file book.
     Non-audio names are ignored; a size that can't be read counts as 0.
+
+    Hidden and NAS-system names are ignored too (issue #525): a stray
+    AppleDouble `._track.mp3` fork beside the one real track it shadows must
+    not read as "two tracks" and flag a folder that is really a single file.
+    This is the one place both the full scan (via `_classify_tree`, over an
+    already-pruned `_walk_tree` result) and the targeted scan (via
+    `_multi_file_groups`'s raw `os.listdir`) funnel through, so filtering here
+    covers both callers.
     """
+    filenames = [n for n in filenames if not is_hidden_or_system_name(n)]
     by_ext: Dict[str, List[str]] = {}
     for name in filenames:
         ext = os.path.splitext(name)[1].lower()
