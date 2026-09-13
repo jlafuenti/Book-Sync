@@ -68,12 +68,24 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 2
+    ignore:
+      # The Python line is pinned three ways (server/.python-version, CI's
+      # python-version, this image) and moves in one hand-made PR — the suite
+      # has to have run on it first. Patch tags may still arrive.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: "docker"
     directory: "/web"
     schedule:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 2
+    ignore:
+      # Node stays on the active LTS line, which CI also runs; the bot offers
+      # the newest Current line (26) the moment it exists. Move it by hand with
+      # web-tests.yml when the next LTS lands.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "docker"
     directory: "/jetson"
     schedule:
