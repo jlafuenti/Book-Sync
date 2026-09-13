@@ -123,14 +123,12 @@ Both CI pipelines fail on known vulnerabilities in production dependencies (issu
 Every allow-list entry must carry a written justification and gets re-checked whenever the
 owning dependency is next touched.
 
-The one standing web exception is `@xmldom/xmldom`, reached through `epubjs` 0.3.x. npm's only
-fix is `epubjs@0.4.2`, a semver-major of the library that renders every book, and epub.js only
-falls back to xmldom when the browser's own parser is missing (`typeof DOMParser === "undefined"
-|| forceXMLDom` in `epubjs/src/utils/core.js`, `typeof XMLSerializer === "undefined" || isIE` in
-`epubjs/src/section.js`) — so the advisories are unreachable in a browser build. The full
-reasoning lives in `web/audit-ci.jsonc` next to the allow-listed IDs; `web/src/dependency-pins.test.js`
-stops a bot PR from taking the major to quiet the audit. Moving off 0.3.x is its own change, with a
-reader regression pass (issue #285).
+The web allow-list is empty. Its one long-standing entry was `@xmldom/xmldom`, reached through
+`epubjs` 0.3.x; epub.js 0.4.x moved to the unscoped, unmaintained `xmldom` instead (worse), so
+the fix is the `overrides` field in `web/package.json`, which lifts `@xmldom/xmldom` to a patched
+0.8.x underneath epub.js 0.3.93. `web/src/dependency-pins.test.js` pins both the override and the
+installed version, and stops a bot PR from taking the epub.js major to quiet the audit. Moving off
+0.3.x is its own change, with a reader regression pass (issue #285).
 
 `npm audit` without `--omit=dev` also reports dev-only advisories (vitest, esbuild, the nested vite
 under it). Those never ship to the browser, `skip-dev` excludes them from the gate, and clearing

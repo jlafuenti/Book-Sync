@@ -321,14 +321,23 @@ def test_every_action_reference_is_pinned_to_a_commit_sha(name):
 
 _DEPENDABOT_REL = ".github/dependabot.yml"
 
-# Ecosystem -> the directory it must watch. Four manifests, four ecosystems:
-# missing one means that half of the tree silently stops getting security PRs.
-_EXPECTED_ECOSYSTEMS = {
-    "pip": "/server",
-    "npm": "/web",
-    "gradle": "/android",
-    "github-actions": "/",
-}
+# (ecosystem, directory) pairs Dependabot must watch. Missing one means that
+# part of the tree silently stops getting update and security PRs. The three
+# Dockerfiles and the compose templates are watched too: `python:3.12-slim`,
+# `node:*-alpine`, `nginx-unprivileged` and `postgres:16-alpine` are shipped
+# dependencies like any other, and without a `docker` block nothing said the
+# web image was still building on a Node line that had reached end of life.
+_EXPECTED_WATCHES = [
+    ("pip", "/server"),
+    ("pip", "/jetson"),
+    ("npm", "/web"),
+    ("gradle", "/android"),
+    ("github-actions", "/"),
+    ("docker", "/server"),
+    ("docker", "/web"),
+    ("docker", "/jetson"),
+    ("docker-compose", "/"),
+]
 
 
 def test_dependabot_config_exists():
@@ -339,15 +348,27 @@ def test_dependabot_config_exists():
     )
 
 
-@pytest.mark.parametrize("ecosystem,directory", sorted(_EXPECTED_ECOSYSTEMS.items()))
+def _dependabot_blocks() -> list[tuple[str, str]]:
+    """(ecosystem, directory) for every update block, in file order."""
+    blocks = []
+    ecosystem = None
+    for line in _read(_DEPENDABOT_REL).splitlines():
+        eco = re.match(r'^\s*-\s*package-ecosystem:\s*"?([^"\s]+)"?', line)
+        if eco:
+            ecosystem = eco.group(1)
+            continue
+        directory = re.match(r'^\s*directory:\s*"?([^"\s]+)"?', line)
+        if directory and ecosystem is not None:
+            blocks.append((ecosystem, directory.group(1)))
+            ecosystem = None
+    return blocks
+
+
+@pytest.mark.parametrize("ecosystem,directory", _EXPECTED_WATCHES)
 def test_dependabot_watches_every_ecosystem(ecosystem, directory):
-    text = _read(_DEPENDABOT_REL)
-    assert re.search(rf'package-ecosystem:\s*"?{re.escape(ecosystem)}"?', text), (
-        f"{_DEPENDABOT_REL} declares no `{ecosystem}` update block"
-    )
-    assert re.search(rf'directory:\s*"?{re.escape(directory)}"?', text), (
-        f"{_DEPENDABOT_REL} has no update block watching `{directory}` "
-        f"(expected for {ecosystem})"
+    assert (ecosystem, directory) in _dependabot_blocks(), (
+        f"{_DEPENDABOT_REL} has no `{ecosystem}` update block watching "
+        f"`{directory}`; found {_dependabot_blocks()}"
     )
 
 
@@ -361,6 +382,94 @@ def test_dependabot_runs_weekly_and_groups_minor_and_patch():
     assert '"minor"' in text and '"patch"' in text, (
         f"{_DEPENDABOT_REL} must group minor and patch update-types so a routine "
         "week is one PR per ecosystem, not twenty"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Releases publish versioned images
+# ---------------------------------------------------------------------------
+#
+# `publish-images.yml` built `:main` and `:sha-…` only, so a release existed as
+# a git tag and a GitHub Release but never as an image an operator could pull
+# by version — and the demo tracked unreleased `main` while the update check
+# announced releases. A `v*` tag push now also publishes `:X.Y.Z` and
+# `:latest`, which is what makes "pull the versioned image" a real deploy route
+# in docs/releasing.md.
+
+_PUBLISH_WORKFLOW = "publish-images.yml"
+
+
+def _publish_workflow_text() -> str:
+    assert _PUBLISH_WORKFLOW in _workflow_names(), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} is missing."
+    )
+    return "\n".join(_workflow_lines(_PUBLISH_WORKFLOW))
+
+
+def test_a_release_tag_publishes_images():
+    text = _publish_workflow_text()
+    assert re.search(r"^\s+tags:\s*\[\s*[\"']?v\*[\"']?\s*\]", text, re.MULTILINE), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} has no `tags: [\"v*\"]` under its "
+        "`push:` trigger, so cutting a release publishes no image for it."
+    )
+
+
+def test_release_images_carry_the_version_and_latest():
+    text = _publish_workflow_text()
+    assert re.search(r"type=semver,pattern=\{\{version\}\}", text), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} does not tag images with the "
+        "release's semver version (`type=semver,pattern={{version}}`)."
+    )
+    assert re.search(r"type=raw,value=latest", text), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} publishes no `latest` tag; an "
+        "operator pulling without a version should get the newest release."
+    )
+    assert re.search(r"type=raw,value=main,enable=\{\{is_default_branch\}\}", text), (
+        f".github/workflows/{_PUBLISH_WORKFLOW} must limit the `main` tag to "
+        "pushes of the default branch, or a release tag push would move the "
+        "demo's `main` image to the tagged commit under the wrong name."
+    )
+
+
+# ---------------------------------------------------------------------------
+# The web image and CI build on the same, supported Node line
+# ---------------------------------------------------------------------------
+#
+# The image built on `node:20-alpine` for five months after Node 20 reached end
+# of life (April 2026), because nothing compared the Dockerfile's base to
+# anything. CI tests on the same major the image builds with, so a bump here
+# is exercised by the suite before it reaches a deploy.
+
+_NODE_FLOOR = 22  # the oldest Node line still in Active/Maintenance LTS
+
+
+def _web_image_node_major() -> int:
+    text = _read("web/Dockerfile")
+    match = re.search(r"^FROM node:(\d+)", text, re.MULTILINE)
+    assert match, "web/Dockerfile has no `FROM node:<major>` build stage"
+    return int(match.group(1))
+
+
+def _ci_node_major() -> int:
+    text = "\n".join(_workflow_lines("web-tests.yml"))
+    match = re.search(r'node-version:\s*"?(\d+)', text)
+    assert match, ".github/workflows/web-tests.yml sets no `node-version`"
+    return int(match.group(1))
+
+
+def test_the_web_image_builds_on_a_supported_node_line():
+    major = _web_image_node_major()
+    assert major >= _NODE_FLOOR, (
+        f"web/Dockerfile builds on node:{major}, which is past end of life. Move "
+        f"to node:{_NODE_FLOOR}-alpine or newer (and web-tests.yml with it)."
+    )
+
+
+def test_ci_tests_the_web_app_on_the_image_s_node_line():
+    assert _ci_node_major() == _web_image_node_major(), (
+        f"web-tests.yml runs Node {_ci_node_major()} but web/Dockerfile builds on "
+        f"Node {_web_image_node_major()}; keep them equal so the suite exercises "
+        "the runtime the image ships."
     )
 
 

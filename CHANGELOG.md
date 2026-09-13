@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Changed
+
+- The web image builds on Node 22 (`node:22-alpine`); Node 20 reached end of life in April 2026.
+  CI tests the web app on the same Node line, and Dependabot now watches the three Dockerfiles
+  and the compose templates so a base image cannot age out unnoticed again.
+- A release tag publishes versioned images: `ghcr.io/jlafuenti/tandem-server:X.Y.Z` and
+  `tandem-web:X.Y.Z`, plus `latest`. Pulling them is now a documented deploy route beside
+  building from source (`docs/releasing.md`).
+
 ## [0.1.0] - 2026-09-13
 
 The first tagged release. `0.1.0` is the version string the code has carried since the beginning,
