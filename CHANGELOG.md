@@ -35,6 +35,15 @@ operator must do by hand rather than read about afterwards.
   `tandem-web:X.Y.Z`, plus `latest`. Pulling them is now a documented deploy route beside
   building from source (`docs/releasing.md`).
 
+### Fixed
+
+- Clearing an ebook's series (`PATCH /api/library/ebooks/{id}` with `{"series": ""}`) now
+  actually sticks. `write_ebook_metadata` only removed the `calibre:series` /
+  `calibre:series_index` OPF metas when a series was being *set*, so an empty series left the old
+  tags in the file and the next library scan's fill-empty-fields step read them straight back
+  onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
+  string: delete both metas rather than leaving them untouched.
+
 ## [0.1.0] - 2026-09-13
 
 The first tagged release. `0.1.0` is the version string the code has carried since the beginning,
