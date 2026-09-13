@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- `normalize_author` no longer treats every comma as a `Last, First` separator. A co-author
+  list (`Ann Axis, Bob Bartleby`), a name with a suffix (`Ann Axis, Jr.`), an author with a
+  narrator tacked on, or a value with two or more commas is now left as-is instead of being
+  swapped into a fabricated name. This ran on every ingest and on `POST
+  /api/library/normalize`, so a rescan or a library-wide normalize used to re-mangle values
+  that had already been corrected by hand (issue #514).
+
 ### Added
 
 - The System page says when the transcription worker is behind the server. The Jetson worker

@@ -63,6 +63,16 @@ MEDIA_FILL_IF_NULL_FIELDS: tuple[str, ...] = (
 )
 
 
+#: Name suffixes that can follow a comma without meaning 'Last, First'
+#: (issue #514) -- e.g. 'Ann Axis, Jr.'. Matched case-insensitively against
+#: the whole part after the comma, dot included, so both punctuated and
+#: unpunctuated spellings are covered.
+_AUTHOR_SUFFIXES = frozenset({
+    "jr", "jr.", "sr", "sr.", "ii", "iii", "iv",
+    "phd", "ph.d.", "md", "esq", "esq.",
+})
+
+
 def normalize_author(author: str) -> Optional[str]:
     """
     Normalize author name to 'First Last' format.
@@ -70,20 +80,41 @@ def normalize_author(author: str) -> Optional[str]:
     - 'Last, First' -> 'First Last'
     - 'Jim Butcher' -> 'Jim Butcher' (no change)
     - 'Butcher, Jim' -> 'Jim Butcher'
+    - 'Modesitt, L. E.' -> 'L. E. Modesitt' (first name plus a middle name/initial)
     - Extra whitespace is stripped.
+
+    A comma is only treated as a 'Last, First' separator when the value looks
+    like a single name written that way (issue #514): exactly one comma, a
+    single-token last name before it, and a one- or two-token first name (an
+    optional middle name/initial) after it that is not a suffix. Anything
+    else that contains a comma is returned unchanged, with only whitespace
+    collapsed -- never swapped or split -- because guessing wrong fabricates
+    an author who doesn't exist:
+    - a co-author list ('Ann Axis, Bob Bartleby' -- both sides are
+      themselves multi-word full names)
+    - a suffix ('Ann Axis, Jr.')
+    - an author with a narrator tacked on ('Ann Axis, Narrator Name')
+    - two or more commas, or names joined with '&' / ' and '
+    Splitting and re-normalizing multi-author strings is out of scope for
+    this fix; see issue #514.
     """
     if not author: return None
     author = author.strip()
     if not author: return None
 
-    if "," in author:
-        parts = author.split(",", 1)
-        first = parts[1].strip()
-        last = parts[0].strip()
+    if "," not in author:
+        return author
+
+    if author.count(",") == 1 and "&" not in author and " and " not in author.lower():
+        last, first = (part.strip() for part in author.split(",", 1))
         if first and last:
-            return f"{first} {last}"
-        return last or first
-    return author
+            is_suffix = first.lower() in _AUTHOR_SUFFIXES
+            if not is_suffix and len(last.split()) == 1 and 1 <= len(first.split()) <= 2:
+                return f"{first} {last}"
+        else:
+            return last or first
+
+    return re.sub(r'\s+', ' ', author).strip()
 
 
 def normalize_series(series: str) -> Optional[str]:
