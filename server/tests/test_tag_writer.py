@@ -16,6 +16,14 @@ extraction was a pure move:
 * a container mutagen opens but which carries *no tags at all* is treated as
   unopenable, because mutagen's `FileType` is a mapping whose truthiness is
   its tag count (see `_read_embedded_metadata` for the same trap).
+
+The "clearing a description also clears the comment tags it can come back
+from" tests (issue #538) are the one place that does build genuine MP3/M4A
+containers (`tests.factories.write_minimal_mp3`/`write_minimal_m4a`), because
+the bug is about the *real* on-disk key an ID3 COMM frame gets — mutagen
+serializes it as `COMM:<desc>:<lang>` (e.g. `COMM::eng`) regardless of what
+dict key it was set under — and a stub dict keyed literally `"COMM"` can't
+reproduce that mismatch.
 """
 
 import zipfile
@@ -26,7 +34,7 @@ import pytest
 
 from services import tag_writer
 from services.metadata_extract import _read_embedded_metadata
-from tests.factories import write_epub
+from tests.factories import write_epub, write_minimal_m4a, write_minimal_mp3
 
 DC = "{http://purl.org/dc/elements/1.1/}"
 OPF = "{http://www.idpf.org/2007/opf}"
@@ -376,3 +384,67 @@ def test_a_failing_save_is_logged_not_raised(audio, monkeypatch, caplog):
     tag_writer.write_audiobook_metadata(audio, _book(title="T"))
 
     assert "Failed to write audio metadata" in caplog.text
+
+
+# ---------------------------------------------- real-file round trips (#538)
+#
+# Clearing a description must also remove the comment-shaped tags
+# `_read_embedded_metadata` fills a description back in from, or the next
+# library scan restores the very text the user just cleared.
+
+
+def test_clearing_the_description_removes_mp3_comment_frames(tmp_path):
+    from mutagen.id3 import COMM, TXXX, ID3
+    from mutagen.mp3 import MP3
+
+    path = write_minimal_mp3(str(tmp_path / "book.mp3"))
+    audio = MP3(path)
+    audio.add_tags()
+    audio.tags.add(COMM(encoding=3, lang="eng", desc="", text="Chapter 12"))
+    audio.tags.add(TXXX(encoding=3, desc="comment", text="Chapter 12"))
+    audio.save()
+
+    tag_writer.write_audiobook_metadata(path, _book(description=None))
+
+    saved = ID3(path)
+    assert list(saved.getall("COMM")) == []
+    assert "TXXX:comment" not in saved
+
+    file_meta = _read_embedded_metadata(path, "audiobook")
+    assert "description" not in file_meta
+
+
+def test_clearing_the_description_removes_mp4_comment_atom(tmp_path):
+    from mutagen.mp4 import MP4
+
+    path = write_minimal_m4a(str(tmp_path / "book.m4a"))
+    audio = MP4(path)
+    audio["\xa9cmt"] = ["Narrated by: Someone"]
+    audio.save()
+
+    tag_writer.write_audiobook_metadata(path, _book(description=None))
+
+    saved = MP4(path)
+    assert "\xa9cmt" not in saved
+
+    file_meta = _read_embedded_metadata(path, "audiobook")
+    assert "description" not in file_meta
+
+
+def test_writing_a_non_empty_description_leaves_an_unrelated_comment_tag_alone(tmp_path):
+    """Only clearing touches comment tags — writing a real description must
+    not invent new behaviour around a frame that has nothing to do with it."""
+    from mutagen.id3 import TXXX, ID3
+    from mutagen.mp3 import MP3
+
+    path = write_minimal_mp3(str(tmp_path / "book.mp3"))
+    audio = MP3(path)
+    audio.add_tags()
+    audio.tags.add(TXXX(encoding=3, desc="replaygain_track_gain", text="-6.2 dB"))
+    audio.save()
+
+    tag_writer.write_audiobook_metadata(path, _book(description="A real blurb"))
+
+    saved = ID3(path)
+    assert "TXXX:replaygain_track_gain" in saved
+    assert str(saved.getall("COMM")[0]) == "A real blurb"

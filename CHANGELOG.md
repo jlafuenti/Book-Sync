@@ -68,6 +68,12 @@ operator must do by hand rather than read about afterwards.
   tags in the file and the next library scan's fill-empty-fields step read them straight back
   onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
   string: delete both metas rather than leaving them untouched.
+- Clearing an audiobook's description now also survives the next library scan. `extract_metadata`
+  falls back to a comment-shaped tag when no description tag is present — ID3 `COMM` frames and
+  `TXXX:comment`, or MP4 `©cmt` — but `write_audiobook_metadata` only cleared the description
+  tags, so a description that came from one of those was read straight back in on the next scan.
+  The audio writer now removes the comment tags too when the description is cleared; writing a
+  real description leaves them untouched (#538).
 
 ## [0.1.0] - 2026-09-13
 
