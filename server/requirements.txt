@@ -13,7 +13,6 @@ psycopg2-binary==2.9.13
 # transitive `ecdsa` dependency whose Minerva timing advisory (CVE-2024-23342)
 # has no fixed release and would otherwise need a permanent pip-audit ignore.
 PyJWT==2.13.0
-passlib[bcrypt]==1.7.4
 bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
