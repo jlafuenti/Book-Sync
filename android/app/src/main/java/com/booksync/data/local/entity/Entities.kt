@@ -53,7 +53,10 @@ data class EBookEntity(
     val series: String?,
     val seriesIndex: Float?,
     val uploadedAt: String,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    // Cover image path as served by /api/files/covers/{filename}, from
+    // EBookResponse.cover_path on library sync. Null until the server provides one.
+    val coverFilename: String? = null
 )
 
 @Entity(tableName = "audiobooks")

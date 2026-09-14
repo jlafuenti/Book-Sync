@@ -182,7 +182,8 @@ class LibraryRepository @Inject constructor(
                 series = ebook.series,
                 seriesIndex = ebook.series_index,
                 uploadedAt = ebook.uploaded_at,
-                isDownloaded = existing?.isDownloaded ?: false
+                isDownloaded = existing?.isDownloaded ?: false,
+                coverFilename = ebook.cover_path ?: existing?.coverFilename
             )
         }
         eBookDao.upsertEBooks(entities)
@@ -453,6 +454,7 @@ class LibraryRepository @Inject constructor(
             seriesIndex = remote.series_index,
             uploadedAt = remote.uploaded_at,
             isDownloaded = false,
+            coverFilename = remote.cover_path,
         )
         eBookDao.upsertEBooks(listOf(entity))
         return entity

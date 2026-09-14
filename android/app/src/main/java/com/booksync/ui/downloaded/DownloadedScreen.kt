@@ -240,12 +240,18 @@ fun DownloadedScreen(
                             }
                             item.ebook != null -> {
                                 val ebook = item.ebook
+                                // No local cover cache for ebooks; Coil's disk cache
+                                // keeps a cover seen online for offline use.
+                                val coverModel = remember(ebook.id, ebook.coverFilename) {
+                                    ebook.coverFilename?.let { coverImageUrl(viewModel.serverUrl, it) }
+                                }
                                 BookCard(
                                     variant = BookCardVariant.SingleMedia(
                                         id = ebook.id,
                                         kind = BookCardVariant.SingleMedia.MediaKind.EBOOK,
                                         title = ebook.title,
                                         author = ebook.author,
+                                        coverImageModel = coverModel,
                                         isDownloaded = true,
                                         series = ebook.series,
                                         seriesIndex = ebook.seriesIndex,

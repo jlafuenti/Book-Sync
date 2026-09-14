@@ -372,9 +372,9 @@ fun BookDetailsScreen(
 private fun Hero(ui: BookDetailsUi, serverUrl: String) {
     val colors = Tandem.colors
     val context = LocalContext.current
-    val coverModel = remember(ui.audiobookIdForCover, ui.audiobookCoverPath, serverUrl) {
+    val coverModel = remember(ui.audiobookIdForCover, ui.coverPath, serverUrl) {
         val local = ui.audiobookIdForCover?.let { File(context.filesDir, "covers/$it.jpg") }
-        val coverPath = ui.audiobookCoverPath
+        val coverPath = ui.coverPath
         when {
             local != null && local.exists() -> local
             coverPath != null               -> coverImageUrl(serverUrl, coverPath)

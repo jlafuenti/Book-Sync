@@ -581,7 +581,7 @@ private fun ItemGrid(
         items(items, key = { it.key }) { item ->
             // Cover: local cached file (CoverArtHelper) first → server URL as fallback.
             val audiobookId = item.pair?.audiobookId ?: item.audiobook?.id
-            val coverPath   = item.pair?.audiobookCoverPath ?: item.audiobook?.coverFilename
+            val coverPath   = item.coverPath
             val coverModel = remember(audiobookId, coverPath) {
                 val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
                 when {
@@ -632,7 +632,7 @@ private fun SeriesGrid(
             val covers = remember(stack.seriesName, stack.items.size) {
                 stack.items.take(3).map { item ->
                     val audiobookId = item.pair?.audiobookId ?: item.audiobook?.id
-                    val coverPath   = item.pair?.audiobookCoverPath ?: item.audiobook?.coverFilename
+                    val coverPath   = item.coverPath
                     val localFile = audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
                     when {
                         localFile != null && localFile.exists() -> localFile
@@ -707,10 +707,10 @@ private fun LibraryItem.toVariant(coverModel: Any? = null): BookCardVariant = wh
         kind = BookCardVariant.SingleMedia.MediaKind.EBOOK,
         title = ebook.title,
         author = ebook.author,
+        coverImageModel = coverModel,
         isDownloaded = ebook.isDownloaded,
         series = series,
         seriesIndex = seriesIndex,
-        // No cover model for standalone ebooks (no audiobook ID to extract from)
     )
     audiobook != null  -> BookCardVariant.SingleMedia(
         id = audiobook.id,

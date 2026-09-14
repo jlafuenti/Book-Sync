@@ -10,9 +10,13 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.local.entity.UserProgressEntity
+import com.booksync.data.remote.BookSyncApi
+import com.booksync.data.remote.EBookResponse
+import com.booksync.data.remote.PageResponse
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -32,8 +36,10 @@ class LibraryRepositoryTest {
     private val audioBookDao = mockk<AudioBookDao>(relaxed = true)
     private val bookmarkDao = mockk<BookmarkDao>(relaxed = true)
     private val userProgressDao = mockk<UserProgressDao>(relaxed = true)
+    private val api = mockk<BookSyncApi>(relaxed = true)
 
     private fun library() = buildLibraryRepository(
+        api = api,
         bookPairDao = bookPairDao,
         eBookDao = eBookDao,
         audioBookDao = audioBookDao,
@@ -129,5 +135,56 @@ class LibraryRepositoryTest {
         assertEquals(2000L, times.pairs[8])
         assertEquals(mapOf(7 to 5L), times.ebooks)
         assertEquals(mapOf(7 to 6L), times.audiobooks)
+    }
+
+    // -----------------------------------------------------------------------
+    // Standalone ebook covers. The server has always sent `cover_path` on an
+    // ebook, but the DTO had no field for it and the entity no column, so every
+    // standalone ebook card showed the placeholder. Same rules as audiobooks.
+    // -----------------------------------------------------------------------
+
+    private fun remoteEbook(id: Int, coverPath: String?) = EBookResponse(
+        id = id, title = "E$id", filename = "e$id.epub", format = "epub",
+        uploaded_at = "2026-01-01T00:00:00", cover_path = coverPath,
+    )
+
+    @Test
+    fun `refreshing ebooks stores the server's cover path`() = runTest {
+        coEvery { api.getEbooks(any(), any()) } returns PageResponse(
+            items = listOf(remoteEbook(1, "/api/files/covers/ebook_1.jpg")), total = 1, page = 1, limit = 100,
+        )
+        coEvery { eBookDao.getEBookById(1) } returns null
+        val saved = slot<List<EBookEntity>>()
+        coEvery { eBookDao.upsertEBooks(capture(saved)) } returns Unit
+
+        library().refreshEbooks()
+
+        assertEquals("/api/files/covers/ebook_1.jpg", saved.captured.single().coverFilename)
+    }
+
+    @Test
+    fun `a refresh without a cover path keeps the cover already cached`() = runTest {
+        // refreshAudiobooks' rule: a server response missing the field (an older
+        // server, or a cover not yet extracted) must not wipe a known cover.
+        coEvery { api.getEbooks(any(), any()) } returns PageResponse(
+            items = listOf(remoteEbook(2, null)), total = 1, page = 1, limit = 100,
+        )
+        coEvery { eBookDao.getEBookById(2) } returns ebook(2).copy(coverFilename = "/api/files/covers/ebook_2.jpg")
+        val saved = slot<List<EBookEntity>>()
+        coEvery { eBookDao.upsertEBooks(capture(saved)) } returns Unit
+
+        library().refreshEbooks()
+
+        assertEquals("/api/files/covers/ebook_2.jpg", saved.captured.single().coverFilename)
+    }
+
+    @Test
+    fun `an ebook fetched on demand is cached with its cover path`() = runTest {
+        coEvery { eBookDao.getEBookById(3) } returns null
+        coEvery { api.getEbook(3) } returns remoteEbook(3, "/api/files/covers/ebook_3.jpg")
+
+        val entity = library().resolveEbookById(3)
+
+        assertEquals("/api/files/covers/ebook_3.jpg", entity?.coverFilename)
     }
 }

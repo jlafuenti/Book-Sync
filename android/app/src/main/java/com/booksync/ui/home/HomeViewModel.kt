@@ -54,6 +54,8 @@ data class HomeItem(
     // Audiobook cover path as served by /api/files/covers/{audiobookCoverPath}.
     // Null for ebooks or audiobooks whose cover the server hasn't catalogued yet.
     val audiobookCoverPath: String? = null,
+    // A standalone ebook's own cover path. Null for pairs and audiobooks.
+    val ebookCoverPath: String? = null,
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,
     val series: String? = null,
@@ -219,6 +221,7 @@ class HomeViewModel @Inject constructor(
                         ebookId = eb.id,
                         progressPercent = progress?.epubProgressPercent ?: 0f,
                         updatedAtMs = progress?.updatedAt ?: 0L,
+                        ebookCoverPath = eb.coverFilename,
                         ebookDownloaded = eb.isDownloaded,
                         series = eb.series,
                         seriesIndex = eb.seriesIndex,
