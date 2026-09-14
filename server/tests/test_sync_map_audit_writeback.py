@@ -163,3 +163,35 @@ async def test_patching_audiobook_metadata_refreshes_its_stored_hash(
     new_hash = hash_file(reread.file_path)
     assert new_hash != old_hash
     assert reread.file_hash == new_hash
+
+
+async def test_an_ebook_in_two_pairs_refreshes_both_maps(
+    db, tmp_path, make_client, editor_headers,
+):
+    # The pair constraint is on (ebook, audiobook), so one ebook may carry two
+    # aligned maps; a metadata edit must keep both healthy, not raise on the
+    # second row.
+    pair, path = await _seed_pair(db, tmp_path)
+    other_audio = tmp_path / "other.m4b"
+    other_audio.write_bytes(b"other placeholder audio bytes")
+    ab2 = AudioBook(title="Axis Test", filename=other_audio.name,
+                    file_path=str(other_audio), file_hash=hash_file(str(other_audio)))
+    db.add(ab2)
+    await db.flush()
+    pair2 = BookPair(ebook_id=pair.ebook_id, audiobook_id=ab2.id, status=PairStatus.SYNCED)
+    db.add(pair2)
+    await db.commit()
+    await db.refresh(pair2)
+    await make_sync_map(db, pair2.id, _points(PREVIEWS), epub_file_hash=hash_file(path))
+
+    async with make_client(library.router) as c:
+        resp = await c.patch(
+            f"/api/library/ebooks/{pair.ebook_id}",
+            headers=editor_headers,
+            json={"title": "A New Title"},
+        )
+    assert resp.status_code == 200
+
+    rows = await sync_map_audit.audit_sync_maps(db)
+    assert len(rows) == 2
+    assert {row["hash_status"] for row in rows} == {"match"}
