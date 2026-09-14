@@ -158,6 +158,45 @@ class PairReadinessTest {
     }
 
     @Test
+    fun `readiness for a synced pair never fetches the queue, even online`() = runTest {
+        // Every pair open goes through readiness(); a queue round trip on a pair that is
+        // already ready would add network latency to opening any book (issue #536).
+        val api = mockk<BookSyncApi>()
+        val bookPairDao = mockk<BookPairDao>()
+        coEvery { bookPairDao.getPairById(7) } returns pair(id = 7, status = "synced")
+        val networkMonitor = mockk<NetworkMonitor>()
+        every { networkMonitor.isOnline } returns MutableStateFlow(true)
+
+        val repository = TranscriptionRepository(
+            api = api,
+            networkMonitor = networkMonitor,
+            bookPairDao = bookPairDao,
+        )
+
+        assertNull(repository.readiness(7))
+        coVerify(exactly = 0) { api.getTranscriptionQueue() }
+    }
+
+    @Test
+    fun `readiness for a pair with a cached sync map never fetches the queue`() = runTest {
+        val api = mockk<BookSyncApi>()
+        val bookPairDao = mockk<BookPairDao>()
+        coEvery { bookPairDao.getPairById(8) } returns
+            pair(id = 8, status = "manual_matched", syncMapDownloaded = true)
+        val networkMonitor = mockk<NetworkMonitor>()
+        every { networkMonitor.isOnline } returns MutableStateFlow(true)
+
+        val repository = TranscriptionRepository(
+            api = api,
+            networkMonitor = networkMonitor,
+            bookPairDao = bookPairDao,
+        )
+
+        assertNull(repository.readiness(8))
+        coVerify(exactly = 0) { api.getTranscriptionQueue() }
+    }
+
+    @Test
     fun `readiness for an unknown pair id returns null`() = runTest {
         val api = mockk<BookSyncApi>()
         val bookPairDao = mockk<BookPairDao>()
