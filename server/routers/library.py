@@ -36,6 +36,7 @@ from models.book import EBook, AudioBook, BookPair, PairStatus
 from models.transcription_queue import TranscriptionQueueItem
 from models.progress import UserProgress
 from models.transcript import AudioTranscript
+from models.sync_map import SyncMap
 from schemas import (
     EBookResponse, AudioBookResponse, BookPairResponse,
     BookPairCreate, LibraryScanResponse, SearchResponse,
@@ -928,6 +929,48 @@ class MetadataUpdate(BaseModel):
 # tests can still stub them on this module.
 
 
+async def _refresh_write_back_hash(db: AsyncSession, book, *, is_ebook: bool) -> None:
+    """After the server rewrites `book`'s own file, keep stored hashes from
+    going stale (issue #533).
+
+    A metadata write-back changes only the container -- the EPUB's OPF, an
+    audio file's tags -- never the text or audio a sync map was aligned
+    against. Left alone, the book's own `file_hash` (the auto-pair and
+    duplicate-detection key) and, for an ebook, `sync_maps.epub_file_hash`
+    (the drift audit's provenance signal, `services/sync_map_audit.py`) would
+    keep describing bytes that no longer exist on disk -- turning an ordinary
+    title edit into a map the audit reports as `stale`.
+
+    Only ever called right after a write-back call this same request just
+    made, so recomputing here is provenance the server can vouch for -- unlike
+    a file some other tool replaced outside of Tandem, which the audit must
+    still catch. The hashing is the only blocking part and stays in the
+    caller's `asyncio.to_thread` hop; the DB reads/writes below run on the
+    event loop as normal, since `AsyncSession` isn't thread-safe.
+    """
+    if not book.file_path or not os.path.exists(book.file_path):
+        return
+    new_hash, new_size = await asyncio.to_thread(_hash_and_size, book.file_path)
+    book.file_hash = new_hash
+    book.file_size = new_size
+
+    if not is_ebook:
+        return
+
+    # Only a map that already carries provenance needs correcting -- one with
+    # a NULL `epub_file_hash` predates the column and stays "unknown" either
+    # way (services/sync_map_audit.py). The pair constraint is on the
+    # (ebook, audiobook) combination, so one ebook can sit in several pairs,
+    # each with its own map -- refresh every one of them.
+    sync_maps = (await db.execute(
+        select(SyncMap)
+        .join(BookPair, BookPair.id == SyncMap.book_pair_id)
+        .where(BookPair.ebook_id == book.id, SyncMap.epub_file_hash.isnot(None))
+    )).scalars().all()
+    for sync_map in sync_maps:
+        sync_map.epub_file_hash = new_hash
+
+
 @router.patch("/ebooks/{book_id}", response_model=EBookResponse)
 async def update_ebook_metadata(
     book_id: int,
@@ -954,9 +997,14 @@ async def update_ebook_metadata(
     # (issue #523).
     try:
         await asyncio.to_thread(_write_ebook_metadata, book.file_path, book)
+        # The rewrite above just changed the file's bytes without changing its
+        # text -- keep the book's own file_hash and any sync map's recorded
+        # provenance hash from describing a file that no longer exists
+        # (issue #533). Only reached on a successful write.
+        await _refresh_write_back_hash(db, book, is_ebook=True)
     except Exception as e:
         logger.warning(f"Failed to write metadata to ebook file: {e}")
-    
+
     await db.commit()
     await db.refresh(book)
     return book
@@ -1029,9 +1077,14 @@ async def update_audiobook_metadata(
     # (issue #523).
     try:
         await asyncio.to_thread(_write_audiobook_metadata, book.file_path, book)
+        # Same reasoning as the ebook PATCH above (issue #533): the container
+        # just got rewritten, so file_hash needs refreshing or it silently
+        # stops describing the file on disk. No sync map column tracks an
+        # audio hash, so this is the audiobook row's own file_hash only.
+        await _refresh_write_back_hash(db, book, is_ebook=False)
     except Exception as e:
         logger.warning(f"Failed to write metadata to audiobook file: {e}")
-    
+
     await db.commit()
     await db.refresh(book)
     return book
@@ -1329,10 +1382,17 @@ async def resolve_metadata_discrepancy(
         # running on the event loop (issue #523); the commit above still
         # happens first, deliberately, so the ordering issue #259 relies on
         # is unchanged.
+        # Refreshing the stored hashes below rides the request's normal final
+        # commit (`get_db`) rather than adding one of its own -- it is not the
+        # irreversible-side-effect case the commit above exists for, and both
+        # writers already re-run happily against a file whose hash needed
+        # refreshing anyway if this handler is retried (issue #533).
         if ebook_changed:
             await asyncio.to_thread(_write_ebook_metadata, ebook.file_path, ebook)
+            await _refresh_write_back_hash(db, ebook, is_ebook=True)
         if audio_changed:
             await asyncio.to_thread(_write_audiobook_metadata, audiobook.file_path, audiobook)
+            await _refresh_write_back_hash(db, audiobook, is_ebook=False)
 
     return {"message": "Discrepancies resolved successfully"}
 
