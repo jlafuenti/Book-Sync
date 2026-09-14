@@ -65,6 +65,14 @@ operator must do by hand rather than read about afterwards.
   tags in the file and the next library scan's fill-empty-fields step read them straight back
   onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
   string: delete both metas rather than leaving them untouched.
+- Editing a paired ebook's metadata no longer marks its sync map `stale` in the drift audit.
+  `PATCH /api/library/ebooks/{id}` and the ebook side of
+  `POST /api/library/pairs/{id}/resolve-discrepancies` rewrite the EPUB's OPF in place, which
+  changes the whole-file hash the audit compares even though the book's text is untouched; both
+  now recompute and store the file's hash right after a successful write-back, on the ebook's own
+  `file_hash` and on its sync map's recorded provenance hash. The audiobook equivalents refresh
+  the audiobook's own `file_hash` the same way. A file replaced by something other than the
+  server is unaffected and is still reported as drifted (#533).
 
 ## [0.1.0] - 2026-09-13
 
