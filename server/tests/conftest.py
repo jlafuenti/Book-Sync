@@ -89,11 +89,10 @@ from models.user import User  # noqa: E402
 from routers.auth import hash_password, create_access_token  # noqa: E402
 
 # Speed up bcrypt in tests: min rounds (4) turns each ~0.3s hash into ~ms, which
-# matters across the many make_user() calls. hash_password/verify_password read
-# the module-level pwd_context at call time, so reassigning it here is enough.
+# matters across the many make_user() calls. hash_password reads the
+# module-level BCRYPT_ROUNDS at call time, so reassigning it here is enough.
 import routers.auth as _auth  # noqa: E402
-from passlib.context import CryptContext as _CryptContext  # noqa: E402
-_auth.pwd_context = _CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4)
+_auth.BCRYPT_ROUNDS = 4
 
 
 def pytest_sessionfinish(session, exitstatus):

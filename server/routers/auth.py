@@ -13,7 +13,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import jwt
 from jwt import PyJWTError as JWTError
-from passlib.context import CryptContext
+import bcrypt
 from fastapi.security import OAuth2PasswordBearer
 
 from database import get_db
@@ -43,18 +43,39 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+# bcrypt work factor for bcrypt.gensalt(). Tests reassign this module
+# attribute to a low value (see conftest.py) so the ~0.3s-per-hash cost of the
+# default factor doesn't add up across the many make_user() calls in the
+# suite; hash_password reads it at call time, so reassigning it is enough.
+BCRYPT_ROUNDS = 12
+
+# bcrypt's C implementation only examines the first 72 bytes of its input and,
+# from 4.1 on (definitely 5.x), raises ValueError instead of truncating for
+# anything longer. passlib 1.7.4 truncated silently to match bcrypt's own
+# limit, so every existing hash in the database was produced from at most 72
+# bytes of the real password. Truncating here on both hash and verify
+# preserves that behavior: a >72-byte password still hashes/verifies (instead
+# of raising), and a password whose hash predates this change still matches.
+_BCRYPT_MAX_BYTES = 72
 
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password."""
-    return pwd_context.hash(password)
+    """Hash a plaintext password, producing a passlib-compatible $2b$ hash."""
+    pw_bytes = password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plaintext password against a hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plaintext password against a hash. Never raises: a malformed
+    or non-bcrypt stored hash (or anything else bcrypt rejects) is just a
+    failed verification, not an error."""
+    pw_bytes = plain_password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+    try:
+        return bcrypt.checkpw(pw_bytes, hashed_password.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def create_token(data: dict, expires_delta: timedelta) -> str:

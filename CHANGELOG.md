@@ -28,6 +28,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- Password hashing calls the `bcrypt` module directly instead of going through `passlib`,
+  whose 1.7.4 backend self-test raises under bcrypt 5. Existing `$2b$` hashes and the
+  72-byte password truncation both keep working unchanged (#515).
 - The web image builds on Node 22 (`node:22-alpine`); Node 20 reached end of life in April 2026.
   CI tests the web app on the same Node line, and Dependabot now watches the three Dockerfiles
   and the compose templates so a base image cannot age out unnoticed again.
