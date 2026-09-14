@@ -2,7 +2,7 @@
 #   pip install -r requirements.txt -r requirements-dev.txt
 # (httpx is already a prod dependency and provides ASGITransport + AsyncClient.)
 pytest==8.4.*
-pytest-asyncio==0.24.*
+pytest-asyncio==1.4.*
 # 7.x, not 5.x. #405 closed on the belief that pytest-cov 7 tripled the suite;
 # measured A/B on an idle machine with the CI invocation, it does not — 31m52s
 # under 7.1.0 against 32m46s under 5.0.0, i.e. marginally faster. The original
