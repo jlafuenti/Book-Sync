@@ -7,6 +7,7 @@ fixture in conftest.py.)
 """
 
 import itertools
+import struct
 import zipfile
 
 from sqlalchemy import select, text
@@ -62,6 +63,69 @@ def write_epub(path, spine_docs, *, manifest_order=None):
         z.writestr("OEBPS/content.opf", opf)
         for name, html in spine_docs:
             z.writestr(f"OEBPS/{name}", html)
+    return str(path)
+
+
+def write_minimal_mp3(path):
+    """Write a real, tiny MP3 stream (no tags) that mutagen can open.
+
+    `mutagen.mp3.MP3` looks for an MPEG audio sync frame and raises
+    `HeaderNotFoundError` on an ID3-only file, so an on-disk fixture for the
+    tag-write/re-extract round trip (issue #538) needs actual frame bytes, not
+    just a tag block. This is a single MPEG-1 Layer III frame header
+    (`0xFFFB9000`: no CRC, 128kbps, 44100Hz, no padding, stereo) padded out to
+    its 417-byte frame length and repeated — silence, not decodable audio, but
+    enough for mutagen to locate frames and mutagen/ID3 tag reads and writes to
+    work against a genuine file rather than a stub.
+    """
+    frame = bytes([0xFF, 0xFB, 0x90, 0x00]) + bytes(417 - 4)
+    with open(path, "wb") as f:
+        f.write(frame * 20)
+    return str(path)
+
+
+def write_minimal_m4a(path):
+    """Write a real, near-empty M4A/MP4 container that mutagen can open.
+
+    Hand-built rather than pulled from a bundled fixture (mutagen's own test
+    audio isn't installed with the package) — just enough ISO-BMFF structure
+    for `mutagen.mp4.MP4` to parse and save: `ftyp`, then `moov` holding an
+    `mvhd` and a `udta/meta/hdlr+ilst` chain for the tag atoms. No `mdat` or
+    `trak` — nothing plays it back, but tag read/write round-trips work
+    because mutagen's MP4 tag path never touches sample tables when there
+    aren't any.
+    """
+
+    def box(tag, payload=b""):
+        return struct.pack(">I4s", 8 + len(payload), tag) + payload
+
+    ftyp = box(b"ftyp", b"M4A " + struct.pack(">I", 0) + b"M4A mp42isom")
+    mvhd = box(
+        b"mvhd",
+        b"\x00" * 4  # version/flags
+        + b"\x00" * 4  # creation time
+        + b"\x00" * 4  # modification time
+        + struct.pack(">I", 1000)  # timescale
+        + struct.pack(">I", 0)  # duration
+        + struct.pack(">I", 0x00010000)  # rate
+        + struct.pack(">H", 0x0100)  # volume
+        + b"\x00" * 10  # reserved
+        + b"\x00" * 36  # matrix
+        + b"\x00" * 24  # predefined
+        + struct.pack(">I", 2),  # next track id
+    )
+    hdlr = box(
+        b"hdlr",
+        b"\x00" * 4  # version/flags
+        + b"\x00" * 4  # predefined
+        + b"mdir" + b"appl"
+        + b"\x00" * 12  # reserved
+        + b"\x00",  # empty name
+    )
+    meta = box(b"meta", b"\x00\x00\x00\x00" + hdlr + box(b"ilst", b""))
+    moov = box(b"moov", mvhd + box(b"udta", meta))
+    with open(path, "wb") as f:
+        f.write(ftyp + moov)
     return str(path)
 
 

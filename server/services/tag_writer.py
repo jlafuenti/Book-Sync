@@ -239,8 +239,15 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                 audio['trkn'] = [(int(book.series_index), 0)]
             if book.description:
                 audio['desc'] = [book.description]
-            elif 'desc' in audio:
-                del audio['desc']
+            else:
+                # Clearing the description must also remove the comment atom
+                # extract_metadata falls back to reading one from (`©cmt`,
+                # after `©des`/`desc`), or the next library scan fills the
+                # field right back in with whatever comment text a ripper
+                # left behind (issue #538).
+                for tag in ('desc', '\xa9cmt'):
+                    if tag in audio:
+                        del audio[tag]
             if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['\xa9day'] = [str(book.publish_year)]
                 
@@ -261,8 +268,21 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
             if book.description:
                 audio.tags['COMM'] = COMM(encoding=3, lang='eng', desc='', text=book.description)
-            elif audio.tags and 'COMM' in audio.tags:
-                del audio.tags['COMM']
+            elif audio.tags:
+                # extract_metadata reads a description back from *any* COMM
+                # frame, matched by key prefix rather than the exact
+                # desc/lang this function writes under -- ID3 keys a COMM
+                # frame by "COMM:<desc>:<lang>" (e.g. "COMM::eng"), not the
+                # literal "COMM" this function assigns to, so the on-disk key
+                # never matches that literal delete. TXXX:comment is the
+                # other slot rippers commonly leave a description-shaped
+                # string in. Leaving either behind means clearing the
+                # description doesn't survive the next library scan (#538).
+                for key in list(audio.tags.keys()):
+                    if key == 'COMM' or key.startswith('COMM:'):
+                        del audio.tags[key]
+                    elif key.startswith('TXXX:') and key[len('TXXX:'):].lower() == 'comment':
+                        del audio.tags[key]
             if getattr(book, 'genres', None) is not None: audio.tags['TCON'] = TCON(encoding=3, text=book.genres)
             if getattr(book, 'publish_year', None) is not None: audio.tags['TYER'] = TYER(encoding=3, text=str(book.publish_year))
             if getattr(book, 'publisher', None) is not None: audio.tags['TPUB'] = TPUB(encoding=3, text=book.publisher)
