@@ -267,10 +267,11 @@ fun HomeScreen(
                 item {
                     SectionHeader(
                         title = "In Queue",
-                        onSeeAll = { onSeeAll(HomeSeeAll.QUEUE) },
+                        onSeeAll = null,
                     )
                     QueueRow(
                         items = queueItems,
+                        serverUrl = viewModel.serverUrl,
                         onItemClick = { q -> openPair(q.pairId) },
                     )
                 }
@@ -299,8 +300,12 @@ fun HomeScreen(
     }
 }
 
-/** Deep-link hint passed to the caller so it can build the matching library URL. */
-enum class HomeSeeAll { CONTINUE, RECENTLY_ADDED, NEW, QUEUE }
+/**
+ * Deep-link hint passed to the caller so it can build the matching library URL.
+ * "In Queue" has none: the Library has no queue view, and pointing it at the NEW
+ * filter showed an unrelated list (issue #549).
+ */
+enum class HomeSeeAll { CONTINUE, RECENTLY_ADDED, NEW }
 
 // --------------------------------------------------------------------------
 // Subcomponents
@@ -308,10 +313,11 @@ enum class HomeSeeAll { CONTINUE, RECENTLY_ADDED, NEW, QUEUE }
 
 /**
  * [onDismiss], when given, renders a per-section "Dismiss" next to "See all"
- * (issue #222). Only "New Pairs" uses it today.
+ * (issue #222). Only "New Pairs" uses it today. "See all" itself appears only
+ * when [onSeeAll] is given.
  */
 @Composable
-private fun SectionHeader(title: String, onSeeAll: () -> Unit, onDismiss: (() -> Unit)? = null) {
+private fun SectionHeader(title: String, onSeeAll: (() -> Unit)?, onDismiss: (() -> Unit)? = null) {
     val colors = Tandem.colors
     Row(
         modifier = Modifier
@@ -331,14 +337,16 @@ private fun SectionHeader(title: String, onSeeAll: () -> Unit, onDismiss: (() ->
                 Text("Dismiss", color = colors.textSecondary, fontSize = 13.sp)
             }
         }
-        TextButton(onClick = onSeeAll) {
-            Text("See all", color = colors.accent, fontSize = 13.sp)
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = colors.accent,
-                modifier = Modifier.size(16.dp),
-            )
+        if (onSeeAll != null) {
+            TextButton(onClick = onSeeAll) {
+                Text("See all", color = colors.accent, fontSize = 13.sp)
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = colors.accent,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
     }
 }
@@ -456,8 +464,10 @@ private fun PairRow(
 @Composable
 private fun QueueRow(
     items: List<HomeQueueItem>,
+    serverUrl: String,
     onItemClick: (HomeQueueItem) -> Unit,
 ) {
+    val context = LocalContext.current
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -467,12 +477,23 @@ private fun QueueRow(
                 HomeQueueItem.QueueStatus.QUEUED       -> BadgeStatus.Queued
                 HomeQueueItem.QueueStatus.TRANSCRIBING -> BadgeStatus.Transcribing(queued.percent)
             }
+            // Same rule as PairRow: local cached file → server URL → placeholder.
+            val coverModel = remember(queued.audiobookId, queued.audiobookCoverPath) {
+                val localFile = queued.audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
+                when {
+                    localFile != null && localFile.exists() -> localFile
+                    queued.audiobookCoverPath != null ->
+                        coverImageUrl(serverUrl, queued.audiobookCoverPath)
+                    else -> null
+                }
+            }
             Box(modifier = Modifier.width(140.dp)) {
                 BookCard(
                     variant = BookCardVariant.Pair(
                         id = queued.pairId,
                         title = queued.title,
-                        author = null,
+                        author = queued.author,
+                        coverImageModel = coverModel,
                     ),
                     onClick = { onItemClick(queued) },
                     onOverflow = { /* overflow wired in Phase G */ },
