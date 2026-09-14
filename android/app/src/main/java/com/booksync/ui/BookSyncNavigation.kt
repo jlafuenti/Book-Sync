@@ -1,5 +1,7 @@
 package com.booksync.ui
 
+import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -34,9 +36,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.data.remote.TokenManager
 import com.booksync.ui.auth.LoginScreen
 import com.booksync.ui.components.MiniPlayerBar
+import com.booksync.ui.components.PairOpenGateViewModel
+import com.booksync.ui.components.TranscriptionStatusDialog
 import com.booksync.ui.components.decodePairIdFromMediaId
 import com.booksync.ui.diagnostics.DiagnosticsScreen
 import com.booksync.ui.downloaded.DownloadedScreen
@@ -256,6 +261,36 @@ fun BookSyncNavigation() {
         ).passwordResetGate()
     }
 
+    // One shared instance for every pair-opening surface (issue #536): scoped to
+    // the activity, not a NavBackStackEntry, since no ViewModel is otherwise
+    // obtained at this level and the dialog must be the same one whether the
+    // open came from Home, Library, Downloaded, Book Details, or the player's
+    // "Switch to Reader" button.
+    val pairOpenGate: PairOpenGateViewModel = hiltViewModel(context as ComponentActivity)
+    val pendingOpen by pairOpenGate.pending.collectAsState()
+    val gateCanTranscribe by pairOpenGate.canTranscribe.collectAsState()
+    val gateIsOnline by pairOpenGate.isOnline.collectAsState()
+    val gateMessage by pairOpenGate.message.collectAsState()
+
+    LaunchedEffect(gateMessage) {
+        gateMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            pairOpenGate.clearMessage()
+        }
+    }
+
+    pendingOpen?.let { pending ->
+        TranscriptionStatusDialog(
+            status = pending.status,
+            canTranscribe = gateCanTranscribe,
+            isOnline = gateIsOnline,
+            continueLabel = pending.continueLabel,
+            onContinue = { pairOpenGate.continueAnyway() },
+            onTranscribe = { pairOpenGate.transcribe() },
+            onDismiss = { pairOpenGate.dismiss() },
+        )
+    }
+
     // Resolve start destination based on persisted auth token.
     //
     // Note there is no getMe() probe here for must_reset_password (issue #209).
@@ -337,7 +372,7 @@ fun BookSyncNavigation() {
         }
 
         composable(Routes.MAIN) {
-            MainScaffold(outerNavController = navController)
+            MainScaffold(outerNavController = navController, gate = pairOpenGate)
         }
 
         composable(Routes.FORCE_PASSWORD_RESET) {
@@ -415,11 +450,13 @@ fun BookSyncNavigation() {
                 pairId = pairId,
                 onBack = { navController.popBackStack() },
                 onSwitchToReader = { audioMs ->
-                    // Carry the position the user is actually at, so the reader
-                    // opens the matching page rather than the stored (possibly
-                    // hours-stale) ebook coordinate.
-                    navController.navigate(Routes.reader(pairId, audioMs)) {
-                        popUpTo(Routes.MAIN)
+                    pairOpenGate.requestOpen(pairId, "Switch anyway") {
+                        // Carry the position the user is actually at, so the reader
+                        // opens the matching page rather than the stored (possibly
+                        // hours-stale) ebook coordinate.
+                        navController.navigate(Routes.reader(pairId, audioMs)) {
+                            popUpTo(Routes.MAIN)
+                        }
                     }
                 },
             )
@@ -456,9 +493,9 @@ fun BookSyncNavigation() {
         ) {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
-                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onRead = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.reader(pairId)) } },
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
-                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
         }
@@ -468,9 +505,9 @@ fun BookSyncNavigation() {
         ) {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
-                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onRead = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.reader(pairId)) } },
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
-                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
         }
@@ -480,9 +517,9 @@ fun BookSyncNavigation() {
         ) {
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
-                onRead = { pairId -> navController.navigate(Routes.reader(pairId)) },
+                onRead = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.reader(pairId)) } },
                 onReadStandalone = { ebookId -> navController.navigate(Routes.readerStandalone(ebookId)) },
-                onListen = { pairId -> navController.navigate(Routes.player(pairId)) },
+                onListen = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.player(pairId)) } },
                 onListenStandalone = { audiobookId -> navController.navigate(Routes.playerStandalone(audiobookId)) },
             )
         }
@@ -494,7 +531,7 @@ fun BookSyncNavigation() {
  * [MiniPlayerBar] directly above it so audio controls stay reachable across tabs.
  */
 @Composable
-private fun MainScaffold(outerNavController: NavHostController) {
+private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGateViewModel) {
     val bottomNavController = rememberNavController()
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -543,8 +580,8 @@ private fun MainScaffold(outerNavController: NavHostController) {
             composable(Routes.HOME) {
                 HomeScreen(
                     onSearchClick     = { outerNavController.navigate(Routes.SEARCH) },
-                    onOpenPairReader  = { outerNavController.navigate(Routes.reader(it)) },
-                    onOpenPairPlayer  = { outerNavController.navigate(Routes.player(it)) },
+                    onOpenPairReader  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
+                    onOpenPairPlayer  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
                     onOpenEbook       = { ebookId -> outerNavController.navigate(Routes.readerStandalone(ebookId)) },
                     onOpenAudiobook   = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onOpenPairDetails      = { outerNavController.navigate(Routes.bookDetailsPair(it)) },
@@ -582,8 +619,8 @@ private fun MainScaffold(outerNavController: NavHostController) {
                 val groupArg  = args?.getString("group")?.equals("series", ignoreCase = true)
 
                 LibraryScreen(
-                    onBookSelect             = { outerNavController.navigate(Routes.reader(it)) },
-                    onAudioSelect            = { outerNavController.navigate(Routes.player(it)) },
+                    onBookSelect             = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
+                    onAudioSelect            = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
                     onStandaloneAudioSelect  = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onOpenDetails            = { item ->
                         val route = when {
@@ -605,8 +642,8 @@ private fun MainScaffold(outerNavController: NavHostController) {
 
             composable(Routes.DOWNLOADED) {
                 DownloadedScreen(
-                    onPairBookSelect  = { outerNavController.navigate(Routes.reader(it)) },
-                    onPairAudioSelect = { outerNavController.navigate(Routes.player(it)) },
+                    onPairBookSelect  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
+                    onPairAudioSelect = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
                     onEbookSelect     = { ebookId -> outerNavController.navigate(Routes.readerStandalone(ebookId)) },
                     onAudiobookSelect = { outerNavController.navigate(Routes.playerStandalone(it)) },
                     onOpenPairDetails     = { outerNavController.navigate(Routes.bookDetailsPair(it)) },

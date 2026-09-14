@@ -45,6 +45,7 @@ internal fun buildRepository(
     deviceIdManager: DeviceIdManager = mockk(relaxed = true),
     json: Json = Json { ignoreUnknownKeys = true },
     userScopeProvider: UserScopeProvider = testScopeProvider(),
+    transcription: TranscriptionRepository = mockk(relaxed = true),
 ): BookSyncRepository = BookSyncRepository(
     library = buildLibraryRepository(
         api = api,
@@ -80,6 +81,7 @@ internal fun buildRepository(
         json = json,
         userScopeProvider = userScopeProvider,
     ),
+    transcription = transcription,
 )
 
 /** As [buildPositionRepository], for a [LibraryRepository] tested directly. */
