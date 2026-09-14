@@ -51,7 +51,9 @@ Its value no longer tells you whether an upload has happened; the Play Console d
 
 1. **Decide the number.** Semver against the previous tag: breaking API change or a migration an
    operator cannot reverse → major (or minor, pre-1.0); new behaviour → minor; fixes only → patch.
-2. **Bump the four files** in the table above, plus `versionCode`.
+2. **Bump the four files** in the table above, plus `versionCode`, then regenerate the
+   committed API export — `python server/scripts/export_openapi.py` — because its
+   `info.version` is `APP_VERSION` and `tests/test_openapi_export.py` fails on a stale copy.
 3. **Update `CHANGELOG.md`.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh
    empty `## [Unreleased]` above it, and add an `### Upgrade notes` subsection if the release
    contains an irreversible migration, a removed endpoint, or a minimum app version.
@@ -179,7 +181,7 @@ hit it is usually you.
 
 ## Checklist
 
-- [ ] Three version literals bumped, plus `versionCode`
+- [ ] Four version literals bumped, plus `versionCode`; `docs/openapi.json` regenerated
 - [ ] `CHANGELOG.md`: version heading dated, new empty `Unreleased`, upgrade notes if needed
 - [ ] Suites pass locally
 - [ ] Merged to `main`, tag pushed

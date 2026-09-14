@@ -51,7 +51,7 @@ except LookupError:
 # /v1/health as `worker_version`; the main server compares it with its own
 # and the System page says when the worker is behind and needs a rebuild.
 # A contract test on the server side fails the build if the four disagree.
-WORKER_VERSION = "0.1.0"
+WORKER_VERSION = "0.2.0"
 
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
