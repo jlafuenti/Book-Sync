@@ -23,6 +23,8 @@ data class BookPairEntity(
     val audiobookFilename: String,
     val audiobookFormat: String,
     val audiobookDurationSeconds: Int?,
+    // The server's PairStatus (`server/models/book.py`):
+    //   "unmatched" / "auto_matched" / "manual_matched" / "transcribing" / "synced" / "error"
     val status: String,
     val ebookDownloaded: Boolean = false,
     val audiobookDownloaded: Boolean = false,

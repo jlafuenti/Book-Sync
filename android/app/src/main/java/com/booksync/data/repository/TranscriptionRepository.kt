@@ -1,5 +1,6 @@
 package com.booksync.data.repository
 
+import com.booksync.data.local.dao.BookPairDao
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.dto.QueueItemResponse
 import com.booksync.data.remote.dto.TranscriptionStatus
@@ -18,11 +19,14 @@ import javax.inject.Singleton
  *     [Result.failure] with [OfflineException] when the device is offline.
  *   - [observeStatus] and [activeQueueItemsFlow] are polling flows; they emit
  *     whatever the server last returned and stop updating while offline.
+ *   - [readiness] never throws or requires connectivity — offline, it falls
+ *     back to the cached pair status alone.
  */
 @Singleton
 class TranscriptionRepository @Inject constructor(
     private val api: BookSyncApi,
     private val networkMonitor: NetworkMonitor,
+    private val bookPairDao: BookPairDao,
 ) {
 
     /** Thrown when a network-only mutation is attempted while offline. */
@@ -97,13 +101,34 @@ class TranscriptionRepository @Inject constructor(
         while (true) {
             val items = if (networkMonitor.isOnline.value) {
                 runCatching { api.getTranscriptionQueue() }.getOrElse { emptyList() }
-                    .filter { it.status == "pending" || it.status == "processing" }
+                    .filter { it.status == "pending" || it.status == "in_progress" || it.status == "processing" }
             } else {
                 emptyList()
             }
             emit(items)
             delay(intervalMs)
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Readiness
+    // -------------------------------------------------------------------------
+
+    /**
+     * What to tell the user before opening/switching [pairId] (issue #535,
+     * feeding the dialog in #536). Null means ready — no dialog needed.
+     *
+     * Reads the pair from Room and, when online, the live queue once; never
+     * throws. An unknown [pairId] returns null.
+     */
+    suspend fun readiness(pairId: Int): TranscriptionStatus? {
+        val pair = bookPairDao.getPairById(pairId) ?: return null
+        val queueItems = if (networkMonitor.isOnline.value) {
+            runCatching { api.getTranscriptionQueue() }.getOrElse { emptyList() }
+        } else {
+            emptyList()
+        }
+        return PairReadiness.readinessFor(pair, queueItems)
     }
 
     companion object {

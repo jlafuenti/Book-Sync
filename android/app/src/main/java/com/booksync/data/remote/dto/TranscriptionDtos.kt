@@ -11,8 +11,10 @@ import kotlinx.serialization.Serializable
  * Response from `POST /api/transcription/{pairId}/start`
  * and `GET /api/transcription/queue`.
  *
- * [status] matches the server's queue item status:
- *   "pending" / "processing" / "completed" / "failed" / "cancelled"
+ * [status] matches the server's queue item status
+ *   (`server/models/transcription_queue.py`):
+ *   "pending" / "in_progress" / "completed" / "failed" / "cancelled"
+ *   ("processing" is a legacy spelling kept as an alias in the mapper below.)
  * [progress] is 0.0–1.0 (multiply by 100 for percent).
  */
 @Serializable
@@ -35,9 +37,11 @@ data class QueueItemResponse(
 /**
  * Response from `GET /api/transcription/{pairId}/status`.
  *
- * [status] is the book pair's PairStatus:
- *   "unpaired" / "matched" / "pending" / "processing" / "synced" / "failed"
- * [progress] is 0.0–1.0 when status == "processing".
+ * [status] is the book pair's PairStatus (`server/models/book.py`):
+ *   "unmatched" / "auto_matched" / "manual_matched" / "transcribing" / "synced" / "error"
+ *   ("pending", "processing" and "failed" are legacy spellings kept as
+ *   aliases in the mapper below.)
+ * [progress] is 0.0–1.0 when status == "transcribing".
  */
 @Serializable
 data class TranscriptionStatusResponse(
@@ -66,18 +70,23 @@ sealed class TranscriptionStatus {
     /** Map from the server's pair `status` string to a UI state (no queue item present). */
     companion object {
         fun fromPairStatus(status: String, progress: Float?): TranscriptionStatus = when (status) {
-            "synced"     -> Transcribed
-            "failed"     -> Failed(null)
-            "processing" -> Transcribing(((progress ?: 0f) * 100).toInt())
-            "pending"    -> Queued(0)
-            else         -> NotTranscribed  // matched, unpaired
+            "synced"                 -> Transcribed
+            "transcribing"           -> Transcribing(((progress ?: 0f) * 100).toInt())
+            "error"                  -> Failed(null)
+            // Legacy spellings, kept as aliases.
+            "processing"             -> Transcribing(((progress ?: 0f) * 100).toInt())
+            "pending"                -> Queued(0)
+            "failed"                 -> Failed(null)
+            else                     -> NotTranscribed  // unmatched, auto_matched, manual_matched
         }
 
         fun fromQueueItem(item: QueueItemResponse): TranscriptionStatus = when (item.status) {
-            "processing" -> Transcribing(((item.progress ?: 0f) * 100).toInt())
-            "completed"  -> Transcribed
+            "in_progress" -> Transcribing(((item.progress ?: 0f) * 100).toInt())
+            // Legacy spelling, kept as an alias.
+            "processing"  -> Transcribing(((item.progress ?: 0f) * 100).toInt())
+            "completed"   -> Transcribed
             "failed", "cancelled" -> Failed(item.error_message ?: item.message)
-            else         -> Queued(item.position)  // pending
+            else          -> Queued(item.position)  // pending
         }
     }
 }

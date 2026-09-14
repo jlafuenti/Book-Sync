@@ -335,5 +335,6 @@ object AppModule {
     fun provideTranscriptionRepository(
         api: BookSyncApi,
         networkMonitor: NetworkMonitor,
-    ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor)
+        bookPairDao: BookPairDao,
+    ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor, bookPairDao)
 }
