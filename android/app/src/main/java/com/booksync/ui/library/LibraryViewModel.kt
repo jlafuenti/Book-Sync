@@ -18,6 +18,7 @@ import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.LastOpenedTimes
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
+import com.booksync.data.repository.SyncMapAutoFetch
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
@@ -369,6 +370,7 @@ class LibraryViewModel @Inject constructor(
                 repository.refreshEbooks()
                 repository.refreshAudiobooks()
                 val pairs = repository.getPairsFlow().first()
+                fetchMissingSyncMaps(pairs)
                 viewModelScope.launch(Dispatchers.IO) {
                     repository.processPendingSync()
                     repository.syncAllBookmarksAndProgress(pairs)
@@ -389,6 +391,22 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Queue the `SYNC_MAP` download for every pair [SyncMapAutoFetch.needsSyncMapFetch]
+     * (issue #537), once per successful [refresh].
+     *
+     * `KEEP` rather than [refreshSyncData]'s `REPLACE`: [refresh] runs on app start,
+     * pull-to-refresh, and now on every queue exit (see [observeQueueExits]) — often
+     * seconds apart — and restarting a fetch already in flight would only waste
+     * bytes and delay it. This is the only sweep: Downloaded/Home read the same
+     * Room cache this call populates, so neither needs its own.
+     */
+    private fun fetchMissingSyncMaps(pairs: List<BookPairEntity>) {
+        SyncMapAutoFetch.pairsToFetch(pairs).forEach { pairId ->
+            enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
+        }
+    }
+
     // --- Download progress (observed from WorkManager) ---------------------
 
     private val _downloadingProgress = MutableStateFlow<Map<Int, Int>>(emptyMap())
@@ -398,6 +416,29 @@ class LibraryViewModel @Inject constructor(
     init {
         refresh(silent = true)
         observeWorkManager()
+        observeQueueExits()
+    }
+
+    /**
+     * Silently re-[refresh] whenever a pair leaves [activeTranscribingPairIds]
+     * (issue #537), so [fetchMissingSyncMaps] runs within seconds of a
+     * transcription finishing while the app is open, rather than waiting for
+     * the next app start or pull-to-refresh.
+     *
+     * `previous` starts null and is guarded by [SyncMapAutoFetch.leftActiveSet]
+     * so the first emission — the initial poll result, not a real transition —
+     * never triggers a refresh on its own.
+     */
+    private fun observeQueueExits() {
+        viewModelScope.launch {
+            var previous: Set<Int>? = null
+            activeTranscribingPairIds.collect { current ->
+                if (SyncMapAutoFetch.leftActiveSet(previous, current).isNotEmpty()) {
+                    refresh(silent = true)
+                }
+                previous = current
+            }
+        }
     }
 
     private fun observeWorkManager() {
@@ -451,9 +492,14 @@ class LibraryViewModel @Inject constructor(
     fun downloadStandaloneAudiobook(audio: AudioBookEntity) =
         enqueue(audio.id, "STANDALONE_AUDIOBOOK", "download_standalone_audio_${audio.id}")
 
-    private fun enqueue(pairId: Int, type: String, uniqueName: String) {
+    private fun enqueue(
+        pairId: Int,
+        type: String,
+        uniqueName: String,
+        policy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE,
+    ) {
         val request = DownloadWorker.request(pairId, type)
-        workManager.enqueueUniqueWork(uniqueName, ExistingWorkPolicy.REPLACE, request)
+        workManager.enqueueUniqueWork(uniqueName, policy, request)
         _downloadingProgress.value = _downloadingProgress.value + (pairId to 0)
     }
 
