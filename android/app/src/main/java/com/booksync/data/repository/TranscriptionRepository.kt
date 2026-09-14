@@ -123,6 +123,10 @@ class TranscriptionRepository @Inject constructor(
      */
     suspend fun readiness(pairId: Int): TranscriptionStatus? {
         val pair = bookPairDao.getPairById(pairId) ?: return null
+        // Every pair open passes through here (issue #536), so a pair that is
+        // already ready must answer from the cache alone: a queue round trip
+        // would add network latency to opening any book.
+        if (PairReadiness.readinessFor(pair, emptyList()) == null) return null
         val queueItems = if (networkMonitor.isOnline.value) {
             runCatching { api.getTranscriptionQueue() }.getOrElse { emptyList() }
         } else {
