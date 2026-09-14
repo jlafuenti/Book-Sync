@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-14
+
 ### Added
 
 - The System page says when the transcription worker is behind the server. The Jetson worker
@@ -37,6 +39,19 @@ operator must do by hand rather than read about afterwards.
 - A release tag publishes versioned images: `ghcr.io/jlafuenti/tandem-server:X.Y.Z` and
   `tandem-web:X.Y.Z`, plus `latest`. Pulling them is now a documented deploy route beside
   building from source (`docs/releasing.md`).
+- Dependency updates since 0.1.0, all via Dependabot: numpy 2 (`>=2.5.3`), bcrypt 4.3.0,
+  psycopg2-binary 2.9.13, audible-cli 0.6, tzdata 2026.3, torch `>=2.14` and tqdm `>=4.70`
+  (server); mutagen 1.48 and python-multipart 0.0.32 (Jetson worker); jsdom 30 (web, dev
+  only); Compose BOM 2026.09 and six minor/patch Android libraries; and the GitHub Actions
+  majors `actions/checkout` 7, `actions/upload-artifact` 7, `gradle/actions/setup-gradle` 6
+  plus `actions/setup-java` 6.0.1. Held back with issues: vite 8 / `@vitejs/plugin-react` 6
+  (#516), pytest 9 (#517).
+- Android app 0.2.0 (versionCode 200) ships with this release. Opening or switching a pair
+  whose transcription has not finished now says so — not transcribed, in the queue at
+  position n, transcribing, or failed — with "Open anyway" always available and a Transcribe
+  button for editors; the sync map downloads on its own once transcription finishes, while
+  the app is open. The app also maps the server's real transcription status values, so
+  "transcribing" and "error" no longer display as "not transcribed" (#535, #536, #537).
 
 ### Fixed
 
@@ -68,8 +83,6 @@ operator must do by hand rather than read about afterwards.
   tags in the file and the next library scan's fill-empty-fields step read them straight back
   onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
   string: delete both metas rather than leaving them untouched.
-### Fixed
-
 - Editing a paired ebook's metadata no longer marks its sync map `stale` in the drift audit.
   `PATCH /api/library/ebooks/{id}` and the ebook side of
   `POST /api/library/pairs/{id}/resolve-discrepancies` rewrite the EPUB's OPF in place, which
