@@ -399,7 +399,17 @@ fun BookSyncNavigation() {
             SearchScreen(
                 onBack = { navController.popBackStack() },
                 onResultSelect = { item, pairTarget ->
-                    Routes.searchDestination(item, pairTarget)?.let { navController.navigate(it) }
+                    Routes.searchDestination(item, pairTarget)?.let { route ->
+                        // A pair headed for the reader or the player goes through the
+                        // not-synced gate like every other surface (issue #536); its
+                        // details screen, and standalone books, never do.
+                        val pairId = item.pairId
+                        if (pairId != null && route != Routes.bookDetailsPair(pairId)) {
+                            pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(route) }
+                        } else {
+                            navController.navigate(route)
+                        }
+                    }
                 },
             )
         }
