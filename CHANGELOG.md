@@ -28,6 +28,9 @@ operator must do by hand rather than read about afterwards.
 
 ### Changed
 
+- Password hashing calls the `bcrypt` module directly instead of going through `passlib`,
+  whose 1.7.4 backend self-test raises under bcrypt 5. Existing `$2b$` hashes and the
+  72-byte password truncation both keep working unchanged (#515).
 - The web image builds on Node 22 (`node:22-alpine`); Node 20 reached end of life in April 2026.
   CI tests the web app on the same Node line, and Dependabot now watches the three Dockerfiles
   and the compose templates so a base image cannot age out unnoticed again.
@@ -65,6 +68,8 @@ operator must do by hand rather than read about afterwards.
   tags in the file and the next library scan's fill-empty-fields step read them straight back
   onto the row. The EPUB writer now matches the audio writer's existing behavior for an empty
   string: delete both metas rather than leaving them untouched.
+### Fixed
+
 - Editing a paired ebook's metadata no longer marks its sync map `stale` in the drift audit.
   `PATCH /api/library/ebooks/{id}` and the ebook side of
   `POST /api/library/pairs/{id}/resolve-discrepancies` rewrite the EPUB's OPF in place, which
@@ -73,6 +78,12 @@ operator must do by hand rather than read about afterwards.
   `file_hash` and on its sync map's recorded provenance hash. The audiobook equivalents refresh
   the audiobook's own `file_hash` the same way. A file replaced by something other than the
   server is unaffected and is still reported as drifted (#533).
+- Clearing an audiobook's description now also survives the next library scan. `extract_metadata`
+  falls back to a comment-shaped tag when no description tag is present — ID3 `COMM` frames and
+  `TXXX:comment`, or MP4 `©cmt` — but `write_audiobook_metadata` only cleared the description
+  tags, so a description that came from one of those was read straight back in on the next scan.
+  The audio writer now removes the comment tags too when the description is cleared; writing a
+  real description leaves them untouched (#538).
 
 ## [0.1.0] - 2026-09-13
 

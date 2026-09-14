@@ -204,6 +204,20 @@ you can fetch the ebook, the audio, or both — plus the pair's sync map, so swi
 reading and listening keeps working with no network. Unpaired ebooks and audiobooks can be
 downloaded on their own too.
 
+**Not synced yet.** Opening a pair whose transcription has not finished (from any screen), or
+pressing switch-to-audio in the reader / switch-to-reader in the player, shows a dismissible dialog
+saying why the place will not carry over: not transcribed, in the queue at position n, transcribing
+at p %, or failed. "Open anyway" / "Switch anyway" always work. Editors and above get a Transcribe
+button (the server's own floor for `POST /api/transcription/{id}/start`); anyone else is told to
+ask whoever runs the server. The dialog stops on its own once the sync map is on the device.
+(Issue #536.)
+
+**The sync map arrives on its own.** After every library refresh (app start, pull-to-refresh, and a
+refresh that fires when a pair leaves the transcription queue while the app is open), a synced pair
+that has the ebook or audiobook on the device but no cached sync map queues a `SYNC_MAP` download.
+No background job: if the app is closed when transcription finishes, the next launch fetches it.
+(Issue #537.)
+
 Two things need the file rather than the stream:
 
 - **Offline.** With no connection and no local copy, the transport controls are disabled and the

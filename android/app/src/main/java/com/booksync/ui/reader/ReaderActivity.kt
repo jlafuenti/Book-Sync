@@ -8,18 +8,29 @@ import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.booksync.R
+import com.booksync.data.auth.hasMinRole
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.remote.TokenManager
+import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ReaderPositionSnapshot
 import com.booksync.data.repository.toStoredPosition
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
+import com.booksync.data.util.NetworkMonitor
+import com.booksync.ui.components.TranscriptionStatusDialog
+import com.booksync.ui.theme.BookSyncTheme
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -28,6 +39,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
@@ -97,11 +109,24 @@ class ReaderActivity : AppCompatActivity() {
 
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var dictionaryRepository: com.booksync.data.repository.DictionaryRepository
+    @Inject lateinit var tokenManager: TokenManager
+    @Inject lateinit var networkMonitor: NetworkMonitor
 
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
     private var pair: BookPairEntity? = null
     private var pairId: Int = 0
+
+    /**
+     * Non-null while [TranscriptionStatusDialog] is up over the "Switch to
+     * Audio" toolbar action (issue #536) — set by
+     * [checkReadinessThenSyncAudioToPage], read by the Compose content in
+     * [R.id.transcription_dialog_host].
+     */
+    private val pendingSwitchStatus = mutableStateOf<TranscriptionStatus?>(null)
+
+    /** Refreshed each time the dialog above is raised — see [checkReadinessThenSyncAudioToPage]. */
+    private val canTranscribeSwitch = mutableStateOf(false)
 
     /**
      * Standalone mode (issue #169): non-zero when opened on an unpaired ebook.
@@ -236,11 +261,13 @@ class ReaderActivity : AppCompatActivity() {
         }
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_switch_audio -> { syncAudioToPage(); true }
+                R.id.action_switch_audio -> { checkReadinessThenSyncAudioToPage(); true }
                 R.id.action_font_settings -> { showDisplaySettings(); true }
                 else -> false
             }
         }
+
+        initTranscriptionDialogHost()
 
         // Progress slider
         progressSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -1131,6 +1158,75 @@ class ReaderActivity : AppCompatActivity() {
             // handles both shapes, so the whole decode is one unit-tested step.
             webView.evaluateJavascript(js) { result -> cont.resume(VisibleText.parse(result)) }
         }
+
+    /**
+     * Wires [R.id.transcription_dialog_host] to render [TranscriptionStatusDialog]
+     * whenever [pendingSwitchStatus] is set (issue #536). Empty content when
+     * nothing is pending, so the view underneath still receives touches.
+     */
+    private fun initTranscriptionDialogHost() {
+        findViewById<ComposeView>(R.id.transcription_dialog_host).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                BookSyncTheme {
+                    val status = pendingSwitchStatus.value
+                    if (status != null) {
+                        val online by networkMonitor.isOnline.collectAsState()
+                        TranscriptionStatusDialog(
+                            status = status,
+                            canTranscribe = canTranscribeSwitch.value,
+                            isOnline = online,
+                            continueLabel = "Switch anyway",
+                            onContinue = {
+                                pendingSwitchStatus.value = null
+                                syncAudioToPage()
+                            },
+                            onTranscribe = {
+                                lifecycleScope.launch {
+                                    repository.addToTranscriptionQueue(pairId)
+                                        .onSuccess {
+                                            android.widget.Toast.makeText(
+                                                this@ReaderActivity,
+                                                "Added to transcription queue",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                            pendingSwitchStatus.value = repository.readiness(pairId)
+                                        }
+                                        .onFailure { e ->
+                                            android.widget.Toast.makeText(
+                                                this@ReaderActivity,
+                                                e.message ?: "Failed to add to queue",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                }
+                            },
+                            onDismiss = { pendingSwitchStatus.value = null },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Gate in front of [syncAudioToPage] (issue #536): a pair with no sync map
+     * switched silently to the beginning of the audiobook with no explanation.
+     * A ready pair ([BookSyncRepository.readiness] returns null) switches
+     * immediately, exactly as before; anything else raises
+     * [TranscriptionStatusDialog] via [pendingSwitchStatus] instead.
+     */
+    private fun checkReadinessThenSyncAudioToPage() {
+        lifecycleScope.launch {
+            val status = repository.readiness(pairId)
+            if (status == null) {
+                syncAudioToPage()
+            } else {
+                canTranscribeSwitch.value = hasMinRole(tokenManager.getRole().first(), "editor")
+                pendingSwitchStatus.value = status
+            }
+        }
+    }
 
     /**
      * The toolbar's "Switch to Audio" action (issue #114).

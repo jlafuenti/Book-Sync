@@ -78,6 +78,13 @@
             android:layout_height="0dp" />
     </LinearLayout>
 
+    <!-- Hosts TranscriptionStatusDialog (issue #536) — empty (no dialog pending)
+         renders nothing and passes touches through to the views below it. -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/transcription_dialog_host"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     </FrameLayout>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
