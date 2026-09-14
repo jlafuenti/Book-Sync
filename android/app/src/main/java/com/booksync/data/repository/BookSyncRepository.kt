@@ -18,7 +18,10 @@ import javax.inject.Singleton
  *  - [LibraryRepository] — the catalogue mirror, refreshes, pairing, lookup,
  *    the Continue / Recently-opened flows, search, NEW-item acknowledgements;
  *  - [MediaDownloadRepository] — files on disk and the cached sync map;
- *  - [PositionRepository] — everything under docs/position-sync-contract.md.
+ *  - [PositionRepository] — everything under docs/position-sync-contract.md;
+ *  - [TranscriptionRepository] — readiness and queueing (issue #536), for
+ *    callers such as [com.booksync.ui.reader.ReaderActivity] that already
+ *    depend on this facade rather than the seam directly.
  *
  * New code should inject the seam it needs directly; a facade method can be
  * deleted once its last caller has moved.
@@ -28,6 +31,7 @@ class BookSyncRepository @Inject constructor(
     private val library: LibraryRepository,
     private val downloads: MediaDownloadRepository,
     private val positions: PositionRepository,
+    private val transcription: TranscriptionRepository,
 ) {
     /** This device's stable id / display name, for position attribution. */
     val deviceId: String get() = positions.deviceId
@@ -476,4 +480,12 @@ class BookSyncRepository @Inject constructor(
 
     /** See [LibraryRepository.acknowledgeItems]. */
     suspend fun acknowledgeItems(ids: List<Int>, type: String) = library.acknowledgeItems(ids, type)
+
+    // ============ Transcription — delegated to TranscriptionRepository (issue #536) ============
+
+    /** See [TranscriptionRepository.readiness]. */
+    suspend fun readiness(pairId: Int) = transcription.readiness(pairId)
+
+    /** See [TranscriptionRepository.addToQueue]. */
+    suspend fun addToTranscriptionQueue(pairId: Int) = transcription.addToQueue(pairId)
 }
