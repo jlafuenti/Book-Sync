@@ -163,4 +163,18 @@ class SearchDestinationTest {
             Regex("""searchDestination\(\s*item\s*,\s*pairTarget\s*\)""").containsMatchIn(nav),
         )
     }
+
+    @Test
+    fun `a pair opened from search goes through the not-synced gate`() {
+        // Every other surface routes pair opens through PairOpenGateViewModel
+        // (issue #536); search navigated straight to the route and skipped the
+        // dialog, so a failed or queued pair opened at the beginning in silence.
+        val nav = source("com/booksync/ui/BookSyncNavigation.kt")
+        val searchBlock = nav.substringAfter("composable(Routes.SEARCH)").substringBefore("composable(")
+        assertTrue(
+            "The Routes.SEARCH call site must hand a pair's reader/player route to " +
+                "pairOpenGate.requestOpen rather than navigating directly.",
+            searchBlock.contains("pairOpenGate.requestOpen("),
+        )
+    }
 }
