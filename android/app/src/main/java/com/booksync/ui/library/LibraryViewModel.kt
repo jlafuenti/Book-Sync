@@ -433,7 +433,10 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             var previous: Set<Int>? = null
             activeTranscribingPairIds.collect { current ->
-                if (SyncMapAutoFetch.leftActiveSet(previous, current).isNotEmpty()) {
+                // The poll emits an empty set while offline or when one request
+                // fails, which looks like every queued pair finishing at once;
+                // only a set that shrank while we are online is a real exit.
+                if (isOnline.value && SyncMapAutoFetch.leftActiveSet(previous, current).isNotEmpty()) {
                     refresh(silent = true)
                 }
                 previous = current
