@@ -79,14 +79,23 @@ beforeEach(() => {
 
 // The History section is collapsed by default and its toggle is a div, not a
 // button — grab it by class rather than by role.
+//
+// Wait for the toggle itself, not for the queue request: the page calls
+// getTranscriptionQueue synchronously on mount and renders only a spinner until
+// that request settles, so "the mock was called" is already true while there is
+// nothing to click. Waiting on the request left the click racing React's commit.
 async function openHistory() {
     const { container } = render(
         <MemoryRouter>
             <TranscriptionPage tab="queue" />
         </MemoryRouter>,
     )
-    await waitFor(() => expect(getQueueMock).toHaveBeenCalled())
-    fireEvent.click(container.querySelector('.transcription-history-toggle'))
+    const toggle = await waitFor(() => {
+        const el = container.querySelector('.transcription-history-toggle')
+        expect(el).not.toBeNull()
+        return el
+    })
+    fireEvent.click(toggle)
     await screen.findByText('Dune')
     return container
 }

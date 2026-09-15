@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import TranscriptionPage from './TranscriptionPage'
 import { roleMeets } from '../roles'
@@ -76,12 +76,19 @@ function pair(overrides = {}) {
 // make this assertion pass or fail for the wrong reason.
 const QUEUE_ACTION = /^\+? ?Queue( All \d+)?$/i
 
-function renderPage(tab = 'not-transcribed') {
-    return render(
+// Resolves once the page has rendered the pair, not merely requested it. The
+// page calls getPairs synchronously on mount and shows only a spinner until the
+// request settles, so waiting on the mock let the "no such button" assertions
+// below run against the spinner and pass whatever the gating did. Plural for
+// the same reason as below: desktop and mobile paths both mount under jsdom.
+async function renderPage(tab = 'not-transcribed') {
+    const utils = render(
         <MemoryRouter>
             <TranscriptionPage tab={tab} />
         </MemoryRouter>,
     )
+    await screen.findAllByText('Dune')
+    return utils
 }
 
 beforeEach(() => {
@@ -100,23 +107,20 @@ beforeEach(() => {
 describe('queueing is admin-gated', () => {
     it('offers no Queue control to a plain user', async () => {
         authRef.role = 'user'
-        renderPage()
-        await waitFor(() => expect(getPairsMock).toHaveBeenCalled())
+        await renderPage()
         expect(screen.queryByRole('button', { name: QUEUE_ACTION })).toBeNull()
     })
 
     it('offers no Queue control to an editor either', async () => {
         // POST /api/transcription/queue/batch is admin; editors get Cancel only.
         authRef.role = 'editor'
-        renderPage()
-        await waitFor(() => expect(getPairsMock).toHaveBeenCalled())
+        await renderPage()
         expect(screen.queryByRole('button', { name: QUEUE_ACTION })).toBeNull()
     })
 
     it('offers it to an admin', async () => {
         authRef.role = 'admin'
-        renderPage()
-        await waitFor(() => expect(getPairsMock).toHaveBeenCalled())
+        await renderPage()
         // Plural: the desktop and mobile render paths both mount under jsdom, so
         // an admin legitimately has more than one of these on the page.
         expect((await screen.findAllByRole('button', { name: QUEUE_ACTION })).length)
@@ -130,8 +134,7 @@ describe('cancel is editor-gated', () => {
     it('is hidden from a plain user', async () => {
         authRef.role = 'user'
         getPairsMock.mockResolvedValue([inProgress()])
-        renderPage('in-progress')
-        await waitFor(() => expect(getPairsMock).toHaveBeenCalled())
+        await renderPage('in-progress')
         expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull()
     })
 })
