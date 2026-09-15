@@ -83,7 +83,7 @@ Fill this in as it happens; it is the answer to "when can we ship" and to
 | Where testers sign in | The public demo stack (#147): second compose project on the owner's docker host behind a Cloudflare Tunnel, kept on the latest `main` daily; built once the repo is public |
 | Android Auto | Opting in at first submission (#172); head-unit pass pending |
 | Minimum testers at filing time | *(confirm in Play Console — 12 at last check)* |
-| Internal testing uploads | 0.1.0 (versionCode 100) on 2026-09-14; 0.2.0 (versionCode 200) prepared the same day. Internal testing is the owner's own test channel and does not count toward the closed-test clock |
+| Internal testing uploads | 0.1.0 (versionCode 100) on 2026-09-14; 0.2.0 (versionCode 200) prepared the same day; 0.2.1 (versionCode 201) on 2026-09-15, the first upload through `./gradlew publishReleaseBundle` rather than the Console. Internal testing is the owner's own test channel and does not count toward the closed-test clock |
 | Closed test first upload | |
 | Twelfth tester opted in (day 0) | |
 | 14 continuous days completed | |
