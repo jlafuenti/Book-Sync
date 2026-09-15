@@ -1,0 +1,1 @@
+Covers now appear on Home's In Queue row and for standalone ebooks throughout the app (Continue Reading, Library, Downloaded and book details).

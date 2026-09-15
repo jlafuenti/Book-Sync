@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-15
+
 ### Fixed
 
 - EPUBs whose content files have spaces (or other escaped characters) in their names extract their
