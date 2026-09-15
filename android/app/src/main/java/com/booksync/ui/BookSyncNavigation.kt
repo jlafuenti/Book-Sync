@@ -602,7 +602,6 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                             HomeSeeAll.CONTINUE        -> Routes.library(sort = "RecentlyOpened")
                             HomeSeeAll.RECENTLY_ADDED  -> Routes.library(sort = "RecentlyAdded")
                             HomeSeeAll.NEW             -> Routes.library(filter = "NEW")
-                            HomeSeeAll.QUEUE           -> Routes.library(filter = "NEW")
                         }
                         bottomNavController.navigate(libraryRoute) {
                             popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }

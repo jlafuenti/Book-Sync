@@ -64,12 +64,17 @@ data class HomeItem(
     enum class MediaType { PAIR, EBOOK, AUDIOBOOK }
 }
 
-/** One row in the "In Queue" section — thin wrapper so Phase G can wire without changing the screen. */
+/** One row in the "In Queue" section. */
 data class HomeQueueItem(
     val pairId: Int,
     val title: String,
     val status: QueueStatus,
     val percent: Int,
+    // From the cached pair (issue #549). The queue endpoint sends only the pair id
+    // and title, so all three stay null for a pair Room has not synced yet.
+    val audiobookId: Int? = null,
+    val audiobookCoverPath: String? = null,
+    val author: String? = null,
 ) {
     enum class QueueStatus { QUEUED, TRANSCRIBING }
 }
@@ -267,11 +272,18 @@ class HomeViewModel @Inject constructor(
     val queueItems: StateFlow<List<HomeQueueItem>> = _queueItems.asStateFlow()
 
     init {
-        // Collect the queue polling flow and map server DTOs to HomeQueueItem.
+        // Map server queue DTOs to HomeQueueItem. The queue endpoint carries no
+        // cover or author, so each item borrows them from the cached pair
+        // (issue #549) — the same pair "Recently Added" draws its cover from.
         viewModelScope.launch {
-            transcriptionRepository.activeQueueItemsFlow().collect { items ->
-                _queueItems.value = items.map { item ->
+            combine(
+                transcriptionRepository.activeQueueItemsFlow(),
+                repository.getPairsFlow(),
+            ) { items, pairs ->
+                val pairsById = pairs.associateBy { it.id }
+                items.map { item ->
                     val status = TranscriptionStatus.fromQueueItem(item)
+                    val pair = pairsById[item.book_pair_id]
                     HomeQueueItem(
                         pairId   = item.book_pair_id,
                         title    = item.book_title ?: "Untitled",
@@ -280,9 +292,12 @@ class HomeViewModel @Inject constructor(
                             else                                -> HomeQueueItem.QueueStatus.QUEUED
                         },
                         percent  = (status as? TranscriptionStatus.Transcribing)?.progressPercent ?: 0,
+                        audiobookId        = pair?.audiobookId,
+                        audiobookCoverPath = pair?.audiobookCoverPath,
+                        author             = pair?.let { it.ebookAuthor ?: it.audiobookAuthor },
                     )
                 }
-            }
+            }.collect { _queueItems.value = it }
         }
     }
 
