@@ -140,6 +140,18 @@ RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; 
 # encrypted book plus the license token; the AES/RSA decryption is a separate
 # step that DeDRM performs (its ineptepub auto-discovers the DeACSM account
 # key). Without this the pipeline stored encrypted EPUBs as if DRM-free.
+#
+# 10.0.3 cannot decrypt an ADEPT EPUB whose META-INF/encryption.xml also lists
+# anything that is not ADEPT-encrypted — obfuscated fonts, which Calibre and
+# many publishers embed (issue #566). `Decryptor.__init__` parses the manifest
+# into a local, while `get_xml` reads `self._encryption`, which nothing
+# assigns; rewriting the leftover entries raises AttributeError, DeDRM's
+# blanket except turns that into rc 2, and the import fails with no usable
+# message. Upstream fixed it in 3c12806 but shipped it only in the 10.0.9
+# pre-release, so we patch the two lines here — same unpack/patch/repack
+# pattern as DeACSM above, and the grep guard fails the build rather than
+# installing an unpatched plugin. Drop this when DEDRM_VERSION moves to a
+# release that carries the fix; test_repo_hygiene pins it to the 10.0.3 pin.
 ARG DEDRM_VERSION=10.0.3
 RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; then \
         curl -L --fail -o /tmp/dedrm_tools.zip \
@@ -148,8 +160,21 @@ RUN if [ "$INSTALL_DRM_PLUGINS" = "true" ] || [ "$INSTALL_DRM_PLUGINS" = "1" ]; 
         unzip -q /tmp/dedrm_tools.zip -d /tmp/dedrm-unpacked && \
         DEDRM_PLUGIN="$(find /tmp/dedrm-unpacked -name 'DeDRM_plugin.zip' | head -1)" && \
         test -n "$DEDRM_PLUGIN" && \
-        calibre-customize -a "$DEDRM_PLUGIN" && \
-        rm -rf /tmp/dedrm_tools.zip /tmp/dedrm-unpacked ; \
+        mkdir -p /tmp/dedrm-plugin-unpacked && \
+        cd /tmp/dedrm-plugin-unpacked && \
+        unzip -q "$DEDRM_PLUGIN" && \
+        sed -i \
+          -e 's|^        encryption = etree.fromstring(encryption)$|        self._encryption = etree.fromstring(encryption)|' \
+          -e 's|^        for elem in encryption.findall(expr):$|        for elem in self._encryption.findall(expr):|' \
+          ineptepub.py && \
+        { grep -q 'self\._encryption = etree.fromstring(encryption)' ineptepub.py \
+          && grep -q 'for elem in self\._encryption.findall(expr):' ineptepub.py \
+          || (echo "DeDRM ineptepub patch did not apply (issue #566)" && exit 1) ; } && \
+        zip -qr /tmp/dedrm-plugin-patched.zip . && \
+        calibre-customize -a /tmp/dedrm-plugin-patched.zip && \
+        cd / && \
+        rm -rf /tmp/dedrm_tools.zip /tmp/dedrm-unpacked /tmp/dedrm-plugin-unpacked \
+               /tmp/dedrm-plugin-patched.zip ; \
     else \
         echo "Skipping DeDRM plugin — default image ships no DRM tooling." ; \
     fi

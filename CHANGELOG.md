@@ -25,6 +25,13 @@ operator must do by hand rather than read about afterwards.
   any comment frame a ripper left behind rather than sitting beside it (#538).
 - The book being transcribed appears once, not twice, under In Progress on the phone-width
   Transcription page, and its card shows the queue's live progress (#562).
+- ACSM imports of Adobe-DRM books that also carry obfuscated fonts work again. The DeDRM plugin
+  release the image pins (10.0.3) crashes on those books — it rewrites `META-INF/encryption.xml`
+  for the leftover font entries from a value it never stored — and the import failed with a bare
+  "ACSM conversion failed (exit 6)". The DRM image build now applies upstream's two-line fix, the
+  same way it already patches DeACSM, and fails the build if the patch stops applying. A
+  decryption failure also reports itself as one, naming the exception, instead of reading like an
+  expired loan or a missing Adobe authorization (#566).
 - EPUBs whose chapters are XHTML files without an `.xhtml` or `.html` name extract their text. The
   server picked content documents by file extension, but EPUB identifies them by the manifest
   media-type, and some publishers name them `chapter01.xml` or give them no extension at all. A
@@ -48,6 +55,11 @@ operator must do by hand rather than read about afterwards.
   are encrypted fail again when re-checked.
 - After upgrading, run Library verify once, then retry any transcription that was refused as
   DRM-encrypted or for "almost no text".
+- The DeDRM fix lives in the image, so a deployment that imports ACSM files must **rebuild** with
+  `docker compose build --build-arg INSTALL_DRM_PLUGINS=1` rather than only restarting; pulling a
+  published image is enough only if it was built with that flag. Re-try any ACSM loan that failed
+  with "ACSM conversion failed (exit 6)". The default image is unchanged: it still ships no DRM
+  tooling.
 
 ## [0.2.1] - 2026-09-15
 
