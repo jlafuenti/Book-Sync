@@ -97,7 +97,9 @@ Its value no longer tells you whether an upload has happened; the Play Console d
 
    Attach the Android artifacts if this release includes an app build — `app-release.apk` for
    sideloading and, when it is also going to Play, the `.aab`. Build them per
-   [android.md](android.md), "Release builds and signing".
+   [android.md](android.md), "Release builds and signing". The Play upload itself is
+   `./gradlew publishReleaseBundle` from `android/` — [android.md](android.md), "Publishing to
+   Play".
 
    > **The GitHub APK and the Play build are signed with different keys** unless you sign both with
    > the Play upload key. A user who sideloads one cannot update to the other; Android refuses the

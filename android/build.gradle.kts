@@ -14,4 +14,7 @@ plugins {
     // unit-test .exec file or per-variant class dirs on AGP 9) and attributes inline
     // functions correctly.
     id("org.jetbrains.kotlinx.kover") version "0.9.9" apply false
+    // Gradle Play Publisher: `publishReleaseBundle` uploads through the Play
+    // Developer API. 4.x is the line that supports AGP 9; 3.x does not.
+    id("com.github.triplet.play") version "4.1.1" apply false
 }

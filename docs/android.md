@@ -54,6 +54,68 @@ debug keystore (password `android`, not a secret) — the R8 output is identical
 apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android   --out app-release-signed.apk app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
+### Publishing to Play
+
+The [Gradle Play Publisher](https://github.com/Triple-T/gradle-play-publisher) plugin uploads a
+signed bundle through the Play Developer API, so a release does not need the Play Console in a
+browser:
+
+```bash
+cd android && ./gradlew publishReleaseBundle
+```
+
+That builds the signed `.aab`, uploads it, and releases it to the **internal** testing track.
+Internal is the default on purpose, so a bare command lands somewhere recoverable. Wider tracks are
+an explicit choice:
+
+```bash
+cd android && ./gradlew publishReleaseBundle --track alpha
+cd android && ./gradlew promoteReleaseArtifact --from-track internal --promote-track production
+```
+
+The bundle carries its own R8 mapping, so there is no separate `mapping.txt` upload. Every upload
+still needs a higher `versionCode` than any build Play has seen ([releasing.md](releasing.md)); the
+plugin fails rather than overwrite.
+
+**Release notes** go in `app/src/main/play/release-notes/en-US/<track>.txt` (or `default.txt`),
+500 characters at most. With no file the plugin copies the previous release's notes.
+
+**Two things stay in the Console:** the app's very first upload (already done for Tandem), and the
+policy forms — Data safety, content rating, App access. The API cannot fill those in.
+
+#### One-time setup: a service account
+
+The plugin authenticates as a Google Cloud **service account**, not as you.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), pick or create a project and
+   enable the **Google Play Android Developer API**.
+2. Under **IAM & Admin → Service accounts**, create a service account. It needs no Cloud roles.
+   Open it, then **Keys → Add key → JSON**, and save the file **outside the checkout**.
+3. In Play Console, **Users and permissions → Invite new user**, paste the service account's e-mail
+   (the `client_email` field in the JSON), and grant it the Tandem app with **Release to testing
+   tracks** — plus **Release to production** only if you want Gradle to be able to do that. It can
+   take up to 24 hours before the API accepts the new account.
+4. Point the build at the key in `android/local.properties`:
+
+   ```properties
+   tandem.play.serviceAccountFile=/absolute/path/to/play-service-account.json
+   ```
+
+   Alternatively, put the JSON *contents* in the `ANDROID_PUBLISHER_CREDENTIALS` environment
+   variable; the plugin reads it when no file is configured.
+
+There is no dry run that exercises the credentials. The first `publishReleaseBundle` to the
+internal track is the check; if the account or its Play permissions are not in place yet, it fails
+with an authorization error and nothing reaches testers.
+
+**The key can publish the app**, to every track you granted it. Treat it like the upload keystore:
+outside the checkout, in a password manager, never in a tracked file. The build reads it only when
+`tandem.play.serviceAccountFile` names a file that exists, so a clean clone and CI configure without
+one. `server/tests/test_repo_hygiene.py` fails the build if a service account key is ever
+committed, and `BuildConfigPinsTest` fails if a key path is written into `build.gradle.kts` or the
+default track stops being `internal`. If a key does leak, delete it in the Cloud console first —
+removing the file from git does not revoke it.
+
 Unit tests:
 
 ```bash
@@ -121,6 +183,8 @@ something generic:
 | `tandem.demoUrl` | Public demo server offered by the first-run screen's **Try the demo** button. Becomes `BuildConfig.DEMO_URL`. |
 | `tandem.demoUser` | Demo account username. `BuildConfig.DEMO_USER`. |
 | `tandem.demoPassword` | Demo account password. `BuildConfig.DEMO_PASSWORD`. |
+| `tandem.signing.*` | Upload keystore and its passwords. See [Release builds and signing](#release-builds-and-signing). |
+| `tandem.play.serviceAccountFile` | Google service account key used by `publishReleaseBundle`. See [Publishing to Play](#publishing-to-play). |
 
 Put them in **`android/local.properties`** — gitignored, and the conventional Android home for
 machine-specific config:

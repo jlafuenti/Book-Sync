@@ -9,6 +9,7 @@ plugins {
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlinx.kover")
+    id("com.github.triplet.play")
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +255,32 @@ android {
         // framework calls (android.util.Log and friends) they aren't asserting on.
         unitTests.isReturnDefaultValues = true
     }
+}
+
+// Publishing to Play without the Console: `./gradlew publishReleaseBundle`
+// (docs/android.md, "Publishing to Play"). It authenticates as a Google Cloud
+// service account whose JSON key can release the app, so the key is handled like
+// the upload keystore above — outside the checkout, its path in
+// android/local.properties:
+//
+//   tandem.play.serviceAccountFile=/absolute/path/to/play-service-account.json
+//
+// Set only when the file exists, so a clean clone and CI configure without one.
+// With no file the plugin falls back to the ANDROID_PUBLISHER_CREDENTIALS
+// environment variable, and a publish with neither fails at execution time.
+val playServiceAccountKey = tandemSetting("tandem.play.serviceAccountFile")
+    .takeIf { it.isNotBlank() }
+    ?.let { file(it) }
+    ?.takeIf { it.exists() }
+
+play {
+    if (playServiceAccountKey != null) {
+        serviceAccountCredentials.set(playServiceAccountKey)
+    }
+    // Internal testing by default, so a bare command lands somewhere
+    // recoverable. Wider tracks take --track or promoteReleaseArtifact.
+    track.set("internal")
+    defaultToAppBundles.set(true)
 }
 
 dependencies {

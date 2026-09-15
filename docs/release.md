@@ -121,7 +121,9 @@ things that must be true before a submission is worth making. Verified 2026-09-1
       in `android/local.properties` — [android.md](android.md), "Release builds and
       signing". Enrol in **Play App Signing** when the app is created in the Console,
       so Google holds the app signing key and the upload key can be rotated. Keep
-      `mapping.txt` from every uploaded build.
+      `mapping.txt` from every uploaded build. Uploads after the first go through
+      `./gradlew publishReleaseBundle` with a Play service account — [android.md](android.md),
+      "Publishing to Play".
 - [x] Listing text. [play-listing.md](play-listing.md); the "requires a
       self-hosted Tandem server" line comes first in every field. Screenshots and
       the feature graphic are still to be taken.
