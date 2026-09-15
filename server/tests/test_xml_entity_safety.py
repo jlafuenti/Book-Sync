@@ -143,6 +143,7 @@ def test_every_lxml_parse_of_untrusted_input_passes_a_hardened_parser():
     server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     targets = [
         os.path.join(server_dir, "services", "epub_parser.py"),
+        os.path.join(server_dir, "services", "ebook_integrity.py"),
         os.path.join(server_dir, "services", "import_sources", "_acsm_fulfill.py"),
     ]
 

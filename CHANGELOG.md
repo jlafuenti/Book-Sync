@@ -31,14 +31,23 @@ operator must do by hand rather than read about afterwards.
   book built that way throughout extracted no text, failed transcription at the integrity check and
   was listed under DRM in Troubleshoot; a book built that way in part got a sync map missing those
   chapters. Chapters that were already read keep their chapter and sentence numbers (#561).
+- EPUBs that only obfuscate their embedded fonts are no longer reported as DRM-encrypted or refused
+  for transcription. Every `META-INF/encryption.xml` uses the XML encryption vocabulary, and the
+  check treated any such file as Adobe ADEPT, but font obfuscation leaves the text readable in
+  every reader. Calibre writes these files when it converts a book with embedded fonts, so books
+  from Tandem's own Convert flow were affected. A book is now DRM-encrypted only when the manifest
+  encrypts something other than fonts. The ACSM import's post-decryption check uses the same
+  rule (#560).
 
 ### Upgrade notes
 
 - Migration `0020` deletes the cached "ebook produced almost no text" integrity failures again: a
-  Library verify run after 0.2.1 re-cached them for books this bug still broke. Run Library verify
-  once after upgrading, then retry any transcription that was refused for "almost no text". A pair
-  already synced from an EPUB that was only partly affected is missing those chapters until you
-  realign it.
+  Library verify run after 0.2.1 re-cached them for books this bug still broke. A pair already
+  synced from an EPUB that was only partly affected is missing those chapters until you realign it.
+- Migration `0021` deletes the cached "EPUB is DRM-encrypted" integrity failures; books that really
+  are encrypted fail again when re-checked.
+- After upgrading, run Library verify once, then retry any transcription that was refused as
+  DRM-encrypted or for "almost no text".
 
 ## [0.2.1] - 2026-09-15
 

@@ -23,8 +23,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.ebook_integrity import (  # noqa: E402
-    _epub_is_drm_encrypted,
     check_ebook_integrity,
+    epub_is_drm_encrypted,
 )
 import zipfile  # noqa: E402
 
@@ -39,7 +39,7 @@ def _fast_check(path: str):
                 pass
         except zipfile.BadZipFile:
             return False, "not a valid zip (corrupt) — re-import required"
-        if _epub_is_drm_encrypted(path):
+        if epub_is_drm_encrypted(path):
             return False, "DRM-encrypted (Adobe ADEPT) — re-import a DRM-free copy"
     return True, "ok (fast check)"
 
