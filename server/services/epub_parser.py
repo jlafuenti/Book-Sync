@@ -12,6 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import unquote, urldefrag
 
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -186,12 +187,18 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
         documents: List[str] = []
         for sid in spine_ids:
             href = manifest.get(sid)
-            if not href or not href.lower().split("#")[0].endswith((".xhtml", ".html", ".htm")):
+            # A manifest href is a URL, not a file name (issue #554): the zip entry
+            # `Text/Axis Test_1.html` is referenced as `Text/Axis%20Test_1.html`.
+            # Reading the encoded name missed the entry and silently emptied the
+            # slot, so a book named that way throughout extracted no text at all.
+            # epub.js and Readium both decode, which is why such books read fine.
+            path = unquote(urldefrag(href).url) if href else ""
+            if not path or not path.lower().endswith((".xhtml", ".html", ".htm")):
                 # Still a spine slot as far as the readers are concerned.
                 documents.append("")
                 continue
             # Resolve href relative to the OPF directory (zip uses forward slashes).
-            full = href if not opf_dir else f"{opf_dir}/{href}"
+            full = path if not opf_dir else f"{opf_dir}/{path}"
             full = os.path.normpath(full).replace(os.sep, "/").lstrip("/")
             try:
                 raw = z.read(full)
