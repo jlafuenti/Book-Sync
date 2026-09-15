@@ -21,6 +21,7 @@ conversion step and place it directly — handy for Project Gutenberg etc.
 import asyncio
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -394,11 +395,47 @@ _ADEPT_ERROR_HINTS: list[tuple[str, str]] = [
 ]
 
 
+def _dedrm_decryption_failure(diag: str) -> Optional[str]:
+    """A message for a DeDRM crash during decryption, or None (issue #566).
+
+    Fulfillment succeeded and the book downloaded; DeDRM then failed to decrypt
+    it. None of the ADEPT hints match, so without this the operator was told
+    "ACSM conversion failed (exit N)" — which reads as a loan or authorization
+    problem, and sends them to re-download or re-authorize. Neither helps: the
+    known case is a plugin bug on books whose `encryption.xml` also lists
+    obfuscated fonts, and a retry fails identically.
+
+    Carries the exception line, which is what separates a plugin fault from a
+    genuinely corrupt download.
+    """
+    if "ineptepub rc=" not in diag and "Could not decrypt" not in diag:
+        return None
+    # The last traceback line is the exception; keep it short enough to read.
+    exception = next(
+        (
+            ln.strip()
+            for ln in reversed(diag.splitlines())
+            if re.match(r"^\s*[A-Za-z_][A-Za-z0-9_.]*(Error|Exception)\b", ln)
+        ),
+        None,
+    )
+    detail = f" ({exception[:160]})" if exception else ""
+    return (
+        f"The book downloaded, but the DeDRM plugin could not decrypt it{detail}. "
+        "This is a plugin fault, not a problem with the loan or the Adobe "
+        "authorization, so re-downloading the ACSM or re-authorizing will not "
+        "help. See the server logs, and issue #566."
+    )
+
+
 def _friendly_acsm_error(diag: str, returncode: int) -> str:
     """Pick a readable message from a long Calibre/DeACSM traceback."""
     for needle, message in _ADEPT_ERROR_HINTS:
         if needle in diag:
             return message
+    decryption = _dedrm_decryption_failure(diag)
+    if decryption:
+        return decryption
     # Fall back to the most informative-looking single line, trimmed.
     # The fulfill script prefixes useful lines with "Fulfillment refused:"
     # or "Download failed". Older code paths put a "DeACSM" prefix on info

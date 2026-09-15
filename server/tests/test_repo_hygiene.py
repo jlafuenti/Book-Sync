@@ -240,6 +240,45 @@ def test_dockerfile_drm_block_is_opt_in():
     )
 
 
+def test_the_dedrm_ineptepub_patch_is_applied_while_the_pin_is_10_0_3():
+    """Issue #566: DeDRM 10.0.3 cannot decrypt an ADEPT EPUB that also carries
+    obfuscated fonts — `Decryptor` parses `encryption.xml` into a local, and
+    `get_xml` reads `self._encryption`, which nothing assigns. Every ACSM loan
+    of such a book fails the import with a bare "exit 6".
+
+    Upstream fixed it in 3c12806, but only released it in the 10.0.9
+    pre-release, so the build patches the two lines the way the DeACSM patch
+    above already does. This pins the patch to the pin: bump `DEDRM_VERSION` to
+    a release that carries the fix and this test tells you to drop the patch.
+    """
+    dockerfile_path = os.path.join(_REPO_ROOT, "server", "Dockerfile")
+    with open(dockerfile_path, encoding="utf-8") as fh:
+        dockerfile = fh.read()
+
+    version = re.search(r"^ARG DEDRM_VERSION=(\S+)", dockerfile, re.M)
+    assert version, "server/Dockerfile must pin DEDRM_VERSION"
+    if version.group(1) != "10.0.3":
+        pytest.skip(
+            f"DEDRM_VERSION is {version.group(1)}, not the patched 10.0.3 — "
+            "if that release carries upstream 3c12806, delete the patch and this test"
+        )
+
+    assert "self._encryption = etree.fromstring(encryption)" in dockerfile, (
+        "the DeDRM ineptepub patch (issue #566) is gone from server/Dockerfile. "
+        "Without it an ACSM loan whose EPUB also has obfuscated fonts fails to import."
+    )
+    assert "for elem in self._encryption.findall(expr)" in dockerfile, (
+        "the DeDRM patch rewrites two lines; the loop half is missing."
+    )
+    # The build must fail loudly if a future version stops matching, exactly as
+    # the DeACSM patch does — a silently unapplied patch is the failure mode.
+    # The shell pattern may escape the dot (`self\._encryption`); accept either.
+    assert re.search(r"grep -q ['\"]?self\\?\._encryption", dockerfile), (
+        "the DeDRM patch needs its `grep -q` guard so the build fails when the "
+        "patch stops applying"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Issue #187: .gitignore must fence off the file shapes that carry secrets.
 #
