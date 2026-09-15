@@ -237,15 +237,16 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                             del audio[tag]
             if book.series_index is not None:
                 audio['trkn'] = [(int(book.series_index), 0)]
+            # extract_metadata reads an MP4 description from `©des` first, then
+            # `desc`, then `©cmt` (issue #538). Setting writes both of the first
+            # two so a stale `©des` can't outrank the new text; clearing removes
+            # all three, or the next library scan fills the field right back in
+            # from whichever a ripper left behind.
             if book.description:
+                audio['\xa9des'] = [book.description]
                 audio['desc'] = [book.description]
             else:
-                # Clearing the description must also remove the comment atom
-                # extract_metadata falls back to reading one from (`©cmt`,
-                # after `©des`/`desc`), or the next library scan fills the
-                # field right back in with whatever comment text a ripper
-                # left behind (issue #538).
-                for tag in ('desc', '\xa9cmt'):
+                for tag in ('\xa9des', 'desc', '\xa9cmt'):
                     if tag in audio:
                         del audio[tag]
             if getattr(book, 'genres', None) is not None: audio['\xa9gen'] = [book.genres]
@@ -267,6 +268,12 @@ def write_audiobook_metadata(filepath: str, book) -> None:
             if book.series_index is not None:
                 audio.tags['TRCK'] = TRCK(encoding=3, text=str(int(book.series_index)))
             if book.description:
+                # extract_metadata takes the first COMM* frame it finds, so a
+                # ripper's `COMM::eng` left beside the new frame could still be
+                # what the next scan reads (issue #538). Replace, don't add.
+                for key in list(audio.tags.keys()):
+                    if key == 'COMM' or key.startswith('COMM:'):
+                        del audio.tags[key]
                 audio.tags['COMM'] = COMM(encoding=3, lang='eng', desc='', text=book.description)
             elif audio.tags:
                 # extract_metadata reads a description back from *any* COMM
@@ -300,8 +307,13 @@ def write_audiobook_metadata(filepath: str, book) -> None:
                 audio['tracknumber'] = [str(int(book.series_index))]
             if book.description:
                 audio['description'] = [book.description]
-            elif 'description' in audio:
-                del audio['description']
+            else:
+                # extract_metadata falls back to `summary` when `description`
+                # is absent, so clearing only one would hand the next scan the
+                # other (issue #538).
+                for tag in ('description', 'summary'):
+                    if tag in audio:
+                        del audio[tag]
             if getattr(book, 'genres', None) is not None: audio['genre'] = [book.genres]
             if getattr(book, 'publish_year', None) is not None: audio['date'] = [str(book.publish_year)]
             if getattr(book, 'publisher', None) is not None: audio['organization'] = [book.publisher]

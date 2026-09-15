@@ -16,6 +16,14 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- A cleared or changed audiobook description now sticks through the next library scan for every
+  format. Clearing an M4B's description also removes its `©des` atom, which the scanner reads
+  first, and a new description is written there too, so a stale `©des` no longer outranks it.
+  Clearing a FLAC or Ogg description also removes `summary`, and a new MP3 description replaces
+  any comment frame a ripper left behind rather than sitting beside it (#538).
+
 ## [0.2.1] - 2026-09-15
 
 ### Fixed
