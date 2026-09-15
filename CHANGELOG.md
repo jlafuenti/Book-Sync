@@ -23,6 +23,14 @@ operator must do by hand rather than read about afterwards.
   first, and a new description is written there too, so a stale `©des` no longer outranks it.
   Clearing a FLAC or Ogg description also removes `summary`, and a new MP3 description replaces
   any comment frame a ripper left behind rather than sitting beside it (#538).
+- The book being transcribed appears once, not twice, under In Progress on the phone-width
+  Transcription page, and its card shows the queue's live progress (#562).
+- EPUBs whose chapters are XHTML files without an `.xhtml` or `.html` name extract their text. The
+  server picked content documents by file extension, but EPUB identifies them by the manifest
+  media-type, and some publishers name them `chapter01.xml` or give them no extension at all. A
+  book built that way throughout extracted no text, failed transcription at the integrity check and
+  was listed under DRM in Troubleshoot; a book built that way in part got a sync map missing those
+  chapters. Chapters that were already read keep their chapter and sentence numbers (#561).
 - EPUBs that only obfuscate their embedded fonts are no longer reported as DRM-encrypted or refused
   for transcription. Every `META-INF/encryption.xml` uses the XML encryption vocabulary, and the
   check treated any such file as Adobe ADEPT, but font obfuscation leaves the text readable in
@@ -33,9 +41,13 @@ operator must do by hand rather than read about afterwards.
 
 ### Upgrade notes
 
-- Migration `0020` deletes the cached "EPUB is DRM-encrypted" integrity failures. Run Library
-  verify once after upgrading to re-check those books; ones that really are encrypted fail again.
-  Retry any transcription that was refused as DRM-encrypted.
+- Migration `0020` deletes the cached "ebook produced almost no text" integrity failures again: a
+  Library verify run after 0.2.1 re-cached them for books this bug still broke. A pair already
+  synced from an EPUB that was only partly affected is missing those chapters until you realign it.
+- Migration `0021` deletes the cached "EPUB is DRM-encrypted" integrity failures; books that really
+  are encrypted fail again when re-checked.
+- After upgrading, run Library verify once, then retry any transcription that was refused as
+  DRM-encrypted or for "almost no text".
 
 ## [0.2.1] - 2026-09-15
 

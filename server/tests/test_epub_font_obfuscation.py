@@ -280,23 +280,23 @@ def test_ebook_integrity_imports_standalone_as_calibre_sees_it(tmp_path):
 # The false failures already cached on existing servers.
 # ---------------------------------------------------------------------------
 
-_MIGRATION = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "0020_epub_font_obfuscation.py"
+_MIGRATION = Path(__file__).resolve().parent.parent / "alembic" / "versions" / "0021_epub_font_obfuscation.py"
 
 
 def _load_migration():
     # By path: `server/alembic/` shares its name with the installed alembic package.
-    spec = importlib.util.spec_from_file_location("migration_0020", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("migration_0021", _MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_the_migration_follows_0019():
+def test_the_migration_follows_0020():
     module = _load_migration()
 
-    assert module.revision == "0020_epub_font_obfuscation"
+    assert module.revision == "0021_epub_font_obfuscation"
     assert len(module.revision) <= 32
-    assert module.down_revision == "0019_ebook_integrity_href_fix"
+    assert module.down_revision == "0020_epub_xml_content_docs"
 
 
 def test_the_migration_clears_only_the_cached_drm_failures(tmp_path):

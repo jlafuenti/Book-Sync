@@ -13,8 +13,8 @@ same message. Corrupt-zip and no-text rows are untouched.
 
 Data only, no schema change. Downgrade is a no-op: the deleted rows are a cache.
 
-Revision ID: 0020_epub_font_obfuscation
-Revises: 0019_ebook_integrity_href_fix
+Revision ID: 0021_epub_font_obfuscation
+Revises: 0020_epub_xml_content_docs
 Create Date: 2026-09-15
 
 """
@@ -26,8 +26,8 @@ import sqlalchemy as sa
 # revision identifiers, used by Alembic.
 # NOTE: keep this at or under 32 chars — see the note in
 # 0002_conflict_resolution.py (alembic_version is a VARCHAR(32)).
-revision: str = "0020_epub_font_obfuscation"
-down_revision: Union[str, None] = "0019_ebook_integrity_href_fix"
+revision: str = "0021_epub_font_obfuscation"
+down_revision: Union[str, None] = "0020_epub_xml_content_docs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
