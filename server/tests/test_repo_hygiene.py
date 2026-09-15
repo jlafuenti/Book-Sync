@@ -91,6 +91,47 @@ _SIZE_ALLOWLIST_GLOBS = ["web/public/*.png"]
 _ONE_MB = 1024 * 1024
 
 
+# A Google Cloud service account key, as downloaded from the Cloud console: a
+# JSON object with "type": "service_account" and a "private_key". The Play
+# publisher (`./gradlew publishReleaseBundle`) authenticates with one, and it can
+# release to every track the account is granted. It has no fixed filename, so
+# match the content rather than a name. The literal is split so this file does
+# not match itself.
+_SERVICE_ACCOUNT_KEY = re.compile(
+    r'"type"\s*:\s*"service' + r'_account"(?s:.*)"private' + r'_key"\s*:'
+)
+
+
+def test_no_tracked_google_service_account_key():
+    offenders = []
+    for path in _git_ls_files():
+        if not path.endswith(".json"):
+            continue
+        abs_path = os.path.join(_REPO_ROOT, *path.split("/"))
+        try:
+            with open(abs_path, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _SERVICE_ACCOUNT_KEY.search(text):
+            offenders.append(path)
+    assert not offenders, (
+        f"Google service account key(s) tracked: {offenders}. Anyone who reads "
+        "the repository can publish the Android app with it. Revoke the key in "
+        "the Cloud console first, then remove the file; keep the replacement "
+        "outside the checkout (docs/android.md, 'Publishing to Play')."
+    )
+
+
+def test_the_service_account_key_detector_matches_a_downloaded_key():
+    sample = (
+        '{\n  "type": "service' + '_account",\n  "project_id": "example",\n'
+        '  "private_key_id": "0",\n  "private' + '_key": "-----BEGIN ...",\n}'
+    )
+    assert _SERVICE_ACCOUNT_KEY.search(sample)
+    assert not _SERVICE_ACCOUNT_KEY.search('{"type": "module", "name": "web"}')
+
+
 def test_no_tracked_file_over_1mb_outside_allowlist():
     tracked = _git_ls_files()
     offenders = []

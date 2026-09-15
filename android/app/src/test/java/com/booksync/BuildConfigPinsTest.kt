@@ -306,6 +306,84 @@ class BuildConfigPinsTest {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Publishing to Play from Gradle (Gradle Play Publisher).
+    //
+    // `./gradlew publishReleaseBundle` uploads with a Google Cloud service
+    // account key. That key can publish to every track the account is granted,
+    // so it is handled exactly like the upload keystore: its path lives in
+    // android/local.properties, the file lives outside the checkout, and a clean
+    // clone — CI included — configures without one.
+    // -----------------------------------------------------------------------
+
+    private val playCredentialSetting = "tandem.play.serviceAccountFile"
+
+    /** The build script with block and line comments removed. */
+    private fun liveBuildScript(): String =
+        buildScript()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .map { it.substringBefore("//") }
+            .joinToString("\n")
+
+    @Test
+    fun `the Play publisher plugin is applied`() {
+        assertTrue(
+            "app/build.gradle.kts does not apply com.github.triplet.play, so " +
+                "publishReleaseBundle does not exist and every Play upload is a " +
+                "manual one through the Console.",
+            liveBuildScript().contains("""id("com.github.triplet.play")"""),
+        )
+    }
+
+    @Test
+    fun `the Play service account key is read from local properties`() {
+        val script = liveBuildScript()
+        assertTrue(
+            "The play block must read the key path through " +
+                "tandemSetting(\"$playCredentialSetting\"), so it stays in " +
+                "android/local.properties.",
+            script.contains("""tandemSetting("$playCredentialSetting")"""),
+        )
+        assertTrue(
+            "serviceAccountCredentials must be set only when the key file " +
+                "exists — a clean clone and CI have none and must still configure.",
+            Regex("""serviceAccountCredentials\.set\(""").containsMatchIn(script) &&
+                Regex("""playServiceAccountKey\s*!=\s*null""").containsMatchIn(script),
+        )
+    }
+
+    @Test
+    fun `no service account key path is written into the build script`() {
+        // A literal `file("something.json")` means the key sits at a path
+        // somebody chose to type into a public file, which is usually inside the
+        // checkout — one `git add -A` from being published.
+        assertTrue(
+            "app/build.gradle.kts names a .json file literally. Put the service " +
+                "account key outside the checkout and its path in " +
+                "android/local.properties as $playCredentialSetting.",
+            !Regex("""\.json"""").containsMatchIn(liveBuildScript()),
+        )
+    }
+
+    @Test
+    fun `the default Play track is not production`() {
+        // A bare `publishReleaseBundle` should land somewhere recoverable.
+        // Production is reached deliberately, with --track production or
+        // promoteReleaseArtifact, never as the default of a mistyped command.
+        val track = Regex("""track\.set\("([^"]+)"\)""").find(liveBuildScript())?.groupValues?.get(1)
+        assertTrue(
+            "The play block sets no default track; pin it to \"internal\" so the " +
+                "default is visible in the build script.",
+            track != null,
+        )
+        assertTrue(
+            "The default Play track is \"$track\". Keep it \"internal\"; use " +
+                "--track or promoteReleaseArtifact for anything wider.",
+            track == "internal",
+        )
+    }
+
     @Test
     fun `CI compiles the release variant`() {
         // The release path rotted precisely because nothing ever built it: no
