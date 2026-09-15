@@ -200,11 +200,24 @@ def main():
             sys.exit(6)
 
         # Verify the result is genuinely decrypted before declaring success.
+        # DeDRM keeps encryption.xml for what it does not decrypt, notably
+        # obfuscated fonts, which are not DRM (issue #560) — so apply the same
+        # rule as the integrity check rather than testing the file's presence.
+        # This runs in Calibre's interpreter with no `services` package, so the
+        # module is imported from its directory; it needs only stdlib + lxml.
         try:
-            with zipfile.ZipFile(out_path) as zf:
-                if "META-INF/encryption.xml" in zf.namelist():
-                    print("Output EPUB still contains encryption.xml — decryption did not take", file=sys.stderr)
-                    sys.exit(6)
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from ebook_integrity import epub_is_drm_encrypted
+        except Exception as e:
+            print(f"Shared DRM rule unavailable ({e}); checking for encryption.xml instead", file=sys.stderr)
+
+            def epub_is_drm_encrypted(path):
+                with zipfile.ZipFile(path) as zf:
+                    return "META-INF/encryption.xml" in zf.namelist()
+        try:
+            if epub_is_drm_encrypted(out_path):
+                print("Output EPUB is still encrypted — decryption did not take", file=sys.stderr)
+                sys.exit(6)
         except Exception as e:
             print(f"Could not verify decrypted EPUB: {e}", file=sys.stderr)
             sys.exit(6)

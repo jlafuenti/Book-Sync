@@ -23,6 +23,19 @@ operator must do by hand rather than read about afterwards.
   first, and a new description is written there too, so a stale `©des` no longer outranks it.
   Clearing a FLAC or Ogg description also removes `summary`, and a new MP3 description replaces
   any comment frame a ripper left behind rather than sitting beside it (#538).
+- EPUBs that only obfuscate their embedded fonts are no longer reported as DRM-encrypted or refused
+  for transcription. Every `META-INF/encryption.xml` uses the XML encryption vocabulary, and the
+  check treated any such file as Adobe ADEPT, but font obfuscation leaves the text readable in
+  every reader. Calibre writes these files when it converts a book with embedded fonts, so books
+  from Tandem's own Convert flow were affected. A book is now DRM-encrypted only when the manifest
+  encrypts something other than fonts. The ACSM import's post-decryption check uses the same
+  rule (#560).
+
+### Upgrade notes
+
+- Migration `0020` deletes the cached "EPUB is DRM-encrypted" integrity failures. Run Library
+  verify once after upgrading to re-check those books; ones that really are encrypted fail again.
+  Retry any transcription that was refused as DRM-encrypted.
 
 ## [0.2.1] - 2026-09-15
 

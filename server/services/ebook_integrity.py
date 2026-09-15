@@ -13,8 +13,9 @@ multi-hour transcription has already run — and with a cryptic parser error
   1. Format (issue #101): only EPUB can be aligned, because EPUB is the only
      thing the readers render. Parsing anything else produces a sync map on an
      axis no reader shares.
-  2. DRM detection (EPUB): presence of `META-INF/encryption.xml` referencing
-     Adobe ADEPT / XML-ENC means the content is encrypted and unusable.
+  2. DRM detection (EPUB): a `META-INF/encryption.xml` that encrypts content
+     (Adobe ADEPT or any other cipher) means the book is unusable. One that only
+     obfuscates embedded fonts is not DRM (issue #560).
   3. Extraction sanity: actually parse the book and confirm it yields a
      non-trivial amount of text.
 
@@ -65,16 +66,82 @@ def format_is_alignable(path: str) -> Tuple[bool, str]:
     )
 
 
-def _epub_is_drm_encrypted(path: str) -> bool:
-    """True if the EPUB carries an Adobe ADEPT / XML-ENC encryption manifest."""
+#: Font obfuscation (issue #560). These mangle an embedded font with a key derived from the book's
+#: own identifier so the font cannot be lifted out; the text stays plain and every reader opens the
+#: book. Both are defined for fonts only.
+_FONT_OBFUSCATION_ALGORITHMS = frozenset({
+    "http://www.idpf.org/2008/embedding",  # IDPF (EPUB 3 font obfuscation)
+    "http://ns.adobe.com/pdf/enc#RC",  # Adobe (what Calibre writes)
+})
+_FONT_SUFFIXES = (".ttf", ".otf", ".ttc", ".woff", ".woff2", ".eot", ".pfb", ".pfm", ".afm")
+_ADEPT_NS = "ns.adobe.com/adept"
+
+
+def _local(tag) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _is_font_uri(uri: str) -> bool:
+    from urllib.parse import unquote
+
+    target = unquote(uri.split("#", 1)[0].split("?", 1)[0]).strip().lower()
+    return target.endswith(_FONT_SUFFIXES)
+
+
+def _encryption_manifest_is_drm(xml: bytes) -> bool:
+    """True if `META-INF/encryption.xml` encrypts anything beyond obfuscated fonts.
+
+    Every entry must name a font-obfuscation algorithm, point at a font file and carry no ADEPT
+    key; any other entry is content a reader needs a key for. A manifest that cannot be parsed,
+    or an entry missing its algorithm or target, counts as DRM: it might be hiding exactly that.
+    """
+    from lxml import etree
+
+    # Untrusted archive XML (issue #265): never resolve entities or touch the network.
+    safe = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)
+    try:
+        root = etree.fromstring(xml, parser=safe)
+    except Exception:  # any parse failure: conservative, and this must never raise
+        return True
+    if root is None:
+        return True
+
+    for data in (el for el in root.iter() if _local(el.tag) == "EncryptedData"):
+        algorithms = [el.get("Algorithm") for el in data.iter() if _local(el.tag) == "EncryptionMethod"]
+        uris = [el.get("URI") for el in data.iter() if _local(el.tag) == "CipherReference"]
+        if not algorithms or not uris or None in algorithms or None in uris:
+            return True
+        if any(a.strip() not in _FONT_OBFUSCATION_ALGORITHMS for a in algorithms):
+            return True
+        if not all(_is_font_uri(u) for u in uris):
+            return True
+        if any(_ADEPT_NS in (el.tag if isinstance(el.tag, str) else "") for el in data.iter()):
+            return True
+    return False
+
+
+def epub_is_drm_encrypted(path: str) -> bool:
+    """True if the EPUB's encryption manifest encrypts content, not just fonts.
+
+    No `META-INF/encryption.xml` means nothing is encrypted. One that only obfuscates embedded
+    fonts is not DRM (issue #560). An Adobe ADEPT `META-INF/rights.xml` next to any manifest counts
+    as DRM; on its own, with nothing encrypted, it locks nothing.
+
+    Runs standalone under `calibre-debug -e` too (the ACSM import's post-decryption check), so it
+    imports nothing from `services` at module level.
+    """
     try:
         with zipfile.ZipFile(path) as z:
-            if "META-INF/encryption.xml" not in z.namelist():
+            names = set(z.namelist())
+            if "META-INF/encryption.xml" not in names:
                 return False
-            enc = z.read("META-INF/encryption.xml").decode("utf-8", errors="ignore").lower()
+            enc = z.read("META-INF/encryption.xml")
+            rights = z.read("META-INF/rights.xml") if "META-INF/rights.xml" in names else b""
     except (zipfile.BadZipFile, KeyError, OSError):
         return False
-    return "ns.adobe.com/adept" in enc or "xmlenc#" in enc or "encrypteddata" in enc
+    if _ADEPT_NS.encode() in rights:
+        return True
+    return _encryption_manifest_is_drm(enc)
 
 
 def check_ebook_integrity(path: str) -> Tuple[bool, str]:
@@ -101,7 +168,7 @@ def check_ebook_integrity(path: str) -> Tuple[bool, str]:
     except OSError as e:
         return False, f"could not open ebook file: {e}"
 
-    if _epub_is_drm_encrypted(path):
+    if epub_is_drm_encrypted(path):
         return False, "EPUB is DRM-encrypted (Adobe ADEPT) — re-import a DRM-free copy"
 
     # Stage 2: extraction sanity.
