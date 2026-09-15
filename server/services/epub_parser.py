@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from urllib.parse import unquote, urldefrag
 
 from ebooklib import epub
@@ -139,6 +139,27 @@ def old_chapter_to_spine_index(documents: List[str]) -> List[int]:
     return mapping
 
 
+_CONTENT_MEDIA_TYPES = frozenset({"application/xhtml+xml", "text/html"})
+_CONTENT_EXTENSIONS = (".xhtml", ".html", ".htm")
+
+
+def _is_content_document(path: str, media_type: Optional[str]) -> bool:
+    """Whether a spine item is a content document the parser should read.
+
+    EPUB says so through the manifest `media-type`, not the file name (issue
+    #561): publisher tooling names XHTML files `chapter01.xml`, and the old
+    extension-only rule read every such book as empty. `text/html` covers old
+    EPUB 2 files. A missing media-type falls back to the extension.
+
+    An HTML-named item still counts whatever its media-type says. The extension
+    rule used to admit those, and dropping one now would take sentences out of a
+    chapter that may already have stored positions and sync points.
+    """
+    if media_type and media_type.split(";", 1)[0].strip().lower() in _CONTENT_MEDIA_TYPES:
+        return True
+    return path.lower().endswith(_CONTENT_EXTENSIONS)
+
+
 def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
     """
     Read an EPUB's content documents in spine order WITHOUT ebooklib.
@@ -174,7 +195,7 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
         opf_dir = os.path.dirname(opf_path)
 
         manifest = {
-            item.get("id"): item.get("href")
+            item.get("id"): (item.get("href"), item.get("media-type"))
             for item in opf.xpath('//*[local-name()="item"]')
             if item.get("id") and item.get("href")
         }
@@ -186,14 +207,14 @@ def _extract_epub_documents_via_zip(epub_path: str) -> List[str]:
 
         documents: List[str] = []
         for sid in spine_ids:
-            href = manifest.get(sid)
+            href, media_type = manifest.get(sid, (None, None))
             # A manifest href is a URL, not a file name (issue #554): the zip entry
             # `Text/Axis Test_1.html` is referenced as `Text/Axis%20Test_1.html`.
             # Reading the encoded name missed the entry and silently emptied the
             # slot, so a book named that way throughout extracted no text at all.
             # epub.js and Readium both decode, which is why such books read fine.
             path = unquote(urldefrag(href).url) if href else ""
-            if not path or not path.lower().endswith((".xhtml", ".html", ".htm")):
+            if not path or not _is_content_document(path, media_type):
                 # Still a spine slot as far as the readers are concerned.
                 documents.append("")
                 continue
