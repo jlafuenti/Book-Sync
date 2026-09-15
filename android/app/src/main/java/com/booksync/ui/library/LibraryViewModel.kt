@@ -114,6 +114,9 @@ data class LibraryItem(
         get() = pair?.ebookSeries ?: ebook?.series ?: audiobook?.series
     val seriesIndex: Float?
         get() = pair?.ebookSeriesIndex ?: ebook?.seriesIndex ?: audiobook?.seriesIndex
+    /** Server cover path for this card; the grid and series stacks both read it. */
+    val coverPath: String?
+        get() = pair?.audiobookCoverPath ?: audiobook?.coverFilename ?: ebook?.coverFilename
 }
 
 /** One stack in series-grouped mode. */

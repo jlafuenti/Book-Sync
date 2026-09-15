@@ -191,6 +191,7 @@ data class EBookResponse(
     val series: String? = null,
     val series_index: Float? = null,
     val uploaded_at: String,
+    val cover_path: String? = null,
     // Server-side "seen" flag (issue #222). Defaults to true so a server too old
     // to send it leaves the phone's own acknowledged_items table alone rather
     // than declaring the whole library new.

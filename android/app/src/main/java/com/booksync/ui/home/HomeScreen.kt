@@ -358,13 +358,15 @@ private fun ContinueRow(
     ) {
         items(items, key = { it.id }) { item ->
             // Cover: prefer local cached file (CoverArtHelper) → fall back to server URL.
-            val coverModel = remember(item.audiobookId, item.audiobookCoverPath) {
+            val coverModel = remember(item.audiobookId, item.audiobookCoverPath, item.ebookCoverPath) {
                 val localFile = item.audiobookId?.let { File(context.filesDir, "covers/$it.jpg") }
                 when {
                     localFile != null && localFile.exists() -> localFile
                     item.audiobookCoverPath != null ->
                         // coverPath already contains the full API path (e.g. "/api/files/covers/audiobook_252.jpg")
                         coverImageUrl(serverUrl, item.audiobookCoverPath)
+                    // A standalone ebook: no audiobook, so no local cache — server URL only.
+                    item.ebookCoverPath != null -> coverImageUrl(serverUrl, item.ebookCoverPath)
                     else -> null
                 }
             }
@@ -382,6 +384,7 @@ private fun ContinueRow(
                     kind = BookCardVariant.SingleMedia.MediaKind.EBOOK,
                     title = item.title,
                     author = item.author,
+                    coverImageModel = coverModel,
                     series = item.series,
                     seriesIndex = item.seriesIndex,
                 )

@@ -100,8 +100,9 @@ data class BookDetailsUi(
         get() = extendedMeta?.description?.takeIf { it.isNotBlank() }
     val audiobookIdForCover: Int?
         get() = pair?.audiobookId ?: audiobook?.id
-    val audiobookCoverPath: String?
-        get() = pair?.audiobookCoverPath ?: audiobook?.coverFilename
+    /** Server cover path: the audiobook's for a pair or audiobook, else a standalone ebook's own. */
+    val coverPath: String?
+        get() = pair?.audiobookCoverPath ?: audiobook?.coverFilename ?: ebook?.coverFilename
 }
 
 @HiltViewModel

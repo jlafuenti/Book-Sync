@@ -153,3 +153,15 @@ val MIGRATION_19_20 = object : Migration(19, 20) {
         db.execSQL("ALTER TABLE acknowledged_items_new RENAME TO acknowledged_items")
     }
 }
+
+/** v20 -> v21: `ebooks.coverFilename`. The server has always sent an ebook's `cover_path`,
+ *  but nothing on the device stored it, so every standalone ebook card showed the
+ *  placeholder.
+ *
+ *  Left NULL for existing rows: the next library refresh fills it in, the same way
+ *  `audiobooks.coverFilename` is populated. */
+val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE ebooks ADD COLUMN coverFilename TEXT")
+    }
+}
