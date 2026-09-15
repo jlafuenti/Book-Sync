@@ -448,3 +448,79 @@ def test_writing_a_non_empty_description_leaves_an_unrelated_comment_tag_alone(t
     saved = ID3(path)
     assert "TXXX:replaygain_track_gain" in saved
     assert str(saved.getall("COMM")[0]) == "A real blurb"
+
+
+# #538, reopened. `_read_embedded_metadata` reads an M4B description from `©des`
+# *first*, then `desc`, then `©cmt`. The writer cleared only `desc`/`©cmt` and set
+# only `desc`, so a `©des` atom outranked whatever the user did: a cleared
+# description came back from it, and a new one lost to it, on the next scan.
+
+
+def _m4a_with(tmp_path, atoms):
+    from mutagen.mp4 import MP4
+
+    path = write_minimal_m4a(str(tmp_path / "book.m4a"))
+    audio = MP4(path)
+    for key, value in atoms.items():
+        audio[key] = [value]
+    audio.save()
+    return path
+
+
+def test_clearing_the_description_removes_the_mp4_des_atom_it_is_read_from(tmp_path):
+    from mutagen.mp4 import MP4
+
+    path = _m4a_with(tmp_path, {"\xa9des": "Chapter 12", "\xa9cmt": "Chapter 12"})
+
+    tag_writer.write_audiobook_metadata(path, _book(description=None))
+
+    saved = MP4(path)
+    assert not {"\xa9des", "desc", "\xa9cmt"} & set(saved.keys())
+    assert "description" not in _read_embedded_metadata(path, "audiobook")
+
+
+def test_clearing_removes_a_lone_mp4_des_atom(tmp_path):
+    path = _m4a_with(tmp_path, {"\xa9des": "Chapter 12"})
+
+    tag_writer.write_audiobook_metadata(path, _book(description=None))
+
+    assert "description" not in _read_embedded_metadata(path, "audiobook")
+
+
+def test_a_new_description_replaces_a_stale_mp4_des_atom(tmp_path):
+    from mutagen.mp4 import MP4
+
+    path = _m4a_with(tmp_path, {"\xa9des": "Chapter 12"})
+
+    tag_writer.write_audiobook_metadata(path, _book(description="A real blurb"))
+
+    saved = MP4(path)
+    assert saved["\xa9des"] == ["A real blurb"]
+    assert saved["desc"] == ["A real blurb"]
+    assert _read_embedded_metadata(path, "audiobook")["description"] == "A real blurb"
+
+
+def test_a_new_mp3_description_is_what_the_next_scan_reads(tmp_path):
+    """A ripper's COMM::eng frame must not outrank the description just written."""
+    from mutagen.id3 import COMM
+    from mutagen.mp3 import MP3
+
+    path = write_minimal_mp3(str(tmp_path / "book.mp3"))
+    audio = MP3(path)
+    audio.add_tags()
+    audio.tags.add(COMM(encoding=3, lang="eng", desc="", text="Chapter 12"))
+    audio.save()
+
+    tag_writer.write_audiobook_metadata(path, _book(description="A real blurb"))
+
+    assert _read_embedded_metadata(path, "audiobook")["description"] == "A real blurb"
+
+
+def test_clearing_a_vorbis_description_also_removes_the_summary_fallback(audio, monkeypatch):
+    """The extractor reads `summary` when `description` is absent, so clearing
+    only `description` would hand the next scan the summary instead."""
+    tags = _opened(monkeypatch, FLAC({"description": ["Chapter 12"], "summary": ["Chapter 12"]}))
+
+    tag_writer.write_audiobook_metadata(audio, _book(title="T", description=None))
+
+    assert "description" not in tags and "summary" not in tags
