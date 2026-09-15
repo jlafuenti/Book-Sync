@@ -23,6 +23,8 @@ operator must do by hand rather than read about afterwards.
   first, and a new description is written there too, so a stale `©des` no longer outranks it.
   Clearing a FLAC or Ogg description also removes `summary`, and a new MP3 description replaces
   any comment frame a ripper left behind rather than sitting beside it (#538).
+- The book being transcribed appears once, not twice, under In Progress on the phone-width
+  Transcription page, and its card shows the queue's live progress (#562).
 - EPUBs whose chapters are XHTML files without an `.xhtml` or `.html` name extract their text. The
   server picked content documents by file extension, but EPUB identifies them by the manifest
   media-type, and some publishers name them `chapter01.xml` or give them no extension at all. A

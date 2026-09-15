@@ -87,6 +87,14 @@ function SortPill({ sortField, setSortField, sortDir, setSortDir }) {
     )
 }
 
+/* ── Mobile search ───────────────────────────────────────────────────────── */
+// `q` is already lower-cased and non-empty.
+const pairMatchesSearch = (p, q) => (
+    (p?.ebook?.title  || p?.audiobook?.title  || '').toLowerCase().includes(q) ||
+    (p?.ebook?.author || p?.audiobook?.author || '').toLowerCase().includes(q) ||
+    (p?.ebook?.series || p?.audiobook?.series || '').toLowerCase().includes(q)
+)
+
 /* ── Main Component ──────────────────────────────────────────────────────── */
 function TranscriptionPage({ tab }) {
     const { hasMinRole } = useAuth()
@@ -454,6 +462,24 @@ function TranscriptionPage({ tab }) {
         return m
     }, [pairs])
 
+    // Mobile In Progress cards: one entry per pair (issue #562). The running
+    // queue item used to get its own card on top of its `transcribing` pair's,
+    // so the book showed twice. Now it only lends its live progress/message to
+    // that pair's card, and is kept even when the pair hasn't flipped to
+    // `transcribing` yet — the queue and pairs polls lag each other.
+    const mobileInProgress = useMemo(() => {
+        const activePair = activeQueueItem ? pairById[activeQueueItem.book_pair_id] : null
+        const entries = activePair ? [{ pair: activePair, live: activeQueueItem }] : []
+        inProgress.forEach(p => {
+            if (p.id !== activePair?.id) entries.push({ pair: p, live: null })
+        })
+        const q = mobileSearch.toLowerCase()
+        if (!q) return entries
+        return entries.filter(({ pair, live }) =>
+            (live?.book_title || '').toLowerCase().includes(q) || pairMatchesSearch(pair, q),
+        )
+    }, [activeQueueItem, inProgress, pairById, mobileSearch])
+
     const sortedHistory = useMemo(() => {
         return [...queueHistory].sort((a, b) => {
             const av = a[historySortCol] ? new Date(a[historySortCol]) : null
@@ -798,31 +824,16 @@ function TranscriptionPage({ tab }) {
 
     /* ── Mobile search filtering ── */
     const mobileQ = mobileSearch.toLowerCase()
-    const mobileFilterPair = (p) => {
-        if (!mobileQ) return true
-        return (
-            (p.ebook?.title  || p.audiobook?.title  || '').toLowerCase().includes(mobileQ) ||
-            (p.ebook?.author || p.audiobook?.author || '').toLowerCase().includes(mobileQ) ||
-            (p.ebook?.series || p.audiobook?.series || '').toLowerCase().includes(mobileQ)
-        )
-    }
-    const mobileFilterQueue = (item) => {
-        if (!mobileQ) return true
-        const pair = pairById[item.book_pair_id]
-        return (
-            (item.book_title || '').toLowerCase().includes(mobileQ) ||
-            (pair?.ebook?.title  || pair?.audiobook?.title  || '').toLowerCase().includes(mobileQ) ||
-            (pair?.ebook?.author || pair?.audiobook?.author || '').toLowerCase().includes(mobileQ) ||
-            (pair?.ebook?.series || pair?.audiobook?.series || '').toLowerCase().includes(mobileQ)
-        )
-    }
-    const mobileInProgress       = mobileQ ? inProgress.filter(mobileFilterPair)             : inProgress
+    const mobileFilterPair = (p) => !mobileQ || pairMatchesSearch(p, mobileQ)
+    const mobileFilterQueue = (item) => (
+        !mobileQ ||
+        (item.book_title || '').toLowerCase().includes(mobileQ) ||
+        pairMatchesSearch(pairById[item.book_pair_id], mobileQ)
+    )
+    // The In Progress list is `mobileInProgress`, derived (and searched) above.
     const mobilePendingQueue      = mobileQ ? pendingQueueItems.filter(mobileFilterQueue)     : pendingQueueItems
     const mobileNotTranscribed    = mobileQ ? sortedNotTranscribed.filter(mobileFilterPair)  : sortedNotTranscribed
     const mobileTranscribed       = mobileQ ? sortedTranscribed.filter(mobileFilterPair)     : sortedTranscribed
-    const mobileActiveQueueItem   = mobileQ
-        ? (activeQueueItem && mobileFilterQueue(activeQueueItem) ? activeQueueItem : null)
-        : activeQueueItem
 
     /* ── Mobile item renderers ── */
     const MOBILE_NOT_TRANSCRIBED_LIMIT = 5
@@ -848,10 +859,12 @@ function TranscriptionPage({ tab }) {
         </div>
     )
 
-    const renderMobileActiveCard = (pair) => {
+    // `live` is the active queue item for this pair, if any: its progress and
+    // message are fresher than the per-pair status poll's.
+    const renderMobileActiveCard = (pair, live = null) => {
         const loc = statuses[pair.id] || {}
-        const progress = loc.progress
-        const message = loc.message || 'Transcribing...'
+        const progress = live ? (live.progress ?? loc.progress) : loc.progress
+        const message = live ? (live.message || 'Processing...') : (loc.message || 'Transcribing...')
         return (
             <div key={pair.id} className="tx-mobile-active-card">
                 {pair.ebook?.cover_path
@@ -860,7 +873,7 @@ function TranscriptionPage({ tab }) {
                 }
                 <div className="tx-mobile-active-body">
                     <div className="tx-mobile-active-title">
-                        {pair.ebook?.title || `Pair #${pair.id}`}
+                        {live?.book_title || pair.ebook?.title || `Pair #${pair.id}`}
                     </div>
                     <div className="tx-mobile-active-author">
                         {pair.ebook?.author || ''}
@@ -952,53 +965,10 @@ function TranscriptionPage({ tab }) {
                         </div>
                         {mobileSections['in-progress'] && (
                             <div className="tx-mobile-section-content">
-                                {mobileInProgress.length === 0 && !mobileActiveQueueItem ? (
+                                {mobileInProgress.length === 0 ? (
                                     <div className="tx-mobile-empty-hint">{mobileQ ? 'No matches' : 'No active transcriptions'}</div>
                                 ) : (
-                                    <>
-                                        {/* Active queue item card (processing) */}
-                                        {mobileActiveQueueItem && pairById[mobileActiveQueueItem.book_pair_id] && (
-                                            (() => {
-                                                const pair = pairById[mobileActiveQueueItem.book_pair_id]
-                                                const progress = mobileActiveQueueItem.progress
-                                                const message = mobileActiveQueueItem.message || 'Processing...'
-                                                return (
-                                                    <div className="tx-mobile-active-card">
-                                                        {pair.ebook?.cover_path
-                                                            ? <CoverImg path={pair.ebook.cover_path} className="tx-mobile-active-thumb" alt="" />
-                                                            : <div className="tx-mobile-item-thumb-placeholder" style={{ width: 80, height: 112 }}>📚</div>
-                                                        }
-                                                        <div className="tx-mobile-active-body">
-                                                            <div className="tx-mobile-active-title">
-                                                                {mobileActiveQueueItem.book_title || pair.ebook?.title || `Pair #${pair.id}`}
-                                                            </div>
-                                                            <div className="tx-mobile-active-author">
-                                                                {pair.ebook?.author || ''}
-                                                            </div>
-                                                            {progress != null && (
-                                                                <div className="tx-mobile-active-progress">
-                                                                    <div className="progress-bar">
-                                                                        <div className="progress-fill" style={{ width: `${(progress * 100).toFixed(1)}%` }} />
-                                                                    </div>
-                                                                    <div className="tx-mobile-active-pct">
-                                                                        {(progress * 100).toFixed(0)}% Synced
-                                                                    </div>
-                                                                </div>
-                                                            )}
-                                                            {!progress && (
-                                                                <div className="tx-mobile-active-time" style={{ color: 'var(--warning)' }}>
-                                                                    {message}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                        <div className="tx-mobile-active-glow" />
-                                                    </div>
-                                                )
-                                            })()
-                                        )}
-                                        {/* In-progress pairs (from pair status) */}
-                                        {mobileInProgress.map(pair => renderMobileActiveCard(pair))}
-                                    </>
+                                    mobileInProgress.map(({ pair, live }) => renderMobileActiveCard(pair, live))
                                 )}
                             </div>
                         )}
