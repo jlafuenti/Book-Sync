@@ -25,6 +25,20 @@ operator must do by hand rather than read about afterwards.
   any comment frame a ripper left behind rather than sitting beside it (#538).
 - The book being transcribed appears once, not twice, under In Progress on the phone-width
   Transcription page, and its card shows the queue's live progress (#562).
+- EPUBs whose chapters are XHTML files without an `.xhtml` or `.html` name extract their text. The
+  server picked content documents by file extension, but EPUB identifies them by the manifest
+  media-type, and some publishers name them `chapter01.xml` or give them no extension at all. A
+  book built that way throughout extracted no text, failed transcription at the integrity check and
+  was listed under DRM in Troubleshoot; a book built that way in part got a sync map missing those
+  chapters. Chapters that were already read keep their chapter and sentence numbers (#561).
+
+### Upgrade notes
+
+- Migration `0020` deletes the cached "ebook produced almost no text" integrity failures again: a
+  Library verify run after 0.2.1 re-cached them for books this bug still broke. Run Library verify
+  once after upgrading, then retry any transcription that was refused for "almost no text". A pair
+  already synced from an EPUB that was only partly affected is missing those chapters until you
+  realign it.
 
 ## [0.2.1] - 2026-09-15
 
