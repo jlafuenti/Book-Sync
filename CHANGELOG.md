@@ -16,6 +16,24 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- EPUBs whose content files have spaces (or other escaped characters) in their names extract their
+  text again. The server read each manifest href as a literal file name, but hrefs are URLs
+  (`Text/Axis%20Test_1.html`), so those chapters came out empty. A book named that way throughout
+  failed transcription at the integrity check and was listed under DRM in Troubleshoot. A book
+  named that way only in part got a sync map missing those chapters (#554).
+
+### Upgrade notes
+
+- Migration `0019` deletes the cached "ebook produced almost no text" integrity failures, which
+  this bug caused. Run Library verify once after upgrading to re-check those books.
+- A transcription that failed with "Ebook failed integrity check — ebook produced almost no text"
+  should be retried; it runs normally now.
+- A pair already synced from an affected EPUB is missing the chapters that read as empty. Realign
+  it (`POST /api/transcription/{pair_id}/realign`, or Realign on the pair) to add them. Existing
+  positions and sync points keep their coordinates.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added
