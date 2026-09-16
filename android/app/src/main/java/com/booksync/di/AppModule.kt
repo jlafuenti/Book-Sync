@@ -319,8 +319,7 @@ object AppModule {
     fun provideScopeAdoptionDao(db: BookSyncDatabase): ScopeAdoptionDao = db.scopeAdoptionDao()
 
     @Provides
-    fun provideLibraryCacheDao(db: BookSyncDatabase): com.booksync.data.local.dao.LibraryCacheDao =
-        db.libraryCacheDao()
+    fun provideLibraryCacheDao(db: BookSyncDatabase): LibraryCacheDao = db.libraryCacheDao()
 
     // Backs both ServerUrlManager and DeviceIdManager, which are each provided via their
     // own @Singleton @Inject constructor (no explicit @Provides needed) — Hilt resolves

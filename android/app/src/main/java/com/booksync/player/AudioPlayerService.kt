@@ -47,7 +47,6 @@ import com.booksync.auto.autoGatedSearch
 import com.booksync.auto.autoHasAccount
 import com.booksync.auto.autoMessageItem
 import com.booksync.auto.autoRootTabs
-import com.booksync.data.local.LibraryCacheReconcile
 import com.booksync.auto.autoSearch
 import com.booksync.auto.autoSearchIndex
 import com.booksync.auto.autoSearchPage
@@ -56,6 +55,8 @@ import com.booksync.auto.continueListeningBooks
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
 import com.booksync.auto.toAutoBook
+import com.booksync.data.local.LibraryCacheOwner
+import com.booksync.data.local.LibraryCacheReconcile
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -174,7 +175,7 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var coverArtHelper: CoverArtHelper
     @Inject lateinit var tokenManager: TokenManager
-    @Inject lateinit var libraryCacheOwner: com.booksync.data.local.LibraryCacheOwner
+    @Inject lateinit var libraryCacheOwner: LibraryCacheOwner
     @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
     @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
 
