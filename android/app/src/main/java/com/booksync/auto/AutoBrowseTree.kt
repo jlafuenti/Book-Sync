@@ -179,8 +179,23 @@ private fun browseFolder(id: String, title: String): MediaItem = MediaItem.Build
  * resolve path (`onGetItem` / `onSetMediaItems`, issue #225), so a book cannot
  * carry one resume position in the list and another when Auto asks for it by
  * id. [url] is the playback source — download or stream — already chosen.
+ *
+ * **Artwork is either bytes or a URI, never both** (issue #570). A browse row
+ * gets [artwork]: a `content://` FileProvider URI, explicitly granted to
+ * Android Auto, which keeps a hundred-row node cheap. The item that is about to
+ * *play* gets [artworkData] instead, because the media session's metadata is
+ * read by SystemUI — the shade's media player, the lock screen, quick settings
+ * — in its own process, where that URI is unreadable and throws. Media3 mirrors
+ * `artworkUri` into the platform metadata whether or not bytes are present and
+ * SystemUI tries the URI first, so setting both keeps the failure; the URI is
+ * dropped when there are bytes rather than kept "just in case".
  */
-fun autoBookItem(book: AutoBook, url: String, artwork: Uri?): MediaItem {
+fun autoBookItem(
+    book: AutoBook,
+    url: String,
+    artwork: Uri?,
+    artworkData: ByteArray? = null,
+): MediaItem {
     val extras = Bundle().apply {
         putLong("resumePositionMs", book.resumePositionMs)
         putLong("durationMs", book.durationMs)
@@ -188,19 +203,21 @@ fun autoBookItem(book: AutoBook, url: String, artwork: Uri?): MediaItem {
         book.pairId?.let { putInt("pairId", it) }
         putInt("audiobookId", book.audiobookId)
     }
+    val metadata = MediaMetadata.Builder()
+        .setTitle(book.title)
+        .setArtist(book.author)
+        .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+        .setIsBrowsable(false)
+        .setIsPlayable(true)
+        .setExtras(extras)
+    if (artworkData != null) {
+        metadata.setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+    } else {
+        metadata.setArtworkUri(artwork)
+    }
     return MediaItem.Builder()
         .setMediaId(book.mediaId)
         .setUri(url)
-        .setMediaMetadata(
-            MediaMetadata.Builder()
-                .setTitle(book.title)
-                .setArtist(book.author)
-                .setArtworkUri(artwork)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                .setIsBrowsable(false)
-                .setIsPlayable(true)
-                .setExtras(extras)
-                .build()
-        )
+        .setMediaMetadata(metadata.build())
         .build()
 }

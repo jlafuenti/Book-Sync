@@ -606,10 +606,15 @@ class PlayerViewModel @Inject constructor(
      *
      * The phone built its MediaItem with a title and an artist and nothing else,
      * so media controls were artless for any book whose file had no embedded
-     * art — while Android Auto, which does set `artworkUri`, was fine. Resolving
+     * art — while Android Auto, which does set artwork, was fine. Resolving
      * runs off the main thread because a cold cache means an HTTP fetch, and the
      * result is applied with `replaceMediaItem` on the same URI, which updates
      * metadata without disturbing playback.
+     *
+     * Bytes, not a `content://` URI (issue #570). This publishes onto the media
+     * session, which SystemUI reads in its own process; a FileProvider URI
+     * there is unreadable and throws, so warming with one would have put the
+     * bug straight back after the service stopped doing it.
      */
     private fun warmNotificationArtwork(
         audiobookId: Int,
@@ -618,18 +623,23 @@ class PlayerViewModel @Inject constructor(
         mediaController: MediaController,
     ) {
         viewModelScope.launch {
-            val uri = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching { coverArtHelper.getCoverUri(audiobookId, filename, serverCoverPath) }
-                    .getOrNull()
+            val artwork = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    coverArtHelper.getCoverArtworkData(audiobookId, filename, serverCoverPath)
+                }.getOrNull()
             } ?: return@launch
 
             val current = mediaController.currentMediaItem ?: return@launch
-            if (current.mediaMetadata.artworkUri != null) return@launch
+            if (current.mediaMetadata.artworkData != null) return@launch
             runCatching {
                 mediaController.replaceMediaItem(
                     mediaController.currentMediaItemIndex,
                     current.buildUpon()
-                        .setMediaMetadata(current.mediaMetadata.buildUpon().setArtworkUri(uri).build())
+                        .setMediaMetadata(
+                            current.mediaMetadata.buildUpon()
+                                .setArtworkData(artwork, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                                .build()
+                        )
                         .build(),
                 )
             }

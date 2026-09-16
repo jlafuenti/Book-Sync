@@ -11,11 +11,14 @@ import androidx.core.content.FileProvider
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.util.localFileName
 import com.booksync.data.remote.coverImageUrl
+import com.booksync.player.ArtworkEncode
 import com.booksync.player.CoverArtRung
 import com.booksync.player.coverArtPlan
+import com.booksync.player.encodeMediaArtwork
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -97,6 +100,61 @@ class CoverArtHelper @Inject constructor(
             if (uri != null) return uri
         }
         return null
+    }
+
+    /**
+     * The same cover as [getCoverUri], re-encoded as bytes for the media
+     * session (issue #570).
+     *
+     * SystemUI draws the notification shade's media player, the lock screen and
+     * quick settings, and reads the session metadata's artwork URI itself, in
+     * its own process. The covers FileProvider is `exported="false"` and no
+     * grant is ever made for SystemUI, so a `content://` cover threw a
+     * `SecurityException` on every publish and the controls were blank. Bytes
+     * need no grant: Media3's `BitmapLoader` prefers `artworkData` and hands
+     * the decoded bitmap to the platform session as `METADATA_KEY_ALBUM_ART`.
+     *
+     * Resolving goes through [getCoverUri] first — that is what walks the
+     * ladder and populates the cache — and then re-encodes the cached file
+     * within [encodeMediaArtwork]'s bounds, because the bytes cross a Binder.
+     *
+     * Null when there is no cover, or when even the smallest encoding is over
+     * budget; the caller then publishes no artwork rather than a URI nothing
+     * can open. Must be called from an IO dispatcher.
+     */
+    fun getCoverArtworkData(
+        audiobookId: Int,
+        audiobookFilename: String?,
+        serverCoverPath: String? = null,
+    ): ByteArray? {
+        if (getCoverUri(audiobookId, audiobookFilename, serverCoverPath) == null) return null
+        val coverFile = File(coversDir, "$audiobookId.jpg")
+        return encodeMediaArtwork { attempt -> encodeCover(coverFile, attempt) }
+    }
+
+    /**
+     * One [ArtworkEncode] attempt: a bounds-only pass, a sampled decode, a JPEG
+     * compress. Never materialises the full-size bitmap — a 3000 px cover
+     * decoded whole is ~36 MB, and this runs once per playback start.
+     */
+    private fun encodeCover(coverFile: File, attempt: ArtworkEncode): ByteArray? {
+        var bitmap: Bitmap? = null
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(coverFile.absolutePath, bounds)
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = coverArtInSampleSize(bounds.outWidth, bounds.outHeight, attempt.maxPx)
+            }
+            bitmap = BitmapFactory.decodeFile(coverFile.absolutePath, opts) ?: return null
+            val out = ByteArrayOutputStream()
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, attempt.quality, out)) return null
+            out.toByteArray()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to encode session artwork from ${coverFile.name}", e)
+            null
+        } finally {
+            bitmap?.recycle()
+        }
     }
 
     /**

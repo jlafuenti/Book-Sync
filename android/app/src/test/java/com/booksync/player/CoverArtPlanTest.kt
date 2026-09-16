@@ -142,13 +142,17 @@ class CoverArtPlanTest {
     fun `every call site supplies the server cover path`() {
         // The parameter defaults to null, so a missed call site silently keeps
         // the old embedded-only behaviour on that surface.
+        // Both resolvers count: issue #570 split the playback path off onto
+        // getCoverArtworkData, and a call site that forgets the path there
+        // regresses #331 on exactly the surface #570 was about.
         val service = source("com/booksync/player/AudioPlayerService.kt")
-        val calls = Regex("""getCoverUri\(""").findAll(service).count()
-        val withPath = Regex("""getCoverUri\([^)]*(?:CoverPath|coverFilename)[^)]*\)""")
+        val name = """getCover(?:Uri|ArtworkData)"""
+        val calls = Regex("""$name\(""").findAll(service).count()
+        val withPath = Regex("""$name\((?:[^()]|\([^()]*\))*?(?:CoverPath|coverFilename)""")
             .findAll(service).count()
         assertTrue(
-            "all $calls getCoverUri call sites in AudioPlayerService must pass a cover " +
-                "path; only $withPath do",
+            "all $calls getCoverUri/getCoverArtworkData call sites in " +
+                "AudioPlayerService must pass a cover path; only $withPath do",
             calls > 0 && calls == withPath,
         )
     }
