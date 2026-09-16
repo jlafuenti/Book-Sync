@@ -347,7 +347,12 @@ two tabs, each holding leaf items — so the tree is two levels deep, and no nod
 ```
 
 Since streaming landed (issue #171) the Library tab lists books that are **not** downloaded too;
-they stream from the server exactly as they do on the phone.
+they stream from the server exactly as they do on the phone. **Continue Listening is built the
+same way** — from audio progress alone, with no download filter (issue #569). It had one until
+then, which meant a book started in the car from Library could never come back in the tab whose
+job is to offer it back. The consequence is that a row can be listed that will not play with the
+server unreachable; that is already true of the Library tab, it is what checklist row 11 walks,
+and the alternative — hiding the book you are half-way through — is the worse of the two.
 
 **Connecting to a car never starts playback.** `onPlaybackResumption` deliberately returns a failed
 future for local playback, so Auto falls back to the browse UI and the driver presses play. This is

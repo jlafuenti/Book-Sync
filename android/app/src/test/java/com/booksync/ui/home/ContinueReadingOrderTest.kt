@@ -167,6 +167,40 @@ class ContinueReadingOrderTest {
     }
 
     /**
+     * Continue Reading keeps a book that is not on the device (issue #569).
+     *
+     * The download predicate that hid streamed books lived in the two DAO
+     * queries this row is built from, and `RecentlyPlayedQueryTest` is what
+     * keeps it out of there. "Move the filter to the callers that genuinely
+     * want downloads-only" was the other fix the issue offered, and this is the
+     * caller that does not: a tap on either row is already handled —
+     * `resolvePairOpenTarget` sends an offline pair with nothing on the device
+     * to its details screen, and the standalone player streams (issue #171).
+     * The Downloaded tab has its own queries and is where the filter belongs.
+     */
+    @Test
+    fun `a book that is not downloaded still appears in Continue Reading`() {
+        val streamed = AudioBookEntity(
+            id = 50, title = "Streamed", author = null, filename = "s.m4b",
+            durationSeconds = 3600, format = "m4b", series = null, seriesIndex = null,
+            uploadedAt = "2026-01-01T00:00:00", isDownloaded = false,
+        )
+        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
+        every { repository.getRecentlyPlayedStandaloneAudiobooksFlow() } returns flowOf(listOf(streamed))
+        coEvery { repository.getBookmark(1) } returns bookmark(1, updatedAt = sep10Iso)
+        coEvery { repository.getProgressOnce("audiobook", 50) } returns UserProgressEntity(
+            scopeKey = "s", mediaType = "audiobook", mediaId = 50, bookPairId = null,
+            epubCfi = null, epubChapter = null, epubProgressPercent = null,
+            audioPositionMs = 240_000, isCompleted = false,
+            updatedAt = sep05Millis, deviceId = null,
+        )
+
+        // `pair(1)` leaves audiobookDownloaded at its false default, so neither
+        // of these books is on the device.
+        assertEquals(listOf("pair_1", "audiobook_50"), newViewModel().order())
+    }
+
+    /**
      * The case the bug made invisible. Standalone books read `UserProgressEntity`,
      * whose `updatedAt` the server mapper already stores as epoch millis — so
      * they were always ordered correctly, and a server-synced *pair* sank below
