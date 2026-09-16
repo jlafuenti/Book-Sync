@@ -416,6 +416,54 @@ class AutoWiringTest {
         }
     }
 
+    // --- Continue Listening is one recency order (issue #574) ---
+
+    /**
+     * Both surfaces that merge pairs with standalone books — Home's Continue
+     * Reading and Auto's Continue Listening — must normalise the two timestamp
+     * shapes through the same helper. `bookmarks.updatedAt` is an epoch-millis
+     * *string* and `user_progress.updatedAt` a *Long*; a second copy of that
+     * rule is a second chance for the two lists to disagree about which book
+     * was played last, which is how issue #476 and issue #574 both happened.
+     */
+    @Test
+    fun `both continue rows derive last-played time from the same helper`() {
+        for (path in listOf(
+            "com/booksync/auto/AutoBookRows.kt",
+            "com/booksync/ui/home/HomeViewModel.kt",
+        )) {
+            assertTrue(
+                "$path must call lastPlayedAtMs() rather than reading updatedAt " +
+                    "itself (issue #574).",
+                codeLines(source(path)).any { it.contains("lastPlayedAtMs()") },
+            )
+        }
+    }
+
+    /**
+     * The cap has to be applied to the merged list. `(pairs + standalone)` then
+     * `take(100)` is the bug: with 100 in-progress pairs the standalone tail —
+     * where the book being listened to may well be — is thrown away before
+     * anything is ordered.
+     */
+    @Test
+    fun `continue listening orders before it caps`() {
+        val body = functionBody(source("com/booksync/auto/AutoBrowseTree.kt"), "continueListeningBooks")
+        val lines = codeLines(body)
+        assertTrue(
+            "continueListeningBooks must sort the merged list by lastPlayedAtMs.",
+            lines.any { it.contains("lastPlayedAtMs") },
+        )
+        val sortIndex = body.indexOf("sortedByDescending")
+        val takeIndex = body.indexOf("take(AUTO_MAX_ITEMS_PER_NODE)")
+        assertTrue("continueListeningBooks must still cap the node.", takeIndex >= 0)
+        assertTrue(
+            "The sort must come before the cap, or a recently played standalone " +
+                "book is truncated away by in-progress pairs (issue #574).",
+            sortIndex in 0 until takeIndex,
+        )
+    }
+
     @Test
     fun `the auto package is covered rather than excluded`() {
         val gradle = repoFile("build.gradle.kts").readText()

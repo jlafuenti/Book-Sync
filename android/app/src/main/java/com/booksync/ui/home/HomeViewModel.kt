@@ -17,8 +17,7 @@ import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
 import com.booksync.data.remote.VersionCompat
 import com.booksync.data.repository.PairOpenTarget
-import com.booksync.data.repository.preferCapturedAt
-import com.booksync.data.repository.parseSyncTimestamp
+import com.booksync.data.repository.lastPlayedAtMs
 import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -175,11 +174,10 @@ class HomeViewModel @Inject constructor(
                     // same read `LibraryRepository.lastOpenedTimesFlow` has always
                     // done — prefer the capture time, then parse either shape —
                     // which is why Library's "Recently opened" was right and this
-                    // was not. The standalone branches below need no change: the
-                    // server mapper already stores their `updatedAt` as millis.
-                    val updatedAt = bookmark?.let {
-                        parseSyncTimestamp(preferCapturedAt(it.capturedAt, it.updatedAt))
-                    } ?: 0L
+                    // was not. Since issue #574 it is one shared helper, because
+                    // Android Auto's Continue Listening merges the same two
+                    // sources and had drifted into its own answer.
+                    val updatedAt = bookmark?.lastPlayedAtMs() ?: 0L
                     items += HomeItem(
                         id = "pair_${pair.id}",
                         title = pair.ebookTitle ?: pair.audiobookTitle,
@@ -209,7 +207,7 @@ class HomeViewModel @Inject constructor(
                         mediaType = HomeItem.MediaType.AUDIOBOOK,
                         audiobookId = ab.id,
                         progressPercent = percent,
-                        updatedAtMs = progress?.updatedAt ?: 0L,
+                        updatedAtMs = progress?.lastPlayedAtMs() ?: 0L,
                         audiobookCoverPath = ab.coverFilename,
                         audiobookDownloaded = ab.isDownloaded,
                         series = ab.series,
@@ -225,7 +223,7 @@ class HomeViewModel @Inject constructor(
                         mediaType = HomeItem.MediaType.EBOOK,
                         ebookId = eb.id,
                         progressPercent = progress?.epubProgressPercent ?: 0f,
-                        updatedAtMs = progress?.updatedAt ?: 0L,
+                        updatedAtMs = progress?.lastPlayedAtMs() ?: 0L,
                         ebookCoverPath = eb.coverFilename,
                         ebookDownloaded = eb.isDownloaded,
                         series = eb.series,

@@ -354,6 +354,17 @@ job is to offer it back. The consequence is that a row can be listed that will n
 server unreachable; that is already true of the Library tab, it is what checklist row 11 walks,
 and the alternative — hiding the book you are half-way through — is the worse of the two.
 
+**Continue Listening is one recency order across both kinds of book, and the cap comes after the
+sort** (issue #574). Paired and standalone books are two Room queries, each already sorted by its
+own timestamp; `continueListeningBooks` merges them by `lastPlayedAtMs` and only then takes the
+first `AUTO_MAX_ITEMS_PER_NODE`. It used to concatenate and cap, so every paired book with any
+progress outranked a standalone one played a minute earlier, and 100 in-progress pairs would have
+pushed the standalones off the list entirely. The two sources spell the timestamp differently —
+`bookmarks.updatedAt` is an epoch-millis *string*, `user_progress.updatedAt` a *Long* — so both go
+through `lastPlayedAtMs` (`data/repository/PositionRepository.kt`), the same normalisation Home's
+Continue Reading uses (issue #476). The search index's "recent first" half is built from the same
+call, so it carries the merged order too.
+
 **Connecting to a car never starts playback.** `onPlaybackResumption` deliberately returns a failed
 future for local playback, so Auto falls back to the browse UI and the driver presses play. This is
 both a car app quality rule and a correctness one — the resumption path used to read a
