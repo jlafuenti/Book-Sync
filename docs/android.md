@@ -382,6 +382,18 @@ recently played book.
 (issue #331), so the browse path fetches art in parallel under a 4 s budget and renders without it
 if the server is slow or unreachable.
 
+**Browse rows carry a cover URI; the playing item carries cover bytes** (issue #570). A browse node
+can hold a hundred rows, so each one gets a `content://` FileProvider URI — cheap, and explicitly
+granted to Android Auto with `grantUriPermission`. The item that is about to *play* gets
+`artworkData` instead and no URI at all, because its metadata goes on the media session, which
+SystemUI reads in its own process to draw the notification shade's media player, the lock screen
+and quick settings. The covers provider is `android:exported="false"` and nothing grants SystemUI
+anything, so a URI there threw a `SecurityException` on every publish and the controls were blank.
+Bytes need no grant. They do cross a Binder, so `com.booksync.player.MediaArtwork` bounds them —
+512 px, 256 KB, stepping down a small encode ladder — and publishes nothing at all rather than
+falling back to a URI. **Never set `android:exported="true"` on that provider**: it fronts
+app-private files, and exporting it would open them to every app on the device.
+
 **An empty node always says why** rather than showing a blank list: "No books yet…" when signed in
 with an empty library, "Nothing started yet…" for an untouched Continue Listening tab, and
 "Tandem couldn't load your library…" when reading the cache itself failed.

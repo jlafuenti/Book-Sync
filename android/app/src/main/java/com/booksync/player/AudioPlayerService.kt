@@ -1948,16 +1948,23 @@ class AudioPlayerService : MediaLibraryService() {
                 // falls back to the cache instead of stalling playback.
                 refreshPositionBeforeResume("pair", id.pairId)
                 val bookmark = repository.getBookmark(id.pairId)
-                val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
-                buildPairMediaItem(pair, bookmark, coverUri)
+                // Bytes, not a URI (issue #570): this item goes on the media
+                // session, and SystemUI cannot open a FileProvider cover.
+                val artwork = coverArtHelper.getCoverArtworkData(
+                    pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath,
+                )
+                buildPairMediaItem(pair, bookmark, artwork)
             }
             is MediaId.Audiobook -> {
                 val audio = repository.getAudiobookById(id.audiobookId) ?: return null
                 // Same rule as the pair branch (issue #162).
                 refreshPositionBeforeResume("audiobook", id.audiobookId)
                 val progress = repository.getProgressOnce("audiobook", id.audiobookId)
-                val coverUri = coverArtHelper.getCoverUri(id.audiobookId, audio.filename, audio.coverFilename)
-                buildAudiobookMediaItem(audio, progress, coverUri)
+                // Bytes, not a URI — see the pair branch (issue #570).
+                val artwork = coverArtHelper.getCoverArtworkData(
+                    id.audiobookId, audio.filename, audio.coverFilename,
+                )
+                buildAudiobookMediaItem(audio, progress, artwork)
             }
             null -> null
         }
@@ -1978,21 +1985,27 @@ class AudioPlayerService : MediaLibraryService() {
     private fun buildPairMediaItem(
         pair: BookPairEntity,
         bookmark: BookmarkEntity?,
-        coverUri: Uri?
+        artworkData: ByteArray?
     ): MediaItem? {
         val uri = mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
             ?: return null
-        return autoBookItem(pair.toAutoBook(bookmark), uri.toString(), coverUri)
+        return autoBookItem(
+            pair.toAutoBook(bookmark), uri.toString(),
+            artwork = null, artworkData = artworkData,
+        )
     }
 
     /** Null for the same reason as [buildPairMediaItem] (issue #177). */
     private fun buildAudiobookMediaItem(
         audio: AudioBookEntity,
         progress: UserProgressEntity?,
-        coverUri: Uri?
+        artworkData: ByteArray?
     ): MediaItem? {
         val uri = mediaUriFor(repository.localAudioFile(audio.filename), audio.id)
             ?: return null
-        return autoBookItem(audio.toAutoBook(progress), uri.toString(), coverUri)
+        return autoBookItem(
+            audio.toAutoBook(progress), uri.toString(),
+            artwork = null, artworkData = artworkData,
+        )
     }
 }
