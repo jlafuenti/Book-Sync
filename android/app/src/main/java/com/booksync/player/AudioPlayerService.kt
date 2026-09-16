@@ -55,6 +55,8 @@ import com.booksync.auto.continueListeningBooks
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
 import com.booksync.auto.toAutoBook
+import com.booksync.data.local.LibraryCacheOwner
+import com.booksync.data.local.LibraryCacheReconcile
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.BookmarkEntity
@@ -173,6 +175,7 @@ class AudioPlayerService : MediaLibraryService() {
     @Inject lateinit var repository: BookSyncRepository
     @Inject lateinit var coverArtHelper: CoverArtHelper
     @Inject lateinit var tokenManager: TokenManager
+    @Inject lateinit var libraryCacheOwner: LibraryCacheOwner
     @Inject lateinit var serverUrlManager: com.booksync.data.remote.ServerUrlManager
     @Inject lateinit var diagnosticLogger: com.booksync.diagnostics.DiagnosticLogger
 
@@ -1745,11 +1748,15 @@ class AudioPlayerService : MediaLibraryService() {
      * gate in `onGetChildren` is above this (issue #573), which is why nothing
      * here asks about the token.
      */
-    private suspend fun childrenOf(parentId: String): List<MediaItem> = when (parentId) {
-        AUTO_ROOT_ID -> buildRootTabs()
-        AUTO_TAB_CONTINUE -> buildContinueListeningItems()
-        AUTO_TAB_LIBRARY -> buildLibraryItems()
-        else -> emptyList()
+    private suspend fun childrenOf(parentId: String): List<MediaItem> {
+        // Whose books these are, before any of them is read (issue #575).
+        if (!libraryCacheReadable()) return listOf(autoMessageItem(AUTO_UNAVAILABLE_MESSAGE))
+        return when (parentId) {
+            AUTO_ROOT_ID -> buildRootTabs()
+            AUTO_TAB_CONTINUE -> buildContinueListeningItems()
+            AUTO_TAB_LIBRARY -> buildLibraryItems()
+            else -> emptyList()
+        }
     }
 
     /**
@@ -1843,6 +1850,37 @@ class AudioPlayerService : MediaLibraryService() {
      */
     private fun hasAccount(): Boolean = autoHasAccount(tokenManager.cachedAccessToken())
 
+    /**
+     * Whether the library cache may be read — and, if its owner changed, the
+     * point at which the previous account's leftovers go (issue #575).
+     *
+     * The second question after [hasAccount], and the one that gate cannot
+     * answer: an account *is* signed in, it is simply not the one whose books
+     * are cached. This is the only place the check can happen in the car.
+     * `UserScopeProvider.onAuthenticated()` covers every phone entry — login,
+     * demo sign-in and app start — but none of those run here: Android Auto and
+     * system media resumption start this `MediaLibraryService` with no Activity
+     * alive, so the browse tree, the voice index and a play-by-media-id can all
+     * reach Room in a process where no login path ever executed.
+     *
+     * Cheap enough to sit in front of every browse: after the first call in a
+     * process [LibraryCacheOwner.reconcile] answers from memory.
+     *
+     * `Unverified` is refused rather than served. Failing open here is the whole
+     * bug — it renders another account's library — and the callers turn `false`
+     * into an empty node, no search hits and an unresolvable media id.
+     */
+    private suspend fun libraryCacheReadable(): Boolean {
+        val outcome = libraryCacheOwner.reconcile()
+        if (outcome != LibraryCacheReconcile.Unchanged) {
+            // Computed while the previous account was signed in, and
+            // onGetSearchResult answers straight out of this map.
+            autoSearchResults.clear()
+            diagnosticLogger.i(LogChannel.AUTO, TAG, "library cache reconciled: $outcome")
+        }
+        return outcome != LibraryCacheReconcile.Unverified
+    }
+
     private suspend fun buildContinueListeningItems(): List<MediaItem> = autoNode(
         emptyMessage = AUTO_NOTHING_STARTED_MESSAGE,
     ) {
@@ -1876,6 +1914,10 @@ class AudioPlayerService : MediaLibraryService() {
      * blank query — Assistant's "play Tandem" — resumes the most recent book.
      */
     private suspend fun loadAutoSearchIndex(): List<AutoBook> {
+        // Both halves of voice search build on this, and so does "play X on
+        // Tandem" — so the owner check goes here rather than in each caller
+        // (issue #575). Unverified means no hits, never a stale index.
+        if (!libraryCacheReadable()) return emptyList()
         val recentPairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) }
         val recentStandalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
             .map { autoBookFor(it) }
@@ -1938,6 +1980,11 @@ class AudioPlayerService : MediaLibraryService() {
     }
 
     private suspend fun resolveMediaItem(mediaId: String): MediaItem? {
+        // The path the issue's downloaded book took: a head unit remembers an id
+        // and asks for it directly, and a file already on disk needs no token,
+        // so nothing below here could refuse it. Null is the refusal, and every
+        // caller already turns it into one (issue #575).
+        if (!libraryCacheReadable()) return null
         return when (val id = MediaId.parse(mediaId)) {
             is MediaId.Pair -> {
                 val pair = repository.getPairById(id.pairId) ?: return null

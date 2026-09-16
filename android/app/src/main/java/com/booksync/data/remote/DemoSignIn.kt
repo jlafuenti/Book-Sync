@@ -141,7 +141,8 @@ class DemoSignIn @Inject constructor(
 
         return try {
             tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
-            // Claim rows written before the cache was scoped (issue #314), and
+            // Claim rows written before the cache was scoped (issue #314), drop
+            // a library cache belonging to another server (issue #575), and
             // learn the role before any screen renders (issue #170). The role is
             // best-effort: a failure here must not undo a sign-in that worked,
             // and an unknown role is treated as no permissions.

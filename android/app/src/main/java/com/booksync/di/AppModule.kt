@@ -318,6 +318,9 @@ object AppModule {
     @Provides
     fun provideScopeAdoptionDao(db: BookSyncDatabase): ScopeAdoptionDao = db.scopeAdoptionDao()
 
+    @Provides
+    fun provideLibraryCacheDao(db: BookSyncDatabase): LibraryCacheDao = db.libraryCacheDao()
+
     // Backs both ServerUrlManager and DeviceIdManager, which are each provided via their
     // own @Singleton @Inject constructor (no explicit @Provides needed) — Hilt resolves
     // them automatically once this DataStore binding is available.

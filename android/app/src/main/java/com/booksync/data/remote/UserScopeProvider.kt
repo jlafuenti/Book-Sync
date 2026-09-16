@@ -1,6 +1,7 @@
 package com.booksync.data.remote
 
 import android.util.Log
+import com.booksync.data.local.LibraryCacheOwner
 import com.booksync.data.local.dao.ScopeAdoptionDao
 import com.booksync.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,7 @@ class UserScopeProvider @Inject constructor(
     private val tokenManager: TokenManager,
     private val serverUrlManager: ServerUrlManager,
     private val scopeAdoptionDao: ScopeAdoptionDao,
+    private val libraryCacheOwner: LibraryCacheOwner,
     @ApplicationScope scope: CoroutineScope,
 ) {
     /**
@@ -76,14 +78,22 @@ class UserScopeProvider @Inject constructor(
     }
 
     /**
-     * Resolve, publish and adopt. Called from the login path *and* from app start
-     * — app start matters because an install upgrading into this build has never
-     * run the login path, so nothing would ever claim its legacy rows.
+     * Resolve, publish, reconcile and adopt. Called from the login path *and*
+     * from app start — app start matters because an install upgrading into this
+     * build has never run the login path, so nothing would ever claim its legacy
+     * rows.
      */
     suspend fun onAuthenticated() {
         val scope = current()
         resolved = Holder(scope?.key)
         if (scope == null) return
+        // The library tables are not partitioned by column the way the tables
+        // above are — one server's catalogue is shared by every account on it —
+        // so they are cleared when the cache belongs to a *different server*
+        // instead (issue #575). Before adoption, and before any screen reads the
+        // cache: `BookSyncNavigation` awaits this call before it picks a start
+        // destination, and `LoginScreen` before it navigates. It never throws.
+        libraryCacheOwner.reconcile()
         // Publishing the scope is what makes the app usable; adopting old rows is
         // a bonus on top. Never let the bonus take down the launch path or block a
         // sign-in — a failure here leaves the rows where they are, to be retried
