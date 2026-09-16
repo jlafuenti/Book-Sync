@@ -201,12 +201,164 @@ class AutoWiringTest {
     fun `an empty or unreachable library shows a message, never a blank list`() {
         assertTrue(
             "Every browse node must fall back to a message leaf.",
-            browsePath.contains("autoEmptyMessage(") &&
+            browsePath.contains("emptyMessage") &&
                 codeLines(service).any { it.contains("autoMessageItem(AUTO_UNAVAILABLE_MESSAGE)") },
         )
+    }
+
+    // --- Signed out: no content by any route (issue #573) ---
+
+    /**
+     * Sign-out leaves the Room cache and the downloaded files in place — that is
+     * deliberate (`docs/android.md`), it is what makes signing back in cheap.
+     * So every Android Auto surface has to ask whether there is an account
+     * *before* it reads that cache, and the answer has to be the same one for
+     * all of them.
+     *
+     * The gate must be exactly this: `autoHasAccount(tokenManager.cachedAccessToken())`,
+     * read once into a helper the surfaces below call. The car is the only
+     * consumer that can be handed another person's library, and the token is the
+     * only thing sign-out actually changes.
+     */
+    @Test
+    fun `the service asks one question about the account, and asks it of the token`() {
         assertTrue(
-            "Signed out is its own message — nothing in the car can fix it.",
-            browsePath.contains("AUTO_SIGNED_OUT_MESSAGE"),
+            "AudioPlayerService must define a single signed-in helper over " +
+                "autoHasAccount(tokenManager.cachedAccessToken()) — issue #573.",
+            codeLines(service).any {
+                it.contains("autoHasAccount(tokenManager.cachedAccessToken())")
+            },
+        )
+    }
+
+    /**
+     * The regression guard for #573 itself.
+     *
+     * The bug was not a missing message — the message existed and was pinned by
+     * a test. It was that the only way to reach it was `autoEmptyMessage`, wired
+     * in as the **empty-list fallback**, so it could only ever appear on a device
+     * whose cache happened to be empty. Signed out with a populated cache, the
+     * car listed and played the previous account's whole library.
+     *
+     * So: the service must not name the signed-out message at all. It belongs to
+     * the gate in `AutoAccountGate`, which decides on the account and not on the
+     * size of a list.
+     */
+    @Test
+    fun `the signed-out message is a gate, not an empty-list fallback`() {
+        val offenders = codeLines(service).filter { it.contains("AUTO_SIGNED_OUT_MESSAGE") }
+        assertTrue(
+            "AudioPlayerService must not reference AUTO_SIGNED_OUT_MESSAGE: " +
+                "$offenders. Producing it in the service is how issue #573 " +
+                "happened — it was only reachable as the empty-list fallback " +
+                "(autoEmptyMessage), so a populated cache hid it forever. The " +
+                "gate (autoSignedOutNode / autoGatedBrowse) owns it now.",
+            offenders.isEmpty(),
+        )
+        assertTrue(
+            "No helper may choose a message by whether the list came back " +
+                "empty: that is the issue #573 shape returning.",
+            codeLines(service).none { it.contains("fun autoEmptyMessage(") },
+        )
+    }
+
+    /**
+     * Every browse node, not merely the two tabs: the root as well, and any node
+     * id a head unit remembers from a previous session and asks for directly.
+     */
+    @Test
+    fun `browsing is gated on having an account, above every node`() {
+        val body = functionBody(service, "onGetChildren")
+        assertTrue(
+            "onGetChildren must run every node through autoGatedBrowse(...) so " +
+                "the root, both tabs and any remembered node id all answer with " +
+                "the sign-in leaf when there is no account (issue #573).",
+            body.contains("autoGatedBrowse("),
+        )
+        assertTrue(
+            "…and the gate must be the service's own account helper.",
+            body.contains("hasAccount()"),
+        )
+    }
+
+    /**
+     * Search is gated separately from browse because it has two halves and a
+     * cache of its own between them: `onSearch` runs the query, `onGetSearchResult`
+     * hands back what it stored. A result set computed while signed in must not
+     * survive a sign-out and be handed to the car afterwards.
+     */
+    @Test
+    fun `voice search returns nothing playable without an account`() {
+        assertTrue(
+            "onSearch must run through autoGatedSearch(...) — the Auto search " +
+                "index is built from the same Room cache as the tree (#573).",
+            functionBody(service, "onSearch").contains("autoGatedSearch("),
+        )
+        assertTrue(
+            "onGetSearchResult must check the account too: it answers from " +
+                "autoSearchResults, which may hold a result set computed before " +
+                "the sign-out (#573).",
+            functionBody(service, "onGetSearchResult").contains("hasAccount()"),
+        )
+    }
+
+    /**
+     * The path the issue's downloaded book took. A file already on disk needs no
+     * token, so nothing below this gate can refuse it — and `onSetMediaItems` is
+     * where *every* play request lands: a tap in the browse tree, a voice query,
+     * Assistant's "play X on Tandem", and `MainActivity`'s
+     * `MEDIA_PLAY_FROM_SEARCH` bridge.
+     */
+    @Test
+    fun `no play request resolves without an account`() {
+        val setItems = functionBody(service, "onSetMediaItems")
+        assertTrue(
+            "onSetMediaItems must refuse before it resolves anything (#573).",
+            setItems.contains("hasAccount()"),
+        )
+        val gateAt = setItems.lines().indexOfFirst { it.contains("hasAccount()") }
+        val firstResolveAt = setItems.lines().indexOfFirst {
+            it.contains("resolveMediaItem(") || it.contains("autoSearchBooks(") ||
+                it.contains("is CastPlayer")
+        }
+        assertTrue(
+            "The gate must come first: it sits above the Cast branch and above " +
+                "every resolve, or a downloaded book still plays (#573).",
+            gateAt >= 0 && (firstResolveAt < 0 || gateAt < firstResolveAt),
+        )
+        assertTrue(
+            "onGetItem must refuse to resolve a media id without an account — " +
+                "it is how a head unit asks for a row it remembers (#573).",
+            functionBody(service, "onGetItem").contains("autoGatedPlayback("),
+        )
+        assertTrue(
+            "onAddMediaItems must be overridden and gated: Media3 routes " +
+                "addMediaItem there rather than through onSetMediaItems (#573).",
+            codeLines(service).any { it.startsWith("override fun onAddMediaItems(") } &&
+                functionBody(service, "onAddMediaItems").contains("hasAccount()"),
+        )
+        assertTrue(
+            "onPlaybackResumption must refuse without an account. Its local " +
+                "branch already fails, but the Cast branch dispatches a LOAD " +
+                "from a saved media id and would resume the previous account's " +
+                "book (#573).",
+            functionBody(service, "onPlaybackResumption").contains("hasAccount()"),
+        )
+    }
+
+    /**
+     * Gating the surfaces is not enough on its own: signing out while a book is
+     * loaded leaves the session holding it, and the car's own transport controls
+     * play whatever the session holds without going through any callback above.
+     */
+    @Test
+    fun `signing out empties the session rather than leaving a book loaded`() {
+        assertTrue(
+            "The service must watch the token and clear the player when it goes " +
+                "away, or the car's play button resumes the previous account's " +
+                "book straight out of the session (#573).",
+            codeLines(service).any { it.contains("clearMediaItems()") } &&
+                codeLines(service).any { it.contains("tokenManager.getAccessToken()") },
         )
     }
 

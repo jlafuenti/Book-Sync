@@ -31,7 +31,7 @@ import com.booksync.auto.AUTO_EMPTY_LIBRARY_MESSAGE
 import com.booksync.auto.AUTO_MESSAGE_ID
 import com.booksync.auto.AUTO_NOTHING_STARTED_MESSAGE
 import com.booksync.auto.AUTO_ROOT_ID
-import com.booksync.auto.AUTO_SIGNED_OUT_MESSAGE
+import com.booksync.auto.AUTO_SIGNED_OUT_PLAYBACK_MESSAGE
 import com.booksync.auto.AUTO_TAB_CONTINUE
 import com.booksync.auto.AUTO_TAB_LIBRARY
 import com.booksync.auto.AUTO_UNAVAILABLE_MESSAGE
@@ -41,6 +41,10 @@ import com.booksync.auto.asSearchable
 import com.booksync.auto.autoBookItem
 import com.booksync.auto.autoBrowseItems
 import com.booksync.auto.autoEffectiveStartIndex
+import com.booksync.auto.autoGatedBrowse
+import com.booksync.auto.autoGatedPlayback
+import com.booksync.auto.autoGatedSearch
+import com.booksync.auto.autoHasAccount
 import com.booksync.auto.autoMessageItem
 import com.booksync.auto.autoRootTabs
 import com.booksync.auto.autoSearch
@@ -483,6 +487,8 @@ class AudioPlayerService : MediaLibraryService() {
             .setId("AudioPlayerSession")
             .build()
 
+        watchForSignOut()
+
         // Hook up CastPlayer if Cast SDK was successfully initialized (in BookSyncApp).
         // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
         // initialized by BookSyncApp; it never re-initializes.
@@ -507,6 +513,37 @@ class AudioPlayerService : MediaLibraryService() {
             }
         } catch (e: Exception) {
             Log.d(TAG, "Cast not available: ${e.message}")
+        }
+    }
+
+    /**
+     * Empty the session the moment the account goes away (issue #573).
+     *
+     * Gating the browse and play callbacks is not enough on its own. Signing out
+     * while a book is loaded leaves that book in the session — with its title,
+     * its artwork and its position — and the car's own transport controls resume
+     * it without passing through any callback above. On a downloaded file that
+     * needs no token, so nothing else would ever stop it.
+     *
+     * Stopping and clearing is the whole action; the position was already saved
+     * by the pause this causes, and the cache and the downloaded files stay
+     * exactly where they are, which is the point of the gate-rather-than-wipe
+     * design. Signed in, this collector does nothing at all.
+     */
+    private fun watchForSignOut() {
+        serviceScope.launch {
+            tokenManager.getAccessToken().collect { token ->
+                if (autoHasAccount(token)) return@collect
+                val player = mediaLibrarySession?.player ?: return@collect
+                if (player.mediaItemCount == 0) return@collect
+                Log.i(TAG, "signed out — stopping playback and clearing the session queue")
+                diagnosticLogger.i(
+                    LogChannel.AUTO, TAG,
+                    "signed out — stopping playback and clearing the session queue (issue #573)",
+                )
+                player.stop()
+                player.clearMediaItems()
+            }
         }
     }
 
@@ -1392,16 +1429,17 @@ class AudioPlayerService : MediaLibraryService() {
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onGetChildren parentId=$parentId page=$page pkg=${browser.packageName}")
-            return when (parentId) {
-                AUTO_ROOT_ID -> Futures.immediateFuture(
-                    LibraryResult.ofItemList(buildRootTabs(), params)
-                )
-                AUTO_TAB_CONTINUE -> buildContinueListeningItems(params)
-                AUTO_TAB_LIBRARY -> buildLibraryItems(params)
-                else -> Futures.immediateFuture(
-                    LibraryResult.ofItemList(ImmutableList.of(), params)
-                )
+            val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+            serviceScope.launch(Dispatchers.IO) {
+                // One gate above every node (issue #573): the root, both tabs,
+                // and any node id a head unit remembers from a previous session.
+                // Sign-out leaves the Room cache in place on purpose, so this is
+                // what stops the car listing the previous account's library —
+                // and [childrenOf] never runs, so that cache is not read at all.
+                val items = autoGatedBrowse(hasAccount()) { childrenOf(parentId) }
+                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
             }
+            return future
         }
 
         /**
@@ -1422,12 +1460,20 @@ class AudioPlayerService : MediaLibraryService() {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onSearch query='$query' pkg=${browser.packageName}")
             val future = SettableFuture.create<LibraryResult<Void>>()
             serviceScope.launch(Dispatchers.IO) {
-                val items = try {
-                    ImmutableList.copyOf(autoSearchItems(query))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Auto search failed", e)
-                    ImmutableList.of<MediaItem>()
-                }
+                // The search index is built from the same Room cache as the
+                // browse tree, so it is gated the same way (issue #573). Signed
+                // out it answers with nothing rather than a message row: a row
+                // among results reads as a hit, and Assistant would play it.
+                val items = ImmutableList.copyOf(
+                    autoGatedSearch(hasAccount()) {
+                        try {
+                            autoSearchItems(query)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Auto search failed", e)
+                            emptyList()
+                        }
+                    }
+                )
                 autoSearchResults[query] = items
                 diagnosticLogger.i(LogChannel.AUTO, TAG, "onSearch query='$query' hits=${items.size}")
                 withContext(Dispatchers.Main) {
@@ -1447,7 +1493,14 @@ class AudioPlayerService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val all = autoSearchResults[query] ?: ImmutableList.of()
+            // Gated as well as [onSearch] (issue #573): this half answers out of
+            // autoSearchResults, which can still hold a result set computed
+            // while the previous account was signed in.
+            val all = if (hasAccount()) {
+                autoSearchResults[query] ?: ImmutableList.of()
+            } else {
+                ImmutableList.of()
+            }
             return Futures.immediateFuture(
                 LibraryResult.ofItemList(ImmutableList.copyOf(autoSearchPage(all, page, pageSize)), params)
             )
@@ -1460,10 +1513,19 @@ class AudioPlayerService : MediaLibraryService() {
         ): ListenableFuture<LibraryResult<MediaItem>> {
             val future = SettableFuture.create<LibraryResult<MediaItem>>()
             serviceScope.launch(Dispatchers.IO) {
-                val item = resolveMediaItem(mediaId)
+                // How a head unit asks for a row it remembers, by id, without
+                // browsing first — so it is gated too (issue #573).
+                val signedIn = hasAccount()
+                val item = autoGatedPlayback(signedIn) { resolveMediaItem(mediaId) }
                 future.set(
-                    if (item != null) LibraryResult.ofItem(item, null)
-                    else LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+                    when {
+                        item != null -> LibraryResult.ofItem(item, null)
+                        // Told apart on purpose: "no such book" and "no account"
+                        // are different answers, and the second one is the one
+                        // worth seeing in a diagnostics log.
+                        !signedIn -> LibraryResult.ofError(LibraryResult.RESULT_ERROR_PERMISSION_DENIED)
+                        else -> LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+                    }
                 )
             }
             return future
@@ -1473,6 +1535,20 @@ class AudioPlayerService : MediaLibraryService() {
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            // No account, no resumption (issue #573). The local branch below
+            // already refuses, but the Cast branch resumes from a media id saved
+            // in SharedPreferences and would put the previous account's book on
+            // a television. Above both, because this is also the media-button /
+            // notification-resume entry point.
+            if (!hasAccount()) {
+                diagnosticLogger.w(
+                    LogChannel.AUTO, TAG,
+                    "resumption refused — no account signed in (issue #573)",
+                )
+                return Futures.immediateFailedFuture(
+                    UnsupportedOperationException(AUTO_SIGNED_OUT_PLAYBACK_MESSAGE)
+                )
+            }
             // Cast path: bypass Media3's CastPlayer.queueLoad() entirely. queueLoad sends a
             // QUEUE_LOAD message which the Default Media Receiver consistently rejects with
             // INVALID_PARAMS (2001) even for properly-formed single-item queues. Instead, send
@@ -1534,6 +1610,24 @@ class AudioPlayerService : MediaLibraryService() {
             startPositionMs: Long
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             diagnosticLogger.i(LogChannel.AUTO, TAG, "onSetMediaItems count=${mediaItems.size} startIndex=$startIndex startPos=${startPositionMs}ms pkg=${controller.packageName} ids=${mediaItems.map { it.mediaId }}")
+
+            // Every play request lands here — a tap in the browse tree, a voice
+            // query, Assistant's "play X on Tandem", and MainActivity's
+            // MEDIA_PLAY_FROM_SEARCH bridge — so the account gate goes first,
+            // above the Cast branch and above every resolve below (issue #573).
+            // It has to be first: a downloaded file needs no token and asks the
+            // server nothing, so nothing further down could ever refuse it. That
+            // is what let a signed-out car play the previous account's book from
+            // local storage, at their stored position.
+            if (!hasAccount()) {
+                diagnosticLogger.w(
+                    LogChannel.AUTO, TAG,
+                    "play refused — no account signed in (issue #573)",
+                )
+                return Futures.immediateFailedFuture(
+                    UnsupportedOperationException(AUTO_SIGNED_OUT_PLAYBACK_MESSAGE)
+                )
+            }
 
             // When Cast is active, returning items here triggers CastPlayer.setMediaItems → a LOAD,
             // AND handleMediaControllerPlayRequest still falls through to onPlaybackResumption
@@ -1605,6 +1699,32 @@ class AudioPlayerService : MediaLibraryService() {
             }
             return future
         }
+
+        /**
+         * The other way items reach the player (issue #573).
+         *
+         * Media3 routes `MediaController.addMediaItem(s)` here rather than
+         * through [onSetMediaItems], and the default implementation — not this
+         * class — would otherwise be the thing deciding. Signed in, the default
+         * is still what answers; signed out, nothing is added, so a controller
+         * cannot queue the previous account's book past the gate above.
+         */
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+        ): ListenableFuture<MutableList<MediaItem>> {
+            if (!hasAccount()) {
+                diagnosticLogger.w(
+                    LogChannel.AUTO, TAG,
+                    "add refused — no account signed in (issue #573)",
+                )
+                return Futures.immediateFailedFuture(
+                    UnsupportedOperationException(AUTO_SIGNED_OUT_PLAYBACK_MESSAGE)
+                )
+            }
+            return super.onAddMediaItems(mediaSession, controller, mediaItems)
+        }
     }
 
     // =========================================================
@@ -1618,8 +1738,19 @@ class AudioPlayerService : MediaLibraryService() {
      * decided where no test can see it. Everything below is therefore reduced
      * to "read Room, hand the rows to the pure builder".
      */
-    private fun buildRootTabs(): ImmutableList<MediaItem> =
-        ImmutableList.copyOf(autoRootTabs())
+    private fun buildRootTabs(): List<MediaItem> = autoRootTabs()
+
+    /**
+     * One browse node's rows, by node id. Only reached with an account — the
+     * gate in `onGetChildren` is above this (issue #573), which is why nothing
+     * here asks about the token.
+     */
+    private suspend fun childrenOf(parentId: String): List<MediaItem> = when (parentId) {
+        AUTO_ROOT_ID -> buildRootTabs()
+        AUTO_TAB_CONTINUE -> buildContinueListeningItems()
+        AUTO_TAB_LIBRARY -> buildLibraryItems()
+        else -> emptyList()
+    }
 
     /**
      * Pair row → browse row. Room only: no network on the browse path.
@@ -1684,44 +1815,36 @@ class AudioPlayerService : MediaLibraryService() {
      * becomes a leaf saying why, because a blank screen in a car tells the
      * driver nothing.
      */
-    private fun autoNode(
-        params: LibraryParams?,
-        emptyMessage: suspend () -> String,
+    private suspend fun autoNode(
+        emptyMessage: String,
         load: suspend () -> List<AutoBook>,
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-        val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
-        serviceScope.launch(Dispatchers.IO) {
-            val items = try {
-                val books = load()
-                val covers = autoCoverUris(books)
-                autoBrowseItems(
-                    books = books,
-                    emptyMessage = emptyMessage(),
-                    urlFor = ::autoSourceUrlFor,
-                    artworkFor = { covers[it.mediaId] },
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Error building Auto browse node", e)
-                listOf(autoMessageItem(AUTO_UNAVAILABLE_MESSAGE))
-            }
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
-        }
-        return future
+    ): List<MediaItem> = try {
+        val books = load()
+        val covers = autoCoverUris(books)
+        autoBrowseItems(
+            books = books,
+            emptyMessage = emptyMessage,
+            urlFor = ::autoSourceUrlFor,
+            artworkFor = { covers[it.mediaId] },
+        )
+    } catch (e: Exception) {
+        Log.e(TAG, "Error building Auto browse node", e)
+        listOf(autoMessageItem(AUTO_UNAVAILABLE_MESSAGE))
     }
 
     /**
-     * "Nothing here" and "you are signed out" are different problems with
-     * different fixes, and only one of them is worth telling the driver to pull
-     * over for. The token read is a cached in-memory value, not a request.
+     * The one question every Android Auto surface asks before it reads the cache
+     * or starts audio (issue #573).
+     *
+     * A cached in-memory read, not a request, so it is free to sit in front of
+     * every callback. The token is the only thing sign-out actually changes —
+     * `clearTokens` leaves the Room cache and the downloaded files alone on
+     * purpose — so it is the only honest signal for "is there an account here".
      */
-    private fun autoEmptyMessage(whenSignedIn: String): String =
-        if (tokenManager.cachedAccessToken() == null) AUTO_SIGNED_OUT_MESSAGE else whenSignedIn
+    private fun hasAccount(): Boolean = autoHasAccount(tokenManager.cachedAccessToken())
 
-    private fun buildContinueListeningItems(
-        params: LibraryParams?
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = autoNode(
-        params,
-        emptyMessage = { autoEmptyMessage(AUTO_NOTHING_STARTED_MESSAGE) },
+    private suspend fun buildContinueListeningItems(): List<MediaItem> = autoNode(
+        emptyMessage = AUTO_NOTHING_STARTED_MESSAGE,
     ) {
         continueListeningBooks(
             pairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) },
@@ -1735,11 +1858,8 @@ class AudioPlayerService : MediaLibraryService() {
      * an undownloaded book streams, so hiding it here just made the car show a
      * shorter library than the phone.
      */
-    private fun buildLibraryItems(
-        params: LibraryParams?
-    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = autoNode(
-        params,
-        emptyMessage = { autoEmptyMessage(AUTO_EMPTY_LIBRARY_MESSAGE) },
+    private suspend fun buildLibraryItems(): List<MediaItem> = autoNode(
+        emptyMessage = AUTO_EMPTY_LIBRARY_MESSAGE,
     ) {
         libraryBooks(
             pairs = repository.getPairsFlow().first().map { autoBookFor(it) },

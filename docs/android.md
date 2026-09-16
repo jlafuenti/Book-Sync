@@ -382,9 +382,34 @@ recently played book.
 (issue #331), so the browse path fetches art in parallel under a 4 s budget and renders without it
 if the server is slow or unreachable.
 
-**An empty node always says why** rather than showing a blank list: "Open Tandem on your phone to
-sign in" when there is no token, "No books yet…" when signed in with an empty library, "Nothing
-started yet…" for an untouched Continue Listening tab.
+**An empty node always says why** rather than showing a blank list: "No books yet…" when signed in
+with an empty library, "Nothing started yet…" for an untouched Continue Listening tab, and
+"Tandem couldn't load your library…" when reading the cache itself failed.
+
+**Signed out, Android Auto serves nothing** (issue #573). Sign-out clears the tokens and the role
+and nothing else — the Room cache and the downloaded audio files stay, deliberately, because that
+is what makes signing back in cheap. On the phone that is harmless; every screen is behind the
+login screen. In the car it was not: the browse tree is built from that cache, and a downloaded
+file needs no token to play, so a signed-out head unit listed the previous account's whole library
+with artwork and played their audiobook at their stored position.
+
+The fix is a gate, not a cache wipe. `com.booksync.auto.AutoAccountGate` asks one question —
+`autoHasAccount(tokenManager.cachedAccessToken())` — and every Auto surface asks it before it
+reads anything:
+
+| Surface | Signed out |
+|---|---|
+| `onGetChildren` (root, both tabs, any remembered node id) | one leaf, "Open Tandem on your phone to sign in"; the loader never runs, so the cache is not read |
+| `onSearch` / `onGetSearchResult` | nothing — not a message row, which a browser would render as a hit |
+| `onSetMediaItems` (browse tap, voice, Assistant, `MEDIA_PLAY_FROM_SEARCH`) | refused above the Cast branch and above every resolve |
+| `onGetItem`, `onAddMediaItems` | refused |
+| `onPlaybackResumption` (media button, notification, Cast) | refused |
+| a book already loaded when you signed out | the service watches the token and stops + clears the session |
+
+The gate is on the account, never on the size of a list — that distinction *is* issue #573. The
+message existed before and was pinned by a test, but the only route to it was the empty-list
+fallback, so it could appear only on a device whose cache happened to be empty. `AutoWiringTest`
+now carries a source guard that fails if the check is removed or reduced to that shape again.
 
 Auto behavior is hard to debug from the car, so the app can record a log: **Account →
 Diagnostics** starts a timed capture on either the *Android Auto* or *Tandem App* channel, shows
@@ -430,7 +455,7 @@ they are what stops it from regressing between walk-throughs.
 | 9 | Voice: search by author or series name in Auto's search UI | Matching books are listed and playable. |
 | 10 | Voice: "Play Tandem" with no title | The most recently played book starts. |
 | 11 | Turn the server off (or airplane-mode the phone) and browse | Downloaded books still browse and play; nothing hangs waiting for the server. |
-| 12 | Sign out on the phone, then browse in the car | A single row reading "Open Tandem on your phone to sign in" — not a blank list. |
+| 12 | Sign out on the phone, then browse in the car | A single row reading "Open Tandem on your phone to sign in" — not a blank list, and not the library. Then check the rest of #573: a voice query resolves nothing, and a **downloaded** book cannot be played by any route. |
 
 Rows 1, 7, 11 and 12 are the ones most likely to fail a review, and rows 8–10 are the voice-actions
 checklist item that used to be advertised in the manifest without being implemented at all.
