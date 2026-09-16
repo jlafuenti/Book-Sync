@@ -38,4 +38,5 @@ abstract class BookSyncDatabase : RoomDatabase() {
     abstract fun acknowledgedItemDao(): AcknowledgedItemDao
     abstract fun bookmarkLogDao(): BookmarkLogDao
     abstract fun scopeAdoptionDao(): ScopeAdoptionDao
+    abstract fun libraryCacheDao(): LibraryCacheDao
 }

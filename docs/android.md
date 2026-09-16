@@ -423,6 +423,42 @@ message existed before and was pinned by a test, but the only route to it was th
 fallback, so it could appear only on a device whose cache happened to be empty. `AutoWiringTest`
 now carries a source guard that fails if the check is removed or reduced to that shape again.
 
+**Signed *in* as someone else, the library cache is checked against its owner** (issue #575). The
+gate above cannot help here — an account is signed in, it is simply not the one whose books are
+cached. Issue #314 partitioned the reading tables by `(server, user)`; the library tables
+(`book_pairs`, `ebooks`, `audiobooks`, and `sync_points` derived from them) were left global
+because one Tandem's catalogue really is shared by every account on it. Nothing refreshed or
+cleared them at login, so a second sign-in listed the previous account's books on the phone and in
+the car, put them in the voice index, and played a **downloaded** one straight off the disk.
+Offline that window never closed.
+
+`com.booksync.data.local.LibraryCacheOwner` records which `(server, user)` the cache belongs to and
+compares it at every authentication:
+
+| What changed | What happens |
+|---|---|
+| nothing | nothing — a re-login must not cost the user their downloads |
+| the **user**, same server | rows and files stand; the in-memory Auto search results are dropped and the owner re-stamped. One server's library is shared, so deleting would cost a large re-download and buy no privacy — and the *positions* are already scoped, so Continue Listening is correctly empty for the new account |
+| the **server** | `book_pairs` / `ebooks` / `audiobooks` / `sync_points` cleared, and `files/ebooks`, `files/audiobooks` and `files/covers` emptied — at a server change everything in them came from the outgoing server. Row ids are per-server, and `CoverArtHelper` caches at `filesDir/covers/{audiobookId}.jpg` — **id alone** — so another Tandem's artwork would be drawn onto this one's book of the same id |
+| the owner cannot be read | `Unverified`: the browse node says "Tandem couldn't load your library…", search returns nothing, and no media id resolves. Failing open here is the bug |
+
+**This is a check on state, not a hook on sign-out, and that is deliberate — do not "fix" it back.**
+Sign-out is an event that gets missed: a session revoked from another device, a refresh token that
+expired, the process killed mid-sign-out, a backup restored onto a different phone. A state check
+catches all of those; a hook catches none of them. Clearing on sign-out is also actively harmful,
+because it would re-download gigabytes for the ordinary same-account sign-out and sign-in, and it
+would undo the property the section above builds on. Nothing on the logout path touches the cache,
+and `LibraryCacheOwnerWiringTest` fails if that changes.
+
+The recorded owner lives in the app's DataStore and is **not** removed by `TokenManager.clearTokens`
+— it has to outlive the session or the next sign-in has nothing to compare against.
+
+The check runs from `UserScopeProvider.onAuthenticated()`, which covers every phone entry (login,
+demo sign-in, app start), **and from inside `AudioPlayerService`** before the browse tree, the
+search index or a media-id resolve reads Room. That second half is not belt-and-braces: Android
+Auto and system media resumption start the service with no Activity alive, so none of the phone
+paths has run in that process.
+
 Auto behavior is hard to debug from the car, so the app can record a log: **Account →
 Diagnostics** starts a timed capture on either the *Android Auto* or *Tandem App* channel, shows
 an ongoing notification while it runs, and lets you share the resulting log file.

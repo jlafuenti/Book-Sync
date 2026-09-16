@@ -1,5 +1,7 @@
 package com.booksync.data.remote
 
+import com.booksync.data.local.LibraryCacheOwner
+import com.booksync.data.local.LibraryCacheReconcile
 import com.booksync.data.local.dao.ScopeAdoptionDao
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -27,6 +29,11 @@ class UserScopeProviderTest {
 
     private val adoption = mockk<ScopeAdoptionDao>(relaxed = true)
 
+    /** Issue #575 — see `LibraryCacheOwnerTest` for what it actually decides. */
+    private val libraryCacheOwner = mockk<LibraryCacheOwner>(relaxed = true).also {
+        coEvery { it.reconcile() } returns LibraryCacheReconcile.Unchanged
+    }
+
     private fun provider(server: String? = "https://tandem.example.com", token: String? = TOKEN_USER_2)
         : UserScopeProvider {
         val tokenManager = mockk<TokenManager>(relaxed = true)
@@ -34,7 +41,9 @@ class UserScopeProviderTest {
         coEvery { tokenManager.currentUserId() } returns userIdFromAccessToken(token)
         val serverUrlManager = mockk<ServerUrlManager>(relaxed = true)
         every { serverUrlManager.currentUrl } returns (server ?: "")
-        return UserScopeProvider(tokenManager, serverUrlManager, adoption, seedScope)
+        return UserScopeProvider(
+            tokenManager, serverUrlManager, adoption, libraryCacheOwner, seedScope,
+        )
     }
 
     @Test
@@ -77,6 +86,16 @@ class UserScopeProviderTest {
         provider(token = null).onAuthenticated()
 
         coVerify(exactly = 0) { adoption.adoptAll(any()) }
+    }
+
+    @Test
+    fun `authenticating reconciles the library cache owner`() = runBlocking {
+        // Issue #575: the library tables are not partitioned by column, so this
+        // is the phone's only chance to notice that they belong to a different
+        // server. Login, demo sign-in and app start all land here.
+        provider().onAuthenticated()
+
+        coVerify(exactly = 1) { libraryCacheOwner.reconcile() }
     }
 
     private companion object {

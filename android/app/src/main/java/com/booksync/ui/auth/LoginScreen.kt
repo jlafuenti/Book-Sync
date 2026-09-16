@@ -323,9 +323,11 @@ class LoginViewModel @Inject constructor(
                 )
                 tokenManager.saveTokens(tokens.access_token, tokens.refresh_token)
                 // Claim any rows written before the cache was scoped, so an
-                // upgrading install keeps its reading positions (issue #314).
-                // After saveTokens — the scope is derived from the stored token —
-                // and before onSuccess() renders anything from the cache.
+                // upgrading install keeps its reading positions (issue #314),
+                // and clear the library cache if it belongs to another server
+                // (issue #575). After saveTokens — both are derived from the
+                // stored token — and before onSuccess() renders anything from
+                // the cache. Awaiting it here is the ordering guarantee.
                 userScopeProvider.onAuthenticated()
                 // Learn what this user may do before any screen renders (issue
                 // #170). Best-effort: a failure here must not block a sign-in
