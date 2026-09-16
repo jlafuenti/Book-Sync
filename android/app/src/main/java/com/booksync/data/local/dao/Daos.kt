@@ -61,6 +61,14 @@ interface BookPairDao {
 
     /**
      * Pairs with audio progress, ordered by most recently listened.
+     *
+     * **Progress is the only condition** (issue #569). This used to also require
+     * `audiobookDownloaded = 1`, which stopped describing playback when issue
+     * #171 made an undownloaded book stream: a book listened to in the car for
+     * four minutes was absent from Android Auto's Continue Listening at the next
+     * connect, and from the recent half of the voice-search index with it. The
+     * Downloaded tab has [getDownloadedPairs] and keeps its filter there.
+     *
      * NOTE: bookmarks.updatedAt is stored as a numeric epoch-ms string
      * (e.g. "1741910592000"). String DESC sort is correct for fixed-length
      * numeric strings — do not change to ISO datetime format without updating this query.
@@ -68,8 +76,7 @@ interface BookPairDao {
     @Query("""
         SELECT bp.* FROM book_pairs bp
         INNER JOIN bookmarks b ON bp.id = b.bookPairId AND b.scopeKey = :scope
-        WHERE bp.audiobookDownloaded = 1
-          AND b.audioPositionMs > 0
+        WHERE b.audioPositionMs > 0
         ORDER BY b.updatedAt DESC
     """)
     fun getRecentlyPlayedPairs(scope: String): Flow<List<BookPairEntity>>
@@ -107,6 +114,15 @@ interface EBookDao {
     /**
      * Ebooks with reading progress, ordered by most recently read.
      * Joins user_progress; updatedAt is a Long epoch-ms timestamp.
+     *
+     * **Keeps its download filter**, unlike the two audio queries above — see
+     * issue #569, where dropping it here was considered and rejected. An unpaired
+     * ebook has nothing to stream to: Home routes this row to
+     * `StandaloneReaderScreen`, which has no download shell (a *paired* ebook
+     * goes through `ReaderScreen`, which fetches the EPUB on open, issue #171)
+     * and documents that its callers guarantee the file is present. Listing a
+     * book that is not on the device would open an empty reader. Relaxing this
+     * means giving the standalone reader that shell first.
      */
     @Query("""
         SELECT eb.* FROM ebooks eb
@@ -157,13 +173,18 @@ interface AudioBookDao {
     /**
      * Standalone audiobooks with audio progress, ordered by most recently played.
      * Joins user_progress; updatedAt is a Long epoch-ms timestamp.
+     *
+     * **Progress is the only condition** (issue #569), for the same reason as
+     * [BookPairDao.getRecentlyPlayedPairs]: an undownloaded audiobook streams
+     * (issue #171), and this is the query that decides whether a book the driver
+     * is part-way through is offered back to them. Downloads-only lists read
+     * [getDownloadedAudioBooks].
      */
     @Query("""
         SELECT ab.* FROM audiobooks ab
         INNER JOIN user_progress up ON up.mediaType = 'audiobook' AND up.mediaId = ab.id
             AND up.scopeKey = :scope
-        WHERE ab.isDownloaded = 1
-          AND up.audioPositionMs IS NOT NULL
+        WHERE up.audioPositionMs IS NOT NULL
           AND up.audioPositionMs > 0
         ORDER BY up.updatedAt DESC
     """)

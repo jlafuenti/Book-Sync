@@ -228,6 +228,42 @@ class AutoWiringTest {
         }
     }
 
+    // --- Continue Listening lists streamed books too (issue #569) ---
+
+    /**
+     * The download predicate that caused issue #569 lived in the DAO, and
+     * `RecentlyPlayedQueryTest` is what holds it out of there. This holds it out
+     * of the other end: "move the filter to the callers" was one of the fixes
+     * the issue offered, and Continue Listening is not a caller that wants it.
+     * A book streams since issue #171, so filtering here would hide exactly the
+     * book the driver is listening to — the tab's whole purpose.
+     */
+    @Test
+    fun `nothing on the Continue Listening path filters on download state`() {
+        val sources = mapOf(
+            "AudioPlayerService.buildContinueListeningItems" to
+                functionBody(service, "buildContinueListeningItems"),
+            // The search index is built from the same two flows, so a filter
+            // here would also make a streamed book unsayable to Assistant.
+            "AudioPlayerService.loadAutoSearchIndex" to
+                functionBody(service, "loadAutoSearchIndex"),
+            "AutoBrowseTree.continueListeningBooks" to
+                functionBody(source("com/booksync/auto/AutoBrowseTree.kt"), "continueListeningBooks"),
+        )
+        for ((where, body) in sources) {
+            val offenders = codeLines(body).filter {
+                it.contains("Downloaded") || it.contains("isDownloaded")
+            }
+            assertTrue(
+                "$where must not filter Continue Listening on download state: " +
+                    "$offenders. Since issue #171 an undownloaded book streams; " +
+                    "hiding one here is issue #569, where a book played in the " +
+                    "car for four minutes was absent at the next connect.",
+                offenders.isEmpty(),
+            )
+        }
+    }
+
     @Test
     fun `the auto package is covered rather than excluded`() {
         val gradle = repoFile("build.gradle.kts").readText()
