@@ -53,6 +53,8 @@ import com.booksync.auto.mergedLibrary
 import com.booksync.auto.toAutoBook
 import com.booksync.data.local.entity.AudioBookEntity
 import com.booksync.data.local.entity.BookPairEntity
+import com.booksync.data.local.entity.BookmarkEntity
+import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.diagnostics.LogChannel
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
@@ -1619,21 +1621,20 @@ class AudioPlayerService : MediaLibraryService() {
     private fun buildRootTabs(): ImmutableList<MediaItem> =
         ImmutableList.copyOf(autoRootTabs())
 
-    /** Pair row → browse row. Room only: no network on the browse path. */
+    /**
+     * Pair row → browse row. Room only: no network on the browse path.
+     *
+     * The bookmark goes in whole. It carries both what the row needs from it —
+     * the resume position and when the book was last played — and reducing it
+     * here would put the timestamp normalisation Continue Listening orders by
+     * inside this class, which Kover does not see (issue #574).
+     */
     private suspend fun autoBookFor(pair: BookPairEntity): AutoBook =
-        pair.toAutoBook(resumePositionMs = pairResumeMs(pair.id))
+        pair.toAutoBook(repository.getBookmark(pair.id))
 
     /** Standalone audiobook row → browse row. Room only, same as above. */
     private suspend fun autoBookFor(audio: AudioBookEntity): AutoBook =
-        audio.toAutoBook(resumePositionMs = audiobookResumeMs(audio.id))
-
-    /** The cached bookmark position for a pair; 0 when the book was never opened. */
-    private suspend fun pairResumeMs(pairId: Int): Long =
-        repository.getBookmark(pairId)?.audioPositionMs?.toLong() ?: 0L
-
-    /** The cached progress position for a standalone audiobook; 0 when never opened. */
-    private suspend fun audiobookResumeMs(audiobookId: Int): Long =
-        repository.getProgressOnce("audiobook", audiobookId)?.audioPositionMs?.toLong() ?: 0L
+        audio.toAutoBook(repository.getProgressOnce("audiobook", audio.id))
 
     /**
      * The playback source for a browse row: the download, else the stream
@@ -1827,18 +1828,16 @@ class AudioPlayerService : MediaLibraryService() {
                 // falls back to the cache instead of stalling playback.
                 refreshPositionBeforeResume("pair", id.pairId)
                 val bookmark = repository.getBookmark(id.pairId)
-                val resumeMs = bookmark?.audioPositionMs?.toLong() ?: 0L
                 val coverUri = coverArtHelper.getCoverUri(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
-                buildPairMediaItem(pair, resumeMs, coverUri)
+                buildPairMediaItem(pair, bookmark, coverUri)
             }
             is MediaId.Audiobook -> {
                 val audio = repository.getAudiobookById(id.audiobookId) ?: return null
                 // Same rule as the pair branch (issue #162).
                 refreshPositionBeforeResume("audiobook", id.audiobookId)
                 val progress = repository.getProgressOnce("audiobook", id.audiobookId)
-                val resumeMs = progress?.audioPositionMs?.toLong() ?: 0L
                 val coverUri = coverArtHelper.getCoverUri(id.audiobookId, audio.filename, audio.coverFilename)
-                buildAudiobookMediaItem(audio, resumeMs, coverUri)
+                buildAudiobookMediaItem(audio, progress, coverUri)
             }
             null -> null
         }
@@ -1858,22 +1857,22 @@ class AudioPlayerService : MediaLibraryService() {
      */
     private fun buildPairMediaItem(
         pair: BookPairEntity,
-        resumePositionMs: Long,
+        bookmark: BookmarkEntity?,
         coverUri: Uri?
     ): MediaItem? {
         val uri = mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
             ?: return null
-        return autoBookItem(pair.toAutoBook(resumePositionMs), uri.toString(), coverUri)
+        return autoBookItem(pair.toAutoBook(bookmark), uri.toString(), coverUri)
     }
 
     /** Null for the same reason as [buildPairMediaItem] (issue #177). */
     private fun buildAudiobookMediaItem(
         audio: AudioBookEntity,
-        resumePositionMs: Long,
+        progress: UserProgressEntity?,
         coverUri: Uri?
     ): MediaItem? {
         val uri = mediaUriFor(repository.localAudioFile(audio.filename), audio.id)
             ?: return null
-        return autoBookItem(audio.toAutoBook(resumePositionMs), uri.toString(), coverUri)
+        return autoBookItem(audio.toAutoBook(progress), uri.toString(), coverUri)
     }
 }

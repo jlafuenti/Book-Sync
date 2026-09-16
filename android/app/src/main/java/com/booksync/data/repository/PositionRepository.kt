@@ -1604,6 +1604,38 @@ internal fun toCapturedAtIso(ts: String?): String? {
 internal fun preferCapturedAt(capturedAt: String?, updatedAt: String): String =
     if (!capturedAt.isNullOrBlank()) capturedAt else updatedAt
 
+/**
+ * When a book was last listened to or read, as epoch millis — the value the
+ * "continue" lists are ordered by.
+ *
+ * Two surfaces merge pairs with standalone books into one recency order:
+ * Home's Continue Reading and Android Auto's Continue Listening (issue #574).
+ * They need one rule, because the two position rows store the timestamp
+ * differently — [BookmarkEntity.updatedAt] is a string holding either epoch
+ * millis (written on-device) or ISO-8601 (pulled from the server or another
+ * device), while [UserProgressEntity.updatedAt] is already a Long. Reading only
+ * the first shape is what sank web-touched books to the bottom of Home's row in
+ * issue #476.
+ *
+ * `captured_at` — the moment a position was actually recorded on a device —
+ * wins over `updated_at`, the row-bookkeeping stamp, exactly as it does for
+ * conflict resolution ([preferCapturedAt], issue #54). An unparseable
+ * `captured_at` falls back to `updated_at` rather than scoring 0, since a 0
+ * here does not merely lose a comparison: it drops the book off the end of a
+ * capped list.
+ */
+internal fun lastPlayedAtMs(capturedAt: String?, updatedAt: String): Long {
+    val preferred = parseSyncTimestamp(preferCapturedAt(capturedAt, updatedAt))
+    return if (preferred > 0L) preferred else parseSyncTimestamp(updatedAt)
+}
+
+/** See [lastPlayedAtMs] — a pair's last-played time, from its bookmark. */
+internal fun BookmarkEntity.lastPlayedAtMs(): Long = lastPlayedAtMs(capturedAt, updatedAt)
+
+/** See [lastPlayedAtMs] — a standalone book's, from its progress row. */
+internal fun UserProgressEntity.lastPlayedAtMs(): Long =
+    lastPlayedAtMs(capturedAt, updatedAt.toString())
+
 // ============ Position response -> entity mappers ============
 
 /**

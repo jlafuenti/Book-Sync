@@ -51,6 +51,13 @@ data class AutoBook(
     val resumePositionMs: Long = 0L,
     val durationMs: Long = 0L,
     /**
+     * When this book was last played, epoch millis, 0 when never. What
+     * [continueListeningBooks] orders by — normalised in `AutoBookRows.kt` from
+     * whichever timestamp shape the row's position record carries, because the
+     * two sources do not agree on one (issue #574).
+     */
+    val lastPlayedAtMs: Long = 0L,
+    /**
      * What the URL and artwork resolvers need to look the file up — the
      * server's filename for the audio, and `audiobooks.cover_path`. Carried
      * here rather than looked up again so one browse is one pass over Room.
@@ -71,12 +78,27 @@ fun autoRootTabs(): List<MediaItem> = listOf(
 )
 
 /**
- * Continue Listening: the recency order the repository already produced, pairs
- * first, capped. No re-sorting — the ordering is the point of the tab, and it
- * comes from `updatedAt` on the bookmark/progress row.
+ * Continue Listening: both sources merged into **one** recency order, then
+ * capped (issue #574).
+ *
+ * The two arguments arrive sorted, but each only against itself — pairs by
+ * their bookmark's timestamp, standalone books by their progress row's. This
+ * used to be `(pairs + standalone).take(...)`, a concatenation, so every paired
+ * book with any progress outranked a standalone one no matter when either was
+ * played: the book played a minute ago sat two dozen rows down.
+ *
+ * The cap comes **after** the sort, and that ordering is the other half of the
+ * fix. Capping a concatenation throws away the standalone tail wholesale, so a
+ * library with 100 in-progress pairs could not show a standalone book at all.
+ *
+ * The sort is stable, so rows that tie — including everything with no usable
+ * timestamp, which scores 0 — keep the order they arrived in rather than
+ * shuffling between browses.
  */
 fun continueListeningBooks(pairs: List<AutoBook>, standalone: List<AutoBook>): List<AutoBook> =
-    (pairs + standalone).take(AUTO_MAX_ITEMS_PER_NODE)
+    (pairs + standalone)
+        .sortedByDescending { it.lastPlayedAtMs }
+        .take(AUTO_MAX_ITEMS_PER_NODE)
 
 /**
  * Library: everything, alphabetical, with an audiobook dropped when a pair
