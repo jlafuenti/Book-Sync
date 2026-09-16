@@ -129,8 +129,8 @@ android {
         // https://developer.android.com/google/play/requirements/target-sdk
         targetSdk = 36
         // MAJOR*10000 + MINOR*100 + PATCH (docs/releasing.md): 0.1.0 -> 100.
-        versionCode = 202
-        versionName = "0.2.2"
+        versionCode = 203
+        versionName = "0.2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

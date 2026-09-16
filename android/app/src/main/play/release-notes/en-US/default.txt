@@ -1,1 +1,1 @@
-Android Auto's Continue Listening now includes books you are streaming, not only downloaded ones. On the phone, a book being transcribed no longer appears twice under In Progress, and covers show for standalone ebooks throughout the app.
+Android Auto now refuses to browse or play while signed out, lists Continue Listening in the order you actually played things, and the phone's media controls show cover art again. Switching to a different server clears the previous server's cached library and downloads.

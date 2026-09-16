@@ -16,6 +16,28 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-16
+
+Android only. Nothing in the server or the web app changed, so a deployment has nothing to do —
+this release exists to ship the Android build. Android normally carries its notes in Play rather
+than here (see the note at the top of this file); they are listed because a version with an empty
+section reads like an oversight.
+
+### Fixed
+
+- Android Auto refuses to browse, search or play anything while no account is signed in. The
+  browse tree is built from a local cache that signing out deliberately keeps, so a head unit went
+  on listing the previous account's library and playing its downloaded books (#573).
+- The local library cache is cleared when it belongs to a different server, including the
+  downloaded files and cached covers, which were keyed by id alone and could show the wrong book's
+  artwork after a switch. An account change on the same server keeps both, because a Tandem
+  server's library is shared by its users (#575).
+- Android Auto's Continue Listening is ordered by when each book was last played, across paired
+  and standalone books, and the cap is applied after that ordering rather than before. The voice
+  query with no title shared the bug and is fixed with it (#574).
+- The phone's own media controls show cover art again: the artwork is published as image data
+  rather than a file link the system UI has no permission to open (#570).
+
 ## [0.2.2] - 2026-09-15
 
 ### Fixed
