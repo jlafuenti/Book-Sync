@@ -47,6 +47,27 @@ class AutoPlayRequestTest {
         assertEquals(all, autoSearchIndex(emptyList(), all))
     }
 
+    @Test
+    fun `a blank voice query resolves to the most recent book of either kind`() {
+        // The index's recent half is the same `continueListeningBooks` the
+        // browse tab uses, so issue #574's concatenation reached voice too:
+        // "play Tandem" with no title resumes the first entry, which was the
+        // most recent *pair* rather than the most recent book.
+        val pairPlayedLastWeek = AutoBook(
+            mediaId = "pair_3", title = "Paired", audiobookId = 30, pairId = 3,
+            lastPlayedAtMs = 1_800_000_000_000L - 7 * 24 * 60 * 60 * 1000L,
+        )
+        val soloPlayedAMinuteAgo = book(7).copy(lastPlayedAtMs = 1_800_000_000_000L - 60_000L)
+        val index = autoSearchIndex(
+            recent = continueListeningBooks(
+                pairs = listOf(pairPlayedLastWeek),
+                standalone = listOf(soloPlayedAMinuteAgo),
+            ),
+            all = listOf(pairPlayedLastWeek, soloPlayedAMinuteAgo, book(9)),
+        )
+        assertEquals("audiobook_7", index.first().mediaId)
+    }
+
     // --- Search result paging ---
 
     @Test

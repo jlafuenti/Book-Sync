@@ -99,6 +99,73 @@ class SyncConflictHelpersTest {
         assertEquals("1700000000000", preferCapturedAt("   ", "1700000000000"))
     }
 
+    // ---------- lastPlayedAtMs ----------
+    //
+    // One normalisation shared by Home's Continue Reading and Android Auto's
+    // Continue Listening (issue #574). Both merge pairs and standalone books
+    // into one recency order, and the two row shapes store the timestamp
+    // differently — a string on the bookmark, a Long on the progress row — so
+    // a second copy of this rule is a second chance for the two lists to
+    // disagree about which book was played last.
+
+    @Test
+    fun `lastPlayedAtMs reads a bookmark's epoch-millis string`() {
+        assertEquals(
+            1700000000000L,
+            BookmarkEntity(
+                scopeKey = "s", bookPairId = 1, source = "audio",
+                epubChapter = null, epubSentenceIndex = null, audioPositionMs = 0,
+                updatedAt = "1700000000000",
+            ).lastPlayedAtMs()
+        )
+    }
+
+    @Test
+    fun `lastPlayedAtMs reads a bookmark's ISO-8601 updatedAt`() {
+        assertEquals(
+            java.time.Instant.parse("2026-04-12T15:30:00Z").toEpochMilli(),
+            BookmarkEntity(
+                scopeKey = "s", bookPairId = 1, source = "audio",
+                epubChapter = null, epubSentenceIndex = null, audioPositionMs = 0,
+                updatedAt = "2026-04-12T15:30:00Z",
+            ).lastPlayedAtMs()
+        )
+    }
+
+    @Test
+    fun `lastPlayedAtMs prefers captured_at, but falls back when it cannot be parsed`() {
+        fun bookmark(updatedAt: String, capturedAt: String?) = BookmarkEntity(
+            scopeKey = "s", bookPairId = 1, source = "audio",
+            epubChapter = null, epubSentenceIndex = null, audioPositionMs = 0,
+            updatedAt = updatedAt, capturedAt = capturedAt,
+        )
+        assertEquals(
+            java.time.Instant.parse("2026-04-12T15:30:00Z").toEpochMilli(),
+            bookmark("1700000000000", "2026-04-12T15:30:00Z").lastPlayedAtMs()
+        )
+        // A capturedAt that parses to nothing must not sink the book to the
+        // bottom of a list ordered by this value.
+        assertEquals(1700000000000L, bookmark("1700000000000", "nonsense").lastPlayedAtMs())
+        assertEquals(1700000000000L, bookmark("1700000000000", null).lastPlayedAtMs())
+    }
+
+    @Test
+    fun `lastPlayedAtMs reads a progress row's Long updatedAt and its captured_at`() {
+        fun progress(updatedAt: Long, capturedAt: String? = null) = UserProgressEntity(
+            scopeKey = "s", mediaType = "audiobook", mediaId = 3, bookPairId = null,
+            epubCfi = null, epubChapter = null, epubProgressPercent = null,
+            audioPositionMs = 0, isCompleted = false, updatedAt = updatedAt,
+            deviceId = null, capturedAt = capturedAt,
+        )
+        assertEquals(1700000000000L, progress(1700000000000L).lastPlayedAtMs())
+        assertEquals(
+            java.time.Instant.parse("2026-04-12T15:30:00Z").toEpochMilli(),
+            progress(1700000000000L, "2026-04-12T15:30:00Z").lastPlayedAtMs()
+        )
+        assertEquals(1700000000000L, progress(1700000000000L, "nonsense").lastPlayedAtMs())
+        assertEquals(0L, progress(0L).lastPlayedAtMs())
+    }
+
     // ---------- PositionResponse.toBookmarkEntity ----------
     //
     // The precise Readium locator arrives as a position hint keyed by device,

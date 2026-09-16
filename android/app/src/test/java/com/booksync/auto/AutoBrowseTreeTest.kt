@@ -23,19 +23,30 @@ import org.junit.Test
  */
 class AutoBrowseTreeTest {
 
-    private fun pair(id: Int, title: String, audiobookId: Int = id) = AutoBook(
+    /** A fixed "now" so the recency assertions don't depend on the clock. */
+    private val NOW = 1_800_000_000_000L
+    private val DAY_MS = 24 * 60 * 60 * 1000L
+
+    private fun pair(
+        id: Int,
+        title: String,
+        audiobookId: Int = id,
+        lastPlayedAtMs: Long = 0L,
+    ) = AutoBook(
         mediaId = "pair_$id",
         title = title,
         author = "Author $id",
         audiobookId = audiobookId,
         pairId = id,
+        lastPlayedAtMs = lastPlayedAtMs,
     )
 
-    private fun standalone(id: Int, title: String) = AutoBook(
+    private fun standalone(id: Int, title: String, lastPlayedAtMs: Long = 0L) = AutoBook(
         mediaId = "audiobook_$id",
         title = title,
         author = "Author $id",
         audiobookId = id,
+        lastPlayedAtMs = lastPlayedAtMs,
     )
 
     /** Every book has a source: downloaded file or, since issue #171, a stream URL. */
@@ -65,7 +76,60 @@ class AutoBrowseTreeTest {
     // --- Continue Listening ---
 
     @Test
-    fun `continue listening keeps the recency order it was given, pairs before standalone`() {
+    fun `continue listening merges the two sources by last played, not one after the other`() {
+        // Issue #574: the node used to be `(pairs + standalone).take(100)`, so
+        // every paired book with any progress outranked a standalone one played
+        // a minute ago — on a real library the book just played sat ~24 rows
+        // down. Each source arrives sorted by its own timestamp; the merge is
+        // what makes "most recently played first" true across both.
+        val aWeekAgo = NOW - 7 * DAY_MS
+        val aMinuteAgo = NOW - 60_000L
+        val books = continueListeningBooks(
+            pairs = listOf(pair(3, "Paired", lastPlayedAtMs = aWeekAgo)),
+            standalone = listOf(standalone(7, "Standalone", lastPlayedAtMs = aMinuteAgo)),
+        )
+        assertEquals(listOf("audiobook_7", "pair_3"), books.map { it.mediaId })
+    }
+
+    @Test
+    fun `continue listening sorts every row, not just the two heads`() {
+        val books = continueListeningBooks(
+            pairs = listOf(
+                pair(1, "Pair newest", lastPlayedAtMs = NOW - 1_000L),
+                pair(2, "Pair oldest", lastPlayedAtMs = NOW - 4 * DAY_MS),
+            ),
+            standalone = listOf(
+                standalone(8, "Solo second", lastPlayedAtMs = NOW - 2_000L),
+                standalone(9, "Solo third", lastPlayedAtMs = NOW - DAY_MS),
+            ),
+        )
+        assertEquals(
+            listOf("pair_1", "audiobook_8", "audiobook_9", "pair_2"),
+            books.map { it.mediaId },
+        )
+    }
+
+    @Test
+    fun `the cap applies to the merged list, so a recent standalone is never truncated away`() {
+        // The second half of issue #574: with more in-progress pairs than the
+        // node can hold, concatenating first meant the cap threw away the whole
+        // standalone tail — including the book the driver was listening to.
+        val manyOldPairs = (1..150).map {
+            pair(it, "Pair %03d".format(it), lastPlayedAtMs = NOW - 30 * DAY_MS - it)
+        }
+        val books = continueListeningBooks(
+            pairs = manyOldPairs,
+            standalone = listOf(standalone(999, "Just played", lastPlayedAtMs = NOW)),
+        )
+        assertEquals(AUTO_MAX_ITEMS_PER_NODE, books.size)
+        assertEquals("audiobook_999", books.first().mediaId)
+    }
+
+    @Test
+    fun `books with equal or missing timestamps keep a deterministic order`() {
+        // Nothing here has ever been played (or the rows carry no usable
+        // timestamp): the result must be the order the sources arrived in,
+        // not an arbitrary one and not an exception.
         val books = continueListeningBooks(
             pairs = listOf(pair(3, "Third"), pair(1, "First")),
             standalone = listOf(standalone(7, "Seventh")),
