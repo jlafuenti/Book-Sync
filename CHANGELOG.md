@@ -16,147 +16,82 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
-### Fixed
-
-- `services/alignment.py`'s anchor filter could let a single false, far-ahead anchor survive:
-  the plain longest-increasing-subsequence filter only maximizes chain *length*, so a lone bad
-  match with an inflated whisper index rode along for free whenever nothing else competed for its
-  epub slot (a noisy stretch, a run of short/ambiguous sentences) — costing the chain nothing to
-  keep, since no correct candidate existed there to lose. DTW/interpolation on either side of it
-  was then pulled toward the wrong position across the whole gap: exact for a stretch, then a
-  region displaced hours ahead, decaying back to exact once real anchors resumed — the shape
-  reported against a production library (43/153 synced pairs flagged by #586's timing check, most
-  of them this bug rather than reordered audio). `_filter_consistent_anchors` now judges each kept
-  anchor against the local trend its *other* kept neighbours imply (leave-one-out, reusing
-  `_expected_ms` from #586's degraded-map diagnostics) and iteratively drops the single worst
-  outlier per pass, re-running the filter on the reduced pool each time — which also lets back in
-  any genuinely consistent raw anchors that only lost out to the bad one. A single displaced
-  anchor being rejected this way is ordinary filtering, not degraded-map territory:
-  `MIN_DISPLACED_RUN_LENGTH` (3) still gates that classification, confirmed by a new regression
-  test (`test_far_ahead_anchor_does_not_displace_the_gap_it_creates`). Existing alignment tests
-  and the `sync_parity` golden vectors are unchanged by this fix.
-- The sync-map audit's timing check (#586) always suggested `check_audio_order` for a flagged
-  pair, even when the *cached transcript's own text* was in book order — meaning the audio was
-  fine and the sync map itself was displaced (typically by the anchor bug above). Re-transcribing
-  in that case spent Jetson hours and changed nothing. `services/sync_map_audit.py` now walks a
-  flagged pair's sampled points' *located transcript positions*, in book order, and checks whether
-  they form a single consistent run (the same longest-increasing-subsequence methodology as the
-  alignment fix above, via the new `_book_order_violations`, robust to a stray bad locate rather
-  than a naive "did this go backwards" check that a single ambiguous match would poison forever).
-  When the transcript is confirmed in book order, the pair is flagged with `suggested_action:
-  "realign"` and `realign_path` instead of `"check_audio_order"`; the `reason` also now names the
-  affected chapter range (`timing_mismatch_chapters`). Without a cached transcript (or when the
-  timing check didn't run), this defaults to the previous, conservative `check_audio_order`
-  behaviour — there's no evidence either way. The web Troubleshoot page's "Sync-Map Audit" section
-  copy and tests were updated to reflect that a flagged pair isn't always an audio problem.
-- The transcription cache used to key a hit on the audiobook's file path alone, so a file replaced
-  at the same path (a downloader "upgrade", a re-rip, an Audiobookshelf merge/re-encode) kept
-  reusing the old recording's transcript and aligning its timestamps against different audio.
-  `AudioTranscript` now stores the audio's own fingerprint (`AudioBook.file_hash`, a whole-file
-  hash, plus `duration_seconds`) at the moment it was transcribed, and `services/queue_manager.py`
-  requires it to match before reusing a cached transcript — a path match is no longer enough on its
-  own. A Tandem tag write-back changes that same whole-file hash, so `_refresh_write_back_hash`
-  (the `#533` mechanism, `routers/library.py`) and the new `services/audio_change.py` now move the
-  transcript's fingerprint forward in the same request/scan pass that wrote the tags, the same way
-  it already does for `sync_maps.epub_file_hash` on the ebook side — a write-back never looks like
-  a replacement.
-- `POST /api/library/scan`, `POST /api/library/rescan-all` and `POST /api/library/{book_type}s/{id}/rescan`
-  now detect when a *known* audiobook path's file has changed and react exactly the way an
-  operator's `POST /api/troubleshoot/replace/audiobook/{id}` already did: refresh
-  `file_size`/`file_hash`, drop every affected pair's cached transcript, and demote a
-  `synced`/`error`/`transcribing` pair to `manual_matched`. Previously only an explicit upload
-  through the replace endpoint did this — a file swapped in place by a downloader or a re-rip and
-  picked up by an ordinary scan left the stale transcript and the `synced` status untouched.
-  Reading positions are unaffected either way. The reaction itself is shared
-  (`services/audio_change.invalidate_audiobook_transcripts`) between the replace endpoint and the
-  new scan-side detector, rather than living in both places.
-
-  The verdict turns on **duration**, not the hash alone: the owner routinely edits tags outside
-  Tandem (Audiobookshelf's own metadata tools, a tag editor), which changes the whole-file hash
-  with the audio itself untouched, and none of those tools go through the write-back refresh above
-  to keep the hash in step the way a Tandem-initiated write does. So a duration that moves by more
-  than 2 seconds is read as a genuine replacement (invalidate); a hash/size change with the
-  duration unchanged is read as an external edit — `file_size`/`file_hash` and the cached
-  transcript's own fingerprint are refreshed and the transcript is *kept* (logged at INFO with the
-  audiobook id), rather than discarding hours of Jetson transcription work over a title edit. A
-  same-length swap to a different recording is the one case this can't tell apart from an edit; the
-  sync-map audit's timing check (#586) is the backstop for it, since it already samples the cached
-  transcript's own timestamps against the sync map independent of how the transcript got there.
-- The transcript cache's fallback for a transcript with no fingerprint at all (a legacy row, or one
-  never verified) no longer trusts a bare path match. `services/queue_manager.py` now sanity-checks
-  such a transcript's own last timestamp against the audiobook's current duration before reusing
-  it — if the transcript runs more than 2 seconds past the file's end, or covers under 95% of it, it
-  is treated as a miss and re-transcribed, rather than blessing a stale transcript for a file that
-  was replaced before this fix shipped. A transcript whose timestamps plausibly reach the end of the
-  file is trusted and gets its fingerprint stamped, same as before.
-
-### Upgrade notes
-
-- New migration `0023_audio_fingerprint` adds `audio_transcripts.audio_file_hash` (varchar(64),
-  nullable) and `audio_transcripts.audio_duration_seconds` (integer, nullable). Both are left NULL
-  on every existing row rather than backfilled — hashing the whole library's worth of audio files
-  during a migration isn't safe to do unconditionally (the files may not even be mounted on the
-  machine running it). A transcript with a NULL fingerprint is treated as "unknown provenance," not
-  "known unchanged": the cache check sanity-checks the transcript's own timestamps against the
-  audiobook's current duration (see above) rather than trusting the path outright, and stamps the
-  current fingerprint onto the row once that passes, so it does not force every pre-existing
-  transcript to re-transcribe on deploy, but does start protecting itself against a future in-place
-  replacement from the next cache check onward.
+## [0.3.0] - 2026-09-17
 
 ### Added
 
-- The sync-map audit gained a fourth, independent check: whether a map's stored chapter order
-  agrees with where its sampled points' text actually falls in the EPUB's *current* spine order.
-  A map built before EPUB parsing was spine-indexed could have numbered its chapters by something
-  else entirely — the reported case was a filename lexicographic sort (`part1, part10, part11,
-  part12, part2 ... part9` instead of true reading order) — and migration `0004_canonical_position`
-  only re-based maps that existed when it ran, not ones built since from a source it didn't
-  anticipate. `epub_parser.extract_spine_chapter_texts` (the per-chapter building block
-  `extract_book_text` now joins into one string) gives each sampled point's *true* spine chapter;
-  `services.sync_map_audit._spine_order_violations` compares that sequence, in the map's own
-  stored order, the same way the timing check's book-order check does. A mismatched map is
-  promoted from `healthy` to `stale` with `suggested_action: "realign"` (or `"retranscribe"`
-  without a cached transcript) and a `reason` naming the affected chapter range
-  (`spine_order_chapters`) — independent of the timing check, so it runs even for a pair with no
-  cached transcript. No schema change and no automatic bulk repair: an admin "realign all flagged"
-  action or a startup check is a reasonable follow-up once this has run against the production
-  library, but doing that implicitly here risked realigning pairs nobody had looked at yet (#595).
-- The sync-map audit (`GET /api/troubleshoot/sync-map-audit`) gained a timing check: for a sample
-  of a pair's sync points (80, spread across the whole map — independent of the endpoint's own
-  `sample_size`), it locates the sentence in the cached audio transcript and compares timestamps,
-  flagging the pair when at least 10% of the located points differ by more than 2 minutes *and*
-  include a run of 3 or more consecutive mismatches in book order — a reordered block is
-  localized, so it shows up as a run, not just a raised share. This catches an audiobook whose
-  content is reordered relative to the ebook (a swapped block of narration) — a case the existing
-  hash/text checks, both about the wrong *file*, never covered. Flagged pairs report
-  `status: "degraded"` with a suggested action of `check_audio_order`, since re-aligning alone
-  cannot fix reordered audio. Surfaced in the web Troubleshoot page's new on-demand "Sync-Map
-  Audit" section (#586).
-- Alignment (`services/alignment.py`) now classifies a sync map as degraded at alignment time when
-  the anchor filter rejects a large, contiguous, consistently-displaced run of raw anchors — the
-  signature of a reordered audio block, which otherwise stays invisible because the filter just
-  keeps timestamps monotonic and interpolates over the gap. Recorded on the sync map
-  (`sync_maps.degraded` / `degraded_reason`) and surfaced by the audit above. A handful of
-  scattered rejected anchors (ordinary noise) does not trip it. Client-side messaging when a
-  switch lands inside a degraded region (Android) is a follow-up, not covered here (#586).
-
-### Upgrade notes
-
-- New migration `0022_sync_map_degraded` adds `sync_maps.degraded` (boolean, default false) and
-  `sync_maps.degraded_reason` (text, nullable). Existing maps backfill to `degraded = false` —
-  "not (yet) known to be degraded" rather than a re-derived verdict; run the sync-map audit (or
-  re-align a specific pair) afterward to get a current read on maps written before this migration.
+- The sync-map audit (`GET /api/troubleshoot/sync-map-audit`) checks timings as well as text. For a
+  sample of 80 sync points it finds each sentence in the cached transcript and compares
+  timestamps, and flags the pair when at least 10% of the located points are more than 2 minutes
+  off *and* at least 3 of those are consecutive. That is the signature of an audiobook whose
+  narration is reordered relative to the ebook, which the hash and text checks never caught.
+  Flagged pairs report `status: "degraded"` with the suggested action `check_audio_order`:
+  re-aligning cannot fix reordered audio, the file has to be corrected first. The web Troubleshoot
+  page has a new on-demand "Sync-Map Audit" section (#586).
+- Alignment marks a sync map as degraded (`sync_maps.degraded`, `degraded_reason`) when the anchor
+  filter throws away a large, contiguous, consistently displaced run of matches — a reordered
+  block that used to be papered over with interpolated timestamps. Scattered rejections from
+  ordinary noise do not trip it (#586).
 
 ### Changed
 
-- A finished book that is picked back up and played (or read) past the last stretch — and then
-  moved back out of it, by seeking, scrubbing, or paging backward — is un-finished again, the
-  mirror of the existing rule that finishes a book on reaching that stretch in the first place.
-  Previously "finished" was sticky forever: re-listening from the middle left the book off every
-  Continue Listening / Continue Reading list until someone un-finished it by hand. The trade-off is
-  deliberate: scrubbing back from the very end to replay a scene now also un-finishes the book. The
-  server decides for every client; Android also mirrors the rule locally so a book reappears on
-  Continue Listening immediately, before the next server round trip (#584).
+- A finished book is un-finished when its position moves back out of the end stretch — the mirror
+  of the rule that finishes it on entering. Re-listening or re-reading from the middle used to
+  leave the book off every Continue Listening / Continue Reading list for good. Rewinding from the
+  final minute to replay the ending now also un-finishes the book until it reaches the end again.
+  The server applies the rule for every client; Android also applies it locally to standalone
+  books so they reappear straight away (#584).
+- The sync-map audit tells a map problem from an audio problem. When the cached transcript is in
+  book order, a flagged pair now gets `suggested_action: "realign"` instead of
+  `check_audio_order`, and the reason names the affected chapters. `check_audio_order` stays for
+  transcripts that really are out of order, or when there is no transcript to check (#595).
+
+### Fixed
+
+- The transcript cache no longer trusts the audiobook's path alone. A transcript now records the
+  fingerprint (file hash and duration) of the audio it was made from, and is reused only when that
+  still matches. Tandem's own tag write-backs move the fingerprint forward, so they never look like
+  a new file (#588).
+- A library scan, rescan-all or single rescan notices when the file at a known audiobook path has
+  changed. A duration change of more than 2 seconds is treated as a replaced recording: the cached
+  transcript is dropped and a synced pair goes back to `manual_matched`, exactly as
+  `POST /api/troubleshoot/replace/audiobook/{id}` already did. A changed hash with the same
+  duration is treated as a tag edit made outside Tandem (Audiobookshelf, a tag editor): the stored
+  hash and size are refreshed and the transcript is kept. Reading positions are untouched either
+  way (#588).
+- A transcript with no fingerprint yet is checked against the file's current duration before it is
+  reused; one that ends well short of the file or runs past its end is re-transcribed instead of
+  being trusted (#588).
+- Android: Define and Sync to Audio read the selection from the page on screen. After moving to an
+  adjacent chapter they used to read a neighbouring chapter's page, giving "Select a word to
+  define", a definition for an earlier word, or a "select more text" error. Switch to Audio reads
+  the visible chapter for the same reason. Curly apostrophes, possessives and invisible characters
+  are cleaned out of a word before it is looked up (#582).
+- Android Auto's Continue Listening and Library refresh while they are on screen, instead of
+  showing a stale list until the app is reopened (#583).
+
+- Alignment no longer lets one wrong match far ahead survive and drag the surrounding stretch of
+  the map toward it — the "exact, then hours off, decaying back to exact" shape. Each kept match
+  is judged against the trend its neighbours imply and outliers are dropped. On a real affected
+  22-hour book the drift of up to 4 hours disappeared and more sentences matched directly, at
+  about 1.3x the alignment time (#595).
+- The sync-map audit flags maps whose chapter order disagrees with the EPUB's spine — maps built
+  when chapters were ordered by file name (`part1, part10, part2 …`) — and suggests realigning
+  them (#595).
+- Android: a guided walkthrough introduces every screen, spotlighting the real control and having
+  you tap through the app yourself, including the hop from a sentence to the matching moment in
+  the audiobook. It can be quit at any time and replayed from Account (#597).
+
+### Upgrade notes
+
+- Two migrations run on start-up. `0022_sync_map_degraded` adds `sync_maps.degraded` (existing
+  maps default to false) and `degraded_reason`. `0023_audio_fingerprint` adds the transcript
+  fingerprint columns, empty for existing transcripts; they are filled in the next time each
+  transcript is used, so nothing is re-transcribed on deploy.
+- Existing sync maps are not re-examined automatically. Run **Sync-Map Audit** on the Troubleshoot
+  page once. Pairs marked `realign` are fixed with **Realign** from their cached transcript, with
+  no re-transcription; only `check_audio_order` needs the audio file itself looked at. Existing
+  maps are not realigned automatically.
 
 ## [0.2.3] - 2026-09-16
 
