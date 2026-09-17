@@ -5,89 +5,41 @@ import com.booksync.data.repository.BookSyncRepository
 
 /**
  * The decision half of the reader's text-selection toolbar (issue #227):
- * what the injected JavaScript reports, how the bridge's answer is decoded,
- * which floating-toolbar items are noise, which word "Define" looks up, and
+ * which floating-toolbar items are noise, which text "Define" looks up, and
  * what "Sync to Audio" on a selection writes.
  *
  * Plain Kotlin on purpose, so `ReaderSelectionTest` can pin it. The WebView
  * and ActionMode plumbing that *acts* on these decisions is
  * [ReaderSelectionController].
+ *
+ * Until issue #582, the toolbar tracked selection itself: JavaScript injected
+ * into "the" Readium WebView parked the last non-trivial selection so a menu
+ * click could read it back later. Readium keeps three chapter WebViews alive
+ * (previous/current/next) and that JS was installed via `findWebView`, which
+ * returns the first one in the view tree — the chapter the reader just left
+ * after any adjacent-chapter move, not the one on screen. Define then read an
+ * empty or stale selection. `EpubNavigatorFragment.currentSelection()`
+ * (Readium's own `SelectableNavigator` API) always targets the resource
+ * actually on screen, so the reader now asks it at tap time instead of
+ * keeping a cache — see `ReaderActivity.defineSelectedWord` /
+ * `syncSelectedTextToAudio`. There is nothing left here to fall back to.
  */
-
-/**
- * Injected into the Readium host WebView on every page turn.
- * Listens for text selection in all epub iframes and stores the last selection in
- * window.top._bookSyncSelection so it survives ActionMode dismissal.
- * Readium serves epub content from localhost iframes, so same-origin access works.
- */
-const val SELECTION_TRACKER_JS = """
-    (function() {
-        function installInDoc(doc) {
-            if (!doc || doc._bsListenerAdded) return;
-            doc._bsListenerAdded = true;
-            doc.addEventListener('selectionchange', function() {
-                try {
-                    var sel = doc.defaultView.getSelection();
-                    var text = sel ? sel.toString().trim() : '';
-                    if (text.length > 3) { window.top._bookSyncSelection = text; }
-                } catch(e) {}
-            });
-        }
-        installInDoc(document);
-        var frames = document.querySelectorAll('iframe');
-        for (var i = 0; i < frames.length; i++) {
-            try {
-                installInDoc(frames[i].contentDocument);
-                frames[i].addEventListener('load', (function(f) {
-                    return function() { try { installInDoc(f.contentDocument); } catch(e) {} };
-                })(frames[i]));
-            } catch(e) {}
-        }
-        new MutationObserver(function(ms) {
-            ms.forEach(function(m) {
-                m.addedNodes.forEach(function(n) {
-                    if (n.nodeName === 'IFRAME') {
-                        n.addEventListener('load', function() {
-                            try { installInDoc(n.contentDocument); } catch(e) {}
-                        });
-                    }
-                });
-            });
-        }).observe(document.body || document, {childList: true, subtree: true});
-    })()
-"""
-
-/**
- * Reads the selection the tracker parked. `window.getSelection()` here is
- * unreliable (the ActionMode may have cleared the DOM selection by the time
- * this evaluates), so `window._bookSyncSelection`, captured the moment the
- * user selected, is preferred; the frames are only asked when it is empty.
- */
-const val CAPTURE_SELECTION_JS = """
-    (function() {
-        var stored = window._bookSyncSelection || '';
-        if (stored.trim().length > 3) return stored;
-        var frames = document.querySelectorAll('iframe');
-        for (var i = 0; i < frames.length; i++) {
-            try {
-                var sel = frames[i].contentWindow.getSelection().toString().trim();
-                if (sel.length > 3) return sel;
-            } catch(e) {}
-        }
-        return window.getSelection().toString();
-    })()
-"""
 
 /** Below this many characters a selection is too little to match against the sync map. */
 const val MIN_SYNC_SELECTION_CHARS = 5
 
 /**
- * Decode what `evaluateJavascript` hands back for [CAPTURE_SELECTION_JS]: a
- * JSON string literal, whose quotes are stripped and whose escaped newlines
- * become spaces. Empty when nothing was captured.
+ * The text Define acts on, given the navigator's current selection
+ * (`EpubNavigatorFragment.currentSelection()?.locator?.text?.highlight`) at
+ * the moment the user tapped Define. That call already targets the resource
+ * on screen, so there is no earlier or cached selection to fall back to: a
+ * null or blank current selection means nothing is selected right now, full
+ * stop, and yields "" — the caller's cue for the existing "Select a word to
+ * define" toast. A short selection (down to a single character) is returned
+ * as-is; [firstDefinableToken] decides what is actually a definable word.
  */
-internal fun decodeCapturedSelection(raw: String?): String =
-    raw?.trim('"')?.replace("\\n", " ")?.trim() ?: ""
+internal fun defineSelectionText(currentSelectionHighlight: String?): String =
+    currentSelectionHighlight?.trim().orEmpty()
 
 /** One item of the floating selection toolbar, as far as the noise rule cares. */
 data class SelectionMenuItem(val id: Int, val title: String?)
@@ -143,16 +95,46 @@ internal fun selectionNoiseItemIds(items: List<SelectionMenuItem>): List<Int> {
     return itemsToRemove
 }
 
+/** Soft hyphen and the zero-width characters: invisible, never part of a lookup. */
+private val INVISIBLE_CHARS = Regex("[\u00AD\u200B\u200C\u200D\u2060\uFEFF]")
+
+/** Non-breaking spaces: whitespace for word-splitting purposes, not letters. */
+private val NBSP_CHARS = Regex("[\u00A0\u202F]")
+
 /**
  * The word "Define" looks up: the first whitespace-separated token of the
  * selection with leading/trailing punctuation shorn off (apostrophes and
  * hyphens are part of a word). Empty when there is no such word.
+ *
+ * Normalises three things dictionaryapi.dev otherwise 404s on (issue #582),
+ * none visible in plain text so cheap to always apply:
+ *  - a curly quote (U+2018/U+2019) folds to a straight apostrophe, so a
+ *    contraction or possessive written with one is looked up in its plain
+ *    ASCII spelling, and a leading curly quote is trimmed away like any
+ *    other boundary punctuation once it is no longer treated as a letter;
+ *  - soft hyphens and zero-width characters are stripped from inside the
+ *    word entirely, not just at the edges;
+ *  - non-breaking spaces act as word separators like any other whitespace,
+ *    so a selection joined by one still yields just its first word.
+ * A trailing possessive "'s" is then dropped - dictionaryapi.dev has no
+ * entry for the possessive form of a headword, only the word itself.
  */
-internal fun firstDefinableToken(selection: String): String =
-    selection.trim().split(Regex("\\s+"))
+internal fun firstDefinableToken(selection: String): String {
+    val normalized = selection
+        .replace(INVISIBLE_CHARS, "")
+        .replace(NBSP_CHARS, " ")
+        .replace('\u2018', '\'')
+        .replace('\u2019', '\'')
+    val word = normalized.trim().split(Regex("\\s+"))
         .firstOrNull()
         ?.trim { !it.isLetter() && it != '\'' && it != '-' }
         .orEmpty()
+    return if (word.length > 2 && word.endsWith("'s", ignoreCase = true)) {
+        word.dropLast(2)
+    } else {
+        word
+    }
+}
 
 /** Whether [selectedText] is too little to match against the sync map. */
 internal fun selectionTooShortToSync(selectedText: String): Boolean =

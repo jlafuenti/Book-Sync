@@ -9,7 +9,6 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.WebView
 import android.widget.FrameLayout
 import com.booksync.R
 
@@ -41,31 +40,42 @@ private const val TAG = "ReaderSelection"
  * Mutate-after-snapshot can't refresh the rendered toolbar, so the noise
  * strip path lives only inside the wrapper. See plan in
  * `.claude/plans/playful-painting-salamander.md`.
+ *
+ * Until issue #582 this class also tracked *what* was selected: it injected
+ * JavaScript into a WebView found by walking the view tree and cached the
+ * result in `lastSelectedText` for a later menu click to read. Readium keeps
+ * three chapter WebViews alive (previous/current/next) and the walk always
+ * returned the first one, which after any adjacent-chapter move is the
+ * chapter the reader just left — so Define and Sync to Audio read an empty
+ * or stale selection instead of the one on screen. That tracking is gone:
+ * [Host.onDefine] and [Host.onSyncToAudio] take no text and are expected to
+ * ask Readium's navigator for the current selection themselves, at the
+ * moment the menu item is clicked — see `ReaderActivity.defineSelectedWord`.
  */
 class ReaderSelectionController(
     private val activity: Activity,
     private val host: Host,
 ) {
 
-    /** What the activity provides: the WebView to talk to, and the two actions. */
+    /** What the activity provides: the two selection actions. */
     interface Host {
-        /** The Readium host WebView, or null before the navigator is up. */
-        fun webView(): WebView?
-
         /** Whether "Sync to Audio" has anything to scrub to (a downloaded paired audiobook). */
         val syncToAudioAvailable: Boolean
 
-        fun onDefine(selectedText: String)
-        fun onSyncToAudio(selectedText: String)
+        /**
+         * [dismiss] ends the ActionMode ([ActionMode.finish]) — call it once
+         * the navigator's current selection has been read, not before.
+         * Finishing the ActionMode tears down the WebView's native text
+         * selection, and `currentSelection()` is asynchronous (it awaits a
+         * JavaScript round trip); calling `mode.finish()` synchronously
+         * alongside that call, the way the old cached-text design did, races
+         * the read against the teardown and can hand back an empty
+         * selection even though the user's highlight was read correctly a
+         * moment before.
+         */
+        fun onDefine(dismiss: () -> Unit)
+        fun onSyncToAudio(dismiss: () -> Unit)
     }
-
-    /**
-     * The user's selected text, captured the moment the ActionMode starts —
-     * by the time a menu item's click fires, the ActionMode interaction has
-     * already cleared `window.getSelection()`.
-     */
-    var lastSelectedText: String = ""
-        private set
 
     private var hasInstalledInterceptor: Boolean = false
 
@@ -119,7 +129,6 @@ class ReaderSelectionController(
      */
     fun onActionModeStarted(mode: ActionMode?) {
         if (mode == null) return
-        captureSelection()
         val menu = mode.menu ?: return
         trimSelectionMenu(menu)
         injectCustomItems(mode, menu)
@@ -127,12 +136,6 @@ class ReaderSelectionController(
         // Without this, items added after the initial onCreateActionMode snapshot
         // are silently ignored by the FloatingToolbar.
         mode.invalidate()
-    }
-
-    /** Injects the selection-change tracker into the Readium WebView (idempotent). */
-    fun injectTracker() {
-        val webView = host.webView() ?: return
-        webView.evaluateJavascript(SELECTION_TRACKER_JS) {}
     }
 
     /**
@@ -191,7 +194,6 @@ class ReaderSelectionController(
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
             // Let the WebView populate first so we can edit the result.
             val keep = delegate.onCreateActionMode(mode, menu)
-            captureSelection()
             trimSelectionMenu(menu)
             injectCustomItems(mode, menu)
             return keep || true
@@ -228,23 +230,17 @@ class ReaderSelectionController(
         }
     }
 
-    /** Read the selection the tracker parked — see [CAPTURE_SELECTION_JS]. */
-    private fun captureSelection() {
-        val webView = host.webView() ?: return
-        webView.evaluateJavascript(CAPTURE_SELECTION_JS.trimIndent()) { result ->
-            val captured = decodeCapturedSelection(result)
-            if (captured.isNotEmpty()) {
-                lastSelectedText = captured
-                Log.d(TAG, "Captured selection: '${captured.take(60)}'")
-            }
-        }
-    }
-
     /**
      * Insert the reader's two custom selection actions: Define (order 0,
      * leftmost) and Sync to Audio (order 1). Idempotent via `findItem` —
      * safe to call from both `onCreateActionMode` and `onPrepareActionMode`,
      * and from the [onActionModeStarted] fallback.
+     *
+     * Neither action is handed any selected text here (issue #582): both ask
+     * Readium's navigator for the current selection themselves, at click
+     * time, so they always read the resource actually on screen. Each is
+     * given a `dismiss` callback rather than having this method call
+     * `mode.finish()` itself — see [Host.onDefine].
      *
      * Sync to Audio is only injected when there is a downloaded paired
      * audiobook, since it has nothing to scrub to otherwise.
@@ -252,16 +248,14 @@ class ReaderSelectionController(
     private fun injectCustomItems(mode: ActionMode, menu: Menu) {
         if (menu.findItem(R.id.action_define) == null) {
             menu.add(0, R.id.action_define, 0, "Define").setOnMenuItemClickListener {
-                host.onDefine(lastSelectedText)
-                mode.finish()
+                host.onDefine { mode.finish() }
                 true
             }
             Log.d(TAG, "Added 'Define' to ActionMode menu")
         }
         if (host.syncToAudioAvailable && menu.findItem(R.id.action_sync_selection) == null) {
             menu.add(0, R.id.action_sync_selection, 1, "Sync to Audio").setOnMenuItemClickListener {
-                host.onSyncToAudio(lastSelectedText)
-                mode.finish()
+                host.onSyncToAudio { mode.finish() }
                 true
             }
             Log.d(TAG, "Added 'Sync to Audio' to ActionMode menu")
@@ -282,16 +276,4 @@ class ReaderSelectionController(
             Log.d(TAG, "Stripped ${itemsToRemove.size} noise item(s) from selection toolbar")
         }
     }
-}
-
-/** The first WebView under [view], depth-first, or null. */
-internal fun findWebView(view: View): WebView? {
-    if (view is WebView) return view
-    if (view is ViewGroup) {
-        for (i in 0 until view.childCount) {
-            val result = findWebView(view.getChildAt(i))
-            if (result != null) return result
-        }
-    }
-    return null
 }
