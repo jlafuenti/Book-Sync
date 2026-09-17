@@ -1,6 +1,7 @@
 package com.booksync.ui.player
 
 import android.content.ComponentName
+import androidx.activity.ComponentActivity
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.Image
@@ -63,6 +64,10 @@ import com.booksync.player.PlaybackRecovery
 import com.booksync.player.playbackFailureFor
 import com.booksync.player.toUri
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourViewModel
+import com.booksync.ui.tour.tourAnchor
 import com.booksync.worker.DownloadWorker
 import com.google.android.gms.cast.framework.CastButtonFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -1177,6 +1182,16 @@ fun PlayerScreen(
     val downloadError      by viewModel.downloadError.collectAsState()
     val playbackFailure    by viewModel.playbackError.collectAsState()
 
+    // Reports to the walkthrough that this pair's player is open, paused at
+    // the synced sentence (issue #597 Track B, `TourStep` "player_paused").
+    // Standalone playback (`pair` stays null, isStandalone true) never fires
+    // this — the tour only ever opens a pair's player. Same
+    // `hiltViewModel(activity)` idiom as the other tour-reporting screens.
+    val tour: TourViewModel = hiltViewModel(LocalContext.current as ComponentActivity)
+    LaunchedEffect(pair?.id) {
+        pair?.let { tour.controller.onEvent(TourEvent.PlayerOpened(it.id)) }
+    }
+
     // Resolved title/author — prefer standalone audio entity, fall back to pair
     val displayTitle  = standaloneAudio?.title  ?: pair?.audiobookTitle  ?: "Audiobook"
     val displayAuthor = standaloneAudio?.author ?: pair?.audiobookAuthor
@@ -1255,7 +1270,10 @@ fun PlayerScreen(
                     )
                     // Switch to Reader (not available for standalone audiobooks — no paired ebook)
                     if (!isStandalone) {
-                        IconButton(onClick = { viewModel.stopAndSave(); onSwitchToReader(positionMs) }) {
+                        IconButton(
+                            onClick = { viewModel.stopAndSave(); onSwitchToReader(positionMs) },
+                            modifier = Modifier.tourAnchor(TourAnchor.PlayerSwitchToReader),
+                        ) {
                             Icon(Icons.Default.AutoStories, "Switch to Reader", tint = colors.textPrimary)
                         }
                     }
@@ -1535,7 +1553,7 @@ fun PlayerScreen(
 
             // ── Playback controls ────────────────────────────────────────────
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.tourAnchor(TourAnchor.PlayerTransport).fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

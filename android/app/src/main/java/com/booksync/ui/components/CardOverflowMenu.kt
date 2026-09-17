@@ -1,5 +1,6 @@
 package com.booksync.ui.components
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,10 +46,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourViewModel
+import com.booksync.ui.tour.tourAnchor
 
 /**
  * Target of an overflow menu — drives which actions are shown.
@@ -295,6 +303,20 @@ fun CardOverflowMenu(
     val colors = Tandem.colors
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    // Report to the walkthrough that this pair's sheet is open (issue #597
+    // Track B, `TourStep` "library_open_pair"'s `TapAnchor`). This sheet is a
+    // shared component used from Home, Library and Downloaded alike, none of
+    // which otherwise know about the tour, so the report lives here rather
+    // than in each caller. Same `hiltViewModel(activity)` idiom the nav host
+    // uses to reach the app-scoped controller; a no-op for every target but a
+    // pair, since only a pair's sheet is ever spotlighted.
+    val tour: TourViewModel = hiltViewModel(LocalContext.current as ComponentActivity)
+    LaunchedEffect(target) {
+        if (target is OverflowTarget.Pair) {
+            tour.controller.onEvent(TourEvent.SheetOpened(target.pairId))
+        }
+    }
+
     // Confirmation dialogs
     var confirmUnlink by remember { mutableStateOf(false) }
     var confirmDeleteEbook by remember { mutableStateOf(false) }
@@ -530,7 +552,7 @@ private fun PairActions(
     onConfirmCancelTx: () -> Unit,
 ) {
     actions.onViewDetails?.let {
-        ActionRow(Icons.Default.Info, "View details", onClick = it)
+        ActionRow(Icons.Default.Info, "View details", onClick = it, anchor = TourAnchor.SheetViewDetails)
     }
     // "Download pair" is the primary download affordance on a pair overflow.
     // Per-media downloads live on the Book Details page (TODO #15); listing three
@@ -545,13 +567,13 @@ private fun PairActions(
     rows.forEach { row ->
         when (row) {
             PairAction.DownloadPair -> actions.onDownloadPair?.let {
-                ActionRow(Icons.Default.CloudDownload, "Download pair", onClick = it)
+                ActionRow(Icons.Default.CloudDownload, "Download pair", onClick = it, anchor = TourAnchor.SheetDownloadPair)
             }
             PairAction.Read -> actions.onRead?.let {
-                ActionRow(Icons.Default.AutoStories, "Read", onClick = it)
+                ActionRow(Icons.Default.AutoStories, "Read", onClick = it, anchor = TourAnchor.SheetRead)
             }
             PairAction.Listen -> actions.onListen?.let {
-                ActionRow(Icons.Default.Headphones, "Listen", onClick = it)
+                ActionRow(Icons.Default.Headphones, "Listen", onClick = it, anchor = TourAnchor.SheetListen)
             }
             PairAction.DeletePair -> actions.onDeletePair?.let {
                 ActionRow(Icons.Default.Delete, "Delete pair", destructive = true, onClick = onConfirmDeletePair)
@@ -678,6 +700,9 @@ private fun ActionRow(
     onClick: () -> Unit,
     destructive: Boolean = false,
     enabled: Boolean = true,
+    // Spotlights this row for the walkthrough (issue #597 Track B); left null
+    // by every row the tour never names.
+    anchor: TourAnchor? = null,
 ) {
     val colors = Tandem.colors
     val textColor = when {
@@ -698,6 +723,7 @@ private fun ActionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(anchor?.let { Modifier.tourAnchor(it) } ?: Modifier)
             .clip(Tandem.shapes.button)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 10.dp),
