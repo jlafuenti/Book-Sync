@@ -101,6 +101,24 @@ fun continueListeningBooks(pairs: List<AutoBook>, standalone: List<AutoBook>): L
         .take(AUTO_MAX_ITEMS_PER_NODE)
 
 /**
+ * The value Android Auto's Continue Listening watcher diffs to decide whether
+ * to notify the car (`AudioPlayerService.watchBrowseNodeChanges`, issue #583
+ * reopened).
+ *
+ * The watcher used to observe the two *source* entity flows directly —
+ * `getRecentlyPlayedPairsFlow` / `getRecentlyPlayedStandaloneAudiobooksFlow` —
+ * but each keeps its own stable order, unrelated to recency. Playing the
+ * older of two books, or a standalone book that was already the sole row in
+ * its list, changes neither source list's own order or membership, so the
+ * combined value was identical before and after and `distinctUntilChanged`
+ * swallowed it: no notify. This reduces [continueListeningBooks] — the same
+ * merge, sort and cap the tab is built from — to just the ordered media ids,
+ * so the watcher measures a change against what the tab actually shows.
+ */
+fun continueListeningWatchedIds(pairs: List<AutoBook>, standalone: List<AutoBook>): List<String> =
+    continueListeningBooks(pairs, standalone).map { it.mediaId }
+
+/**
  * Library: everything, alphabetical, with an audiobook dropped when a pair
  * already represents it — otherwise a paired book appears twice, once under
  * each id, and the two rows resume at different positions.

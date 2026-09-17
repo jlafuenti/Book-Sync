@@ -53,6 +53,7 @@ import com.booksync.auto.autoSearchPage
 import com.booksync.auto.autoStartPositionMs
 import com.booksync.auto.changesToNotify
 import com.booksync.auto.continueListeningBooks
+import com.booksync.auto.continueListeningWatchedIds
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
 import com.booksync.auto.toAutoBook
@@ -563,7 +564,7 @@ class AudioPlayerService : MediaLibraryService() {
 
     /**
      * Keeps Android Auto's browse tree live rather than frozen at whatever it
-     * looked like when the head unit last subscribed (issue #583).
+     * looked like when the head unit last subscribed (issue #583, reopened).
      *
      * `notifyChildrenChanged` is the only way Media3 tells a subscribed
      * browser "ask again" — without it, Continue Listening only refreshed on
@@ -574,18 +575,36 @@ class AudioPlayerService : MediaLibraryService() {
      * first — decided by `changesToNotify()`, tested on its own in
      * `AutoChangeNotifierTest` because this class is excluded from Kover.
      *
+     * Continue Listening's watched value is *not* the two source entity lists
+     * — `getRecentlyPlayedPairsFlow` / `getRecentlyPlayedStandaloneAudiobooksFlow`
+     * each keep their own stable order, unrelated to recency, so a play that
+     * only changes the *merged* order (the reopening bug: the older of two
+     * books gets played, and neither source list's own order or membership
+     * moves) left the combined value identical and no notify ever fired. The
+     * fix joins each source with its bookmark/progress row — the same data
+     * `autoBookFor` reads — and reduces to `continueListeningWatchedIds`
+     * (`AutoBrowseTree.kt`): the merged, capped id order the tab actually
+     * shows, tested in `AutoBrowseTreeTest`.
+     *
      * Continue Listening is the node issue #583 names directly. The Library
      * tab is included too: it is built from the same kind of flow, so
      * watching it costs one more `combine` rather than a second mechanism —
      * and a library scan finishing while the car is connected is exactly the
-     * kind of change the tab would otherwise sit stale through.
+     * kind of change the tab would otherwise sit stale through. Library's
+     * content does not depend on progress, so it keeps watching the raw
+     * entity lists.
      */
     private fun watchBrowseNodeChanges() {
         continueListeningNotifyJob = serviceScope.launch(Dispatchers.IO) {
             combine(
-                repository.getRecentlyPlayedPairsFlow(),
-                repository.getRecentlyPlayedStandaloneAudiobooksFlow(),
-            ) { pairs, standalone -> pairs to standalone }
+                repository.getRecentlyPlayedPairsWithBookmarksFlow(),
+                repository.getRecentlyPlayedStandaloneAudiobooksWithProgressFlow(),
+            ) { pairs, standalone ->
+                continueListeningWatchedIds(
+                    pairs = pairs.map { (pair, bookmark) -> pair.toAutoBook(bookmark) },
+                    standalone = standalone.map { (audio, progress) -> audio.toAutoBook(progress) },
+                )
+            }
                 .changesToNotify()
                 .collect { notifyBrowseNodeChanged(AUTO_TAB_CONTINUE) { buildContinueListeningItems() } }
         }

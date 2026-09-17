@@ -146,6 +146,61 @@ class AutoBrowseTreeTest {
         assertEquals(42_000L, books.single().resumePositionMs)
     }
 
+    // --- Continue Listening watcher (issue #583, reopened) ---
+
+    @Test
+    fun `playing the older of two books changes the watched ids even though neither source list reorders`() {
+        // This is the exact miss from the reopened bug: `getRecentlyPlayedPairsFlow`
+        // and `getRecentlyPlayedStandaloneAudiobooksFlow` each keep their own stable
+        // order (by id, not by recency), so playing the standalone book here changes
+        // neither list's own order or membership — only the *merged* order the tab
+        // shows. `AudioPlayerService.watchBrowseNodeChanges` must watch this reduced
+        // id list, not the raw entity lists, or the notify never fires.
+        val aWeekAgo = NOW - 7 * DAY_MS
+        val aMinuteAgo = NOW - 60_000L
+        val before = continueListeningWatchedIds(
+            pairs = listOf(pair(3, "Paired", lastPlayedAtMs = aWeekAgo)),
+            standalone = listOf(standalone(7, "Standalone", lastPlayedAtMs = aWeekAgo - 1_000L)),
+        )
+        // The standalone book is played: its own list still holds one row, in the
+        // same position, but its timestamp now overtakes the pair's.
+        val after = continueListeningWatchedIds(
+            pairs = listOf(pair(3, "Paired", lastPlayedAtMs = aWeekAgo)),
+            standalone = listOf(standalone(7, "Standalone", lastPlayedAtMs = aMinuteAgo)),
+        )
+        assertEquals(listOf("pair_3", "audiobook_7"), before)
+        assertEquals(listOf("audiobook_7", "pair_3"), after)
+        assertTrue("A merged-order change must produce a distinct watched value", before != after)
+    }
+
+    @Test
+    fun `a position heartbeat that does not reorder the merged list produces the same watched ids`() {
+        // A heartbeat on the book that is already most recent nudges its
+        // timestamp forward but changes no one's rank — this must not be
+        // mistaken for a change worth notifying the car about.
+        val pairs = listOf(pair(1, "Paired", lastPlayedAtMs = NOW))
+        val standalone = listOf(standalone(2, "Standalone", lastPlayedAtMs = NOW - DAY_MS))
+        val before = continueListeningWatchedIds(pairs, standalone)
+        val afterHeartbeat = continueListeningWatchedIds(
+            pairs = listOf(pair(1, "Paired", lastPlayedAtMs = NOW + 5_000L)),
+            standalone = standalone,
+        )
+        assertEquals(before, afterHeartbeat)
+    }
+
+    @Test
+    fun `the watched ids are exactly the merged, capped continue listening order`() {
+        val books = continueListeningBooks(
+            pairs = listOf(pair(1, "Pair newest", lastPlayedAtMs = NOW - 1_000L)),
+            standalone = listOf(standalone(8, "Solo second", lastPlayedAtMs = NOW - 2_000L)),
+        )
+        val ids = continueListeningWatchedIds(
+            pairs = listOf(pair(1, "Pair newest", lastPlayedAtMs = NOW - 1_000L)),
+            standalone = listOf(standalone(8, "Solo second", lastPlayedAtMs = NOW - 2_000L)),
+        )
+        assertEquals(books.map { it.mediaId }, ids)
+    }
+
     // --- Library ---
 
     @Test
