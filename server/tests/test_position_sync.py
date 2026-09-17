@@ -590,9 +590,9 @@ async def test_explicit_is_completed_false_beats_the_rule(
 async def test_un_finishing_sticks_while_the_position_stays_in_the_end_zone(
     client, make_user, auth_header, db
 ):
-    """The rule fires on *crossing* into the zone, not on being in it. A user
-    who un-finishes a book they're still sitting at the end of must not have
-    the very next heartbeat finish it again."""
+    """The rule fires on *crossing* the zone boundary, not on being on one
+    side of it. A user who un-finishes a book they're still sitting at the
+    end of must not have the very next heartbeat finish it again."""
     pair = await make_book_pair(db, duration_seconds=3600)
     user = await make_user(username="reader")
 
@@ -612,17 +612,172 @@ async def test_un_finishing_sticks_while_the_position_stays_in_the_end_zone(
     )
     assert heartbeat.json()["is_completed"] is False
 
-    # Never auto-cleared either: a completed book stays completed on a
-    # mid-book write (re-reading a chapter is not un-finishing).
+
+async def test_moving_within_the_end_zone_keeps_a_manual_completion(
+    client, make_user, auth_header, db
+):
+    """The mirror image of the test above: a manual *re*-finish sticks while
+    the position stays inside the zone. The next heartbeat there must not
+    undo it either."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_590_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    refinish = await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+    assert refinish.json()["is_completed"] is True
+
+    heartbeat = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_595_000, captured_at="2026-07-30T10:02:00Z",
+    )
+    assert heartbeat.json()["is_completed"] is True
+
+
+async def test_leaving_the_end_zone_clears_an_explicit_completion(
+    client, make_user, auth_header, db
+):
+    """The mirror of the auto-complete rule (issue #584): a write that moves
+    the position from inside the end zone to outside it un-finishes the
+    book, even when the completion was set explicitly rather than by the
+    auto-complete rule. This is the documented trade-off of option 1 —
+    scrubbing back from near the end to replay a scene un-finishes the book."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_595_000, captured_at="2026-07-30T10:00:00Z",
+    )
     await _put(
         client, user, auth_header, "pair", pair.id,
-        is_completed=True, captured_at="2026-07-30T10:03:00Z",
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
     )
-    back = await _put(
+
+    left = await _put(
         client, user, auth_header, "pair", pair.id, source="audiobook",
-        audio_position_ms=1_000_000, captured_at="2026-07-30T10:04:00Z",
+        audio_position_ms=1_000_000, captured_at="2026-07-30T10:02:00Z",
     )
-    assert back.json()["is_completed"] is True
+    assert left.json()["is_completed"] is False
+
+    # Both projected rows of the pair follow, consistently with completion.
+    progress = await client.get("/api/sync/progress", headers=auth_header(user))
+    flags = {r["media_type"]: r["is_completed"] for r in progress.json()}
+    assert flags == {"ebook": False, "audiobook": False}
+
+
+async def test_middle_to_middle_write_does_not_touch_a_manual_completion(
+    client, make_user, auth_header, db
+):
+    """A manual completion set while the position is *already* outside the
+    end zone (a deliberate "mark as finished" on a partially-read book) must
+    survive an ordinary write elsewhere outside the zone — that write never
+    crossed the boundary, so there is nothing to clear."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=100_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+
+    middle = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=200_000, captured_at="2026-07-30T10:02:00Z",
+    )
+    assert middle.json()["is_completed"] is True
+
+
+async def test_end_to_end_write_keeps_completion(client, make_user, auth_header, db):
+    """Staying inside the zone across writes must not needlessly re-derive
+    (or clear) the flag."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    first = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_590_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    assert first.json()["is_completed"] is True
+
+    second = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=3_598_000, captured_at="2026-07-30T10:01:00Z",
+    )
+    assert second.json()["is_completed"] is True
+
+
+async def test_explicit_is_completed_true_with_an_outside_position_stays_true(
+    client, make_user, auth_header, db
+):
+    """An explicit value on the write always wins, even when the same write
+    also carries a position outside the end zone."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    put = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=1_000_000, is_completed=True,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    assert put.json()["is_completed"] is True
+
+
+async def test_audio_write_with_unknown_duration_never_clears_either(
+    client, make_user, auth_header, db
+):
+    """No length, no end zone — in either direction. A manual completion on a
+    book whose duration is unknown must survive every position write."""
+    pair = await make_book_pair(db, duration_seconds=None)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "audiobook", pair.audiobook_id,
+        source="audiobook", audio_position_ms=100_000,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "audiobook", pair.audiobook_id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+
+    put = await _put(
+        client, user, auth_header, "audiobook", pair.audiobook_id,
+        source="audiobook", audio_position_ms=99_999_999,
+        captured_at="2026-07-30T10:02:00Z",
+    )
+    assert put.json()["is_completed"] is True
+
+
+async def test_epub_write_leaving_the_end_zone_clears_completion(
+    client, make_user, auth_header, db
+):
+    """The ebook side mirrors the audio side: crossing back out below
+    `auto_complete_epub_percent` clears a completion the same way crossing in
+    sets one."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=40, epub_progress_percent=99.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    left = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=10, epub_progress_percent=50.0,
+        captured_at="2026-07-30T10:01:00Z",
+    )
+    assert left.json()["is_completed"] is False
 
 
 async def test_re_entering_the_end_zone_completes_again(

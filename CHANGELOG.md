@@ -44,6 +44,17 @@ operator must do by hand rather than read about afterwards.
   "not (yet) known to be degraded" rather than a re-derived verdict; run the sync-map audit (or
   re-align a specific pair) afterward to get a current read on maps written before this migration.
 
+### Changed
+
+- A finished book that is picked back up and played (or read) past the last stretch — and then
+  moved back out of it, by seeking, scrubbing, or paging backward — is un-finished again, the
+  mirror of the existing rule that finishes a book on reaching that stretch in the first place.
+  Previously "finished" was sticky forever: re-listening from the middle left the book off every
+  Continue Listening / Continue Reading list until someone un-finished it by hand. The trade-off is
+  deliberate: scrubbing back from the very end to replay a scene now also un-finishes the book. The
+  server decides for every client; Android also mirrors the rule locally so a book reappears on
+  Continue Listening immediately, before the next server round trip (#584).
+
 ## [0.2.3] - 2026-09-16
 
 Android only. Nothing in the server or the web app changed, so a deployment has nothing to do —
