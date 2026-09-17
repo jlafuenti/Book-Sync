@@ -30,15 +30,34 @@ operator must do by hand rather than read about afterwards.
   it already does for `sync_maps.epub_file_hash` on the ebook side — a write-back never looks like
   a replacement.
 - `POST /api/library/scan`, `POST /api/library/rescan-all` and `POST /api/library/{book_type}s/{id}/rescan`
-  now detect when a *known* audiobook path's file has changed (size or hash differs, or the
-  file's duration moves by more than 2 seconds) and react exactly the way an operator's
-  `POST /api/troubleshoot/replace/audiobook/{id}` already did: refresh `file_size`/`file_hash`,
-  drop every affected pair's cached transcript, and demote a `synced`/`error`/`transcribing` pair
-  to `manual_matched`. Previously only an explicit upload through the replace endpoint did this —
-  a file swapped in place by a downloader or a re-rip and picked up by an ordinary scan left the
-  stale transcript and the `synced` status untouched. Reading positions are unaffected either way.
-  The reaction itself is shared (`services/audio_change.invalidate_audiobook_transcripts`) between
-  the replace endpoint and the new scan-side detector, rather than living in both places.
+  now detect when a *known* audiobook path's file has changed and react exactly the way an
+  operator's `POST /api/troubleshoot/replace/audiobook/{id}` already did: refresh
+  `file_size`/`file_hash`, drop every affected pair's cached transcript, and demote a
+  `synced`/`error`/`transcribing` pair to `manual_matched`. Previously only an explicit upload
+  through the replace endpoint did this — a file swapped in place by a downloader or a re-rip and
+  picked up by an ordinary scan left the stale transcript and the `synced` status untouched.
+  Reading positions are unaffected either way. The reaction itself is shared
+  (`services/audio_change.invalidate_audiobook_transcripts`) between the replace endpoint and the
+  new scan-side detector, rather than living in both places.
+
+  The verdict turns on **duration**, not the hash alone: the owner routinely edits tags outside
+  Tandem (Audiobookshelf's own metadata tools, a tag editor), which changes the whole-file hash
+  with the audio itself untouched, and none of those tools go through the write-back refresh above
+  to keep the hash in step the way a Tandem-initiated write does. So a duration that moves by more
+  than 2 seconds is read as a genuine replacement (invalidate); a hash/size change with the
+  duration unchanged is read as an external edit — `file_size`/`file_hash` and the cached
+  transcript's own fingerprint are refreshed and the transcript is *kept* (logged at INFO with the
+  audiobook id), rather than discarding hours of Jetson transcription work over a title edit. A
+  same-length swap to a different recording is the one case this can't tell apart from an edit; the
+  sync-map audit's timing check (#586) is the backstop for it, since it already samples the cached
+  transcript's own timestamps against the sync map independent of how the transcript got there.
+- The transcript cache's fallback for a transcript with no fingerprint at all (a legacy row, or one
+  never verified) no longer trusts a bare path match. `services/queue_manager.py` now sanity-checks
+  such a transcript's own last timestamp against the audiobook's current duration before reusing
+  it — if the transcript runs more than 2 seconds past the file's end, or covers under 95% of it, it
+  is treated as a miss and re-transcribed, rather than blessing a stale transcript for a file that
+  was replaced before this fix shipped. A transcript whose timestamps plausibly reach the end of the
+  file is trusted and gets its fingerprint stamped, same as before.
 
 ### Upgrade notes
 
@@ -47,10 +66,11 @@ operator must do by hand rather than read about afterwards.
   on every existing row rather than backfilled — hashing the whole library's worth of audio files
   during a migration isn't safe to do unconditionally (the files may not even be mounted on the
   machine running it). A transcript with a NULL fingerprint is treated as "unknown provenance," not
-  "known unchanged": the cache check trusts the path match once and stamps the current fingerprint
-  onto the row at that point, so it does not force every pre-existing transcript to re-transcribe
-  on deploy, but does start protecting itself against a future in-place replacement from the next
-  cache check onward.
+  "known unchanged": the cache check sanity-checks the transcript's own timestamps against the
+  audiobook's current duration (see above) rather than trusting the path outright, and stamps the
+  current fingerprint onto the row once that passes, so it does not force every pre-existing
+  transcript to re-transcribe on deploy, but does start protecting itself against a future in-place
+  replacement from the next cache check onward.
 
 ### Added
 

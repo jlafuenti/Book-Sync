@@ -46,6 +46,7 @@ latency-sensitive voice pipeline the rest of the day. Two tasks cooperate:
 """
 
 import asyncio
+import json
 import logging
 import datetime
 import re
@@ -61,7 +62,10 @@ from database import async_session
 from models.transcription_queue import TranscriptionQueueItem
 from models.book import BookPair, PairStatus
 from services import offhours
-from services.audio_change import AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC
+from services.audio_change import (
+    AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC,
+    TRANSCRIPT_COVERAGE_MIN_FRACTION,
+)
 from utils import utcnow
 
 logger = logging.getLogger("queue-manager")
@@ -939,7 +943,7 @@ async def _run_integrity_gates(
 def _cached_transcript_matches_audio(
     cached, audiobook_path: str,
     audiobook_file_hash: Optional[str], audiobook_duration_seconds: Optional[int],
-) -> bool:
+) -> Optional[bool]:
     """Is `cached` a transcript of the audio currently at `audiobook_path`?
 
     A path match alone used to be the whole check, and a file replaced in
@@ -956,10 +960,14 @@ def _cached_transcript_matches_audio(
       rounding (`services.audio_change.AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC`).
     * neither — unknown provenance on one or both sides (a transcript
       written before this column existed, or a book whose hash/duration
-      haven't been computed). Trusts the path match rather than forcing a
-      transcript with no evidence against it to re-transcribe; the caller
-      backfills the fingerprint once a hit is confirmed, so a legacy row's
-      "unknown" state has a way out.
+      haven't been computed). Returns **None**, not True: an unverified
+      match must not be blessed just because nothing ever fingerprinted it
+      — that would bless exactly the stale-transcript case issue #588 is
+      about, for any pair replaced before this fix shipped. The caller
+      (`_run_transcription_pipeline`) sanity-checks a `None` against the
+      transcript's own content (`_transcript_covers_duration`) before
+      trusting it, and backfills the fingerprint once a hit is confirmed
+      either way, so a legacy row's "unknown" state has a way out.
     """
     if cached is None or cached.audiobook_path != audiobook_path:
         return False
@@ -971,6 +979,40 @@ def _cached_transcript_matches_audio(
             abs(cached.audio_duration_seconds - audiobook_duration_seconds)
             <= AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC
         )
+    return None
+
+
+def _transcript_covers_duration(
+    sentences_json: str, duration_seconds: Optional[int],
+) -> Optional[bool]:
+    """Sanity check for a NULL-fingerprint transcript: does its own content
+    plausibly describe audio of `duration_seconds`? Compares the transcript's
+    last segment end time against the file's current duration — a stand-in
+    for a fingerprint when neither side ever recorded one (issue #588).
+
+    Returns False (don't trust it) when the transcript's last timestamp runs
+    more than the fingerprint tolerance past the file's end, or covers well
+    under the file (`TRANSCRIPT_COVERAGE_MIN_FRACTION`) — either shape is
+    what a transcript of a *different* (shorter or longer) recording at the
+    same path would look like. Returns True when it plausibly covers the
+    file. Returns None — "cannot judge," not "safe" — when there is nothing
+    to compare against (no duration) or the stored JSON is empty/unparseable;
+    the caller treats unparseable content as untrustworthy on its own.
+    """
+    if duration_seconds is None:
+        return None
+    try:
+        sentences = json.loads(sentences_json)
+    except (TypeError, ValueError):
+        return False  # supposedly-cached content that isn't even readable
+    if not sentences:
+        return False
+    last_end_ms = max((s.get("end_ms") or 0) for s in sentences)
+    duration_ms = duration_seconds * 1000
+    if last_end_ms > duration_ms + AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC * 1000:
+        return False
+    if last_end_ms < duration_ms * TRANSCRIPT_COVERAGE_MIN_FRACTION:
+        return False
     return True
 
 
@@ -1020,7 +1062,6 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # Step 1: Transcription (or load from cache)
     # Transcript is persisted immediately after completion, linked to the audio file.
     # EPUB issues cannot cause transcript data to be lost.
-    import json
     from models.transcript import AudioTranscript
     from services.transcription import TranscribedSentence as _TranscribedSentence
 
@@ -1034,6 +1075,26 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             cached_transcript, audiobook_path,
             audiobook_file_hash, audiobook_duration_seconds,
         )
+        if cache_hit is None and cached_transcript is not None:
+            # Neither side has a fingerprint (a transcript written before
+            # this column existed, or never verified) -- a path match alone
+            # is not evidence, or a file replaced before this fix shipped
+            # would be blessed forever (issue #588). Sanity-check the
+            # transcript's own timestamps against the file's current
+            # duration before trusting it.
+            covers = _transcript_covers_duration(
+                cached_transcript.sentences_json, audiobook_duration_seconds,
+            )
+            if covers is False:
+                logger.warning(
+                    f"Pair {pair_id}: cached transcript has no fingerprint and its "
+                    f"own timestamps don't line up with the current audio's duration "
+                    f"({audiobook_duration_seconds}s) -- treating as a miss, not "
+                    f"trusting the path match"
+                )
+                cache_hit = False
+            else:
+                cache_hit = True
         if cache_hit and cached_transcript is not None:
             # Lazy backfill (issue #588 migration note): a transcript with no
             # fingerprint yet (written before this column existed, or never

@@ -688,3 +688,36 @@ async def test_scan_triggered_abs_write_back_does_not_invalidate(
     transcript = await _transcript_for(db, pair.id)
     assert transcript is not None
     assert transcript.audio_file_hash == ab.file_hash      # fingerprint moved with it
+
+
+async def test_scan_keeps_the_transcript_after_an_external_tag_edit(
+    db, stub_extract, audio_library
+):
+    """The owner edits tags with a tool outside Tandem (Audiobookshelf's own
+    metadata tools, a tag editor) between scans -- unlike the ABS write-back
+    test above, nothing here goes through Tandem's own write-back refresh, so
+    `AudioBook.file_hash` is genuinely stale by the time a scan finds the
+    file. The bytes (and hash) changed, but the *duration* didn't: this must
+    read as an edit, not a same-path replacement, and the transcript that can
+    take hours to rebuild on the Jetson must survive it."""
+    old_hash = hash_file(str(audio_library))
+    old_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=old_hash,
+                                file_size=old_size, duration_seconds=3600)
+
+    # An external tool rewrites the tags: same length category, different
+    # bytes, and Tandem never saw it happen.
+    audio_library.write_bytes(b"same recording, retagged by another program" * 20)
+    stub_extract(duration_seconds=3600)  # the recording itself is unchanged
+
+    await library.scan_files_impl(db, [str(audio_library)])
+    await db.commit()
+
+    await db.refresh(ab)
+    new_hash = hash_file(str(audio_library))
+    assert ab.file_hash == new_hash
+    assert ab.file_hash != old_hash
+    assert await _pair_status(db, pair.id) == PairStatus.SYNCED
+    transcript = await _transcript_for(db, pair.id)
+    assert transcript is not None, "an edit must not cost the pair its cached transcript"
+    assert transcript.audio_file_hash == new_hash

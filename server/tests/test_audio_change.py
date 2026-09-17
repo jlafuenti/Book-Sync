@@ -221,6 +221,61 @@ class TestRefreshIfAudiobookFileChanged:
         assert transcript is not None
         assert transcript.audio_file_hash == book.file_hash
 
+    async def test_an_external_tag_edit_refreshes_the_hash_but_keeps_the_transcript(
+        self, db, tmp_path, caplog
+    ):
+        """The owner edits tags outside Tandem routinely (Audiobookshelf's own
+        metadata tools, a tag editor) -- unlike the write-back case above,
+        nothing ever calls `refresh_after_write_back` for an edit like this,
+        so `book.file_hash` is genuinely stale by the time a scan finds it.
+        The hash changed, but the *duration* didn't -- this must be read as
+        an edit, not a replacement: refresh the hash, keep the hours-long
+        transcript, and say so in the log."""
+        path = tmp_path / "book.m4b"
+        _touch(path, b"original bytes before an external tag edit" * 50)
+        old_hash = hash_file(str(path))
+
+        pair = await make_book_pair(db, status=PairStatus.SYNCED, duration_seconds=3600)
+        book = await db.get(AudioBook, pair.audiobook_id)
+        book.file_path = str(path)
+        book.file_hash = old_hash
+        book.file_size = os.path.getsize(path)
+        await db.commit()
+        db.add(AudioTranscript(pair_id=pair.id, audiobook_path=str(path),
+                               sentence_count=1, sentences_json="[]",
+                               audio_file_hash=old_hash))
+        await db.commit()
+
+        # Some other tool rewrites the tags -- same length, different bytes,
+        # and Tandem never sees it happen (no write-back refresh runs).
+        _touch(path, b"same recording, tagged by another program entirely" * 40)
+        new_hash = hash_file(str(path))
+        assert new_hash != old_hash  # the premise: an edit does move the hash
+
+        import logging
+        with caplog.at_level(logging.INFO, logger="services.audio_change"):
+            changed = await audio_change.refresh_if_audiobook_file_changed(
+                db, book, str(path), new_duration_seconds=3600,
+            )
+        await db.commit()
+
+        assert changed is False, "an edit must not report itself as a replacement"
+        await db.refresh(book)
+        assert book.file_hash == new_hash
+        assert book.file_size == os.path.getsize(path)
+
+        fresh_pair = await db.get(BookPair, pair.id)
+        assert fresh_pair.status == PairStatus.SYNCED
+        transcript = (await db.execute(
+            select(AudioTranscript).where(AudioTranscript.pair_id == pair.id)
+        )).scalar_one()
+        assert transcript is not None, "the hours-long transcript must survive an edit"
+        assert transcript.audio_file_hash == new_hash, "its fingerprint still moves forward"
+        assert any(
+            "external tag edit" in r.message and str(book.id) in r.message
+            for r in caplog.records
+        ), "the correction must be logged with the audiobook id"
+
     async def test_a_row_with_no_stored_hash_backfills_without_invalidating(
         self, db, tmp_path
     ):
