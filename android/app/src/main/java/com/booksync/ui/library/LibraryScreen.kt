@@ -128,27 +128,31 @@ fun LibraryScreen(
     val tourPairId = (tourState as? TourState.Running)?.pairId
     val gridState = rememberLazyGridState()
 
-    LaunchedEffect(Unit) {
-        tour.controller.nav.collect { navEvent ->
-            if (navEvent is TourNav.OpenLibraryAt) {
-                // Land on the plain, unfiltered grid — the pair the tour picked
-                // may not satisfy whatever filter/search/grouping the user last
-                // left active, and a scroll into a grid that doesn't show the
-                // card would silently do nothing.
-                viewModel.setFilter(LibraryFilter.ALL)
-                viewModel.setGroupBySeries(false)
-                viewModel.setSearchQuery("")
-                // `items` recomputes asynchronously off the filter change above
-                // (it's a `combine`, not a synchronous derivation), so reading
-                // `.value` right away can still be the pre-reset list. Wait
-                // (bounded) for the reset to land rather than racing it.
-                val items = kotlinx.coroutines.withTimeoutOrNull(2_000) {
-                    viewModel.items.first { libraryIndexOf(it, navEvent.pairId) != null }
-                }
-                items?.let { libraryIndexOf(it, navEvent.pairId) }?.let { index ->
-                    gridState.animateScrollToItem(index)
-                }
-            }
+    // Driven by the tour's *state*, not its nav flow: the controller emits
+    // OpenLibraryAt in the same breath as the tab switch, before this screen is
+    // composed to collect it, so a collector here missed the first entry.
+    // Re-runs whenever the "open a book" step becomes current (Back/replay too).
+    val openPairStep = (tourState as? TourState.Running)
+        ?.takeIf { it.step.id == "library_open_pair" }
+        ?.pairId
+    LaunchedEffect(openPairStep) {
+        val pairId = openPairStep ?: return@LaunchedEffect
+        // Land on the plain, unfiltered grid — the pair the tour picked
+        // may not satisfy whatever filter/search/grouping the user last
+        // left active, and a scroll into a grid that doesn't show the
+        // card would silently do nothing.
+        viewModel.setFilter(LibraryFilter.ALL)
+        viewModel.setGroupBySeries(false)
+        viewModel.setSearchQuery("")
+        // `items` recomputes asynchronously off the filter change above
+        // (it's a `combine`, not a synchronous derivation), so reading
+        // `.value` right away can still be the pre-reset list. Wait
+        // (bounded) for the reset to land rather than racing it.
+        val items = kotlinx.coroutines.withTimeoutOrNull(2_000) {
+            viewModel.items.first { libraryIndexOf(it, pairId) != null }
+        }
+        items?.let { libraryIndexOf(it, pairId) }?.let { index ->
+            gridState.animateScrollToItem(index)
         }
     }
 
