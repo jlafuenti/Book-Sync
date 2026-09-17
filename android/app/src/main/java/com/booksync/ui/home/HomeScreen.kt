@@ -61,6 +61,8 @@ import com.booksync.ui.components.OverflowActions
 import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.components.VersionMismatchBanner
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.tourAnchor
 
 /**
  * Home feed — four horizontal carousels.
@@ -191,6 +193,7 @@ fun HomeScreen(
                     SectionHeader(
                         title = "Continue Reading",
                         onSeeAll = { onSeeAll(HomeSeeAll.CONTINUE) },
+                        anchor = TourAnchor.HomeContinueReading,
                     )
                     ContinueRow(
                         items = continueItems,
@@ -221,6 +224,7 @@ fun HomeScreen(
                     SectionHeader(
                         title = "Recently Added",
                         onSeeAll = { onSeeAll(HomeSeeAll.RECENTLY_ADDED) },
+                        anchor = TourAnchor.HomeRecentlyAdded,
                     )
                     PairRow(
                         pairs = recentlyAdded,
@@ -268,6 +272,7 @@ fun HomeScreen(
                     SectionHeader(
                         title = "In Queue",
                         onSeeAll = null,
+                        anchor = TourAnchor.HomeInQueue,
                     )
                     QueueRow(
                         items = queueItems,
@@ -317,11 +322,17 @@ enum class HomeSeeAll { CONTINUE, RECENTLY_ADDED, NEW }
  * when [onSeeAll] is given.
  */
 @Composable
-private fun SectionHeader(title: String, onSeeAll: (() -> Unit)?, onDismiss: (() -> Unit)? = null) {
+private fun SectionHeader(
+    title: String,
+    onSeeAll: (() -> Unit)?,
+    onDismiss: (() -> Unit)? = null,
+    anchor: TourAnchor? = null,
+) {
     val colors = Tandem.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(anchor?.let { Modifier.tourAnchor(it) } ?: Modifier)
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

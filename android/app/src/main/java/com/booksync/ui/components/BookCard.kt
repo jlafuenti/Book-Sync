@@ -107,6 +107,10 @@ fun BookCard(
     status: BadgeStatus? = null,
     progress: Float? = null,                             // 0.0..1.0 reading/listening progress
     downloadPercent: Int? = null,                        // overrides status+progress while downloading
+    // Lets a caller spotlight this specific card's overflow button for the
+    // guided walkthrough (issue #597 Track B, `TourAnchor.CardOverflow`) —
+    // every other caller leaves this at its default, which changes nothing.
+    overflowModifier: Modifier = Modifier,
 ) {
     val colors = Tandem.colors
     val shapes = Tandem.shapes
@@ -238,7 +242,7 @@ fun BookCard(
 
                 IconButton(
                     onClick = onOverflow,
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(32.dp).then(overflowModifier),
                 ) {
                     Icon(
                         imageVector = Icons.Default.MoreVert,

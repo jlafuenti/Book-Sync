@@ -1,6 +1,7 @@
 package com.booksync.ui.library
 
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,8 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -69,6 +72,7 @@ import com.booksync.data.remote.coverImageUrl
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.booksync.ui.components.BadgeStatus
 import com.booksync.ui.components.BookCard
@@ -79,6 +83,11 @@ import com.booksync.ui.components.FilterPill
 import com.booksync.ui.components.OverflowActions
 import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourNav
+import com.booksync.ui.tour.TourState
+import com.booksync.ui.tour.TourViewModel
+import com.booksync.ui.tour.tourAnchor
 
 /**
  * Unified Library — one grid, five filter pills, two toggles, optional series grouping.
@@ -107,6 +116,40 @@ fun LibraryScreen(
     // Apply deep-link args once
     LaunchedEffect(initialFilter, initialSeries, initialSort, initialGroupBySeries) {
         viewModel.applyDeepLink(initialFilter, initialSeries, initialSort, initialGroupBySeries)
+    }
+
+    // The walkthrough's picked pair (issue #597 Track B) — same app-scoped
+    // instance BookSyncNavigation holds, reached the same way (`hiltViewModel`
+    // on the Activity rather than this NavBackStackEntry) so both see the same
+    // TourController. Used below to spotlight one card's overflow button and to
+    // scroll to it when the tour first opens Library.
+    val tour: TourViewModel = hiltViewModel(context as ComponentActivity)
+    val tourState by tour.controller.state.collectAsState()
+    val tourPairId = (tourState as? TourState.Running)?.pairId
+    val gridState = rememberLazyGridState()
+
+    LaunchedEffect(Unit) {
+        tour.controller.nav.collect { navEvent ->
+            if (navEvent is TourNav.OpenLibraryAt) {
+                // Land on the plain, unfiltered grid — the pair the tour picked
+                // may not satisfy whatever filter/search/grouping the user last
+                // left active, and a scroll into a grid that doesn't show the
+                // card would silently do nothing.
+                viewModel.setFilter(LibraryFilter.ALL)
+                viewModel.setGroupBySeries(false)
+                viewModel.setSearchQuery("")
+                // `items` recomputes asynchronously off the filter change above
+                // (it's a `combine`, not a synchronous derivation), so reading
+                // `.value` right away can still be the pre-reset list. Wait
+                // (bounded) for the reset to land rather than racing it.
+                val items = kotlinx.coroutines.withTimeoutOrNull(2_000) {
+                    viewModel.items.first { libraryIndexOf(it, navEvent.pairId) != null }
+                }
+                items?.let { libraryIndexOf(it, navEvent.pairId) }?.let { index ->
+                    gridState.animateScrollToItem(index)
+                }
+            }
+        }
     }
 
     val ui           by viewModel.uiState.collectAsState()
@@ -162,6 +205,7 @@ fun LibraryScreen(
                 onRefreshClick = { viewModel.refresh() },
                 onSortChange = { viewModel.setSort(it) },
                 onClearSeries = { viewModel.clearSeriesFilter() },
+                topBarAnchor = Modifier.tourAnchor(TourAnchor.LibrarySortSearch),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -189,6 +233,7 @@ fun LibraryScreen(
                 active = ui.filter,
                 newCount = newCount,
                 onPick = { viewModel.setFilter(it) },
+                modifier = Modifier.tourAnchor(TourAnchor.LibraryFilterPills),
             )
 
             // Toggles
@@ -256,6 +301,8 @@ fun LibraryScreen(
                     items = items,
                     serverUrl = viewModel.serverUrl,
                     downloadingPercent = downloading,
+                    gridState = gridState,
+                    tourPairId = tourPairId,
                     onItemClick = { item -> openItem(item, scope, viewModel, onBookSelect, onAudioSelect, onStandaloneAudioSelect, onOpenDetails) },
                     // Reading the stored position is a point lookup in Room, so
                     // the sheet opens a frame later rather than offering a
@@ -305,6 +352,10 @@ private fun LibraryTopBar(
     onRefreshClick: () -> Unit,
     onSortChange: (LibrarySort) -> Unit,
     onClearSeries: () -> Unit,
+    // Spotlights the whole Sort/Search/Refresh icon group for the walkthrough
+    // (issue #597 Track B, `TourAnchor.LibrarySortSearch`); default is a no-op
+    // for anyone constructing this bar without the tour in mind.
+    topBarAnchor: Modifier = Modifier,
 ) {
     val colors = Tandem.colors
     var sortOpen by remember { mutableStateOf(false) }
@@ -336,40 +387,42 @@ private fun LibraryTopBar(
             }
         },
         actions = {
-            IconButton(onClick = onSearchToggle) {
-                Icon(
-                    if (searchActive) Icons.Default.Close else Icons.Default.Search,
-                    contentDescription = if (searchActive) "Close search" else "Search",
-                    tint = colors.textPrimary,
-                )
-            }
-            if (!searchActive) {
-                Box {
-                    IconButton(onClick = { sortOpen = true }) {
-                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
-                    }
-                    DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
-                        // Not every value, every value that means something here
-                        // (issue #223): "Series order" and "Most books" are
-                        // no-ops outside series mode.
-                        sortOptionsFor(uiState).forEach { sort ->
-                            DropdownMenuItem(
-                                text = { Text(stringResource(sort.labelRes)) },
-                                trailingIcon = {
-                                    if (uiState.sort == sort) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
-                                    }
-                                },
-                                onClick = {
-                                    sortOpen = false
-                                    onSortChange(sort)
-                                },
-                            )
+            Row(modifier = topBarAnchor) {
+                IconButton(onClick = onSearchToggle) {
+                    Icon(
+                        if (searchActive) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = if (searchActive) "Close search" else "Search",
+                        tint = colors.textPrimary,
+                    )
+                }
+                if (!searchActive) {
+                    Box {
+                        IconButton(onClick = { sortOpen = true }) {
+                            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort", tint = colors.textPrimary)
+                        }
+                        DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                            // Not every value, every value that means something here
+                            // (issue #223): "Series order" and "Most books" are
+                            // no-ops outside series mode.
+                            sortOptionsFor(uiState).forEach { sort ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(sort.labelRes)) },
+                                    trailingIcon = {
+                                        if (uiState.sort == sort) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = colors.accent)
+                                        }
+                                    },
+                                    onClick = {
+                                        sortOpen = false
+                                        onSortChange(sort)
+                                    },
+                                )
+                            }
                         }
                     }
-                }
-                IconButton(onClick = onRefreshClick) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = colors.textPrimary)
+                    IconButton(onClick = onRefreshClick) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = colors.textPrimary)
+                    }
                 }
             }
         },
@@ -385,9 +438,10 @@ private fun FilterPillRow(
     active: LibraryFilter,
     newCount: Int,
     onPick: (LibraryFilter) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -422,20 +476,27 @@ private fun ToggleRow(
             label = "Transcribed only",
             checked = transcribedOnly,
             onCheckedChange = onTranscribedToggle,
+            modifier = Modifier.tourAnchor(TourAnchor.LibraryTranscribedOnly),
         )
         Spacer(Modifier.width(12.dp))
         ToggleChip(
             label = "Group by series",
             checked = groupBySeries,
             onCheckedChange = onGroupBySeriesToggle,
+            modifier = Modifier.tourAnchor(TourAnchor.LibraryGroupBySeries),
         )
     }
 }
 
 @Composable
-private fun ToggleChip(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun ToggleChip(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = Tandem.colors
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
@@ -569,6 +630,10 @@ private fun ItemGrid(
     downloadingPercent: Map<Int, Int>,
     onItemClick: (LibraryItem) -> Unit,
     onItemOverflow: (LibraryItem) -> Unit,
+    gridState: LazyGridState = rememberLazyGridState(),
+    // The pair the walkthrough picked (issue #597 Track B), so exactly one
+    // card's ⋮ can be spotlighted — every other caller leaves this null.
+    tourPairId: Int? = null,
 ) {
     val context = LocalContext.current
     LazyVerticalGrid(
@@ -577,6 +642,7 @@ private fun ItemGrid(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxSize(),
+        state = gridState,
     ) {
         items(items, key = { it.key }) { item ->
             // Cover: local cached file (CoverArtHelper) first → server URL as fallback.
@@ -605,6 +671,11 @@ private fun ItemGrid(
                 onOverflow = { onItemOverflow(item) },
                 status = item.defaultBadge(),
                 downloadPercent = dlPct,
+                overflowModifier = if (item.pair?.id == tourPairId) {
+                    Modifier.tourAnchor(TourAnchor.CardOverflow)
+                } else {
+                    Modifier
+                },
             )
         }
     }

@@ -1,5 +1,6 @@
 package com.booksync.ui.details
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,6 +68,10 @@ import com.booksync.BuildConfig
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourViewModel
+import com.booksync.ui.tour.tourAnchor
 import java.io.File
 
 /**
@@ -93,6 +98,16 @@ fun BookDetailsScreen(
     val canEdit by viewModel.canEdit.collectAsStateWithLifecycle()
     val colors = Tandem.colors
     val snackHost = remember { SnackbarHostState() }
+
+    // Reports to the walkthrough that this pair's details are showing (issue
+    // #597 Track B, `TourStep` "sheet_view_details"'s `TapAnchor`). Same
+    // `hiltViewModel(activity)` idiom as the nav host, since this composable
+    // is reached from three different routes (pair / standalone ebook /
+    // standalone audiobook) and only the pair route is ever part of the tour.
+    val tour: TourViewModel = hiltViewModel(LocalContext.current as ComponentActivity)
+    LaunchedEffect(ui.pair?.id) {
+        ui.pair?.let { tour.controller.onEvent(TourEvent.DetailsOpened(it.id)) }
+    }
 
     // Surface transient messages via the snackbar. Clear after display so a
     // second occurrence of the same text re-notifies.
@@ -239,6 +254,7 @@ fun BookDetailsScreen(
                                 title = "Refresh sync data",
                                 description = "Re-download the latest sync map.",
                                 trailingIcon = Icons.Default.Sync,
+                                modifier = Modifier.tourAnchor(TourAnchor.DetailsRefreshSync),
                                 onClick = { viewModel.refreshSyncData() },
                             )
                         }
@@ -328,6 +344,7 @@ fun BookDetailsScreen(
                             title = "Unlink pair",
                             description = "Separate the ebook and audiobook. The files stay on the server.",
                             destructive = true,
+                            modifier = Modifier.tourAnchor(TourAnchor.DetailsUnlink),
                             onClick = {
                                 pending = PendingConfirm(
                                     title = "Unlink pair?",
@@ -497,18 +514,21 @@ private fun StatusChipRow(ui: BookDetailsUi) {
         if (pair != null) {
             add(StatusChip("Ebook", pair.ebookDownloaded))
             add(StatusChip("Audiobook", pair.audiobookDownloaded))
-            add(StatusChip("Sync map", pair.syncMapDownloaded))
+            add(StatusChip("Sync map", pair.syncMapDownloaded, anchor = TourAnchor.DetailsSyncMapChip))
         }
         ui.ebook?.let  { add(StatusChip("Ebook",     it.isDownloaded)) }
         ui.audiobook?.let { add(StatusChip("Audiobook", it.isDownloaded)) }
     }
     if (chips.isEmpty()) return
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        modifier = Modifier.tourAnchor(TourAnchor.DetailsChips),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         chips.forEach { chip -> Chip(chip) }
     }
 }
 
-private data class StatusChip(val label: String, val present: Boolean)
+private data class StatusChip(val label: String, val present: Boolean, val anchor: TourAnchor? = null)
 
 @Composable
 private fun Chip(chip: StatusChip) {
@@ -518,7 +538,9 @@ private fun Chip(chip: StatusChip) {
     Surface(shape = Tandem.shapes.pill, color = bg) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier
+                .then(chip.anchor?.let { Modifier.tourAnchor(it) } ?: Modifier)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             Icon(
                 if (chip.present) Icons.Default.Check else Icons.Default.Close,
@@ -617,7 +639,7 @@ private fun PrimaryActionButton(
     if (spec == null) return
     Button(
         onClick = spec.onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.tourAnchor(TourAnchor.DetailsPrimaryAction).fillMaxWidth(),
         colors = ButtonDefaults.buttonColors(containerColor = colors.accent),
     ) {
         Icon(spec.icon, contentDescription = null, modifier = Modifier.size(18.dp))

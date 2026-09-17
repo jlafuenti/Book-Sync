@@ -33,6 +33,7 @@ fun ActionRow(
     destructive: Boolean = false,
     enabled: Boolean = true,
     trailingIcon: ImageVector = Icons.Default.ChevronRight,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val colors = Tandem.colors
@@ -42,7 +43,7 @@ fun ActionRow(
         else         -> colors.textPrimary
     }
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 14.dp),

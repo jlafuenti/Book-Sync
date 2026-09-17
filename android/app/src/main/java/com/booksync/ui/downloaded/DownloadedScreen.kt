@@ -58,6 +58,8 @@ import com.booksync.ui.library.LibrarySort
 import com.booksync.ui.library.LibraryUiState
 import com.booksync.ui.library.sortOptionsFor
 import com.booksync.ui.theme.Tandem
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.tourAnchor
 
 /**
  * Downloaded tab — everything you can open offline.
@@ -160,6 +162,7 @@ fun DownloadedScreen(
             // Filter pills
             Row(
                 modifier = Modifier
+                    .tourAnchor(TourAnchor.DownloadedPills)
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
