@@ -624,12 +624,18 @@ class PositionRepository @Inject constructor(
         audioPositionMs: Int,
         claimFormat: Boolean = true,
         pushToServer: Boolean = true,
+        // The book's live duration, straight from the player — see
+        // [updateProgress]'s doc for why this comes from the caller rather
+        // than a DAO lookup. Null (unknown yet) simply skips the local
+        // leaving-the-end-zone check; the server still corrects it.
+        durationMs: Long? = null,
     ): Boolean {
         // Room-first, mirroring savePlaybackPosition above (issue #164).
         updateProgress(
             mediaType = "audiobook",
             mediaId = audiobookId,
             audioPositionMs = audioPositionMs,
+            durationMs = durationMs,
             pushToServer = false,
             markSynced = false,
         )
@@ -652,6 +658,7 @@ class PositionRepository @Inject constructor(
                 mediaType = "audiobook",
                 mediaId = audiobookId,
                 audioPositionMs = audioPositionMs,
+                durationMs = durationMs,
                 pushToServer = true,
             )
         } else {
@@ -692,12 +699,14 @@ class PositionRepository @Inject constructor(
         audiobookId: Int,
         audioPositionMs: Int,
         claimFormat: Boolean = true,
+        durationMs: Long? = null,
     ): Job = appScope.launch {
         withContext(NonCancellable) {
             savePlaybackPositionStandalone(
                 audiobookId = audiobookId,
                 audioPositionMs = audioPositionMs,
                 claimFormat = claimFormat,
+                durationMs = durationMs,
             )
         }
     }
@@ -1301,7 +1310,29 @@ class PositionRepository @Inject constructor(
         }
     }
 
-    /** Update progress locally and queue for sync */
+    /**
+     * Update progress locally and queue for sync.
+     *
+     * [isCompleted] left null (the ordinary save path) keeps whatever is
+     * already stored — *unless* this save's own position crosses back out of
+     * the end zone the stored completion was sitting in, in which case it is
+     * cleared. This is Android's local mirror of the server's crossing rule
+     * (`position_service._auto_complete`, issue #584): the server is still
+     * authoritative and re-derives the same verdict on its own copy, but
+     * without this, a save that undoes a finished book's position leaves the
+     * local row claiming "completed" — and every Continue list filters that
+     * out — until the next round trip corrects it. See [AutoComplete].
+     *
+     * [durationMs] is the audiobook's current duration, needed to know where
+     * the audio end zone is. It is deliberately a parameter rather than a DAO
+     * lookup here: the caller (the player) already has the authoritative,
+     * live duration from the media session, which does not depend on
+     * `AudioBook.durationSeconds` having been backfilled by a library scan.
+     * Omitted (standalone ebook saves, or an audio save whose caller doesn't
+     * have it yet), the audio side of the check simply does not run — the
+     * completion carries over unchanged, the same as a stored value with no
+     * `duration_seconds` does server-side.
+     */
     suspend fun updateProgress(
         mediaType: String,
         mediaId: Int,
@@ -1310,6 +1341,7 @@ class PositionRepository @Inject constructor(
         epubChapter: Int? = null,
         epubProgressPercent: Float? = null,
         audioPositionMs: Int? = null,
+        durationMs: Long? = null,
         isCompleted: Boolean? = null,
         deviceId: String? = deviceIdManager.deviceId,
         // See updateBookmark: false writes the Room row only, for callers that
@@ -1322,6 +1354,17 @@ class PositionRepository @Inject constructor(
         val existing = userProgressDao.getProgress(scope, mediaType, mediaId)
         val nowMillis = System.currentTimeMillis()
 
+        val resolvedIsCompleted = isCompleted ?: run {
+            val wasCompleted = existing?.isCompleted ?: false
+            val leftAudioZone = mediaType == "audiobook" && audioPositionMs != null &&
+                AutoComplete.inAudioEndZone(existing?.audioPositionMs, durationMs) &&
+                !AutoComplete.inAudioEndZone(audioPositionMs, durationMs)
+            val leftEpubZone = mediaType == "ebook" && epubProgressPercent != null &&
+                AutoComplete.inEpubEndZone(existing?.epubProgressPercent) &&
+                !AutoComplete.inEpubEndZone(epubProgressPercent)
+            wasCompleted && !(leftAudioZone || leftEpubZone)
+        }
+
         // Merge with existing
         val merged = UserProgressEntity(
             mediaType = mediaType,
@@ -1331,7 +1374,7 @@ class PositionRepository @Inject constructor(
             epubChapter = epubChapter ?: existing?.epubChapter,
             epubProgressPercent = epubProgressPercent ?: existing?.epubProgressPercent,
             audioPositionMs = audioPositionMs ?: existing?.audioPositionMs,
-            isCompleted = isCompleted ?: existing?.isCompleted ?: false,
+            isCompleted = resolvedIsCompleted,
             updatedAt = nowMillis,
             deviceId = deviceId,
             deviceName = deviceIdManager.deviceName,

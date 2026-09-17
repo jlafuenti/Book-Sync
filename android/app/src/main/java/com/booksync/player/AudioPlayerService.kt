@@ -1088,6 +1088,13 @@ class AudioPlayerService : MediaLibraryService() {
         val mediaId = player.currentMediaItem?.mediaId ?: return
         val posMs = player.currentPosition.toInt()
         if (posMs <= 0 && !allowZeroPosition) return
+        // ExoPlayer reports C.TIME_UNSET (a large negative) until the media is
+        // prepared; null it out rather than mistake that for a real duration
+        // (mirrors PlaybackOffsets.skipForwardPosition's own guard). Used only
+        // to mirror the server's completion crossing rule locally for a
+        // standalone audiobook (issue #584) — unknown here just skips that
+        // local check, same as an unknown duration server-side.
+        val durationMs = player.duration.let { if (it > 0L) it else null }
 
         if (appendToLog) continuousPlaybackLog.onLogged(System.currentTimeMillis())
 
@@ -1103,6 +1110,7 @@ class AudioPlayerService : MediaLibraryService() {
                     audiobookId = id.audiobookId,
                     audioPositionMs = posMs,
                     claimFormat = claimFormat,
+                    durationMs = durationMs,
                 )
                 null -> {}
             }
@@ -1131,6 +1139,7 @@ class AudioPlayerService : MediaLibraryService() {
                             audioPositionMs = posMs,
                             claimFormat = claimFormat,
                             pushToServer = pushToServer,
+                            durationMs = durationMs,
                         )
                     null -> false
                 }
