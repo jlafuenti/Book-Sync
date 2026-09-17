@@ -228,6 +228,33 @@ class LibraryRepository @Inject constructor(
             audiobooks.filter { it.id !in completedIds }
         }
 
+    /**
+     * [getRecentlyPlayedPairsFlow], each row paired with its bookmark — the
+     * same bookmark [lastOpenedTimesFlow] and `autoBookFor` read for a pair's
+     * position and timestamp. Used by Android Auto's Continue Listening
+     * watcher (issue #583 reopened): watching the entity list alone missed
+     * changes to the *merged* recency order, because the entity list's own
+     * order does not move when only a timestamp changes.
+     */
+    fun getRecentlyPlayedPairsWithBookmarksFlow(): Flow<List<Pair<BookPairEntity, BookmarkEntity?>>> =
+        combine(
+            getRecentlyPlayedPairsFlow(),
+            bookmarkDao.getAllBookmarksFlow(scope),
+        ) { pairs, bookmarks ->
+            val byPairId = bookmarks.associateBy { it.bookPairId }
+            pairs.map { it to byPairId[it.id] }
+        }
+
+    /** [getRecentlyPlayedStandaloneAudiobooksFlow], each row paired with its progress. See above. */
+    fun getRecentlyPlayedStandaloneAudiobooksWithProgressFlow(): Flow<List<Pair<AudioBookEntity, UserProgressEntity?>>> =
+        combine(
+            getRecentlyPlayedStandaloneAudiobooksFlow(),
+            userProgressDao.getAllProgressFlow(scope),
+        ) { audiobooks, allProgress ->
+            val byAudiobookId = allProgress.filter { it.mediaType == "audiobook" }.associateBy { it.mediaId }
+            audiobooks.map { it to byAudiobookId[it.id] }
+        }
+
     /** Ebooks with reading progress, ordered by most recently read. */
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> =
         combine(

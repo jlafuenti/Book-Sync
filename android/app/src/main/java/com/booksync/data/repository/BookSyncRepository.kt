@@ -86,6 +86,14 @@ class BookSyncRepository @Inject constructor(
     fun getRecentlyPlayedStandaloneAudiobooksFlow(): Flow<List<AudioBookEntity>> =
         library.getRecentlyPlayedStandaloneAudiobooksFlow()
 
+    /** See [LibraryRepository.getRecentlyPlayedPairsWithBookmarksFlow]. */
+    fun getRecentlyPlayedPairsWithBookmarksFlow(): Flow<List<Pair<BookPairEntity, BookmarkEntity?>>> =
+        library.getRecentlyPlayedPairsWithBookmarksFlow()
+
+    /** See [LibraryRepository.getRecentlyPlayedStandaloneAudiobooksWithProgressFlow]. */
+    fun getRecentlyPlayedStandaloneAudiobooksWithProgressFlow(): Flow<List<Pair<AudioBookEntity, UserProgressEntity?>>> =
+        library.getRecentlyPlayedStandaloneAudiobooksWithProgressFlow()
+
     /** See [LibraryRepository.getRecentlyReadEbooksFlow]. */
     fun getRecentlyReadEbooksFlow(): Flow<List<EBookEntity>> = library.getRecentlyReadEbooksFlow()
 
