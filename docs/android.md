@@ -558,6 +558,39 @@ hard-coded third-party host under `app/src/main/java`. **A new destination fails
 purpose** — adding one means updating the policy and the Data safety answers in
 [play-listing.md](play-listing.md) in the same change.
 
+## Walkthrough
+
+A guided, five-minute tour (issue #597) runs over the real UI on first sign-in on a fresh
+install, and any time after that from Account → Help → **Replay the walkthrough**. It covers
+Home's three sections, opening a book from Library through the overflow sheet and its Details
+screen, the reader (bringing up the toolbar, the page-level Switch to Audio jump, and syncing a
+selected sentence to audio precisely), the player paused at that sentence, Switch to Reader back,
+Library's filters and search, the Downloaded tab, and Account's Storage/Server rows — ending on
+the replay row itself.
+
+Each step spotlights one real control with a scrim and a card (`ui/tour/TourOverlay.kt`); most are
+**guided taps** — the user taps the highlighted control themselves and the tour advances on the
+resulting event, not on a timer or a Next button. `TourController` (`ui/tour/TourController.kt`)
+is the state machine behind this, app-scoped rather than tied to a ViewModel because the reader is
+a second Activity; `TourAnchorRegistry` is how a real element, Compose or View-based, reports
+where it currently is on screen.
+
+**Degradation is explained, never silent.** The tour runs against any server: the demo library
+guarantees every step has something to point at, but an ordinary library can be missing a synced
+pair, a Refresh sync data row, or (for a non-editor) Unlink pair. A step whose control never shows
+up within its anchor-timeout window renders centred with `emptyBody` copy saying why, rather than
+being skipped outright; a run with no qualifying pair at all collapses every pair-dependent step
+into one explained skip card instead of silently dropping them.
+
+**The reader's selection step streams.** "Press and hold a word, drag to select a sentence, then
+tap Sync to Audio" needs a synced pair whose audio is reachable — either already downloaded or
+reachable over the network right now (`selectionSyncAvailable` in
+`ui/reader/ReaderSelectionAvailability.kt`) — not a downloaded audiobook specifically: the match
+itself resolves through the cached sync map and the player streams the result, the same way the
+ordinary selection-toolbar "Sync to Audio" action does outside the tour. The step only degrades
+when the device is offline with nothing local for that pair, in which case Skip runs the
+page-level sync instead.
+
 ## Reader
 
 `ReaderActivity` hosts Readium's `EpubNavigatorFragment`. Two things it does to the publication

@@ -78,10 +78,12 @@
             android:layout_height="0dp" />
     </LinearLayout>
 
-    <!-- Hosts TranscriptionStatusDialog (issue #536) — empty (no dialog pending)
-         renders nothing and passes touches through to the views below it. -->
+    <!-- Hosts ReaderOverlays (issue #597 Track C): TranscriptionStatusDialog
+         (issue #536) and, while the walkthrough is running a Reader/Player
+         step, TourOverlay. Empty (nothing pending, no tour step here) renders
+         nothing and passes touches through to the views below it. -->
     <androidx.compose.ui.platform.ComposeView
-        android:id="@+id/transcription_dialog_host"
+        android:id="@+id/overlay_host"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 

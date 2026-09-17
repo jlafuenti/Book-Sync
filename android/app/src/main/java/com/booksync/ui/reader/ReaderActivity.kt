@@ -30,7 +30,11 @@ import com.booksync.data.sync.StoredPosition
 import com.booksync.data.sync.planRestore
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.components.TranscriptionStatusDialog
-import com.booksync.ui.theme.BookSyncTheme
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourAnchorRegistry
+import com.booksync.ui.tour.TourController
+import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourNav
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -42,6 +46,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -110,6 +115,18 @@ class ReaderActivity : AppCompatActivity() {
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var networkMonitor: NetworkMonitor
 
+    /**
+     * The app-scoped walkthrough engine and its anchor registry (issue #597
+     * Track C). Both are bound `@Singleton` in the Hilt graph already (see
+     * `di/AppModule.kt`'s `provideTourController` and
+     * `TourAnchorRegistry`'s own `@Inject constructor`), so — unlike
+     * `BookSyncNavigation`, which is Compose and has no other route to the
+     * graph — a plain `@Inject lateinit var` on this `@AndroidEntryPoint`
+     * Activity reaches the same instances directly, no `EntryPoint` needed.
+     */
+    @Inject lateinit var tourController: TourController
+    @Inject lateinit var tourRegistry: TourAnchorRegistry
+
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
     private var pair: BookPairEntity? = null
@@ -119,7 +136,7 @@ class ReaderActivity : AppCompatActivity() {
      * Non-null while [TranscriptionStatusDialog] is up over the "Switch to
      * Audio" toolbar action (issue #536) — set by
      * [checkReadinessThenSyncAudioToPage], read by the Compose content in
-     * [R.id.transcription_dialog_host].
+     * [R.id.overlay_host].
      */
     private val pendingSwitchStatus = mutableStateOf<TranscriptionStatus?>(null)
 
@@ -136,6 +153,8 @@ class ReaderActivity : AppCompatActivity() {
     private var standaloneEbook: com.booksync.data.local.entity.EBookEntity? = null
     private val isStandalone: Boolean get() = ebookId != 0
     private var positionSaveJob: Job? = null
+    /** Collects [TourController.nav] for the two reader-only requests — see [onCreate]. */
+    private var tourNavJob: Job? = null
     private var isBarVisible = false
     private var isSeeking = false
     private val chapterTextCache = mutableMapOf<Int, String?>() // spine index → plain text cache
@@ -223,12 +242,36 @@ class ReaderActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_reader)
 
+        // Reported once the pair id is known (issue #597 Track C). Standalone
+        // opens (isStandalone, pairId == 0) have no pair for the walkthrough to
+        // track and are skipped — TourEvent.ReaderOpened's id is a placeholder
+        // for every step built from the static TOUR script anyway (see
+        // TourEvent.matchesKind), so this only needs to fire, not carry a real id.
+        if (!isStandalone && pairId != 0) {
+            tourController.onEvent(TourEvent.ReaderOpened(pairId))
+        }
+
+        // The two nav requests TourController can only make of the reader
+        // itself (issue #597 §5): showing the bars for the "tap the middle of
+        // the page" step, and skipping the sentence-sync step onto the
+        // existing page-level sync when the tour is degraded offline.
+        tourNavJob = lifecycleScope.launch {
+            tourController.nav.collect { nav ->
+                when (nav) {
+                    TourNav.ShowReaderBars -> showBarsForTour()
+                    TourNav.SkipToToolbarSync -> checkReadinessThenSyncAudioToPage()
+                    else -> Unit
+                }
+            }
+        }
+
         displaySettings.load()
         initViews()
         applyWindowInsets()
         // Install before the navigator exists — the wrapper sits at the content
         // root and intercepts selection ActionModes from any future WebView.
         installSelectionInterceptor()
+        registerReaderPageAnchor()
         loadPublication()
     }
 
@@ -265,7 +308,7 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
-        initTranscriptionDialogHost()
+        initOverlayHost()
 
         // Progress slider
         progressSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -577,11 +620,73 @@ class ReaderActivity : AppCompatActivity() {
         setBarsVisible(!isBarVisible)
     }
 
+    /**
+     * Brings up the toolbar exactly as a centre tap would, for the
+     * walkthrough's "tap the middle of the page" step (`TourNav.ShowReaderBars`,
+     * issue #597 §5) — the tour shows the bars itself after its anchor-timeout
+     * window elapses rather than leaving the user stuck on a step whose
+     * control never appears.
+     */
+    fun showBarsForTour() {
+        setBarsVisible(true)
+    }
+
     private fun setBarsVisible(visible: Boolean) {
         isBarVisible = visible
         val visibility = if (visible) View.VISIBLE else View.GONE
         topBar.visibility = visibility
         bottomBar.visibility = visibility
+        if (visible) {
+            tourController.onEvent(TourEvent.ReaderBarsShown)
+            registerSwitchToAudioAnchor()
+        } else {
+            tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+        }
+    }
+
+    /**
+     * Publishes the toolbar's "Switch to Audio" action as the
+     * [TourAnchor.ReaderSwitchToAudio] anchor (issue #597 §2), in window
+     * coordinates the same way `Modifier.tourAnchor` does for every Compose
+     * screen. Posted rather than read synchronously: this runs right after
+     * `topBar.visibility` flips to VISIBLE, and the toolbar's menu (inflated
+     * once, in `initViews`) needs a layout pass before its action item view
+     * exists to look up — `toolbar.post` runs after that pass completes.
+     * A standalone open hides the action entirely (`initViews`), so there is
+     * nothing to find; `findViewById` then returns null and this is a no-op,
+     * same as a step whose anchor never shows up on this build.
+     */
+    private fun registerSwitchToAudioAnchor() {
+        toolbar.post {
+            val itemView = toolbar.findViewById<View>(R.id.action_switch_audio) ?: return@post
+            tourRegistry.set(TourAnchor.ReaderSwitchToAudio, itemView.windowRect())
+        }
+    }
+
+    /**
+     * Publishes the navigator container's window bounds as [TourAnchor.ReaderPage]
+     * (issue #597 §2) once it has been laid out, so the walkthrough's first
+     * reader step ("tap the middle of the page") and the selection step (which
+     * reuses this anchor — see `READER_SELECTION_STEP_ID` in `TourScript.kt`)
+     * have a hole to spotlight.
+     */
+    private fun registerReaderPageAnchor() {
+        val container = findViewById<View>(R.id.navigator_container)
+        container.post {
+            tourRegistry.set(TourAnchor.ReaderPage, container.windowRect())
+        }
+    }
+
+    /** This view's bounds in window coordinates, as the tour's anchor registry stores them. */
+    private fun View.windowRect(): ComposeRect {
+        val location = IntArray(2)
+        getLocationInWindow(location)
+        return ComposeRect(
+            left = location[0].toFloat(),
+            top = location[1].toFloat(),
+            right = (location[0] + width).toFloat(),
+            bottom = (location[1] + height).toFloat(),
+        )
     }
 
     private fun switchToAudio() {
@@ -1128,51 +1233,53 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
-     * Wires [R.id.transcription_dialog_host] to render [TranscriptionStatusDialog]
-     * whenever [pendingSwitchStatus] is set (issue #536). Empty content when
-     * nothing is pending, so the view underneath still receives touches.
+     * Wires [R.id.overlay_host] to [ReaderOverlays] (issue #597 Track C —
+     * renamed from `transcription_dialog_host`, which held only
+     * [TranscriptionStatusDialog] before the walkthrough needed a second,
+     * independent overlay in the same spot). [TranscriptionStatusDialog]'s
+     * behaviour is unchanged; [ReaderOverlays] additionally renders
+     * [com.booksync.ui.tour.TourOverlay] whenever the walkthrough is running a
+     * Reader or Player step. Empty content when neither is showing, so the
+     * view underneath still receives touches, exactly as before.
      */
-    private fun initTranscriptionDialogHost() {
-        findViewById<ComposeView>(R.id.transcription_dialog_host).apply {
+    private fun initOverlayHost() {
+        findViewById<ComposeView>(R.id.overlay_host).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                BookSyncTheme {
-                    val status = pendingSwitchStatus.value
-                    if (status != null) {
-                        val online by networkMonitor.isOnline.collectAsState()
-                        TranscriptionStatusDialog(
-                            status = status,
-                            canTranscribe = canTranscribeSwitch.value,
-                            isOnline = online,
-                            continueLabel = "Switch anyway",
-                            onContinue = {
-                                pendingSwitchStatus.value = null
-                                syncAudioToPage()
-                            },
-                            onTranscribe = {
-                                lifecycleScope.launch {
-                                    repository.addToTranscriptionQueue(pairId)
-                                        .onSuccess {
-                                            android.widget.Toast.makeText(
-                                                this@ReaderActivity,
-                                                "Added to transcription queue",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                            pendingSwitchStatus.value = repository.readiness(pairId)
-                                        }
-                                        .onFailure { e ->
-                                            android.widget.Toast.makeText(
-                                                this@ReaderActivity,
-                                                e.message ?: "Failed to add to queue",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
+                val status = pendingSwitchStatus.value
+                val online by networkMonitor.isOnline.collectAsState()
+                ReaderOverlays(
+                    pendingSwitchStatus = status,
+                    canTranscribeSwitch = canTranscribeSwitch.value,
+                    isOnline = online,
+                    onContinueSwitch = {
+                        pendingSwitchStatus.value = null
+                        syncAudioToPage()
+                    },
+                    onTranscribeSwitch = {
+                        lifecycleScope.launch {
+                            repository.addToTranscriptionQueue(pairId)
+                                .onSuccess {
+                                    android.widget.Toast.makeText(
+                                        this@ReaderActivity,
+                                        "Added to transcription queue",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                    pendingSwitchStatus.value = repository.readiness(pairId)
                                 }
-                            },
-                            onDismiss = { pendingSwitchStatus.value = null },
-                        )
-                    }
-                }
+                                .onFailure { e ->
+                                    android.widget.Toast.makeText(
+                                        this@ReaderActivity,
+                                        e.message ?: "Failed to add to queue",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                        }
+                    },
+                    onDismissSwitch = { pendingSwitchStatus.value = null },
+                    tourController = tourController,
+                    tourRegistry = tourRegistry,
+                )
             }
         }
     }
@@ -1283,7 +1390,10 @@ class ReaderActivity : AppCompatActivity() {
         ReaderSelectionController(
             this,
             object : ReaderSelectionController.Host {
-                override val syncToAudioAvailable: Boolean get() = pair?.audiobookDownloaded == true
+                // Issue #597 Track C, "Selection sync while streaming": no longer
+                // requires a downloaded audiobook — see [selectionSyncAvailable].
+                override val syncToAudioAvailable: Boolean
+                    get() = selectionSyncAvailable(pair, networkMonitor.isOnline.value)
                 override fun onDefine(dismiss: () -> Unit) = defineSelectedWord(dismiss)
                 override fun onSyncToAudio(dismiss: () -> Unit) = syncSelectedTextToAudio(dismiss)
             },
@@ -1396,6 +1506,10 @@ class ReaderActivity : AppCompatActivity() {
                     val audioMs = outcome.audioMs
                     val timeStr = formatAudioTime(audioMs.toLong())
                     android.widget.Toast.makeText(this@ReaderActivity, "Audio synced to $timeStr", android.widget.Toast.LENGTH_SHORT).show()
+                    // Reported before switchToAudio()'s finish() tears the
+                    // Activity down (issue #597 §2/§5) — the walkthrough's
+                    // sentence-sync step is waiting on exactly this event.
+                    tourController.onEvent(TourEvent.ReaderSyncedSelection)
                     // After successful sync, jump straight to the player so the user can continue listening.
                     switchToAudio()
                 }
@@ -1471,6 +1585,12 @@ class ReaderActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         positionSaveJob?.cancel()
+        tourNavJob?.cancel()
+        // Both reader view anchors are this Activity's alone to publish
+        // (issue #597 §2) — clear them so a stale rect from a finished reader
+        // never survives into the next screen the tour spotlights.
+        tourRegistry.clear(TourAnchor.ReaderPage)
+        tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
         publication?.close()
         super.onDestroy()
     }

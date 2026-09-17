@@ -59,7 +59,15 @@ class ReaderSelectionController(
 
     /** What the activity provides: the two selection actions. */
     interface Host {
-        /** Whether "Sync to Audio" has anything to scrub to (a downloaded paired audiobook). */
+        /**
+         * Whether "Sync to Audio" has anything to resolve against — a synced
+         * pair whose audio is reachable, either downloaded already or
+         * streamable right now (`selectionSyncAvailable` in
+         * `ReaderSelectionAvailability.kt`, issue #597 Track C). It used to
+         * require a downloaded audiobook outright; the match itself never
+         * touched a local file, so that was stricter than the write path
+         * needed.
+         */
         val syncToAudioAvailable: Boolean
 
         /**
@@ -242,8 +250,9 @@ class ReaderSelectionController(
      * given a `dismiss` callback rather than having this method call
      * `mode.finish()` itself — see [Host.onDefine].
      *
-     * Sync to Audio is only injected when there is a downloaded paired
-     * audiobook, since it has nothing to scrub to otherwise.
+     * Sync to Audio is only injected when [Host.syncToAudioAvailable] says
+     * there is something to resolve it against, since it has nothing to
+     * scrub to otherwise.
      */
     private fun injectCustomItems(mode: ActionMode, menu: Menu) {
         if (menu.findItem(R.id.action_define) == null) {
