@@ -39,6 +39,171 @@ class AlignedPoint:
     confidence: float  # 0.0 to 1.0, how confident is the match
 
 
+# ---------------------------------------------------------------------------
+# Degraded-map detection (issue #586)
+#
+# The anchor filter in `_find_anchors` keeps only the longest increasing
+# subsequence (LIS) of raw fuzzy matches, so an audio file with a reordered
+# block of content never breaks monotonicity — it just gets quietly dropped
+# and the gap is filled by DTW/interpolation between the anchors on either
+# side. That produces a map that is internally consistent (monotonic,
+# plausible-looking timestamps) but wrong for the whole displaced block: real
+# text correctly matched to the wrong audio position. Nothing in the anchor
+# filter's own output said so until now — `_diagnose_anchor_rejection` looks
+# at what the filter *rejected*, not just what it kept.
+# ---------------------------------------------------------------------------
+
+#: A rejected anchor is "displaced" (part of a reordered block) rather than
+#: just imprecise (a stray mismatch, a repeated phrase) when its actual audio
+#: time is off from the kept sequence's local trend by more than this. Ordinary
+#: transcription noise does not move a whole sentence by minutes; a swapped
+#: block of narration does (the real case behind issue #586 was offset by
+#: 30-45 minutes).
+DISPLACED_ANCHOR_OFFSET_MS = 3 * 60 * 1000  # 3 minutes
+
+#: A run of at least this many *consecutive* rejected candidates (no kept
+#: anchor in between), all displaced in the same direction, is treated as one
+#: contiguous displaced block rather than coincidental scattered noise. Below
+#: this a handful of isolated rejects (repeated phrasing, a mishear) is normal
+#: and must not trip degraded classification.
+MIN_DISPLACED_RUN_LENGTH = 3
+
+#: Share of raw anchors the LIS filter has to reject before a map is even
+#: considered for degraded classification. A real reordering rejects a large
+#: chunk of the anchors that fall inside the displaced block(s); a healthy book
+#: with ordinary noise rejects a small handful out of hundreds.
+DEGRADED_REJECTED_FRACTION = 0.10
+
+
+@dataclass
+class AlignmentDiagnostics:
+    """What the anchor filter saw, for degraded-map detection (issue #586).
+
+    Not persisted itself — `sync_engine.save_sync_map` stamps `degraded` /
+    `degraded_reason` onto the `SyncMap` row from this.
+    """
+    raw_anchor_count: int
+    kept_anchor_count: int
+    rejected_anchor_count: int
+    rejected_fraction: float
+    #: Length of the longest contiguous run of rejected anchors displaced in
+    #: the same direction by more than `DISPLACED_ANCHOR_OFFSET_MS`.
+    displaced_run_length: int
+    #: Mean signed offset (ms) of that run, or None if there is no such run.
+    displaced_offset_ms: Optional[int]
+    degraded: bool
+    reason: str = ""
+
+
+def _expected_ms(epub_idx: int, kept_with_ms: List[Tuple[int, float]]) -> Optional[float]:
+    """Linearly interpolate (or, at the ends, hold) the audio time the kept
+    anchor sequence's local trend predicts for `epub_idx`."""
+    if not kept_with_ms:
+        return None
+    import bisect
+    idxs = [k[0] for k in kept_with_ms]
+    pos = bisect.bisect_left(idxs, epub_idx)
+    if pos == 0:
+        return kept_with_ms[0][1]
+    if pos == len(kept_with_ms):
+        return kept_with_ms[-1][1]
+    e0, m0 = kept_with_ms[pos - 1]
+    e1, m1 = kept_with_ms[pos]
+    if e1 == e0:
+        return m0
+    frac = (epub_idx - e0) / (e1 - e0)
+    return m0 + frac * (m1 - m0)
+
+
+def _diagnose_anchor_rejection(
+    raw_anchors: List[Tuple[int, int, float]],
+    kept_anchors: List[Tuple[int, int, float]],
+    whisper_sentences: List["TranscribedSentence"],
+) -> AlignmentDiagnostics:
+    """Classify what the LIS anchor filter rejected.
+
+    `raw_anchors` and `kept_anchors` are both sorted by `epub_idx`, and
+    `kept_anchors` is a subsequence of `raw_anchors` (that's what the LIS
+    filter guarantees) — so walking `raw_anchors` in order and checking
+    membership in `kept_anchors` finds exactly the *contiguous* runs of
+    candidates the filter dropped, with no kept anchor breaking up a run.
+    """
+    raw_n = len(raw_anchors)
+    kept_n = len(kept_anchors)
+    rejected_n = raw_n - kept_n
+    rejected_fraction = (rejected_n / raw_n) if raw_n else 0.0
+
+    empty = AlignmentDiagnostics(
+        raw_anchor_count=raw_n, kept_anchor_count=kept_n,
+        rejected_anchor_count=rejected_n, rejected_fraction=rejected_fraction,
+        displaced_run_length=0, displaced_offset_ms=None, degraded=False,
+    )
+    if raw_n == 0 or rejected_n == 0:
+        return empty
+
+    kept_epub_idxs = {a[0] for a in kept_anchors}
+    kept_with_ms = sorted(
+        (a[0], float(whisper_sentences[a[1]].start_ms)) for a in kept_anchors
+    )
+
+    best_run_len = 0
+    best_run_offset: Optional[float] = None
+    cur_run: List[float] = []
+
+    def flush():
+        nonlocal best_run_len, best_run_offset
+        if len(cur_run) >= MIN_DISPLACED_RUN_LENGTH and len(cur_run) > best_run_len:
+            best_run_len = len(cur_run)
+            best_run_offset = sum(cur_run) / len(cur_run)
+
+    for epub_idx, whisper_idx, _score in raw_anchors:
+        if epub_idx in kept_epub_idxs:
+            flush()
+            cur_run = []
+            continue
+        expected = _expected_ms(epub_idx, kept_with_ms)
+        if expected is None:
+            flush()
+            cur_run = []
+            continue
+        offset = whisper_sentences[whisper_idx].start_ms - expected
+        if abs(offset) > DISPLACED_ANCHOR_OFFSET_MS and (
+            not cur_run or (offset > 0) == (cur_run[-1] > 0)
+        ):
+            cur_run.append(offset)
+        else:
+            flush()
+            cur_run = [offset] if abs(offset) > DISPLACED_ANCHOR_OFFSET_MS else []
+    flush()
+
+    degraded = (
+        rejected_fraction >= DEGRADED_REJECTED_FRACTION
+        and best_run_len >= MIN_DISPLACED_RUN_LENGTH
+    )
+    reason = ""
+    if degraded:
+        offset_min = (best_run_offset or 0) / 60_000
+        reason = (
+            f"{rejected_n}/{raw_n} raw anchors ({rejected_fraction:.0%}) rejected by the "
+            f"increasing-sequence filter, including a run of {best_run_len} consecutive "
+            f"anchors displaced ~{offset_min:.0f} min from the kept sequence — the audio "
+            f"likely contains a reordered block."
+        )
+        logger.warning(
+            "Degraded alignment: %d/%d anchors rejected (%.0f%%), displaced run of "
+            "%d anchors offset ~%.0f min",
+            rejected_n, raw_n, rejected_fraction * 100, best_run_len, offset_min,
+        )
+
+    return AlignmentDiagnostics(
+        raw_anchor_count=raw_n, kept_anchor_count=kept_n,
+        rejected_anchor_count=rejected_n, rejected_fraction=rejected_fraction,
+        displaced_run_length=best_run_len,
+        displaced_offset_ms=int(best_run_offset) if best_run_offset is not None else None,
+        degraded=degraded, reason=reason,
+    )
+
+
 def _normalize_text(text: str) -> str:
     """Normalize text for comparison by lowering and stripping punctuation."""
     import re
@@ -158,8 +323,12 @@ def _find_anchors(
     repeated phrases), and keep only the longest increasing subsequence of
     whisper indices (rejects order-violating false positives).
 
-    Returns [(epub_idx, whisper_idx, score 0..1)] sorted by epub_idx with
-    strictly increasing whisper_idx.
+    Returns (anchors, raw_anchors): `anchors` is [(epub_idx, whisper_idx, score
+    0..1)] sorted by epub_idx with strictly increasing whisper_idx; `raw_anchors`
+    is every candidate that passed the score/uniqueness checks, before the LIS
+    filter — `anchors` is a subsequence of it. Callers that only want the
+    filtered anchors (the alignment path) use `anchors`; degraded-map detection
+    (issue #586) diffs the two to see what got rejected and why.
     """
     from rapidfuzz import process
 
@@ -192,7 +361,7 @@ def _find_anchors(
         f"Anchors: {len(candidates)} candidates, {len(raw_anchors)} raw, "
         f"{len(anchors)} after LIS filter"
     )
-    return anchors
+    return anchors, raw_anchors
 
 
 def _longest_increasing_subsequence(
@@ -224,19 +393,29 @@ def _anchor_align(
     epub_sentences: List[EpubSentence],
     whisper_sentences: List[TranscribedSentence],
     max_segment: int = 600,
-) -> List[Tuple[int, int, float]]:
+    collect_diagnostics: bool = False,
+) -> Tuple[List[Tuple[int, int, float]], Optional["AlignmentDiagnostics"]]:
     """
     Align using anchors as fixed waypoints, running DTW only on the bounded
     segments BETWEEN consecutive anchors. A bad region (music, credits,
     skipped front matter) can no longer poison the rest of the book — drift
     is confined to one inter-anchor segment.
+
+    Returns (alignments, diagnostics); diagnostics is None unless
+    `collect_diagnostics` is set (issue #586) — computing it is cheap relative
+    to the anchor search itself, but callers that don't need it (most of them,
+    most of the time) shouldn't pay even that.
     """
     n, m = len(epub_sentences), len(whisper_sentences)
 
-    anchors = _find_anchors(epub_sentences, whisper_sentences)
+    anchors, raw_anchors = _find_anchors(epub_sentences, whisper_sentences)
+    diagnostics = (
+        _diagnose_anchor_rejection(raw_anchors, anchors, whisper_sentences)
+        if collect_diagnostics else None
+    )
     if len(anchors) < 3:
         logger.warning("Too few anchors (%d); falling back to chunked DTW", len(anchors))
-        return _chunk_align(epub_sentences, whisper_sentences)
+        return _chunk_align(epub_sentences, whisper_sentences), diagnostics
 
     # Virtual anchors pin the first/last segments.
     waypoints = [(-1, -1, 1.0)] + anchors + [(n, m, 1.0)]
@@ -265,7 +444,7 @@ def _anchor_align(
             all_alignments.append((e1, w1, a_conf))
 
     all_alignments.sort(key=lambda t: t[0])
-    return all_alignments
+    return all_alignments, diagnostics
 
 
 def _repair_outliers(
@@ -369,11 +548,12 @@ def _chunk_align(
     return all_alignments
 
 
-def align_texts(
+def _align_texts_impl(
     epub_sentences: List[EpubSentence],
     whisper_sentences: List[TranscribedSentence],
     min_confidence: float = 0.3,
-) -> List[AlignedPoint]:
+    collect_diagnostics: bool = False,
+) -> Tuple[List[AlignedPoint], Optional[AlignmentDiagnostics]]:
     """
     Align EPUB sentences to Whisper transcribed sentences.
 
@@ -387,9 +567,13 @@ def align_texts(
         epub_sentences: Sentences extracted from the EPUB
         whisper_sentences: Sentences from Whisper transcription
         min_confidence: Minimum similarity score to keep a match
+        collect_diagnostics: also compute `AlignmentDiagnostics` (issue #586).
+            Shared by `align_texts` (which discards it, to stay a drop-in for
+            every existing caller/test) and `align_texts_with_diagnostics`.
 
     Returns:
-        List of AlignedPoint objects, one per EPUB sentence.
+        (aligned_points, diagnostics) — one AlignedPoint per EPUB sentence;
+        diagnostics is None unless `collect_diagnostics` is set.
     """
     logger.info(
         f"Aligning {len(epub_sentences)} EPUB sentences to "
@@ -398,10 +582,12 @@ def align_texts(
 
     if not epub_sentences or not whisper_sentences:
         logger.warning("Empty sentence lists — nothing to align")
-        return []
+        return [], None
 
     # Get raw alignment (anchor-bounded DTW — drift confined between anchors)
-    raw_alignments = _anchor_align(epub_sentences, whisper_sentences)
+    raw_alignments, diagnostics = _anchor_align(
+        epub_sentences, whisper_sentences, collect_diagnostics=collect_diagnostics
+    )
 
     # Build a map from epub index to whisper index + confidence
     epub_to_whisper = {}
@@ -479,7 +665,41 @@ def align_texts(
 
     logger.info(f"Generated {len(aligned_points)} aligned points "
                 f"({len(matched_keys)} matched, {len(aligned_points) - len(matched_keys)} interpolated)")
-    return aligned_points
+    return aligned_points, diagnostics
+
+
+def align_texts(
+    epub_sentences: List[EpubSentence],
+    whisper_sentences: List[TranscribedSentence],
+    min_confidence: float = 0.3,
+) -> List[AlignedPoint]:
+    """Align EPUB sentences to Whisper transcribed sentences.
+
+    See `_align_texts_impl` for the algorithm. This is the long-standing
+    entry point — every existing caller and test gets exactly the same
+    return type and values as before; nothing here changes them (issue #586
+    added degraded-map detection as a separate, opt-in return via
+    `align_texts_with_diagnostics`, not by altering this one).
+    """
+    points, _ = _align_texts_impl(epub_sentences, whisper_sentences, min_confidence)
+    return points
+
+
+def align_texts_with_diagnostics(
+    epub_sentences: List[EpubSentence],
+    whisper_sentences: List[TranscribedSentence],
+    min_confidence: float = 0.3,
+) -> Tuple[List[AlignedPoint], Optional[AlignmentDiagnostics]]:
+    """Same as `align_texts`, but also returns `AlignmentDiagnostics` — what
+    the anchor filter rejected, and whether that means the map is degraded
+    (issue #586). Used by the production pipeline (`queue_manager.py`,
+    `realign.py`) so `sync_engine.save_sync_map` can stamp the verdict onto
+    the `SyncMap` row; `align_texts` stays a thin wrapper around the same
+    implementation so the anchor search is never computed twice.
+    """
+    return _align_texts_impl(
+        epub_sentences, whisper_sentences, min_confidence, collect_diagnostics=True
+    )
 
 
 def _interpolate_timestamp(

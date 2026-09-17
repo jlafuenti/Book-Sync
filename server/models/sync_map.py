@@ -7,7 +7,8 @@ to an audio time range.
 """
 
 from datetime import datetime
-from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, Float
+from typing import Optional
+from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, Float, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -40,6 +41,18 @@ class SyncMap(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=utcnow, nullable=False
     )
+    #: Set by `sync_engine.save_sync_map` from `alignment.AlignmentDiagnostics`
+    #: (issue #586): the anchor filter rejected a large, contiguous, displaced
+    #: run of anchors — a strong sign the audio contains a block reordered
+    #: relative to the ebook. The map is still monotonic and was still saved
+    #: (re-aligning alone cannot fix reordered audio; the aligner assumes
+    #: in-order audio), but the timestamps under the displaced region are
+    #: interpolated guesses, not matches. Default False — every map before
+    #: this column existed predates the detection, not confirmed-healthy.
+    degraded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: Human-readable explanation (anchor counts, offset) when `degraded` is
+    #: True; NULL otherwise.
+    degraded_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     book_pair = relationship("BookPair", back_populates="sync_map")

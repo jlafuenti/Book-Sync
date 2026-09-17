@@ -6,7 +6,7 @@ import TroubleshootPage from './TroubleshootPage'
 const {
     getLibraryIssuesMock, repairChapterEncodingMock, bulkRepairChapterEncodingMock,
     getLibraryScanProgressMock, dismissMultiFileFolderMock, removeMultiFileTracksMock,
-    scanLibraryMock,
+    scanLibraryMock, getSyncMapAuditMock,
 } = vi.hoisted(() => ({
     getLibraryIssuesMock: vi.fn(),
     repairChapterEncodingMock: vi.fn(),
@@ -15,6 +15,7 @@ const {
     dismissMultiFileFolderMock: vi.fn(),
     removeMultiFileTracksMock: vi.fn(),
     scanLibraryMock: vi.fn(),
+    getSyncMapAuditMock: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -40,6 +41,7 @@ vi.mock('../api', () => ({
     dismissMultiFileFolder: dismissMultiFileFolderMock,
     removeMultiFileTracks: removeMultiFileTracksMock,
     scanLibrary: scanLibraryMock,
+    getSyncMapAudit: getSyncMapAuditMock,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ hasMinRole: () => true }) }))
@@ -68,6 +70,7 @@ beforeEach(() => {
     dismissMultiFileFolderMock.mockReset().mockResolvedValue({ status: 'dismissed' })
     removeMultiFileTracksMock.mockReset().mockResolvedValue({ deleted: 12 })
     scanLibraryMock.mockReset().mockResolvedValue({ new_ebooks: 0, new_audiobooks: 0, auto_matched_pairs: 0, multi_file_folders: 1, message: '' })
+    getSyncMapAuditMock.mockReset()
 })
 
 describe('TroubleshootPage chapter encoding repair', () => {
@@ -266,5 +269,54 @@ describe('TroubleshootPage confirmations are dialogs', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
         expect(screen.queryByRole('dialog')).toBeNull()
+    })
+})
+
+// Issue #586: out-of-order audio stays invisible to the hash/text drift
+// checks, so the audit gained a timing check and a `degraded` verdict —
+// surfaced here as an on-demand section (an audit walks every paired ebook
+// on disk, so it must not run automatically on page load).
+describe('TroubleshootPage sync-map audit', () => {
+    beforeEach(() => {
+        getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
+    })
+
+    it('does not run the audit on page load', async () => {
+        renderPage()
+
+        await screen.findByText('Sync-Map Audit')
+        expect(getSyncMapAuditMock).not.toHaveBeenCalled()
+    })
+
+    it('runs the audit on demand and lists a degraded pair with its suggested action', async () => {
+        getSyncMapAuditMock.mockResolvedValueOnce({
+            sample_size: 20, checked: 2, flagged: 1,
+            realign_endpoint: '/api/transcription/{pair_id}/realign',
+            pairs: [{
+                pair_id: 313, title: 'Dungeon Crawler Carl', status: 'degraded',
+                reason: "The audio's order differs from the ebook — check the audio file, then re-transcribe.",
+                suggested_action: 'check_audio_order', realign_path: null,
+            }],
+        })
+        renderPage()
+
+        fireEvent.click(await screen.findByText('Sync-Map Audit'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
+
+        await screen.findByText('2 pairs checked, 1 flagged')
+        expect(screen.getByText('Dungeon Crawler Carl')).toBeInTheDocument()
+        expect(screen.getByText('degraded')).toBeInTheDocument()
+        expect(screen.getByText('check_audio_order')).toBeInTheDocument()
+        expect(screen.getByText(/audio's order differs/)).toBeInTheDocument()
+    })
+
+    it('shows an error message when the audit request fails', async () => {
+        getSyncMapAuditMock.mockRejectedValueOnce(new Error('Sync-map audit failed'))
+        renderPage()
+
+        fireEvent.click(await screen.findByText('Sync-Map Audit'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
+
+        await screen.findByText('Sync-map audit failed')
     })
 })

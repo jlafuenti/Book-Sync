@@ -1116,8 +1116,10 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         return
 
     # Step 3: Align texts
-    from services.alignment import align_texts
-    sync_points_data = await _asyncio.to_thread(align_texts, epub_sentences, whisper_sentences)
+    from services.alignment import align_texts_with_diagnostics
+    sync_points_data, alignment_diagnostics = await _asyncio.to_thread(
+        align_texts_with_diagnostics, epub_sentences, whisper_sentences
+    )
 
     # Zero points is not a sync (issue #194). `save_sync_map` deletes the
     # existing map before inserting the new one, so letting an empty result
@@ -1138,7 +1140,7 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
     # Step 4: Save sync map
     async with async_session() as db:
         from services.sync_engine import save_sync_map
-        await save_sync_map(db, pair_id, sync_points_data)
+        await save_sync_map(db, pair_id, sync_points_data, alignment_diagnostics)
 
         # Update pair status
         result = await db.execute(select(BookPair).where(BookPair.id == pair_id))

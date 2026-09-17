@@ -14,7 +14,7 @@ from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from services.alignment import align_texts
+from services.alignment import align_texts, align_texts_with_diagnostics
 
 
 @dataclass
@@ -142,3 +142,101 @@ def test_confidence_present_on_matches():
     points = align_texts(epub, whisper)
     matched = [p for p in points if p.confidence > 0]
     assert len(matched) > len(points) * 0.8
+
+
+# ---------------------------------------------------------------------------
+# Degraded-map detection (issue #586): a reordered block of audio content
+# stays monotonic (and so invisible to the LIS anchor filter's own output)
+# unless something looks at what the filter rejected, not just what it kept.
+# ---------------------------------------------------------------------------
+
+def _make_distinct_book(num=900):
+    """Every sentence text and length is unique — good anchor material."""
+    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+             "hotel", "india", "juliet", "kilo", "lima", "mike", "november"]
+    epub, epub_texts = [], []
+    for i in range(num):
+        text = " ".join(words[(i + j) % len(words)] + str(i * 7 + j) for j in range(12))
+        epub.append(EpubSentence(chapter=i // 50, sentence_index=i % 50, text=text))
+        epub_texts.append(text)
+    return epub, epub_texts
+
+
+def _whisper_from_position_source(epub_texts, position_source):
+    """Build whisper sentences where audio position `pos` speaks the epub
+    sentence at `position_source[pos]` — i.e. a permutation of reading order."""
+    whisper = []
+    t = 0
+    for pos in range(len(position_source)):
+        text = epub_texts[position_source[pos]]
+        whisper.append(TranscribedSentence(text=text, start_ms=t, end_ms=t + 3000))
+        t += 3000
+    return whisper
+
+
+def _make_swapped_blocks_book(num=900, block_a=(300, 400), block_b=(500, 600)):
+    """Two equal-length audio blocks are swapped relative to reading order —
+    the scenario from issue #586 (two ~33-minute blocks swapped mid-book)."""
+    epub, epub_texts = _make_distinct_book(num)
+    a0, a1 = block_a
+    b0, b1 = block_b
+    assert (a1 - a0) == (b1 - b0)
+    position_source = list(range(num))
+    position_source[a0:a1], position_source[b0:b1] = (
+        position_source[b0:b1], position_source[a0:a1]
+    )
+    whisper = _whisper_from_position_source(epub_texts, position_source)
+    return epub, whisper
+
+
+def _make_scattered_swaps_book(num=300, swaps=((30, 270), (90, 210))):
+    """A handful of single, isolated sentences swapped far apart — ordinary
+    noise, not a reordered block. Must not trip degraded classification."""
+    epub, epub_texts = _make_distinct_book(num)
+    position_source = list(range(num))
+    for a, b in swaps:
+        position_source[a], position_source[b] = position_source[b], position_source[a]
+    whisper = _whisper_from_position_source(epub_texts, position_source)
+    return epub, whisper
+
+
+def test_swapped_audio_blocks_flagged_degraded():
+    epub, whisper = _make_swapped_blocks_book()
+    points, diagnostics = align_texts_with_diagnostics(epub, whisper)
+    assert len(points) == len(epub)
+    assert diagnostics is not None
+    assert diagnostics.degraded is True
+    assert diagnostics.rejected_fraction >= 0.10
+    assert diagnostics.displaced_run_length >= 3
+    assert diagnostics.reason  # a human-readable explanation was recorded
+
+
+def test_scattered_rejects_not_flagged_degraded():
+    """A few scattered rejected anchors — no contiguous displaced run — must
+    not trip degraded classification, even if the reject share looks elevated."""
+    epub, whisper = _make_scattered_swaps_book()
+    points, diagnostics = align_texts_with_diagnostics(epub, whisper)
+    assert len(points) == len(epub)
+    assert diagnostics is not None
+    assert diagnostics.degraded is False
+
+
+def test_in_order_book_with_noise_not_flagged_degraded():
+    """The existing noisy-but-in-order fixture (word drops/mishears, an
+    inserted narration block) must not be misclassified as degraded."""
+    epub, whisper, _truth = _make_realistic_book()
+    points, diagnostics = align_texts_with_diagnostics(epub, whisper)
+    assert len(points) == len(epub)
+    assert diagnostics is not None
+    assert diagnostics.degraded is False
+
+
+def test_align_texts_unchanged_by_diagnostics_collection():
+    """`align_texts` (no diagnostics) and `align_texts_with_diagnostics` must
+    produce identical points — collecting diagnostics is purely additive."""
+    epub, whisper = _make_swapped_blocks_book()
+    plain = align_texts(epub, whisper)
+    with_diag, _diagnostics = align_texts_with_diagnostics(epub, whisper)
+    assert [(p.audio_start_ms, p.audio_end_ms, p.confidence) for p in plain] == [
+        (p.audio_start_ms, p.audio_end_ms, p.confidence) for p in with_diag
+    ]

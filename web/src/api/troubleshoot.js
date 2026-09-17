@@ -98,3 +98,14 @@ export async function deleteOrphanCovers(filenames) {
     });
     return jsonOrThrow(resp, 'Delete failed');
 }
+
+// Sync-map drift/degraded audit (issue #295, issue #586): a map built against
+// the wrong ebook file, or one whose audio content is reordered relative to
+// the ebook. `flagged_only` is the page's default — an operator wants the
+// pairs that need attention, not a walk of every healthy one.
+export async function getSyncMapAudit({ flaggedOnly = true } = {}) {
+    const resp = await fetchWithAuth(
+        `${API_BASE}/troubleshoot/sync-map-audit?flagged_only=${flaggedOnly}`
+    );
+    return jsonOrThrow(resp, 'Sync-map audit failed');
+}

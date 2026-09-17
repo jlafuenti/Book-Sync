@@ -671,7 +671,10 @@ async def sync_map_audit(
     rows = await sync_map_audit_service.audit_sync_maps(
         db, sample_size=sample_size, pair_id=pair_id, limit=limit
     )
-    flagged = [r for r in rows if r["status"] == "stale"]
+    # "degraded" (issue #586, out-of-order audio) is as actionable as "stale"
+    # (wrong file/edition) — both need an operator's attention, just with a
+    # different fix (`suggested_action` names which).
+    flagged = [r for r in rows if r["status"] in ("stale", "degraded")]
     return {
         "sample_size": sample_size,
         "checked": len(rows),

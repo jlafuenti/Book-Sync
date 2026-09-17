@@ -69,6 +69,9 @@ AUDIT_ROW_KEYS = {
     "pair_id", "title", "ebook_id", "ebook_path", "sync_map_version",
     "total_sentences", "stored_epub_hash", "current_epub_hash", "hash_status",
     "text_status", "sampled", "hits", "hit_rate", "has_cached_transcript",
+    # issue #586: alignment-time degraded flag + the audit's own timing check
+    "degraded", "degraded_reason", "timing_status", "timing_checked",
+    "timing_mismatches", "timing_mismatch_rate", "timing_mismatch_run",
     "status", "reason", "suggested_action", "realign_path",
 }
 

@@ -8,6 +8,7 @@ import {
     getEbook, getAudiobook, updateEbookMetadata, updateAudiobookMetadata,
     repairChapterEncoding, bulkRepairChapterEncoding,
     dismissMultiFileFolder, removeMultiFileTracks, scanLibrary,
+    getSyncMapAudit,
 } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import EnhancedMetadataModal from '../components/EnhancedMetadataModal'
@@ -421,6 +422,94 @@ function IssueSection({ cat, rows, canEdit, onChanged, onOpenDetails }) {
     )
 }
 
+/* ── Sync-map audit (issue #295, issue #586) ──────────────────────────
+   A map built against the wrong ebook file, or one whose audio content is
+   reordered relative to the ebook (out-of-order narration — the aligner's
+   anchor filter stays monotonic by quietly interpolating over a displaced
+   block, so nothing else here would ever surface it). On-demand only: a full
+   audit walks every paired ebook on disk, so it doesn't run on page load. */
+function SyncMapAuditSection({ canEdit }) {
+    const [open, setOpen] = useState(false)
+    const [result, setResult] = useState(null)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState(null)
+
+    if (!canEdit) return null
+
+    const runAudit = async () => {
+        setLoading(true); setError(null)
+        try { setResult(await getSyncMapAudit()); setOpen(true) }
+        catch (e) { setError(e.message) }
+        finally { setLoading(false) }
+    }
+
+    return (
+        <div className="system-card ts-section">
+            <div className="system-card-header system-card-header-clickable" onClick={() => setOpen(o => !o)}>
+                <h3>
+                    {result && (
+                        <span className={`ts-count-badge${result.flagged > 0 ? ' warning' : ''}`}>
+                            {result.flagged}
+                        </span>
+                    )}
+                    Sync-Map Audit
+                </h3>
+                <Chevron open={open} />
+            </div>
+            {open && (
+                <div className="system-card-body">
+                    <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
+                        Checks every paired book's sync map against the ebook file on disk and,
+                        for a sample of points, against the cached audio transcript — catching a
+                        map built from a different edition, or one whose audio content is out of
+                        order relative to the ebook.
+                    </p>
+                    <button className="btn btn-secondary" onClick={runAudit} disabled={loading}>
+                        {loading ? 'Auditing…' : 'Run Sync-Map Audit'}
+                    </button>
+                    {error && <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>}
+                    {result && (
+                        <>
+                            <div className="ts-summary" style={{ marginTop: 12 }}>
+                                {result.checked} pair{result.checked !== 1 ? 's' : ''} checked, {result.flagged} flagged
+                            </div>
+                            {result.pairs.length > 0 && (
+                                <div className="table-wrapper table-wrapper--flush" style={{ marginTop: 12 }}>
+                                    <table className="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Title</th><th>Status</th><th>Reason</th><th>Suggested action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {result.pairs.map(row => (
+                                                <tr key={row.pair_id}>
+                                                    <td>{row.title || `Pair ${row.pair_id}`}</td>
+                                                    <td>
+                                                        <span className={`ts-count-badge ${row.status === 'degraded' ? 'warning' : 'error'}`}>
+                                                            {row.status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="ts-detail">{row.reason}</td>
+                                                    <td className="ts-detail">
+                                                        {row.suggested_action === 'realign' && row.realign_path
+                                                            ? `Re-align (${row.realign_path})`
+                                                            : row.suggested_action}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
+        </div>
+    )
+}
+
 /* ── Page ──────────────────────────────────────────────────────────── */
 function TroubleshootPage() {
     const { hasMinRole } = useAuth()
@@ -558,6 +647,8 @@ function TroubleshootPage() {
                 <IssueSection key={cat.key} cat={cat} rows={data.categories[cat.key]}
                     canEdit={canEdit} onChanged={load} onOpenDetails={openDetails} />
             ))}
+
+            <SyncMapAuditSection canEdit={canEdit} />
 
             {editBook && (
                 <EnhancedMetadataModal
