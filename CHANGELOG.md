@@ -18,6 +18,37 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- `services/alignment.py`'s anchor filter could let a single false, far-ahead anchor survive:
+  the plain longest-increasing-subsequence filter only maximizes chain *length*, so a lone bad
+  match with an inflated whisper index rode along for free whenever nothing else competed for its
+  epub slot (a noisy stretch, a run of short/ambiguous sentences) — costing the chain nothing to
+  keep, since no correct candidate existed there to lose. DTW/interpolation on either side of it
+  was then pulled toward the wrong position across the whole gap: exact for a stretch, then a
+  region displaced hours ahead, decaying back to exact once real anchors resumed — the shape
+  reported against a production library (43/153 synced pairs flagged by #586's timing check, most
+  of them this bug rather than reordered audio). `_filter_consistent_anchors` now judges each kept
+  anchor against the local trend its *other* kept neighbours imply (leave-one-out, reusing
+  `_expected_ms` from #586's degraded-map diagnostics) and iteratively drops the single worst
+  outlier per pass, re-running the filter on the reduced pool each time — which also lets back in
+  any genuinely consistent raw anchors that only lost out to the bad one. A single displaced
+  anchor being rejected this way is ordinary filtering, not degraded-map territory:
+  `MIN_DISPLACED_RUN_LENGTH` (3) still gates that classification, confirmed by a new regression
+  test (`test_far_ahead_anchor_does_not_displace_the_gap_it_creates`). Existing alignment tests
+  and the `sync_parity` golden vectors are unchanged by this fix.
+- The sync-map audit's timing check (#586) always suggested `check_audio_order` for a flagged
+  pair, even when the *cached transcript's own text* was in book order — meaning the audio was
+  fine and the sync map itself was displaced (typically by the anchor bug above). Re-transcribing
+  in that case spent Jetson hours and changed nothing. `services/sync_map_audit.py` now walks a
+  flagged pair's sampled points' *located transcript positions*, in book order, and checks whether
+  they form a single consistent run (the same longest-increasing-subsequence methodology as the
+  alignment fix above, via the new `_book_order_violations`, robust to a stray bad locate rather
+  than a naive "did this go backwards" check that a single ambiguous match would poison forever).
+  When the transcript is confirmed in book order, the pair is flagged with `suggested_action:
+  "realign"` and `realign_path` instead of `"check_audio_order"`; the `reason` also now names the
+  affected chapter range (`timing_mismatch_chapters`). Without a cached transcript (or when the
+  timing check didn't run), this defaults to the previous, conservative `check_audio_order`
+  behaviour — there's no evidence either way. The web Troubleshoot page's "Sync-Map Audit" section
+  copy and tests were updated to reflect that a flagged pair isn't always an audio problem.
 - The transcription cache used to key a hit on the audiobook's file path alone, so a file replaced
   at the same path (a downloader "upgrade", a re-rip, an Audiobookshelf merge/re-encode) kept
   reusing the old recording's transcript and aligning its timestamps against different audio.
@@ -74,6 +105,22 @@ operator must do by hand rather than read about afterwards.
 
 ### Added
 
+- The sync-map audit gained a fourth, independent check: whether a map's stored chapter order
+  agrees with where its sampled points' text actually falls in the EPUB's *current* spine order.
+  A map built before EPUB parsing was spine-indexed could have numbered its chapters by something
+  else entirely — the reported case was a filename lexicographic sort (`part1, part10, part11,
+  part12, part2 ... part9` instead of true reading order) — and migration `0004_canonical_position`
+  only re-based maps that existed when it ran, not ones built since from a source it didn't
+  anticipate. `epub_parser.extract_spine_chapter_texts` (the per-chapter building block
+  `extract_book_text` now joins into one string) gives each sampled point's *true* spine chapter;
+  `services.sync_map_audit._spine_order_violations` compares that sequence, in the map's own
+  stored order, the same way the timing check's book-order check does. A mismatched map is
+  promoted from `healthy` to `stale` with `suggested_action: "realign"` (or `"retranscribe"`
+  without a cached transcript) and a `reason` naming the affected chapter range
+  (`spine_order_chapters`) — independent of the timing check, so it runs even for a pair with no
+  cached transcript. No schema change and no automatic bulk repair: an admin "realign all flagged"
+  action or a startup check is a reasonable follow-up once this has run against the production
+  library, but doing that implicitly here risked realigning pairs nobody had looked at yet (#595).
 - The sync-map audit (`GET /api/troubleshoot/sync-map-audit`) gained a timing check: for a sample
   of a pair's sync points (80, spread across the whole map — independent of the endpoint's own
   `sample_size`), it locates the sentence in the cached audio transcript and compares timestamps,

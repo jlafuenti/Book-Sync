@@ -378,6 +378,31 @@ def extract_book_sentences(path: str) -> List[EpubSentence]:
     return extract_epub_sentences(path)
 
 
+def extract_spine_chapter_texts(path: str) -> List[str]:
+    """Readable text per spine item, one entry per itemref, in spine order —
+    the same extraction `extract_book_text` joins into a single string,
+    kept separate here for the sync-map audit's spine-order check (issue
+    #595): for a sample of a map's stored points, which chapter that text
+    *actually* lives in today, regardless of what chapter numbering the map
+    itself stored (a map from before spine-order parsing used a different,
+    now-wrong numbering — see the module docstring on `old_chapter_to_spine_index`).
+
+    Deliberately stops short of sentence tokenization, same reasoning as
+    `extract_book_text`: this only needs "which chapter is this text in",
+    not sentence-level positions, and NLTK over a whole novel is the
+    expensive half of parsing.
+
+    MOBI has no independently-addressable spine here (`extract_mobi_sentences`
+    treats the whole converted document as one unit), so it comes back as a
+    single-entry list — a spine-order mismatch can't be detected for MOBI by
+    this function, only EPUB.
+    """
+    if Path(path).suffix.lower() == ".mobi":
+        return ["\n".join(s.text for s in extract_mobi_sentences(path))]
+    documents = _load_epub_documents(path)
+    return [_extract_text_from_html(doc) for doc in documents]
+
+
 def extract_book_text(path: str) -> str:
     """The whole book's readable text, spine order, as one string.
 
@@ -386,7 +411,4 @@ def extract_book_text(path: str) -> str:
     whole novel is the expensive half of parsing. Same extraction as
     `extract_book_sentences` otherwise, so the two agree on what the text *is*.
     """
-    if Path(path).suffix.lower() == ".mobi":
-        return "\n".join(s.text for s in extract_mobi_sentences(path))
-    documents = _load_epub_documents(path)
-    return "\n".join(_extract_text_from_html(doc) for doc in documents)
+    return "\n".join(extract_spine_chapter_texts(path))

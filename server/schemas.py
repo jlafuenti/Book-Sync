@@ -1046,6 +1046,29 @@ class SyncMapAuditRow(StrictResponse):
     #: mismatch — what the check actually flags on, since a reordered block
     #: is localized and shows up as a run rather than a raised overall share.
     timing_mismatch_run: int
+    #: (first, last) epub_chapter of that run, or null when there wasn't one
+    #: — the affected range an operator would look at (issue #595).
+    timing_mismatch_chapters: Optional[List[int]]
+    #: Whether the *cached transcript's own text* was confirmed in book
+    #: order (issue #595) — the signal that separates "the map is displaced
+    #: but the audio is fine" (`suggested_action` "realign") from "the audio
+    #: itself is out of order" ("check_audio_order"). False both when the
+    #: transcript actually looked out of order and when there wasn't enough
+    #: evidence to say (no cached transcript, or the check didn't run).
+    timing_transcript_confirmed_in_order: bool
+    #: "ok" | "mismatch" | "cannot_check" | "skipped" — whether the map's
+    #: stored chapter order agrees with where its sampled points' text
+    #: actually falls in today's EPUB spine (issue #595): a map built before
+    #: spine-order parsing may have numbered chapters by document-declaration
+    #: or filename order instead.
+    spine_order_status: str
+    spine_order_checked: int
+    #: Longest run of *consecutive* sampled points (in the map's own stored
+    #: order) whose text lands earlier in the spine than the run before it.
+    spine_order_violation_run: int
+    #: (first, last) *stored* chapter of that run, or null when there wasn't
+    #: one.
+    spine_order_chapters: Optional[List[int]]
     #: "healthy" | "stale" | "unknown" | "degraded"
     status: str
     reason: str

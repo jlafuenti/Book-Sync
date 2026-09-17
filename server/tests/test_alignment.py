@@ -240,3 +240,107 @@ def test_align_texts_unchanged_by_diagnostics_collection():
     assert [(p.audio_start_ms, p.audio_end_ms, p.confidence) for p in plain] == [
         (p.audio_start_ms, p.audio_end_ms, p.confidence) for p in with_diag
     ]
+
+
+# ---------------------------------------------------------------------------
+# Issue #595: a far-ahead outlier anchor surviving the LIS filter.
+#
+# #586's swapped-block fixtures above are dense on both sides of the reordered
+# block — plenty of correctly-ordered candidate anchors compete for the same
+# chain, so the plain longest-increasing-subsequence filter already prefers
+# the long correct run over a lone bad anchor there. The failure this issue
+# describes is different: a region with *no competing candidates at all*
+# (noisy transcription, a stretch of short/ambiguous sentences), where a
+# single false, far-ahead anchor survives for free — including it costs the
+# LIS nothing, because nothing else could occupy that epub slot anyway. Every
+# sentence in the gap it creates then gets pulled toward it by
+# DTW/interpolation: exact, then displaced (peaking near the false anchor),
+# decaying back to exact once real anchors resume — precisely the shape in
+# the issue's own evidence table.
+# ---------------------------------------------------------------------------
+
+def _make_collision_free_distinct_book(num):
+    """Like `_make_distinct_book`, but every token is a hash of its own
+    (sentence, position) pair rather than a small cyclic word list plus a
+    decimal suffix. `_make_distinct_book`'s scheme repeats its 14-word cycle
+    every 14 sentences and its numeric suffix is close (few characters
+    different) between nearby sentences — fine for the book-wide fixtures
+    elsewhere in this file, but at this test's scale (needed for a gap wide
+    enough to force the chunked-DTW fallback, matching the issue's own
+    thousands-of-sentences scenario) that produces enough incidental
+    similarity for `token_set_ratio` to score unrelated sentences above the
+    anchor threshold — confounding this test's one deliberately-injected
+    false anchor with accidental ones. A hash has no structural similarity
+    between different inputs, which removes that risk entirely."""
+    import hashlib
+
+    def token(i, j):
+        return "w" + hashlib.md5(f"{i}-{j}".encode()).hexdigest()[:10]
+
+    epub, epub_texts = [], []
+    for i in range(num):
+        text = " ".join(token(i, j) for j in range(12))
+        epub.append(EpubSentence(chapter=i // 50, sentence_index=i % 50, text=text))
+        epub_texts.append(text)
+    return epub, epub_texts
+
+
+def _make_book_with_far_ahead_anchor(num=1500, bad_epub_idx=300, bad_whisper_idx=1100):
+    """An otherwise perfectly in-order book, except epub sentence
+    `bad_epub_idx`'s only spoken occurrence is placed at `bad_whisper_idx` —
+    hundreds of sentences ahead of where it belongs — instead of at its own
+    position. Its own slot, and everything between the two positions, carries
+    only filler noise unrelated to any epub sentence, so nothing competes for
+    that stretch: the false anchor is the only candidate the LIS filter ever
+    sees there, which is exactly what lets it survive unfiltered today.
+    """
+    epub, epub_texts = _make_collision_free_distinct_book(num)
+    whisper = []
+    t = 0
+    for pos in range(num):
+        if pos == bad_whisper_idx:
+            text = epub_texts[bad_epub_idx]  # the one false, far-ahead match
+        elif bad_epub_idx <= pos < bad_whisper_idx:
+            text = f"um uh well filler {pos} noise"  # no valid anchor here
+        else:
+            text = epub_texts[pos]
+        whisper.append(TranscribedSentence(text=text, start_ms=t, end_ms=t + 3000))
+        t += 3000
+    truth = {i: i * 3000 for i in range(num)}
+    return epub, whisper, truth
+
+
+def test_far_ahead_anchor_does_not_displace_the_gap_it_creates():
+    """A single false, far-ahead anchor must not survive the anchor filter
+    just because nothing else competes for its epub slot — every sentence in
+    the gap between the surrounding correct anchors must still track truth,
+    not get pulled toward the false anchor's position hours away."""
+    epub, whisper, truth = _make_book_with_far_ahead_anchor()
+    points, diagnostics = align_texts_with_diagnostics(epub, whisper)
+    assert len(points) == len(epub)
+
+    # Well before and well after the injected anchor: unaffected either way.
+    for i in (50, 150, 1450):
+        assert abs(points[i].audio_start_ms - truth[i]) < 30_000, (
+            f"sentence {i}: got {points[i].audio_start_ms}, expected ~{truth[i]}"
+        )
+
+    # Inside the gap the false anchor would otherwise pin: must track truth,
+    # not the false anchor's audio position (~3,300,000 ms / 55 min). A wider
+    # tolerance than the dense-anchor checks above — this whole stretch has
+    # no anchors at all once the false one is rejected, so it is bridged by
+    # interpolation/chunked-DTW between the two anchors bracketing the gap
+    # rather than a per-sentence match — but still tight against a
+    # ~40-minute pull.
+    for i in (500, 700, 900):
+        assert abs(points[i].audio_start_ms - truth[i]) < 120_000, (
+            f"sentence {i}: got {points[i].audio_start_ms}, expected ~{truth[i]} "
+            f"— looks pulled toward the false anchor instead"
+        )
+
+    # A single displaced anchor being rejected is ordinary filtering, not a
+    # degraded map: issue #586's classifier keys on rejected anchors, and a
+    # better filter now rejects this one too, but MIN_DISPLACED_RUN_LENGTH
+    # (3) means one rejection alone must not trip degraded classification.
+    assert diagnostics is not None
+    assert diagnostics.degraded is False

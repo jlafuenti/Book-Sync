@@ -276,6 +276,13 @@ describe('TroubleshootPage confirmations are dialogs', () => {
 // checks, so the audit gained a timing check and a `degraded` verdict —
 // surfaced here as an on-demand section (an audit walks every paired ebook
 // on disk, so it must not run automatically on page load).
+//
+// Issue #595: a `degraded`/`stale` pair isn't always an audio problem. The
+// audit can now tell "the audio is out of order" (still `check_audio_order`)
+// apart from "the audio's fine but the sync map itself is displaced, or its
+// chapter numbering predates spine-order parsing" (`realign`) — this section
+// must show the operator whichever advice the audit actually gives, not
+// assume every flagged row means "check the audio file".
 describe('TroubleshootPage sync-map audit', () => {
     beforeEach(() => {
         getLibraryIssuesMock.mockResolvedValue(issuesWithChapterEncodingBad([]))
@@ -288,12 +295,23 @@ describe('TroubleshootPage sync-map audit', () => {
         expect(getSyncMapAuditMock).not.toHaveBeenCalled()
     })
 
-    it('runs the audit on demand and lists a degraded pair with its suggested action', async () => {
+    it('mentions checking the audio, a displaced map, and spine order, not just the audio file', async () => {
+        renderPage()
+
+        fireEvent.click(await screen.findByText('Sync-Map Audit'))
+
+        // Issue #595: the old copy only described "out of order" audio; an
+        // operator reading it should know the map itself, or its chapter
+        // numbering, can be the problem too — not just the recording.
+        expect(await screen.findByText(/displaced|chapter numbering/i)).toBeInTheDocument()
+    })
+
+    it('runs the audit on demand and lists a degraded, audio-order pair with its suggested action', async () => {
         getSyncMapAuditMock.mockResolvedValueOnce({
             sample_size: 20, checked: 2, flagged: 1,
             realign_endpoint: '/api/transcription/{pair_id}/realign',
             pairs: [{
-                pair_id: 313, title: 'Dungeon Crawler Carl', status: 'degraded',
+                pair_id: 313, title: 'Axis Test', status: 'degraded',
                 reason: "The audio's order differs from the ebook — check the audio file, then re-transcribe.",
                 suggested_action: 'check_audio_order', realign_path: null,
             }],
@@ -304,10 +322,62 @@ describe('TroubleshootPage sync-map audit', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
 
         await screen.findByText('2 pairs checked, 1 flagged')
-        expect(screen.getByText('Dungeon Crawler Carl')).toBeInTheDocument()
+        expect(screen.getByText('Axis Test')).toBeInTheDocument()
         expect(screen.getByText('degraded')).toBeInTheDocument()
         expect(screen.getByText('check_audio_order')).toBeInTheDocument()
         expect(screen.getByText(/audio's order differs/)).toBeInTheDocument()
+    })
+
+    it('lists a degraded, map-displaced pair with realign advice instead of blaming the audio', async () => {
+        // Issue #595: the transcript is in book order (the audio is fine),
+        // so the audit now names `realign`, with the endpoint to hit, rather
+        // than the old blanket `check_audio_order`.
+        getSyncMapAuditMock.mockResolvedValueOnce({
+            sample_size: 20, checked: 1, flagged: 1,
+            realign_endpoint: '/api/transcription/{pair_id}/realign',
+            pairs: [{
+                pair_id: 41, title: 'Axis Test', status: 'degraded',
+                reason: 'The cached transcript is in book order, so the audio looks '
+                    + 'fine — the sync map itself is displaced. Re-align from the '
+                    + 'cached transcript.',
+                suggested_action: 'realign', realign_path: '/api/transcription/41/realign',
+            }],
+        })
+        renderPage()
+
+        fireEvent.click(await screen.findByText('Sync-Map Audit'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
+
+        await screen.findByText('1 pair checked, 1 flagged')
+        expect(screen.getByText('degraded')).toBeInTheDocument()
+        expect(screen.getByText('Re-align (/api/transcription/41/realign)')).toBeInTheDocument()
+        expect(screen.getByText(/sync map itself is displaced/)).toBeInTheDocument()
+        expect(screen.queryByText('check_audio_order')).not.toBeInTheDocument()
+    })
+
+    it('lists a stale, spine-order-mismatched pair with realign advice', async () => {
+        // Issue #595 part 3: a map predating spine-order parsing.
+        getSyncMapAuditMock.mockResolvedValueOnce({
+            sample_size: 20, checked: 1, flagged: 1,
+            realign_endpoint: '/api/transcription/{pair_id}/realign',
+            pairs: [{
+                pair_id: 77, title: 'Axis Test', status: 'stale',
+                reason: "The map's chapter numbering disagrees with the EPUB's "
+                    + 'spine for a run of 9 consecutive sampled points (stored '
+                    + 'chapters 1-9) — likely a map built before spine-order '
+                    + "parsing. Re-align to rebuild it with today's chapter numbering.",
+                suggested_action: 'realign', realign_path: '/api/transcription/77/realign',
+            }],
+        })
+        renderPage()
+
+        fireEvent.click(await screen.findByText('Sync-Map Audit'))
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Sync-Map Audit' }))
+
+        await screen.findByText('1 pair checked, 1 flagged')
+        expect(screen.getByText('stale')).toBeInTheDocument()
+        expect(screen.getByText('Re-align (/api/transcription/77/realign)')).toBeInTheDocument()
+        expect(screen.getByText(/disagrees with the EPUB's spine/)).toBeInTheDocument()
     })
 
     it('shows an error message when the audit request fails', async () => {

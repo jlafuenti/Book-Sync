@@ -459,10 +459,12 @@ function SyncMapAuditSection({ canEdit }) {
             {open && (
                 <div className="system-card-body">
                     <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-                        Checks every paired book's sync map against the ebook file on disk and,
-                        for a sample of points, against the cached audio transcript — catching a
-                        map built from a different edition, or one whose audio content is out of
-                        order relative to the ebook.
+                        Checks every paired book's sync map against the ebook file on disk, the
+                        cached audio transcript, and the EPUB's own spine order — catching a map
+                        built from a different edition, one whose audio is genuinely out of order,
+                        one that's displaced even though the audio is fine, or one whose chapter
+                        numbering predates spine-order parsing. Each flagged pair names which of
+                        those it is, so "check the audio" isn't the only advice you'll see.
                     </p>
                     <button className="btn btn-secondary" onClick={runAudit} disabled={loading}>
                         {loading ? 'Auditing…' : 'Run Sync-Map Audit'}

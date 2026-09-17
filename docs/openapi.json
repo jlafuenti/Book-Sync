@@ -4535,6 +4535,32 @@
             "title": "Sampled",
             "type": "integer"
           },
+          "spine_order_chapters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spine Order Chapters"
+          },
+          "spine_order_checked": {
+            "title": "Spine Order Checked",
+            "type": "integer"
+          },
+          "spine_order_status": {
+            "title": "Spine Order Status",
+            "type": "string"
+          },
+          "spine_order_violation_run": {
+            "title": "Spine Order Violation Run",
+            "type": "integer"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -4580,6 +4606,20 @@
             "title": "Timing Checked",
             "type": "integer"
           },
+          "timing_mismatch_chapters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing Mismatch Chapters"
+          },
           "timing_mismatch_rate": {
             "anyOf": [
               {
@@ -4602,6 +4642,10 @@
           "timing_status": {
             "title": "Timing Status",
             "type": "string"
+          },
+          "timing_transcript_confirmed_in_order": {
+            "title": "Timing Transcript Confirmed In Order",
+            "type": "boolean"
           },
           "title": {
             "anyOf": [
@@ -4648,6 +4692,12 @@
           "timing_mismatches",
           "timing_mismatch_rate",
           "timing_mismatch_run",
+          "timing_mismatch_chapters",
+          "timing_transcript_confirmed_in_order",
+          "spine_order_status",
+          "spine_order_checked",
+          "spine_order_violation_run",
+          "spine_order_chapters",
           "status",
           "reason",
           "suggested_action",

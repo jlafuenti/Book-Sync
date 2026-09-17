@@ -356,10 +356,10 @@ def _find_anchors(
         raw_anchors.append((i, best_idx, best_score / 100.0))
 
     raw_anchors.sort(key=lambda a: a[0])
-    anchors = _longest_increasing_subsequence(raw_anchors)
+    anchors = _filter_consistent_anchors(raw_anchors, whisper_sentences)
     logger.info(
         f"Anchors: {len(candidates)} candidates, {len(raw_anchors)} raw, "
-        f"{len(anchors)} after LIS filter"
+        f"{len(anchors)} after LIS + consistency filter"
     )
     return anchors, raw_anchors
 
@@ -387,6 +387,102 @@ def _longest_increasing_subsequence(
         k = prev[k]
     result.reverse()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Outlier-anchor filtering (issue #595)
+#
+# Plain LIS maximizes chain *length* only — it has no notion of "consistent
+# pace". A single false anchor with an inflated whisper index rides along for
+# free whenever nothing else competes for its epub slot (a noisy stretch, a
+# run of short/ambiguous sentences): including it costs the chain nothing,
+# because no correct candidate exists there to lose. DTW/interpolation on
+# either side of it is then pulled toward the wrong position across the whole
+# gap — exact, then a region displaced hours ahead, decaying back to exact
+# once real anchors resume. That is the shape in the issue's own evidence,
+# and `test_far_ahead_anchor_does_not_displace_the_gap_it_creates` in
+# test_alignment.py reproduces it with a single injected anchor.
+#
+# The fix looks at what the *plain* LIS kept, not just what it rejected
+# (`_diagnose_anchor_rejection`, issue #586, already does the rejected side):
+# judge each kept anchor against the local trend its *other* kept neighbours
+# imply, drop the ones that are inconsistent with it, and re-run LIS on the
+# reduced pool — which also lets back in any genuinely consistent raw anchors
+# that were only excluded because they conflicted with the bad one.
+# ---------------------------------------------------------------------------
+
+#: Refinement passes are bounded, not unbounded-looped: each pass removes at
+#: most one anchor, so this is also the max number of outliers one call can
+#: ever remove. Real books have a handful at most; the cap guards against a
+#: pathological input looping needlessly.
+MAX_ANCHOR_REFINEMENT_PASSES = 20
+
+
+def _trend_outliers(
+    kept: List[Tuple[int, int, float]],
+    whisper_sentences: List["TranscribedSentence"],
+    tolerance_ms: int = DISPLACED_ANCHOR_OFFSET_MS,
+) -> List[Tuple[Tuple[int, int, float], float]]:
+    """(anchor, |actual - expected| ms) for every kept anchor whose audio
+    position is far from what their *other* kept neighbours' local trend
+    predicts, worst first.
+
+    Leave-one-out via `_expected_ms`: each anchor is judged against the trend
+    implied by the rest of the kept set (never against itself), so a single
+    outlier is checked against the consistent majority around it. Fewer than
+    3 kept anchors carries no trend to check against, and is left alone.
+    """
+    if len(kept) < 3:
+        return []
+    kept_with_ms = [(a[0], float(whisper_sentences[a[1]].start_ms)) for a in kept]
+    outliers = []
+    for idx, (epub_idx, ms) in enumerate(kept_with_ms):
+        others = kept_with_ms[:idx] + kept_with_ms[idx + 1:]
+        expected = _expected_ms(epub_idx, others)
+        if expected is None:
+            continue
+        deviation = abs(ms - expected)
+        if deviation > tolerance_ms:
+            outliers.append((kept[idx], deviation))
+    outliers.sort(key=lambda pair: pair[1], reverse=True)
+    return outliers
+
+
+def _filter_consistent_anchors(
+    raw_anchors: List[Tuple[int, int, float]],
+    whisper_sentences: List["TranscribedSentence"],
+) -> List[Tuple[int, int, float]]:
+    """The longest increasing subsequence of `raw_anchors`, refined to drop
+    anchors that are individually inconsistent with their kept neighbours'
+    local trend (issue #595) — see the module comment above for why plain LIS
+    alone lets a lone far-ahead anchor through.
+
+    Only the single *worst* outlier is removed per pass, not every anchor
+    `_trend_outliers` flags in one go: a genuinely bad anchor distorts the
+    local trend enough that its innocent neighbours can look inconsistent
+    too, in the very same pass, purely because the bad one is still
+    contaminating their "expected" value. Removing the worst offender first
+    and re-checking on a clean(er) trend is what keeps a single bad anchor
+    from taking a correct neighbour down with it.
+
+    Each pass removes that one anchor from the candidate pool (not just from
+    the kept list) and re-runs LIS, so previously-blocked raw anchors that
+    only lost out to the bad one get a chance to be kept instead.
+    `raw_anchors` itself is untouched — issue #586's degraded diagnostics
+    diffs the caller's original raw list against this function's (now
+    possibly smaller) result, and that still holds: the result is built by
+    filtering `raw_anchors` down, so it stays a subsequence of it.
+    """
+    pool = list(raw_anchors)
+    kept = _longest_increasing_subsequence(pool)
+    for _ in range(MAX_ANCHOR_REFINEMENT_PASSES):
+        outliers = _trend_outliers(kept, whisper_sentences)
+        if not outliers:
+            break
+        worst_anchor, _deviation = outliers[0]
+        pool = [a for a in pool if a != worst_anchor]
+        kept = _longest_increasing_subsequence(pool)
+    return kept
 
 
 def _anchor_align(

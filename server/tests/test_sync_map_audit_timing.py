@@ -45,6 +45,49 @@ def _sentence(i):
     return " ".join(_WORDS[(i + j) % len(_WORDS)] + str(i * 7 + j) for j in range(12))
 
 
+# ---------------------------------------------------------------------------
+# `_book_order_violations` (issue #595): a pure function, tested directly.
+#
+# A naive "did this go backwards from the previous point" check is itself the
+# same class of bug this issue is about: one bad locate poisons every
+# comparison after it forever if the check just tracks a running max. This
+# uses the longest-increasing-subsequence of transcript positions instead
+# (mirrors `services.alignment._diagnose_anchor_rejection`'s methodology), so
+# a handful of scattered bad locates don't cascade into flagging the rest of
+# the book as out of order.
+# ---------------------------------------------------------------------------
+
+def test_book_order_violations_empty_for_a_fully_increasing_sequence():
+    run, flags = sync_map_audit._book_order_violations([10, 20, 30, 40, 50])
+    assert run == 0
+    assert flags == [False] * 5
+
+
+def test_book_order_violations_ignores_a_single_scattered_bad_locate():
+    """One bad locate must not poison everything that comes after it — the
+    naive "running max" approach this replaced would flag all four points
+    after the outlier, not just the outlier itself."""
+    run, flags = sync_map_audit._book_order_violations([10, 20, 999, 40, 50, 60])
+    assert run == 1
+    assert flags == [False, False, True, False, False, False]
+
+
+def test_book_order_violations_finds_a_genuinely_reordered_block():
+    """Two blocks swapped (the real #586/#595 audio-reordering shape): one of
+    the two blocks is excluded from the longest increasing run."""
+    # Book order 0..9; audio narrates 0-2, then 6-8 (swapped forward), then
+    # 3-5 (swapped back), then 9.
+    positions = [0, 1, 2, 60, 70, 80, 30, 40, 50, 90]
+    run, flags = sync_map_audit._book_order_violations(positions)
+    assert run == 3
+    # Exactly one of the two swapped 3-long blocks is excluded, not both.
+    assert sum(flags) == 3
+
+
+def test_book_order_violations_empty_input():
+    assert sync_map_audit._book_order_violations([]) == (0, [])
+
+
 SENTENCES = [_sentence(i) for i in range(20)]
 
 # 3 minutes apart, in true speaking order — the "ground truth" the cached
@@ -99,7 +142,13 @@ def _healthy_points():
 def _displaced_block_points():
     """Sentences 5-9 (a contiguous run, 25% of the map) carry a sync-point
     timestamp 30 minutes off from where the cached transcript actually has
-    that text — the swapped-block scenario from issue #586."""
+    that text. The transcript itself (`_transcript_sentences()`, unchanged by
+    this helper) is still fully in book order — only the *map's* stored
+    timestamp for this block is wrong. Originally written to model issue
+    #586's swapped-audio scenario, but re-checking a real flagged pair for
+    issue #595 found the opposite: the audio was fine and only the map was
+    displaced. `_out_of_order_transcript_sentences` below is the audio-really-
+    reordered case; this one is the map-displaced case."""
     points = []
     for i in range(len(SENTENCES)):
         ms = TRUE_START_MS[i]
@@ -109,11 +158,14 @@ def _displaced_block_points():
     return points
 
 
-async def test_timing_check_flags_a_displaced_block(db, tmp_path):
+async def test_timing_check_flags_a_map_displaced_but_in_order_transcript(db, tmp_path):
+    """Issue #595: when the cached transcript's own text is in book order,
+    the audio is fine and the map itself is what's displaced — re-align from
+    the transcript rather than pointing at the audio file."""
     pair, path = await _seed_pair(db, tmp_path)
     await make_sync_map(db, pair.id, _displaced_block_points(),
                          epub_file_hash=hash_file(path))
-    await _add_transcript(db, pair.id)
+    await _add_transcript(db, pair.id)  # unmodified: fully in book order
 
     [row] = await sync_map_audit.audit_sync_maps(db)
 
@@ -123,8 +175,53 @@ async def test_timing_check_flags_a_displaced_block(db, tmp_path):
     assert row["timing_mismatches"] == 5
     assert row["timing_mismatch_rate"] == 0.25
     assert row["timing_mismatch_run"] == 5  # indices 5-9, contiguous
+    assert row["timing_mismatch_chapters"] == (0, 0)  # all in chapter 0
+    assert row["timing_transcript_confirmed_in_order"] is True
+    assert row["status"] == "degraded"
+    assert row["suggested_action"] == "realign"
+    assert row["realign_path"] == f"/api/transcription/{pair.id}/realign"
+    assert "in book order" in row["reason"]
+    assert "re-align" in row["reason"].lower()
+
+
+def _out_of_order_transcript_sentences():
+    """The audio's own narration genuinely swaps two blocks: sentences 5-9
+    are actually spoken where 10-14 belong, and vice versa — unlike
+    `_displaced_block_points` above, this is the cached transcript's own
+    *content* out of order, not just the map's stored timestamp. `start_ms`
+    stays strictly increasing (it's the audio's real timeline; transcription
+    is inherently sequential) — what moves is which sentence's text sits at
+    which position."""
+    reading_order = list(range(len(SENTENCES)))
+    reading_order[5:10], reading_order[10:15] = reading_order[10:15], reading_order[5:10]
+    return [
+        {"text": SENTENCES[reading_order[pos]], "start_ms": pos * 180_000,
+         "end_ms": pos * 180_000 + 3000}
+        for pos in range(len(SENTENCES))
+    ]
+
+
+async def test_timing_check_flags_a_genuinely_reordered_transcript(db, tmp_path):
+    """Issue #595: when the cached transcript's own text is NOT in book
+    order, the audio really is the problem — keep pointing at it, not at
+    re-aligning (which would just rebuild from the same reordered audio)."""
+    pair, path = await _seed_pair(db, tmp_path)
+    # The map itself claims healthy, book-order timestamps; it's the
+    # transcript's own content that disagrees with book order.
+    await make_sync_map(db, pair.id, _healthy_points(), epub_file_hash=hash_file(path))
+    db.add(AudioTranscript(
+        pair_id=pair.id, audiobook_path="/x/a.m4b", sentence_count=len(SENTENCES),
+        sentences_json=json.dumps(_out_of_order_transcript_sentences()),
+    ))
+    await db.commit()
+
+    [row] = await sync_map_audit.audit_sync_maps(db)
+
+    assert row["timing_status"] == "flagged"
+    assert row["timing_transcript_confirmed_in_order"] is False
     assert row["status"] == "degraded"
     assert row["suggested_action"] == "check_audio_order"
+    assert row["realign_path"] is None
     assert "audio's order differs" in row["reason"]
 
 
