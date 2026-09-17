@@ -37,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -71,7 +73,13 @@ fun TourOverlay(
     // The controller's snapshot is only the fallback while the registry has no
     // live rect for this anchor.
     val liveRects by LocalTourRegistry.current.rects.collectAsState()
-    val hole = state.step.anchor?.let { liveRects[it] } ?: state.anchor
+    // Anchors are registered in window coordinates; this overlay may be hosted
+    // anywhere in the window (the nav host, the reader's ComposeView, inside a
+    // bottom sheet's content), so express the hole relative to its own origin.
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    val hole = (state.step.anchor?.let { liveRects[it] } ?: state.anchor)
+        ?.takeIf { it.width > 0f && it.height > 0f }
+        ?.translate(-origin.x, -origin.y)
 
     // The reader selection step must not eat the long-press-and-drag gesture
     // it is teaching, so it blocks nothing and the "hole" is the full page.
@@ -81,7 +89,10 @@ fun TourOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { screenSize = Size(it.size.width.toFloat(), it.size.height.toFloat()) },
+            .onGloballyPositioned {
+                screenSize = Size(it.size.width.toFloat(), it.size.height.toFloat())
+                origin = it.positionInWindow()
+            },
     ) {
         if (!blockNothing) {
             // Forces an offscreen compositing layer so BlendMode.Clear actually
@@ -110,24 +121,23 @@ fun TourOverlay(
             TourBlockers(hole = hole, screenSize = screenSize, density = density)
         }
 
-        val cardHeightPx = with(density) { 220.dp.toPx() }
+        // Measured on first layout; the estimate only serves the very first frame.
+        var cardHeightPx by remember { mutableStateOf(with(density) { 220.dp.toPx() }) }
         val placement = cardPlacement(hole, screenSize, cardHeightPx)
         val cardAlignment = when (placement) {
             Placement.Below, Placement.Above -> Alignment.TopCenter
             Placement.Center -> Alignment.Center
         }
-        val cardOffsetY = when (placement) {
-            Placement.Below -> hole?.let { with(density) { (it.bottom + 16f).toDp() } } ?: 0.dp
-            Placement.Above -> hole?.let { with(density) { (it.top - cardHeightPx - 16f).toDp() } } ?: 0.dp
-            Placement.Center -> 0.dp
-        }
+        val cardOffsetY = cardOffsetY(placement, hole, screenSize, cardHeightPx)
+            ?.let { with(density) { it.toDp() } } ?: 0.dp
 
         Box(Modifier.fillMaxSize(), contentAlignment = cardAlignment) {
             TourCard(
                 state = state,
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
-                    .offset(y = if (placement == Placement.Center) 0.dp else cardOffsetY),
+                    .offset(y = if (placement == Placement.Center) 0.dp else cardOffsetY)
+                    .onSizeChanged { cardHeightPx = it.height.toFloat() },
                 onNext = onNext,
                 onBack = onBack,
                 onSkip = onSkip,

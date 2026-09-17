@@ -69,4 +69,40 @@ class LibraryScrollTargetTest {
     fun `an empty list has no index`() {
         assertNull(libraryIndexOf(emptyList(), pairId = 1))
     }
+
+    // ---- libraryTourTarget: the cell the "open a book" step spotlights ---
+
+    private fun unsynced(id: Int) = pair(id).copy(status = "manual_matched")
+
+    @Test
+    fun `the picker's pair wins when it is near the top`() {
+        val items = listOf(
+            LibraryItem("pair_1", pair = pair(1)),
+            LibraryItem("pair_2", pair = pair(2)),
+        )
+        assertEquals(1, libraryTourTarget(items, preferredPairId = 2))
+    }
+
+    @Test
+    fun `a picked pair buried in the grid gives way to the first synced pair`() {
+        // In practice the picker's choice was the last card of a 300-item grid.
+        val items = List(20) { i -> LibraryItem("ebook_$i", ebook = ebook(i)) } +
+            LibraryItem("pair_40", pair = unsynced(40)) +
+            LibraryItem("pair_41", pair = pair(41)) +
+            LibraryItem("pair_99", pair = pair(99))
+        assertEquals(21, libraryTourTarget(items, preferredPairId = 99))
+    }
+
+    @Test
+    fun `with no synced pair in the grid the picked pair is still used`() {
+        val items = List(10) { i -> LibraryItem("ebook_$i", ebook = ebook(i)) } +
+            LibraryItem("pair_99", pair = pair(99))
+        assertEquals(10, libraryTourTarget(items, preferredPairId = 99, nearTop = 3))
+    }
+
+    @Test
+    fun `nothing to spotlight when the grid has no pairs`() {
+        val items = listOf(LibraryItem("ebook_1", ebook = ebook(1)))
+        assertNull(libraryTourTarget(items, preferredPairId = null))
+    }
 }

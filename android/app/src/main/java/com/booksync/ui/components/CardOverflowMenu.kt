@@ -52,6 +52,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.ui.theme.Tandem
+import androidx.compose.runtime.collectAsState
+import com.booksync.ui.tour.TourOverlay
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourEvent
 import com.booksync.ui.tour.TourViewModel
@@ -329,11 +333,18 @@ fun CardOverflowMenu(
     var confirmSeriesComplete by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            // A swipe-away or outside tap, never a row tap (those call onDismiss
+            // directly): tell the walkthrough its sheet step lost its controls.
+            tour.controller.onEvent(TourEvent.SheetClosed)
+            onDismiss()
+        },
         sheetState = sheetState,
         containerColor = colors.bgSecondary,
         shape = Tandem.shapes.modal,
     ) {
+        Box {
+        Column(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -400,6 +411,25 @@ fun CardOverflowMenu(
                     onConfirmComplete = { confirmSeriesComplete = true },
                 )
             }
+        }
+        }
+        // Sheet steps of the walkthrough live here: a ModalBottomSheet is its
+        // own window above the activity, so the nav host's overlay cannot
+        // reach it (issue #597). Matched over the whole sheet content.
+        val tourState by tour.controller.state.collectAsState()
+        (tourState as? TourState.Running)?.takeIf { it.step.screen == TourScreen.Sheet }?.let { running ->
+            // matchParentSize: cover the sheet's content without growing it
+            // (a fillMaxSize child would stretch the sheet to the full screen).
+            Box(Modifier.matchParentSize()) {
+                TourOverlay(
+                    state = running,
+                    onNext = { tour.controller.next() },
+                    onBack = { tour.controller.back() },
+                    onSkip = { tour.controller.skip() },
+                    onQuit = { tour.controller.quit() },
+                )
+            }
+        }
         }
     }
 

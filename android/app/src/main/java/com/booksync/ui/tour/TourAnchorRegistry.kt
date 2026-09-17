@@ -1,5 +1,12 @@
 package com.booksync.ui.tour
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
@@ -28,7 +35,16 @@ class TourAnchorRegistry @Inject constructor() {
     private val _rects = MutableStateFlow<Map<TourAnchor, Rect>>(emptyMap())
     val rects: StateFlow<Map<TourAnchor, Rect>> = _rects.asStateFlow()
 
+    /** The anchor the current step wants on screen; tagged elements scroll themselves into view for it. */
+    private val _wanted = MutableStateFlow<TourAnchor?>(null)
+    val wanted: StateFlow<TourAnchor?> = _wanted.asStateFlow()
+    fun setWanted(anchor: TourAnchor?) { _wanted.value = anchor }
+
     fun set(anchor: TourAnchor, rect: Rect) {
+        // The first layout pass of a not-yet-measured element reports an empty
+        // rect; that is not a position anyone can spotlight.
+        if (rect.width <= 0f || rect.height <= 0f) return
+        if (anchor !in _rects.value) android.util.Log.d("Tour", "anchor $anchor registered at $rect")
         _rects.value = _rects.value + (anchor to rect)
     }
 
@@ -57,12 +73,21 @@ val LocalTourRegistry = staticCompositionLocalOf<TourAnchorRegistry> {
  * appears in [TourAnchorRegistry.rects], and [TourController] renders that
  * step degraded instead of pointing at nothing.
  */
+@OptIn(ExperimentalFoundationApi::class)
 fun Modifier.tourAnchor(anchor: TourAnchor): Modifier = composed {
     val registry = LocalTourRegistry.current
     DisposableEffect(anchor, registry) {
         onDispose { registry.clear(anchor) }
     }
-    onGloballyPositioned { coordinates ->
+    // A tagged element below the fold of a scrolling column brings itself into
+    // view when its step is current; lazy lists still need the screen to scroll
+    // to the item, since an uncomposed item has no modifier to ask.
+    val requester = remember { BringIntoViewRequester() }
+    val wanted by registry.wanted.collectAsState()
+    LaunchedEffect(wanted, anchor) {
+        if (wanted == anchor) requester.bringIntoView()
+    }
+    bringIntoViewRequester(requester).onGloballyPositioned { coordinates ->
         registry.set(anchor, coordinates.boundsInWindow())
     }
 }

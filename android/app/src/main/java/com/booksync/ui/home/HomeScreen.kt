@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.ChevronRight
@@ -62,6 +64,8 @@ import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.components.VersionMismatchBanner
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourState
+import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.tourAnchor
 
 /**
@@ -97,6 +101,14 @@ fun HomeScreen(
         recentlyAdded.isEmpty() &&
         newPairs.isEmpty() &&
         queueItems.isEmpty()
+
+    // The walkthrough (issue #597) spotlights section headers; a LazyColumn
+    // lays out nothing below the fold, so scroll the step's section into view
+    // first or the tour would call a present section empty.
+    val tour: TourViewModel = hiltViewModel(LocalContext.current as ComponentActivity)
+    val tourState by tour.controller.state.collectAsState()
+    val tourAnchorWanted = (tourState as? TourState.Running)?.step?.anchor?.takeIf { it in HOME_TOUR_ANCHORS }
+    val listState = rememberLazyListState()
 
     // Overflow sheet state — set when a card's three-dots is tapped.
     var overflowTarget by remember { mutableStateOf<OverflowTarget?>(null) }
@@ -177,7 +189,21 @@ fun HomeScreen(
             return@Scaffold
         }
 
+        // One entry per `item {}` below, in emission order (null = no anchor).
+        val sections = buildList<TourAnchor?> {
+            if (versionBanner != null) add(null)
+            if (continueItems.isNotEmpty()) add(TourAnchor.HomeContinueReading)
+            if (recentlyAdded.isNotEmpty()) add(TourAnchor.HomeRecentlyAdded)
+            if (newPairs.isNotEmpty()) add(null)
+            if (queueItems.isNotEmpty()) add(TourAnchor.HomeInQueue)
+        }
+        LaunchedEffect(tourAnchorWanted, sections) {
+            val anchor = tourAnchorWanted ?: return@LaunchedEffect
+            homeSectionIndex(anchor, sections)?.let { listState.animateScrollToItem(it) }
+        }
+
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize(),

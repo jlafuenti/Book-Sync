@@ -65,6 +65,10 @@ import com.booksync.R
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.theme.TandemTheme
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.lazy.rememberLazyListState
+import com.booksync.ui.tour.TourState
+import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.tourAnchor
 import kotlinx.coroutines.launch
@@ -213,7 +217,17 @@ fun AccountScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = colors.bgPrimary,
     ) { padding ->
+        // The walkthrough (issue #597) spotlights sections of this lazy list;
+        // an item below the fold is not composed, so scroll to it first.
+        val tour: TourViewModel = hiltViewModel(LocalContext.current as ComponentActivity)
+        val tourState by tour.controller.state.collectAsState()
+        val wantedSection = (tourState as? TourState.Running)?.step?.anchor?.let { accountSectionIndex(it) }
+        val listState = rememberLazyListState()
+        LaunchedEffect(wantedSection) {
+            wantedSection?.let { listState.animateScrollToItem(it) }
+        }
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize(),
@@ -270,6 +284,7 @@ fun AccountScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .tourAnchor(TourAnchor.AccountStorage)
                         .clip(Tandem.shapes.card)
                         .background(colors.bgCard),
                 ) {
@@ -403,6 +418,7 @@ fun AccountScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .tourAnchor(TourAnchor.AccountServer)
                         .clip(Tandem.shapes.card)
                         .background(colors.bgCard)
                         .padding(16.dp),

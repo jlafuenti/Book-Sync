@@ -148,12 +148,19 @@ fun LibraryScreen(
         // (it's a `combine`, not a synchronous derivation), so reading
         // `.value` right away can still be the pre-reset list. Wait
         // (bounded) for the reset to land rather than racing it.
-        val items = kotlinx.coroutines.withTimeoutOrNull(2_000) {
-            viewModel.items.first { libraryIndexOf(it, pairId) != null }
-        }
-        items?.let { libraryIndexOf(it, pairId) }?.let { index ->
-            gridState.animateScrollToItem(index)
-        }
+        val items = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+            viewModel.items.first { it.any { item -> item.pair != null } }
+        } ?: return@LaunchedEffect
+        // The picker's pair may sit anywhere in this ordering (it was the last
+        // card of a long grid in practice); prefer the first synced pair the
+        // user can see and let the rest of the tour follow it.
+        val index = libraryTourTarget(items, preferredPairId = pairId) ?: return@LaunchedEffect
+        val target = items[index].pair?.id ?: return@LaunchedEffect
+        if (target != pairId) tour.controller.adoptPair(target)
+        android.util.Log.d("Tour", "library step: scrolling to index $index (pair $target)")
+        // Jump, don't animate: animating across a thousand cells took 16 s on
+        // a real library, and the step cannot start until the card is laid out.
+        gridState.scrollToItem(index)
     }
 
     val ui           by viewModel.uiState.collectAsState()
