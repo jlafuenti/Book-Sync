@@ -439,6 +439,13 @@ kover {
                     "com.booksync.ui.reader.DictionarySheet*",
                     "com.booksync.ui.player.UnifiedAudioPlayer*",
                     "com.booksync.ui.account.ChangePasswordSheet*",
+                    // Tour engine (issue #597): TourScript/TourController/TourAnchorRegistry/
+                    // TourPrefs/TourPairPicker/TourGeometry/TourOffer are plain Kotlin and stay
+                    // covered on purpose. Only the Compose overlay, and the composable
+                    // `Modifier.tourAnchor` extension (its own top-level-function class,
+                    // `TourAnchorRegistryKt`), are excluded here.
+                    "com.booksync.ui.tour.TourOverlay*",
+                    "com.booksync.ui.tour.TourAnchorRegistryKt",
                     "com.booksync.MainActivity*",
                     "com.booksync.BookSyncApp*",
 

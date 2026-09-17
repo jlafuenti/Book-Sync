@@ -65,6 +65,8 @@ import com.booksync.R
 import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.theme.TandemTheme
+import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.tourAnchor
 import kotlinx.coroutines.launch
 
 // ---------------------------------------------------------------------------
@@ -93,6 +95,8 @@ private val themeSwatchColors = mapOf(
  *
  * @param onDiagnosticsAuto / [onDiagnosticsApp] navigate to `diagnostics/{channel}`
  * @param onClearAllDownloads wired by BookSyncNavigation to the DownloadedViewModel
+ * @param onReplayTour "Replay the walkthrough" in the Help section (issue #597) — wired by
+ *   BookSyncNavigation to `TourController.start()`, the same idiom as [onDiagnosticsApp].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +104,7 @@ fun AccountScreen(
     onDiagnosticsAuto: () -> Unit,
     onDiagnosticsApp: () -> Unit,
     onClearAllDownloads: () -> Unit = {},
+    onReplayTour: () -> Unit = {},
     viewModel: AccountViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -434,6 +439,24 @@ fun AccountScreen(
                         serverUrlError ?: "Changing this signs you out; the new server applies immediately.",
                         color = if (serverUrlError != null) colors.statusError else colors.textMuted,
                         fontSize = 12.sp,
+                    )
+                }
+            }
+
+            item { SectionTitle("Help") }
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Tandem.shapes.card)
+                        .background(colors.bgCard)
+                        // Track A's one Compose anchor (issue #597) — the rest are Track B/C's.
+                        .tourAnchor(TourAnchor.AccountReplayTour),
+                ) {
+                    ActionRow(
+                        title = "Replay the walkthrough",
+                        description = "About five minutes, on your own library.",
+                        onClick = onReplayTour,
                     )
                 }
             }

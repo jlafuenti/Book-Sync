@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.AccountCircle
@@ -57,10 +59,19 @@ import com.booksync.ui.player.PlayerScreen
 import com.booksync.ui.reader.ReaderScreen
 import com.booksync.ui.account.ForcePasswordResetScreen
 import com.booksync.ui.account.AccountScreen
+import com.booksync.ui.tour.LocalTourRegistry
+import com.booksync.ui.tour.TourAnchorRegistry
+import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourNav
+import com.booksync.ui.tour.TourOverlay
+import com.booksync.ui.tour.TourState
+import com.booksync.ui.tour.TourViewModel
+import com.booksync.ui.tour.shouldOfferTour
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.firstOrNull
+import androidx.compose.runtime.CompositionLocalProvider
 
 /**
  * Hilt entry point to access TokenManager from a Composable context.
@@ -83,6 +94,18 @@ interface PasswordResetGateEntryPoint {
 @dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
 interface UserScopeProviderEntryPoint {
     fun userScopeProvider(): com.booksync.data.remote.UserScopeProvider
+}
+
+/**
+ * Hilt entry point for the tour's anchor registry (issue #597). Not a
+ * ViewModel — it is a plain `@Singleton` shared with the reader Activity
+ * (Track C) — so it is reached the same way [TokenManagerEntryPoint] reaches
+ * `TokenManager`, and provided to every screen below via [LocalTourRegistry].
+ */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface TourAnchorRegistryEntryPoint {
+    fun tourAnchorRegistry(): TourAnchorRegistry
 }
 
 // ------------------------------------------------------------
@@ -272,6 +295,19 @@ fun BookSyncNavigation() {
     val gateIsOnline by pairOpenGate.isOnline.collectAsState()
     val gateMessage by pairOpenGate.message.collectAsState()
 
+    // One shared instance for the whole app (issue #597): the reader is a
+    // second Activity, so the tour's state can't live in a MainActivity-scoped
+    // ViewModel alone — TourViewModel just wraps the app-scoped TourController
+    // for Compose. Same `hiltViewModel(activity)` idiom as `pairOpenGate` above.
+    val tour: TourViewModel = hiltViewModel(context as ComponentActivity)
+    val tourRegistry = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            TourAnchorRegistryEntryPoint::class.java,
+        ).tourAnchorRegistry()
+    }
+    val tourState by tour.controller.state.collectAsState()
+
     LaunchedEffect(gateMessage) {
         gateMessage?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
@@ -359,6 +395,8 @@ fun BookSyncNavigation() {
         return
     }
 
+    CompositionLocalProvider(LocalTourRegistry provides tourRegistry) {
+    Box(Modifier.fillMaxSize()) {
     NavHost(navController = navController, startDestination = startDestination!!) {
 
         composable(Routes.LOGIN) {
@@ -372,7 +410,7 @@ fun BookSyncNavigation() {
         }
 
         composable(Routes.MAIN) {
-            MainScaffold(outerNavController = navController, gate = pairOpenGate)
+            MainScaffold(outerNavController = navController, gate = pairOpenGate, tour = tour)
         }
 
         composable(Routes.FORCE_PASSWORD_RESET) {
@@ -417,10 +455,12 @@ fun BookSyncNavigation() {
         // Legacy route kept for any intents that still point at "settings".
         // Delegates to AccountScreen (the Account tab replacement for SettingsScreen).
         composable(Routes.SETTINGS) {
+            TourRouteShown(tour, Routes.SETTINGS)
             AccountScreen(
                 onDiagnosticsAuto   = { navController.navigate(Routes.diagnostics("AUTO")) },
                 onDiagnosticsApp    = { navController.navigate(Routes.diagnostics("APP")) },
                 onClearAllDownloads = { /* no-op in overlay context */ },
+                onReplayTour        = { tour.controller.start() },
             )
         }
 
@@ -439,6 +479,7 @@ fun BookSyncNavigation() {
             ),
         ) { backStackEntry ->
             val pairId = backStackEntry.arguments?.getInt("pairId") ?: return@composable
+            TourRouteShown(tour, Routes.READER)
             ReaderScreen(
                 pairId = pairId,
                 handoffAudioMs = backStackEntry.arguments?.getLong("handoffAudioMs") ?: 0L,
@@ -456,6 +497,7 @@ fun BookSyncNavigation() {
             arguments = listOf(navArgument("pairId") { type = NavType.IntType }),
         ) { backStackEntry ->
             val pairId = backStackEntry.arguments?.getInt("pairId") ?: return@composable
+            TourRouteShown(tour, Routes.PLAYER)
             PlayerScreen(
                 pairId = pairId,
                 onBack = { navController.popBackStack() },
@@ -501,6 +543,7 @@ fun BookSyncNavigation() {
             Routes.BOOK_DETAILS_PAIR,
             arguments = listOf(navArgument("pairId") { type = NavType.IntType }),
         ) {
+            TourRouteShown(tour, Routes.BOOK_DETAILS_PAIR)
             com.booksync.ui.details.BookDetailsScreen(
                 onBack = { navController.popBackStack() },
                 onRead = { pairId -> pairOpenGate.requestOpen(pairId, "Open anyway") { navController.navigate(Routes.reader(pairId)) } },
@@ -534,6 +577,29 @@ fun BookSyncNavigation() {
             )
         }
     }
+
+    (tourState as? TourState.Running)?.let { running ->
+        TourOverlay(
+            state = running,
+            onNext = { tour.controller.next() },
+            onBack = { tour.controller.back() },
+            onSkip = { tour.controller.skip() },
+            onQuit = { tour.controller.quit() },
+        )
+    }
+    } // Box
+    } // CompositionLocalProvider
+}
+
+/**
+ * Reports a route's composition to the tour (issue #597 §5) — one line per
+ * route, rather than editing each screen: `LaunchedEffect(Unit)` fires once
+ * per composition of the route, which is what "this route is now showing"
+ * means for the tour's purposes.
+ */
+@Composable
+private fun TourRouteShown(tour: TourViewModel, route: String) {
+    LaunchedEffect(Unit) { tour.controller.onEvent(TourEvent.RouteShown(route)) }
 }
 
 /**
@@ -541,11 +607,59 @@ fun BookSyncNavigation() {
  * [MiniPlayerBar] directly above it so audio controls stay reachable across tabs.
  */
 @Composable
-private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGateViewModel) {
+private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGateViewModel, tour: TourViewModel) {
     val bottomNavController = rememberNavController()
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
         ?.substringBefore("?") // strip query args so selection matches "library?filter=NEW"
+
+    // Executes every TourNav the controller emits (issue #597 §5). Threaded in
+    // here, rather than collected at the outer NavHost, because tab switches
+    // need `bottomNavController` — the same reason `gate` is threaded in.
+    // ShowReaderBars / SkipToToolbarSync are for the reader Activity (Track C)
+    // and are simply not actionable here.
+    LaunchedEffect(Unit) {
+        tour.controller.nav.collect { navEvent ->
+            when (navEvent) {
+                is TourNav.GoToTab -> bottomNavController.navigate(navEvent.tab) {
+                    popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+                is TourNav.OpenLibraryAt -> Unit // LibraryScreen scrolls to it (Track B)
+                is TourNav.OpenDetails -> outerNavController.navigate(Routes.bookDetailsPair(navEvent.pairId))
+                is TourNav.OpenReader -> outerNavController.navigate(Routes.reader(navEvent.pairId))
+                TourNav.PopToMain -> outerNavController.popBackStack(Routes.MAIN, inclusive = false)
+                TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit
+            }
+        }
+    }
+
+    // First-sign-in offer (issue #597 §5): MAIN only ever shows once signed
+    // in, so `signedIn` is always true here — `shouldOfferTour` still takes
+    // it explicitly so the decision itself is testable independent of that.
+    val offered by tour.offered.collectAsState()
+    var offerDismissedThisSession by remember { mutableStateOf(false) }
+    if (!offerDismissedThisSession && shouldOfferTour(offered = offered, signedIn = true)) {
+        AlertDialog(
+            onDismissRequest = { /* answer required — Take the tour / Not now */ },
+            title = { Text("Take the 5-minute tour?") },
+            text = { Text("A guided walkthrough of Tandem, using your own library. Quit any time.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    offerDismissedThisSession = true
+                    tour.markOffered()
+                    tour.controller.start()
+                }) { Text("Take the tour") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    offerDismissedThisSession = true
+                    tour.markOffered()
+                }) { Text("Not now") }
+            },
+        )
+    }
 
     Scaffold(
         // Don't let the outer shell consume the status-bar inset — each screen's own
@@ -588,6 +702,7 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
             modifier = Modifier.padding(padding),
         ) {
             composable(Routes.HOME) {
+                TourRouteShown(tour, Routes.HOME)
                 HomeScreen(
                     onSearchClick     = { outerNavController.navigate(Routes.SEARCH) },
                     onOpenPairReader  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
@@ -627,6 +742,7 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                 val seriesArg = args?.getString("series")?.let { java.net.URLDecoder.decode(it, "UTF-8") }
                 val groupArg  = args?.getString("group")?.equals("series", ignoreCase = true)
 
+                TourRouteShown(tour, Routes.LIBRARY)
                 LibraryScreen(
                     onBookSelect             = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
                     onAudioSelect            = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
@@ -650,6 +766,7 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
             }
 
             composable(Routes.DOWNLOADED) {
+                TourRouteShown(tour, Routes.DOWNLOADED)
                 DownloadedScreen(
                     onPairBookSelect  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
                     onPairAudioSelect = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
@@ -662,10 +779,12 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
             }
 
             composable(Routes.ACCOUNT) {
+                TourRouteShown(tour, Routes.ACCOUNT)
                 AccountScreen(
                     onDiagnosticsAuto   = { outerNavController.navigate(Routes.diagnostics("AUTO")) },
                     onDiagnosticsApp    = { outerNavController.navigate(Routes.diagnostics("APP")) },
                     onClearAllDownloads = { /* wired in a future Phase E.6 */ },
+                    onReplayTour        = { tour.controller.start() },
                 )
             }
         }
