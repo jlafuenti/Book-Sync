@@ -3,6 +3,7 @@ package com.booksync.ui.tour
 import androidx.compose.ui.geometry.Rect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -14,6 +15,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the tour is right now. */
+/** How long the "tap the page" reader step waits before raising the bars itself. */
+const val READER_BARS_GRACE_MS = 4_000L
+
 sealed class TourState {
     data object Idle : TourState()
 
@@ -78,6 +82,7 @@ class TourController(
     private var steps: List<TourStep> = emptyList()
     private var pairId: Int? = null
     private var anchorWaitJob: Job? = null
+    private var barsGraceJob: Job? = null
 
     /** Picks a pair (degrading gracefully to the skip card when none qualifies) and enters step 0. */
     fun start() {
@@ -152,8 +157,21 @@ class TourController(
 
     private fun enter(index: Int, previousScreen: TourScreen?) {
         anchorWaitJob?.cancel()
+        barsGraceJob?.cancel()
         val step = steps[index]
         emitEnterNav(step, previousScreen, isFirstOccurrenceOfScreen(step.screen, index))
+
+        // The "tap the page" step waits for the reader's bars; a user who never
+        // taps would be stuck, so after a grace period the tour raises them
+        // itself and the resulting ReaderBarsShown advances the step.
+        val waitsForBars = (step.advance as? Advance.WaitFor)?.event == TourEvent.ReaderBarsShown
+        if (waitsForBars) {
+            barsGraceJob = scope.launch {
+                delay(READER_BARS_GRACE_MS)
+                val current = _state.value as? TourState.Running ?: return@launch
+                if (current.index == index) _nav.tryEmit(TourNav.ShowReaderBars)
+            }
+        }
 
         val immediateRect = step.anchor?.let { registry.rects.value[it] }
         _state.value = TourState.Running(
@@ -236,6 +254,7 @@ class TourController(
             _nav.tryEmit(TourNav.PopToMain)
         }
         anchorWaitJob?.cancel()
+        barsGraceJob?.cancel()
         _state.value = TourState.Finished
         scope.launch { prefs.markCompleted() }
     }

@@ -190,6 +190,37 @@ class TourControllerTest {
     }
 
     @Test
+    fun `the reader tap-page step shows the bars itself after the grace period`() = runTest {
+        // A user who never taps the page would be stuck; after the grace period
+        // the tour asks the reader to raise its bars, whose ReaderBarsShown then
+        // advances the step as if the user had tapped.
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("reader_tap_page")
+
+        advanceTimeBy(READER_BARS_GRACE_MS - 1)
+        assertFalse(navLog.contains(TourNav.ShowReaderBars))
+
+        advanceTimeBy(2)
+        assertTrue(navLog.contains(TourNav.ShowReaderBars))
+
+        // Leaving the step first cancels the request.
+        val controller2 = newController(scope = scope)
+        val navLog2 = mutableListOf<TourNav>()
+        scope.launch { controller2.nav.collect { navLog2.add(it) } }
+        controller2.start()
+        advanceUntilIdle()
+        controller2.advanceUntil("reader_tap_page")
+        controller2.onEvent(TourEvent.ReaderBarsShown)
+        advanceTimeBy(READER_BARS_GRACE_MS + 10)
+        assertFalse(navLog2.contains(TourNav.ShowReaderBars))
+    }
+
+    @Test
     fun `skip on a non-skippable WaitFor step does nothing`() = runTest {
         val controller = newController()
         controller.start()
