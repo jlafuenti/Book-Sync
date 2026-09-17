@@ -18,7 +18,7 @@ from models.book import BookPair, EBook
 from models.bookmark import Bookmark, BookmarkSource
 from models.sync_map import SyncMap, SyncPoint
 from schemas import PositionScope
-from services.alignment import AlignedPoint
+from services.alignment import AlignedPoint, AlignmentDiagnostics
 from services.file_hash import hash_file
 from services.position_service import ScopeRef, _sync_derived_progress
 from services.sync_matcher import match_text_to_sync_points
@@ -68,9 +68,18 @@ async def save_sync_map(
     db: AsyncSession,
     book_pair_id: int,
     aligned_points: List[AlignedPoint],
+    diagnostics: Optional[AlignmentDiagnostics] = None,
 ) -> SyncMap:
     """
     Save alignment results as a SyncMap with SyncPoints.
+
+    `diagnostics`, when given, is `alignment.AlignmentDiagnostics` from
+    `align_texts_with_diagnostics` (issue #586): its `degraded`/`reason` are
+    stamped onto the saved map so an audio file with a reordered block —
+    which stays monotonic, and so invisible to the aligner's own anchor
+    filter — is recorded rather than silently interpolated over. Callers that
+    don't pass it (or that used the plain `align_texts`) get `degraded=False`,
+    same as every map saved before this existed.
 
     If a SyncMap already exists for this pair, it is replaced — and the
     bookmarks that referenced it are re-mapped onto the new coordinates
@@ -140,6 +149,8 @@ async def save_sync_map(
         total_sentences=len(aligned_points),
         total_chapters=len(chapters),
         epub_file_hash=await _ebook_file_hash(db, book_pair_id),
+        degraded=bool(diagnostics and diagnostics.degraded),
+        degraded_reason=(diagnostics.reason if diagnostics and diagnostics.degraded else None),
     )
     db.add(sync_map)
     await db.flush()

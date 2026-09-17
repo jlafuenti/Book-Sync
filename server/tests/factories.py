@@ -269,17 +269,20 @@ DEFAULT_SYNC_POINTS = [
 ]
 
 
-async def make_sync_map(db, book_pair_id=1, points=None, *, epub_file_hash=None):
+async def make_sync_map(db, book_pair_id=1, points=None, *, epub_file_hash=None,
+                         degraded=False, degraded_reason=None):
     """Create a SyncMap + ordered SyncPoints for a pair and return the map.
 
     `epub_file_hash` defaults to None — the legacy "unknown provenance" state a
-    map written before issue #295 is in.
+    map written before issue #295 is in. `degraded`/`degraded_reason` default to
+    the "not flagged at alignment time" state every map had before issue #586.
     """
     points = DEFAULT_SYNC_POINTS if points is None else points
     chapters = {ch for ch, *_ in points}
     sm = SyncMap(book_pair_id=book_pair_id, version=1,
                  total_sentences=len(points), total_chapters=len(chapters),
-                 epub_file_hash=epub_file_hash)
+                 epub_file_hash=epub_file_hash,
+                 degraded=degraded, degraded_reason=degraded_reason)
     db.add(sm)
     await db.flush()
     for ch, si, ms, preview in points:

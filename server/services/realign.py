@@ -32,7 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from models.book import BookPair, PairStatus
 from models.transcript import AudioTranscript
-from services.alignment import align_texts
+from services.alignment import align_texts_with_diagnostics
 from services.ebook_integrity import format_is_alignable
 from services.epub_parser import extract_book_sentences
 from services.sync_engine import save_sync_map
@@ -117,13 +117,15 @@ async def realign_pair_from_cached_transcript(
     except (zipfile.BadZipFile, FileNotFoundError) as e:
         raise RealignError(f"Could not read ebook file: {e}") from e
 
-    aligned = await asyncio.to_thread(align_texts, epub_sentences, whisper_sentences)
+    aligned, diagnostics = await asyncio.to_thread(
+        align_texts_with_diagnostics, epub_sentences, whisper_sentences
+    )
     if not aligned:
         raise RealignError(
             "Alignment produced no points (empty transcript or ebook text)."
         )
 
-    await save_sync_map(db, pair_id, aligned)
+    await save_sync_map(db, pair_id, aligned, diagnostics)
     pair.status = PairStatus.SYNCED
     pair.synced_at = utcnow()
 

@@ -1028,10 +1028,29 @@ class SyncMapAuditRow(StrictResponse):
     hits: int
     hit_rate: Optional[float]
     has_cached_transcript: bool
-    #: "healthy" | "stale" | "unknown"
+    #: Stamped at alignment time from `alignment.AlignmentDiagnostics`
+    #: (issue #586): the anchor filter rejected a large, contiguous, displaced
+    #: run of anchors — a strong sign the audio contains a reordered block.
+    degraded: bool
+    degraded_reason: Optional[str]
+    #: "ok" | "flagged" | "cannot_check" | "skipped" — the timing check
+    #: (issue #586): for a sample of points, locate the text in the cached
+    #: transcript and compare timestamps. "cannot_check" covers both no
+    #: cached transcript and no sampled point confidently locatable — neither
+    #: is a failure, just nothing to check against.
+    timing_status: str
+    timing_checked: int
+    timing_mismatches: int
+    timing_mismatch_rate: Optional[float]
+    #: Longest run of *consecutive* sampled points (in book order) that all
+    #: mismatch — what the check actually flags on, since a reordered block
+    #: is localized and shows up as a run rather than a raised overall share.
+    timing_mismatch_run: int
+    #: "healthy" | "stale" | "unknown" | "degraded"
     status: str
     reason: str
-    #: "realign" | "retranscribe" | "restore_file", or null when healthy
+    #: "realign" | "retranscribe" | "restore_file" | "check_audio_order", or
+    #: null when healthy
     suggested_action: Optional[str]
     realign_path: Optional[str]
 

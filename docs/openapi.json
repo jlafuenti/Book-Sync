@@ -4459,6 +4459,21 @@
             ],
             "title": "Current Epub Hash"
           },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          },
           "ebook_id": {
             "title": "Ebook Id",
             "type": "integer"
@@ -4561,6 +4576,33 @@
             "title": "Text Status",
             "type": "string"
           },
+          "timing_checked": {
+            "title": "Timing Checked",
+            "type": "integer"
+          },
+          "timing_mismatch_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing Mismatch Rate"
+          },
+          "timing_mismatch_run": {
+            "title": "Timing Mismatch Run",
+            "type": "integer"
+          },
+          "timing_mismatches": {
+            "title": "Timing Mismatches",
+            "type": "integer"
+          },
+          "timing_status": {
+            "title": "Timing Status",
+            "type": "string"
+          },
           "title": {
             "anyOf": [
               {
@@ -4599,6 +4641,13 @@
           "hits",
           "hit_rate",
           "has_cached_transcript",
+          "degraded",
+          "degraded_reason",
+          "timing_status",
+          "timing_checked",
+          "timing_mismatches",
+          "timing_mismatch_rate",
+          "timing_mismatch_run",
           "status",
           "reason",
           "suggested_action",

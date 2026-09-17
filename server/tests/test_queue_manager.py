@@ -1183,14 +1183,14 @@ def _install_pipeline(monkeypatch, provider, *, map_rows=FIRST_MAP,
         return _epub_sentences(map_rows)
 
     def _align(epub_sentences, whisper_sentences):
-        return _aligned(map_rows)
+        return _aligned(map_rows), None
 
     monkeypatch.setattr(queue_manager, "_run_integrity_gates", _no_gates)
     monkeypatch.setattr(
         "services.transcription_providers.get_transcription_provider", _get_provider
     )
     monkeypatch.setattr("services.epub_parser.extract_book_sentences", _extract)
-    monkeypatch.setattr("services.alignment.align_texts", _align)
+    monkeypatch.setattr("services.alignment.align_texts_with_diagnostics", _align)
 
 
 async def _sync_map_for(pair_id):
@@ -1898,7 +1898,7 @@ async def test_an_empty_alignment_does_not_replace_an_existing_sync_map(db, monk
     item = await _seed_item(db, pair.id, status="pending")
     _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
     monkeypatch.setattr("services.epub_parser.extract_book_sentences", lambda p: [])
-    monkeypatch.setattr("services.alignment.align_texts", lambda e, w: [])
+    monkeypatch.setattr("services.alignment.align_texts_with_diagnostics", lambda e, w: ([], None))
 
     await queue_manager._process_next_item()
 
@@ -1920,7 +1920,7 @@ async def test_an_empty_alignment_on_a_first_run_fails_instead_of_saying_synced(
     pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
     item = await _seed_item(db, pair.id, status="pending")
     _install_pipeline(monkeypatch, _PipelineProvider(), map_rows=FIRST_MAP)
-    monkeypatch.setattr("services.alignment.align_texts", lambda e, w: [])
+    monkeypatch.setattr("services.alignment.align_texts_with_diagnostics", lambda e, w: ([], None))
 
     await queue_manager._process_next_item()
 

@@ -16,6 +16,34 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- The sync-map audit (`GET /api/troubleshoot/sync-map-audit`) gained a timing check: for a sample
+  of a pair's sync points (80, spread across the whole map — independent of the endpoint's own
+  `sample_size`), it locates the sentence in the cached audio transcript and compares timestamps,
+  flagging the pair when at least 10% of the located points differ by more than 2 minutes *and*
+  include a run of 3 or more consecutive mismatches in book order — a reordered block is
+  localized, so it shows up as a run, not just a raised share. This catches an audiobook whose
+  content is reordered relative to the ebook (a swapped block of narration) — a case the existing
+  hash/text checks, both about the wrong *file*, never covered. Flagged pairs report
+  `status: "degraded"` with a suggested action of `check_audio_order`, since re-aligning alone
+  cannot fix reordered audio. Surfaced in the web Troubleshoot page's new on-demand "Sync-Map
+  Audit" section (#586).
+- Alignment (`services/alignment.py`) now classifies a sync map as degraded at alignment time when
+  the anchor filter rejects a large, contiguous, consistently-displaced run of raw anchors — the
+  signature of a reordered audio block, which otherwise stays invisible because the filter just
+  keeps timestamps monotonic and interpolates over the gap. Recorded on the sync map
+  (`sync_maps.degraded` / `degraded_reason`) and surfaced by the audit above. A handful of
+  scattered rejected anchors (ordinary noise) does not trip it. Client-side messaging when a
+  switch lands inside a degraded region (Android) is a follow-up, not covered here (#586).
+
+### Upgrade notes
+
+- New migration `0022_sync_map_degraded` adds `sync_maps.degraded` (boolean, default false) and
+  `sync_maps.degraded_reason` (text, nullable). Existing maps backfill to `degraded = false` —
+  "not (yet) known to be degraded" rather than a re-derived verdict; run the sync-map audit (or
+  re-align a specific pair) afterward to get a current read on maps written before this migration.
+
 ### Changed
 
 - A finished book that is picked back up and played (or read) past the last stretch — and then
