@@ -42,8 +42,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
-import kotlin.coroutines.resume
-import kotlinx.coroutines.suspendCancellableCoroutine
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -981,10 +979,6 @@ class ReaderActivity : AppCompatActivity() {
             return
         }
 
-        // Inject selection tracker on every page turn (content may have changed).
-        // Called on the main thread before the coroutine, so WebView access is safe.
-        injectSelectionTracker()
-
         // Everything from here down is synchronous, main-thread-cheap, and
         // runs BEFORE any coroutine boundary (issue #61/#40 fix 2). The old
         // code ran this whole capture inside lifecycleScope.launch with the
@@ -1042,29 +1036,35 @@ class ReaderActivity : AppCompatActivity() {
     // ============ Manual Sync ============
 
     /**
-     * Gets the visible paragraph text from the correct Readium iframe for [chapterHref].
-     * Readium pre-renders adjacent chapters in background iframes so we MUST target
-     * the iframe whose src URL matches the current chapter filename.
-     * Within that iframe, Readium CSS uses horizontal CSS columns for pagination;
-     * the fragments of the current page sit in [0, innerWidth).
+     * Gets the visible paragraph text from the current chapter's WebView.
+     * Readium CSS uses horizontal CSS columns for pagination; the fragments
+     * of the current page sit in [0, innerWidth).
      *
      * Reports *how* it answered (issue #131). The scroll-position fallback is an
      * estimate by character count, which does not track page position under
      * column pagination — the caller must not treat it as a real read.
+     *
+     * Evaluates through `EpubNavigatorFragment.evaluateJavascript`, not a
+     * WebView found by walking the view tree (issue #582): Readium keeps
+     * three chapter WebViews alive (previous/current/next), and that walk
+     * always returned the first one — the chapter just left after any
+     * adjacent-chapter move, not the one on screen. The navigator's own
+     * `evaluateJavascript` runs against `resourcePager`'s tracked current
+     * page, so it always targets the resource actually visible.
+     *
+     * This used to also search `document.querySelectorAll('iframe')` for a
+     * frame whose `src` matched the chapter's filename, on the theory that
+     * Readium pre-rendered adjacent chapters into background iframes of one
+     * shared WebView. It does not: Readium 3 gives each chapter — previous,
+     * current, next — its own WebView with the resource loaded directly
+     * into `document`, no iframes at all. That search could therefore never
+     * match and always fell through to the `document` reads below; it is
+     * deleted rather than kept as inert dead code (issue #582 follow-up).
      */
-    private suspend fun extractVisibleTextFromWebView(chapterHref: String): VisibleText =
-        suspendCancellableCoroutine { cont ->
-            val webView = navigator?.view?.let { findWebView(it) }
-            if (webView == null) {
-                cont.resume(VisibleText.EMPTY)
-                return@suspendCancellableCoroutine
-            }
-            val chapterFile = chapterHref.substringAfterLast("/").ifEmpty { chapterHref }
-            val quotedFile = org.json.JSONObject.quote(chapterFile)
-            val js = """
+    private suspend fun extractVisibleTextFromWebView(): VisibleText {
+        val nav = navigator ?: return VisibleText.EMPTY
+        val js = """
                 (function() {
-                    var chapterFile = $quotedFile;
-
                     function getVisibleText(doc) {
                         var win = doc.defaultView;
                         var vpW = win ? win.innerWidth : 800;
@@ -1107,45 +1107,13 @@ class ReaderActivity : AppCompatActivity() {
                         return body.substring(Math.max(0, pos - 20), pos + 300);
                     }
 
-                    // Target the iframe for the current chapter
-                    var frames = document.querySelectorAll('iframe');
-                    var targetDoc = null;
-                    for (var i = 0; i < frames.length; i++) {
-                        try {
-                            if (frames[i].src.indexOf(chapterFile) >= 0) {
-                                targetDoc = frames[i].contentDocument;
-                                break;
-                            }
-                        } catch(e) {}
-                    }
-
                     function result(text, source) {
                         return JSON.stringify({ text: text, source: source });
                     }
 
-                    if (targetDoc) {
-                        var text = getVisibleText(targetDoc);
-                        if (text.trim().length > 10) return result(text, 'dom');
-                        var guess = scrollBasedText(targetDoc);
-                        if (guess.trim().length > 10) return result(guess, 'estimated');
-                    }
-
-                    // No matching iframe — try every other frame first.
-                    for (var i = 0; i < frames.length; i++) {
-                        try {
-                            var text = getVisibleText(frames[i].contentDocument);
-                            if (text.trim().length > 10) return result(text, 'dom');
-                        } catch(e) {}
-                    }
-
-                    // Then this WebView's own document. The comment above used
-                    // to promise this case ("chapter may load directly in
-                    // WebView") while the loop it introduced searched `frames`
-                    // again, so a build that renders the chapter directly —
-                    // with no iframes at all — always fell through to 'none'.
-                    // Every "Switch to Audio" then handed over on the chapter
-                    // anchor instead of the sentence on screen, which is the
-                    // whole of what issue #114 added.
+                    // evaluateJavascript always runs against the current
+                    // chapter's own document (see the doc comment above) —
+                    // there is nothing else on this page to search.
                     var own = getVisibleText(document);
                     if (own.trim().length > 10) return result(own, 'dom');
                     var ownGuess = scrollBasedText(document);
@@ -1154,10 +1122,10 @@ class ReaderActivity : AppCompatActivity() {
                     return result('', 'none');
                 })()
             """.trimIndent()
-            // The bridge double-encodes our JSON.stringify(...); VisibleText.parse
-            // handles both shapes, so the whole decode is one unit-tested step.
-            webView.evaluateJavascript(js) { result -> cont.resume(VisibleText.parse(result)) }
-        }
+        // The bridge double-encodes our JSON.stringify(...); VisibleText.parse
+        // handles both shapes, so the whole decode is one unit-tested step.
+        return VisibleText.parse(nav.evaluateJavascript(js))
+    }
 
     /**
      * Wires [R.id.transcription_dialog_host] to render [TranscriptionStatusDialog]
@@ -1256,16 +1224,13 @@ class ReaderActivity : AppCompatActivity() {
         Log.d(TAG, "syncAudioToPage called! locator.href='${locator.href}', progression=$progression")
         Log.d(TAG, "syncAudioToPage: rawChapterIndex=$rawChapterIndex => chapterIndex=$chapterIndex")
 
-        val chapterHref = locator.href.toString()
         lifecycleScope.launch {
             // Only a real DOM read of the current column is worth seeking on.
             // The extractor's other answer is a character-offset estimate, which
             // under column pagination routinely names text from another page —
             // and a confident seek to the wrong second is worse than the anchor
-            // handoff the user would otherwise have got (issue #131). Pass the
-            // chapter href so we target the right iframe; Readium pre-loads the
-            // adjacent chapters.
-            val visible = extractVisibleTextFromWebView(chapterHref)
+            // handoff the user would otherwise have got (issue #131).
+            val visible = extractVisibleTextFromWebView()
             Log.d(TAG, "syncAudioToPage: source=${visible.source} " +
                 "textPreview='${visible.text.take(80)}'")
 
@@ -1318,10 +1283,9 @@ class ReaderActivity : AppCompatActivity() {
         ReaderSelectionController(
             this,
             object : ReaderSelectionController.Host {
-                override fun webView() = navigator?.view?.let { findWebView(it) }
                 override val syncToAudioAvailable: Boolean get() = pair?.audiobookDownloaded == true
-                override fun onDefine(selectedText: String) = defineSelectedWord(selectedText)
-                override fun onSyncToAudio(selectedText: String) = syncSelectedTextToAudio(selectedText)
+                override fun onDefine(dismiss: () -> Unit) = defineSelectedWord(dismiss)
+                override fun onSyncToAudio(dismiss: () -> Unit) = syncSelectedTextToAudio(dismiss)
             },
         )
     }
@@ -1338,17 +1302,34 @@ class ReaderActivity : AppCompatActivity() {
     /**
      * Look up the first word of the user's selection on dictionaryapi.dev
      * and present the result in a dialog. Silent/Toast on offline or 404.
+     *
+     * Reads the selection from Readium's navigator at the moment Define is
+     * tapped, rather than a value cached earlier (issue #582):
+     * `currentSelection()` always targets the resource the reader is showing
+     * right now, so there is nothing stale to fall back to — an empty
+     * current selection means the same as it always did, "nothing is
+     * selected".
+     *
+     * [dismiss] — [ReaderSelectionController.Host.onDefine]'s callback that
+     * finishes the ActionMode — is called only after that read completes,
+     * not before: finishing the ActionMode tears down the WebView's native
+     * selection, and calling it any earlier would race that teardown against
+     * the asynchronous `currentSelection()` call and could hand back "" even
+     * though the highlight was read a moment before.
      */
-    private fun defineSelectedWord(selectedText: String) {
-        val firstToken = firstDefinableToken(selectedText)
-
-        if (firstToken.isEmpty()) {
-            android.widget.Toast.makeText(this, "Select a word to define", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        Log.d(TAG, "Defining word: '$firstToken'")
-
+    private fun defineSelectedWord(dismiss: () -> Unit) {
         lifecycleScope.launch {
+            val highlight = navigator?.currentSelection()?.locator?.text?.highlight
+            Log.d(TAG, "defineSelectedWord: currentSelection highlight='$highlight'")
+            dismiss()
+            val firstToken = firstDefinableToken(defineSelectionText(highlight))
+
+            if (firstToken.isEmpty()) {
+                android.widget.Toast.makeText(this@ReaderActivity, "Select a word to define", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            Log.d(TAG, "Defining word: '$firstToken'")
+
             val entries = try {
                 dictionaryRepository.lookup(firstToken)
             } catch (e: Exception) {
@@ -1372,24 +1353,31 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun syncSelectedTextToAudio(rawSelectedText: String) {
-        // Use the text captured when the ActionMode started — by the time this
-        // click fires, the ActionMode interaction has already cleared
-        // window.getSelection().
-        val selectedText = rawSelectedText.trim()
-        Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
-
-        if (selectionTooShortToSync(selectedText)) {
-            android.widget.Toast.makeText(this, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val locator = navigator?.currentLocator?.value ?: return
-        val pub = publication ?: return
-        val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
-        Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
-
+    /**
+     * Reads the selection from Readium's navigator at click time — see
+     * [defineSelectedWord] (issue #582) — rather than a value captured
+     * earlier by WebView JavaScript, which could name a chapter the reader
+     * had already left. [dismiss] finishes the ActionMode and, exactly as in
+     * [defineSelectedWord], is only called after the read completes — see
+     * that function's doc for why the ordering matters.
+     */
+    private fun syncSelectedTextToAudio(dismiss: () -> Unit) {
         lifecycleScope.launch {
+            val selection = navigator?.currentSelection()
+            val selectedText = selection?.locator?.text?.highlight?.trim().orEmpty()
+            dismiss()
+            Log.d(TAG, "Selected text: '${selectedText.take(100)}'")
+
+            if (selectionTooShortToSync(selectedText)) {
+                android.widget.Toast.makeText(this@ReaderActivity, "Select more text to sync", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            val locator = selection?.locator ?: return@launch
+            val pub = publication ?: return@launch
+            val chapterIndex = pub.spineIndexOf(locator).coerceAtLeast(0)
+            Log.d(TAG, "syncSelectedText: chapterIndex=$chapterIndex, text='${selectedText.take(60)}'")
+
             val outcome = syncSelectionToAudio(
                 repository = repository,
                 pairId = pairId,
@@ -1424,9 +1412,6 @@ class ReaderActivity : AppCompatActivity() {
         val s = totalSec % 60
         return "%d:%02d:%02d".format(h, m, s)
     }
-
-    /** Injects the selection-change tracker into the Readium WebView (idempotent). */
-    private fun injectSelectionTracker() = selectionController.injectTracker()
 
     // ============ Lifecycle ============
 
