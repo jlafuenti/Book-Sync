@@ -21,3 +21,21 @@ fun libraryIndexOf(items: List<LibraryItem>, pairId: Int): Int? {
     val index = items.indexOfFirst { it.pair?.id == pairId }
     return index.takeIf { it >= 0 }
 }
+
+/**
+ * The grid cell the walkthrough should spotlight for its "open a book" step.
+ *
+ * The picker chose [preferredPairId] from the database, which says nothing
+ * about where that pair sits in the user's current ordering — it was the
+ * *last* card of a 300-item grid in practice. So prefer it only if it is
+ * near the top; otherwise take the first synced pair in the grid's own order,
+ * and let the tour adopt that pair for the steps that follow. Returns the
+ * index to scroll to, or null when the grid holds no synced pair at all.
+ */
+fun libraryTourTarget(items: List<LibraryItem>, preferredPairId: Int?, nearTop: Int = 6): Int? {
+    val preferred = preferredPairId?.let { libraryIndexOf(items, it) }
+    if (preferred != null && preferred < nearTop) return preferred
+    val firstSynced = items.indexOfFirst { it.pair?.status == "synced" }
+    if (firstSynced >= 0) return firstSynced
+    return preferred
+}

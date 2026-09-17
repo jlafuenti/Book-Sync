@@ -63,6 +63,7 @@ class TourControllerTest {
         is TourEvent.ReaderOpened -> TourEvent.ReaderOpened(42)
         TourEvent.ReaderBarsShown -> TourEvent.ReaderBarsShown
         TourEvent.ReaderSyncedSelection -> TourEvent.ReaderSyncedSelection
+        TourEvent.SheetClosed -> TourEvent.SheetClosed
         is TourEvent.PlayerOpened -> TourEvent.PlayerOpened(42)
         is TourEvent.RouteShown -> expected
         is TourEvent.AnchorTapped -> expected
@@ -218,6 +219,35 @@ class TourControllerTest {
         controller2.onEvent(TourEvent.ReaderBarsShown)
         advanceTimeBy(READER_BARS_GRACE_MS + 10)
         assertFalse(navLog2.contains(TourNav.ShowReaderBars))
+    }
+
+    @Test
+    fun `a screen can adopt a different pair for the rest of the tour`() = runTest {
+        val controller = newController(pairId = 42)
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("library_open_pair")
+
+        controller.adoptPair(7)
+
+        assertEquals(7, running(controller).pairId)
+        controller.onEvent(TourEvent.SheetOpened(7))
+        assertEquals(7, running(controller).pairId)
+    }
+
+    @Test
+    fun `dismissing the sheet mid-step returns to the open-a-book step`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("sheet_download")
+
+        controller.onEvent(TourEvent.SheetClosed)
+
+        assertEquals("library_open_pair", running(controller).step.id)
+        // Elsewhere the event is ignored.
+        controller.onEvent(TourEvent.SheetClosed)
+        assertEquals("library_open_pair", running(controller).step.id)
     }
 
     @Test

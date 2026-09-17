@@ -51,6 +51,8 @@ sealed class TourEvent {
     data object ReaderBarsShown : TourEvent()
     data object ReaderSyncedSelection : TourEvent()
     data class PlayerOpened(val pairId: Int) : TourEvent()
+    /** The card sheet went away (dismissed or its screen left) while a Sheet step was current. */
+    data object SheetClosed : TourEvent()
     data class RouteShown(val route: String) : TourEvent()
     data class AnchorTapped(val anchor: TourAnchor) : TourEvent()
 
@@ -67,6 +69,7 @@ sealed class TourEvent {
         is ReaderOpened -> actual is ReaderOpened
         ReaderBarsShown -> actual is ReaderBarsShown
         ReaderSyncedSelection -> actual is ReaderSyncedSelection
+        SheetClosed -> actual is SheetClosed
         is PlayerOpened -> actual is PlayerOpened
         is RouteShown -> actual is RouteShown && actual.route == route
         is AnchorTapped -> actual is AnchorTapped && actual.anchor == anchor
@@ -202,13 +205,13 @@ val TOUR: List<TourStep> = listOf(
     TourStep(
         id = "details_maintenance",
         screen = TourScreen.Details,
-        anchor = TourAnchor.DetailsRefreshSync,
+        anchor = TourAnchor.DetailsUnlink,
         title = "Refresh sync data, Unlink pair",
         body = "Refresh sync data replaces an old sync map after the book is re-transcribed, " +
             "since its old timestamps no longer line up. Unlink pair undoes an auto-match that " +
             "paired the wrong files — editors only.",
-        emptyBody = "Neither row is showing here — there's nothing to refresh, and unlinking " +
-            "needs an editor role.",
+        emptyBody = "Neither row shows here right now: there's nothing to refresh until a sync map is on " +
+            "this device, and Unlink pair only appears for editors.",
         needsPair = true,
     ),
     TourStep(

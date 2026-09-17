@@ -260,6 +260,9 @@ class ReaderActivity : AppCompatActivity() {
                 when (nav) {
                     TourNav.ShowReaderBars -> showBarsForTour()
                     TourNav.SkipToToolbarSync -> checkReadinessThenSyncAudioToPage()
+                    // The tour moved on to a Main screen: popping the reader
+                    // route in the nav host does not close this Activity.
+                    TourNav.PopToMain -> finish()
                     else -> Unit
                 }
             }

@@ -64,6 +64,7 @@ import com.booksync.ui.tour.TourAnchorRegistry
 import com.booksync.ui.tour.TourEvent
 import com.booksync.ui.tour.TourNav
 import com.booksync.ui.tour.TourOverlay
+import com.booksync.ui.tour.TourScreen
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.shouldOfferTour
@@ -578,7 +579,9 @@ fun BookSyncNavigation() {
         }
     }
 
-    (tourState as? TourState.Running)?.let { running ->
+    // Sheet steps are hosted inside the bottom sheet itself: a ModalBottomSheet
+    // is its own window above this one, so an overlay here would sit beneath it.
+    (tourState as? TourState.Running)?.takeIf { it.step.screen != TourScreen.Sheet }?.let { running ->
         TourOverlay(
             state = running,
             onNext = { tour.controller.next() },

@@ -217,6 +217,10 @@ fun BookDetailsScreen(
                                 description = "Fetches the ebook, then opens the reader.",
                                 trailingIcon = Icons.Default.Book,
                                 onClick = { onRead(pair.id) },
+                                // The walkthrough's "tap Read" step must point at
+                                // whatever opens the *reader*: this row whenever
+                                // it exists (the primary button is Listen then).
+                                modifier = Modifier.tourAnchor(TourAnchor.DetailsPrimaryAction),
                             )
                         }
                         if (primaryAction(ui) == PrimaryAction.Listen && !pair.ebookDownloaded &&
@@ -639,7 +643,11 @@ private fun PrimaryActionButton(
     if (spec == null) return
     Button(
         onClick = spec.onClick,
-        modifier = Modifier.tourAnchor(TourAnchor.DetailsPrimaryAction).fillMaxWidth(),
+        // Only when this button is the one that opens the reader; otherwise the
+        // walkthrough's "tap Read" step points at the Read row above.
+        modifier = Modifier
+            .then(if (spec.label == "Read") Modifier.tourAnchor(TourAnchor.DetailsPrimaryAction) else Modifier)
+            .fillMaxWidth(),
         colors = ButtonDefaults.buttonColors(containerColor = colors.accent),
     ) {
         Icon(spec.icon, contentDescription = null, modifier = Modifier.size(18.dp))

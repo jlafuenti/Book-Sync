@@ -119,6 +119,17 @@ class TourController(
     /** Quits the tour from wherever it is right now. */
     fun quit() = finish()
 
+    /**
+     * A screen found a better pair than the picker's (the Library adopts the
+     * first synced pair in its own ordering rather than scrolling to an
+     * arbitrary one); every later step follows it.
+     */
+    fun adoptPair(newPairId: Int) {
+        pairId = newPairId
+        val running = _state.value as? TourState.Running ?: return
+        _state.value = running.copy(pairId = newPairId)
+    }
+
     /** A no-op unless the current step is a skippable [Advance.WaitFor]. */
     fun skip() {
         val running = _state.value as? TourState.Running ?: return
@@ -133,6 +144,15 @@ class TourController(
     /** Advances a [Advance.TapAnchor] or [Advance.WaitFor] step whose expected event just fired. */
     fun onEvent(event: TourEvent) {
         val running = _state.value as? TourState.Running ?: return
+        if (event is TourEvent.SheetClosed) {
+            // The user swiped the sheet away mid-step: its controls are gone,
+            // so go back to the step that asks them to open it.
+            if (running.step.screen == TourScreen.Sheet) {
+                val reopen = steps.indexOfLast { it.screen == TourScreen.Library && it.advance is Advance.TapAnchor }
+                if (reopen in 0 until running.index) enter(reopen, previousScreen = running.step.screen)
+            }
+            return
+        }
         val matched = when (val advance = running.step.advance) {
             is Advance.TapAnchor -> advance.expect.matchesKind(event)
             is Advance.WaitFor -> advance.event.matchesKind(event)
@@ -159,6 +179,7 @@ class TourController(
         anchorWaitJob?.cancel()
         barsGraceJob?.cancel()
         val step = steps[index]
+        registry.setWanted(step.anchor)
         emitEnterNav(step, previousScreen, isFirstOccurrenceOfScreen(step.screen, index))
 
         // The "tap the page" step waits for the reader's bars; a user who never
@@ -255,6 +276,7 @@ class TourController(
         }
         anchorWaitJob?.cancel()
         barsGraceJob?.cancel()
+        registry.setWanted(null)
         _state.value = TourState.Finished
         scope.launch { prefs.markCompleted() }
     }
