@@ -341,4 +341,24 @@ object AppModule {
         networkMonitor: NetworkMonitor,
         bookPairDao: BookPairDao,
     ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor, bookPairDao)
+
+    /**
+     * The guided-walkthrough engine (issue #597). A plain `@Provides` rather
+     * than an `@Inject constructor` on [com.booksync.ui.tour.TourController]:
+     * that class's `clock`/`anchorTimeoutMs` constructor parameters carry
+     * Kotlin default values for testability, but Dagger's generated factory
+     * does not honour Kotlin defaults — every constructor parameter becomes a
+     * required binding, and there is no `@Provides` for a bare `Long` or a
+     * `() -> Long`. Calling the constructor directly here, as ordinary Kotlin
+     * code, is what lets the defaults apply in production.
+     */
+    @Provides
+    @Singleton
+    fun provideTourController(
+        registry: com.booksync.ui.tour.TourAnchorRegistry,
+        prefs: com.booksync.ui.tour.TourPrefs,
+        picker: com.booksync.ui.tour.TourPairPicker,
+        @ApplicationScope scope: kotlinx.coroutines.CoroutineScope,
+    ): com.booksync.ui.tour.TourController =
+        com.booksync.ui.tour.TourController(registry, prefs, picker, scope)
 }
