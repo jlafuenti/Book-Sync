@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from models.book import AudioBook, EBook
 from schemas import LibraryScanResponse
-from services import multi_file_audiobooks
+from services import audio_change, multi_file_audiobooks
 from services.abs_metadata import (
     enrich_from_abs,
     fetch_abs_index,
@@ -218,6 +218,18 @@ async def _ingest_one_audiobook(
     if existing_audiobook:
         meta = await extract_metadata(filepath, "audiobook", db, library_root=audiobook_dir)
 
+        # Detect a same-path replacement (issue #588) before this pass's own
+        # writes -- the ABS enrichment write-back just below -- can change the
+        # file out from under the comparison. Uses the file exactly as
+        # `extract_metadata` just read it: a genuine external replacement
+        # (downloader upgrade, re-rip, ABS merge/re-encode) still looks
+        # different; a write this same call is about to make doesn't, because
+        # it hasn't happened yet.
+        await audio_change.refresh_if_audiobook_file_changed(
+            db, existing_audiobook, filepath,
+            new_duration_seconds=meta.get("duration_seconds"),
+        )
+
         if abs_index:
             meta, abs_changed, _ = enrich_from_abs(meta, filepath, abs_index, audiobook_dir)
             # Respect user-cleared fields: empty string means user explicitly cleared it.
@@ -226,6 +238,10 @@ async def _ingest_one_audiobook(
                 meta.pop("series_index", None)
             if abs_changed:
                 await asyncio.to_thread(write_metadata_to_file, filepath, meta)
+                # Tandem's own write just changed the file's bytes -- move the
+                # hash forward so the *next* scan doesn't mistake this write
+                # for a replacement (issue #588, mirrors issue #533).
+                await audio_change.refresh_after_write_back(db, existing_audiobook, filepath)
 
         updated = False
         if not existing_audiobook.metadata_source:

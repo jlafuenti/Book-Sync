@@ -16,6 +16,42 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- The transcription cache used to key a hit on the audiobook's file path alone, so a file replaced
+  at the same path (a downloader "upgrade", a re-rip, an Audiobookshelf merge/re-encode) kept
+  reusing the old recording's transcript and aligning its timestamps against different audio.
+  `AudioTranscript` now stores the audio's own fingerprint (`AudioBook.file_hash`, a whole-file
+  hash, plus `duration_seconds`) at the moment it was transcribed, and `services/queue_manager.py`
+  requires it to match before reusing a cached transcript — a path match is no longer enough on its
+  own. A Tandem tag write-back changes that same whole-file hash, so `_refresh_write_back_hash`
+  (the `#533` mechanism, `routers/library.py`) and the new `services/audio_change.py` now move the
+  transcript's fingerprint forward in the same request/scan pass that wrote the tags, the same way
+  it already does for `sync_maps.epub_file_hash` on the ebook side — a write-back never looks like
+  a replacement.
+- `POST /api/library/scan`, `POST /api/library/rescan-all` and `POST /api/library/{book_type}s/{id}/rescan`
+  now detect when a *known* audiobook path's file has changed (size or hash differs, or the
+  file's duration moves by more than 2 seconds) and react exactly the way an operator's
+  `POST /api/troubleshoot/replace/audiobook/{id}` already did: refresh `file_size`/`file_hash`,
+  drop every affected pair's cached transcript, and demote a `synced`/`error`/`transcribing` pair
+  to `manual_matched`. Previously only an explicit upload through the replace endpoint did this —
+  a file swapped in place by a downloader or a re-rip and picked up by an ordinary scan left the
+  stale transcript and the `synced` status untouched. Reading positions are unaffected either way.
+  The reaction itself is shared (`services/audio_change.invalidate_audiobook_transcripts`) between
+  the replace endpoint and the new scan-side detector, rather than living in both places.
+
+### Upgrade notes
+
+- New migration `0023_audio_fingerprint` adds `audio_transcripts.audio_file_hash` (varchar(64),
+  nullable) and `audio_transcripts.audio_duration_seconds` (integer, nullable). Both are left NULL
+  on every existing row rather than backfilled — hashing the whole library's worth of audio files
+  during a migration isn't safe to do unconditionally (the files may not even be mounted on the
+  machine running it). A transcript with a NULL fingerprint is treated as "unknown provenance," not
+  "known unchanged": the cache check trusts the path match once and stamps the current fingerprint
+  onto the row at that point, so it does not force every pre-existing transcript to re-transcribe
+  on deploy, but does start protecting itself against a future in-place replacement from the next
+  cache check onward.
+
 ### Added
 
 - The sync-map audit (`GET /api/troubleshoot/sync-map-audit`) gained a timing check: for a sample

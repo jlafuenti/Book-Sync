@@ -61,6 +61,7 @@ from database import async_session
 from models.transcription_queue import TranscriptionQueueItem
 from models.book import BookPair, PairStatus
 from services import offhours
+from services.audio_change import AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC
 from utils import utcnow
 
 logger = logging.getLogger("queue-manager")
@@ -935,6 +936,44 @@ async def _run_integrity_gates(
         )
 
 
+def _cached_transcript_matches_audio(
+    cached, audiobook_path: str,
+    audiobook_file_hash: Optional[str], audiobook_duration_seconds: Optional[int],
+) -> bool:
+    """Is `cached` a transcript of the audio currently at `audiobook_path`?
+
+    A path match alone used to be the whole check, and a file replaced in
+    place at the same path (a downloader "upgrade", a re-rip, an
+    Audiobookshelf merge/re-encode) kept reusing the old recording's
+    transcript (issue #588). The fingerprint on `cached`
+    (`AudioTranscript.audio_file_hash` / `audio_duration_seconds`, stamped
+    when it was written) is compared against the audiobook's *current*
+    values; whichever side is missing falls through to the next, weaker
+    signal:
+
+    * both hashes known — the authoritative answer (a whole-file hash).
+    * both durations known — a coarser fallback, tolerant of ffprobe/mutagen
+      rounding (`services.audio_change.AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC`).
+    * neither — unknown provenance on one or both sides (a transcript
+      written before this column existed, or a book whose hash/duration
+      haven't been computed). Trusts the path match rather than forcing a
+      transcript with no evidence against it to re-transcribe; the caller
+      backfills the fingerprint once a hit is confirmed, so a legacy row's
+      "unknown" state has a way out.
+    """
+    if cached is None or cached.audiobook_path != audiobook_path:
+        return False
+    if cached.audio_file_hash is not None and audiobook_file_hash is not None:
+        return cached.audio_file_hash == audiobook_file_hash
+    if (cached.audio_duration_seconds is not None
+            and audiobook_duration_seconds is not None):
+        return (
+            abs(cached.audio_duration_seconds - audiobook_duration_seconds)
+            <= AUDIO_DURATION_FINGERPRINT_TOLERANCE_SEC
+        )
+    return True
+
+
 async def _run_transcription_pipeline(item_id: int, pair_id: int):
     """
     The actual transcription + alignment pipeline, adapted from the old
@@ -967,6 +1006,11 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
 
         ebook_path = pair.ebook.file_path
         audiobook_path = pair.audiobook.file_path
+        # The fingerprint of the audio actually being fed to this run — a
+        # cache hit on the path alone cannot tell two different recordings
+        # dropped at the same path apart (issue #588).
+        audiobook_file_hash = pair.audiobook.file_hash
+        audiobook_duration_seconds = pair.audiobook.duration_seconds
 
     # Step 0: integrity gates (skipped when resuming — see the helper).
     await _run_integrity_gates(
@@ -986,7 +1030,29 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
         )
         cached_transcript = cached_result.scalar_one_or_none()
 
-    if cached_transcript and cached_transcript.audiobook_path == audiobook_path:
+        cache_hit = _cached_transcript_matches_audio(
+            cached_transcript, audiobook_path,
+            audiobook_file_hash, audiobook_duration_seconds,
+        )
+        if cache_hit and cached_transcript is not None:
+            # Lazy backfill (issue #588 migration note): a transcript with no
+            # fingerprint yet (written before this column existed, or never
+            # verified) gets today's values stamped on it now that we trust
+            # the match, rather than leaving it "unknown" forever — a
+            # transcript that never gets re-transcribed would otherwise never
+            # pick up a fingerprint to compare against later.
+            backfilled = False
+            if cached_transcript.audio_file_hash is None and audiobook_file_hash is not None:
+                cached_transcript.audio_file_hash = audiobook_file_hash
+                backfilled = True
+            if (cached_transcript.audio_duration_seconds is None
+                    and audiobook_duration_seconds is not None):
+                cached_transcript.audio_duration_seconds = audiobook_duration_seconds
+                backfilled = True
+            if backfilled:
+                await db.commit()
+
+    if cache_hit:
         logger.info(f"Pair {pair_id}: loading transcript from cache ({cached_transcript.sentence_count} sentences)")
         raw = json.loads(cached_transcript.sentences_json)
         whisper_sentences = [_TranscribedSentence(**s) for s in raw]
@@ -996,6 +1062,11 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             message=f"Using cached transcript ({len(whisper_sentences)} sentences). Extracting EPUB text...",
         )
     else:
+        if cached_transcript is not None:
+            logger.info(
+                f"Pair {pair_id}: cached transcript no longer matches the audio "
+                f"at {audiobook_path} (path, hash, or duration changed) — re-transcribing"
+            )
         await _update_queue_item(item_id, message="Selecting transcription provider...", progress=0.02)
 
         # Check cancellation
@@ -1067,6 +1138,8 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
             )
             if existing is not None:
                 existing.audiobook_path = audiobook_path
+                existing.audio_file_hash = audiobook_file_hash
+                existing.audio_duration_seconds = audiobook_duration_seconds
                 existing.sentence_count = len(whisper_sentences)
                 existing.sentences_json = json.dumps(sentences_data)
                 # The column records when this transcription was produced, not
@@ -1076,6 +1149,8 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 db.add(AudioTranscript(
                     pair_id=pair_id,
                     audiobook_path=audiobook_path,
+                    audio_file_hash=audiobook_file_hash,
+                    audio_duration_seconds=audiobook_duration_seconds,
                     sentence_count=len(whisper_sentences),
                     sentences_json=json.dumps(sentences_data),
                 ))

@@ -25,10 +25,12 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from config import settings
-from models.book import AudioBook
+from models.book import AudioBook, BookPair, EBook, PairStatus
+from models.transcript import AudioTranscript
 import routers.library as library
 import routers.troubleshoot as troubleshoot
 from services import library_scan, metadata_extract
+from services.file_hash import hash_file
 
 
 @contextlib.asynccontextmanager
@@ -488,3 +490,201 @@ async def test_a_scanned_audiobook_can_auto_complete_from_its_own_length(
 
     assert end.status_code == 200, end.text
     assert end.json()["is_completed"] is True
+
+
+# ---------- issue #588: a same-path replacement invalidates the transcript ----------
+
+async def _seed_pair(db, path, *, file_hash, file_size, duration_seconds):
+    """A synced pair with a cached transcript on `path`'s audiobook -- so a
+    detected file change on scan/rescan has something to drop."""
+    eb = EBook(title="Dune", filename="Dune.epub", file_path=str(path) + ".epub")
+    ab = AudioBook(title="Dune", filename="Dune.mp3", file_path=str(path),
+                   format="mp3", duration_seconds=duration_seconds,
+                   file_hash=file_hash, file_size=file_size)
+    db.add_all([eb, ab])
+    await db.flush()
+    pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+    db.add(pair)
+    await db.flush()
+    db.add(AudioTranscript(pair_id=pair.id, audiobook_path=str(path),
+                           sentence_count=1, sentences_json="[]",
+                           audio_file_hash=file_hash))
+    await db.commit()
+    await db.refresh(ab)
+    await db.refresh(pair)
+    return ab, pair
+
+
+async def _pair_status(db, pair_id):
+    return (await db.execute(
+        select(BookPair.status).where(BookPair.id == pair_id)
+        .execution_options(populate_existing=True)
+    )).scalar_one()
+
+
+async def _transcript_for(db, pair_id):
+    return (await db.execute(
+        select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
+    )).scalar_one_or_none()
+
+
+async def test_rescan_all_detects_a_same_path_replacement_and_invalidates(
+    db, stub_extract, audio_library, make_user, auth_header
+):
+    """The issue's reproduce case, through `/rescan-all`: a file replaced at
+    the same path (a downloader upgrade, a re-rip) must refresh `file_hash`/
+    `file_size` and drop the stale transcript, the same as an operator's
+    explicit `troubleshoot/replace` would."""
+    old_hash = hash_file(str(audio_library))
+    old_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=old_hash,
+                                file_size=old_size, duration_seconds=3600)
+
+    # Replaced in place: a different recording, a different length.
+    audio_library.write_bytes(b"a completely different recording" * 20)
+    stub_extract(duration_seconds=7200)
+    editor = await make_user(username="ed", role="editor")
+
+    async with _library_client() as c:
+        r = await c.post("/api/library/rescan-all", headers=auth_header(editor))
+    assert r.status_code == 200, r.text
+
+    await db.refresh(ab)
+    assert ab.duration_seconds == 7200
+    assert ab.file_hash == hash_file(str(audio_library))
+    assert ab.file_hash != old_hash
+    assert ab.file_size == audio_library.stat().st_size
+
+    assert await _pair_status(db, pair.id) == PairStatus.MANUAL_MATCHED
+    assert await _transcript_for(db, pair.id) is None
+
+
+async def test_single_book_rescan_detects_a_same_path_replacement_and_invalidates(
+    db, stub_extract, audio_library, make_user, auth_header
+):
+    old_hash = hash_file(str(audio_library))
+    old_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=old_hash,
+                                file_size=old_size, duration_seconds=3600)
+
+    audio_library.write_bytes(b"a completely different recording" * 20)
+    stub_extract(duration_seconds=7200)
+    editor = await make_user(username="ed", role="editor")
+
+    async with _library_client() as c:
+        r = await c.post(f"/api/library/audiobooks/{ab.id}/rescan",
+                         headers=auth_header(editor))
+    assert r.status_code == 200, r.text
+
+    await db.refresh(ab)
+    assert ab.file_hash == hash_file(str(audio_library))
+    assert ab.file_hash != old_hash
+
+    assert await _pair_status(db, pair.id) == PairStatus.MANUAL_MATCHED
+    assert await _transcript_for(db, pair.id) is None
+
+
+async def test_rescan_all_does_not_invalidate_an_unchanged_file(
+    db, stub_extract, audio_library, make_user, auth_header
+):
+    """Reading positions, the pair's `synced` status and the transcript must
+    all survive a rescan that found nothing different -- the same file, the
+    same length."""
+    the_hash = hash_file(str(audio_library))
+    the_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=the_hash,
+                                file_size=the_size, duration_seconds=3600)
+
+    stub_extract(duration_seconds=3600)
+    editor = await make_user(username="ed", role="editor")
+
+    async with _library_client() as c:
+        r = await c.post("/api/library/rescan-all", headers=auth_header(editor))
+    assert r.status_code == 200, r.text
+
+    await db.refresh(ab)
+    assert ab.file_hash == the_hash
+    assert await _pair_status(db, pair.id) == PairStatus.SYNCED
+    assert await _transcript_for(db, pair.id) is not None
+
+
+async def test_single_book_rescan_does_not_invalidate_an_unchanged_file(
+    db, stub_extract, audio_library, make_user, auth_header
+):
+    the_hash = hash_file(str(audio_library))
+    the_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=the_hash,
+                                file_size=the_size, duration_seconds=3600)
+
+    stub_extract(duration_seconds=3600)
+    editor = await make_user(username="ed", role="editor")
+
+    async with _library_client() as c:
+        r = await c.post(f"/api/library/audiobooks/{ab.id}/rescan",
+                         headers=auth_header(editor))
+    assert r.status_code == 200, r.text
+
+    await db.refresh(ab)
+    assert ab.file_hash == the_hash
+    assert await _pair_status(db, pair.id) == PairStatus.SYNCED
+    assert await _transcript_for(db, pair.id) is not None
+
+
+async def test_scan_detects_a_same_path_replacement_and_invalidates(
+    db, stub_extract, audio_library
+):
+    """The plain directory scan (`scan_files_impl`, what `POST
+    /api/library/scan` and an upload both funnel through) must catch the same
+    replacement `/rescan-all` does."""
+    old_hash = hash_file(str(audio_library))
+    old_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=old_hash,
+                                file_size=old_size, duration_seconds=3600)
+
+    audio_library.write_bytes(b"a completely different recording" * 20)
+    stub_extract(duration_seconds=7200)
+
+    await library.scan_files_impl(db, [str(audio_library)])
+    await db.commit()
+
+    await db.refresh(ab)
+    assert ab.file_hash == hash_file(str(audio_library))
+    assert ab.file_hash != old_hash
+    assert await _pair_status(db, pair.id) == PairStatus.MANUAL_MATCHED
+    assert await _transcript_for(db, pair.id) is None
+
+
+async def test_scan_triggered_abs_write_back_does_not_invalidate(
+    db, stub_extract, audio_library, monkeypatch
+):
+    """An Audiobookshelf-enrichment write-back during scan rewrites the
+    file's tags -- and therefore its hash -- but it is Tandem's own write, not
+    a replacement. It must not drop the transcript or demote the pair."""
+    old_hash = hash_file(str(audio_library))
+    old_size = audio_library.stat().st_size
+    ab, pair = await _seed_pair(db, audio_library, file_hash=old_hash,
+                                file_size=old_size, duration_seconds=3600)
+    stub_extract(duration_seconds=3600)  # the recording itself is unchanged
+
+    def _enrich(meta, filepath, abs_index, prefix, force=False):
+        return {**meta, "publisher": "From ABS"}, True, True
+
+    def _write(filepath, meta):
+        # Simulate the tag write actually changing the file's bytes, the way
+        # mutagen's `.save()` would -- same length, different content.
+        audio_library.write_bytes(audio_library.read_bytes() + b"tag-bytes")
+        return True, None
+
+    monkeypatch.setattr(library_scan, "enrich_from_abs", _enrich)
+    monkeypatch.setattr(library_scan, "write_metadata_to_file", _write)
+
+    await library_scan._ingest_one_audiobook(db, str(audio_library), str(audio_library.parent), {"x": {}})
+    await db.commit()
+
+    await db.refresh(ab)
+    assert ab.file_hash == hash_file(str(audio_library))  # moved forward...
+    assert ab.file_hash != old_hash                       # ...the write did change it...
+    assert await _pair_status(db, pair.id) == PairStatus.SYNCED   # ...but it's not a replacement
+    transcript = await _transcript_for(db, pair.id)
+    assert transcript is not None
+    assert transcript.audio_file_hash == ab.file_hash      # fingerprint moved with it

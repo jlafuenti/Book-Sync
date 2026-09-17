@@ -1290,6 +1290,120 @@ async def test_rerun_with_a_different_audio_path_replaces_the_cached_transcript(
     assert transcripts[0].audiobook_path != first_path
 
 
+async def test_a_same_path_replacement_with_a_different_hash_is_not_a_cache_hit(
+    db, monkeypatch
+):
+    """Issue #588's reproduce case: the file at the *same* path was replaced
+    with a different recording. A path match alone used to be enough to reuse
+    the old transcript; the fingerprint must catch what the path can't."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "old-recording-hash"
+    ab.file_size = 111
+    await db.commit()
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+    first_path = provider.paths[0]
+
+    transcripts = await _transcripts_for(pair.id)
+    assert transcripts[0].audio_file_hash == "old-recording-hash"
+
+    # Replaced in place: same path, a different recording (a downloader
+    # "upgrade", a re-rip). Nothing about the path changed.
+    async with async_session() as s:
+        audiobook = (await s.execute(
+            select(AudioBook).join(BookPair, BookPair.audiobook_id == AudioBook.id)
+            .where(BookPair.id == pair.id)
+        )).scalar_one()
+        audiobook.file_hash = "new-recording-hash"
+        audiobook.file_size = 222
+        await s.commit()
+
+    await _seed_item(db, pair.id, status="pending")
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 2, "the fingerprint mismatch must force a re-transcription"
+    assert provider.paths[1] == first_path, "the path itself never changed"
+    transcripts = await _transcripts_for(pair.id)
+    assert len(transcripts) == 1
+    assert transcripts[0].audio_file_hash == "new-recording-hash"
+
+
+async def test_a_tag_only_write_back_still_hits_the_cache(db, monkeypatch):
+    """A Tandem tag write-back changes the whole-file hash too (it's the same
+    hashing scheme used everywhere else), but `_refresh_write_back_hash` /
+    `services.audio_change.refresh_after_write_back` move both
+    `AudioBook.file_hash` and the transcript's own fingerprint forward
+    together -- so by the time this runs, they still agree."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "hash-before-tagging"
+    await db.commit()
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    # Simulate a write-back: the file's hash moves, and the refresh helper
+    # that always runs right after a write-back moves both rows together.
+    async with async_session() as s:
+        audiobook = (await s.execute(
+            select(AudioBook).join(BookPair, BookPair.audiobook_id == AudioBook.id)
+            .where(BookPair.id == pair.id)
+        )).scalar_one()
+        audiobook.file_hash = "hash-after-tagging"
+        transcript = (await s.execute(
+            select(AudioTranscript).where(AudioTranscript.pair_id == pair.id)
+        )).scalar_one()
+        transcript.audio_file_hash = "hash-after-tagging"
+        await s.commit()
+
+    await _seed_item(db, pair.id, status="pending")
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 1, "a write-back's own hash change must not look like a replacement"
+    assert len(await _transcripts_for(pair.id)) == 1
+
+
+async def test_a_legacy_transcript_with_no_fingerprint_still_hits_the_cache_and_is_backfilled(
+    db, monkeypatch
+):
+    """A transcript written before this column existed has NULL
+    `audio_file_hash`/`audio_duration_seconds` -- unknown provenance, not
+    evidence of a change. It must keep hitting the cache on the path alone
+    (issue #588's migration note: don't force every pre-existing transcript
+    to re-transcribe on deploy), and get today's fingerprint stamped on it so
+    a *future* replacement has something to compare against."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    ab = await db.get(AudioBook, pair.audiobook_id)
+    ab.file_hash = "current-hash"
+    ab.duration_seconds = 3600
+    ab.file_path = "/x/legacy/book.m4b"
+    await db.commit()
+    db.add(AudioTranscript(
+        pair_id=pair.id, audiobook_path="/x/legacy/book.m4b",
+        sentence_count=3, sentences_json='[{"text": "a", "start_ms": 0, "end_ms": 1000}]',
+        audio_file_hash=None, audio_duration_seconds=None,
+    ))
+    await db.commit()
+
+    await _seed_item(db, pair.id, status="pending")
+    provider = _PipelineProvider()
+    _install_pipeline(monkeypatch, provider)
+
+    await queue_manager._process_next_item()
+
+    assert provider.transcribe_calls == 0, "a legacy row with no fingerprint must still hit the cache"
+    transcripts = await _transcripts_for(pair.id)
+    assert len(transcripts) == 1
+    assert transcripts[0].audio_file_hash == "current-hash"
+    assert transcripts[0].audio_duration_seconds == 3600
+
+
 async def test_rerun_bumps_the_sync_map_version_and_remaps_bookmarks(db, monkeypatch):
     """The re-map of issue #55, exercised through its real caller.
 

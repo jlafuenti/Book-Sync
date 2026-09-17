@@ -42,6 +42,7 @@ from schemas import (
 )
 from services import chapter_repair, library_verify, pair_plausibility
 from services import sync_map_audit as sync_map_audit_service
+from services.audio_change import invalidate_audiobook_transcripts
 from services.position_service import (
     demote_pair_positions,
     invalidate_parse_coordinates_for_ebook,
@@ -537,13 +538,11 @@ async def replace_file(
     if item_type == "ebook":
         await invalidate_parse_coordinates_for_ebook(db, item_id)
 
-    # Replacing an audiobook invalidates the cached transcript & sync.
+    # Replacing an audiobook invalidates the cached transcript & sync
+    # (issue #588: shared with the scan-side detector so both react the
+    # same way to a file that no longer matches what a pair was synced to).
     if item_type == "audiobook":
-        pairs = (await db.execute(select(BookPair).where(BookPair.audiobook_id == item_id))).scalars().all()
-        for pair in pairs:
-            await db.execute(sa_delete(AudioTranscript).where(AudioTranscript.pair_id == pair.id))
-            if pair.status in (PairStatus.SYNCED, PairStatus.ERROR, PairStatus.TRANSCRIBING):
-                pair.status = PairStatus.MANUAL_MATCHED
+        await invalidate_audiobook_transcripts(db, item_id)
 
     # Re-run the integrity check so the issue clears (or re-flags) immediately.
     import asyncio as _asyncio

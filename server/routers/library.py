@@ -115,6 +115,7 @@ from services.position_service import (
     repoint_standalone_positions_to_ebook,
 )
 from services import library_jobs
+from services import audio_change
 from services.library_jobs import LibraryJobBusy
 from services.uploads import stream_upload_to_path
 from utils import resolve_cover_url, safe_join, utcnow
@@ -336,7 +337,15 @@ async def _rescan_all_impl(db: AsyncSession) -> dict:
         logger.info(f"[global-rescan] Forcing rescan of audiobook {book.id}: {book.file_path}")
         try:
             meta = await extract_metadata(book.file_path, "audiobook", db, library_root=settings.audiobook_dir)
-            
+
+            # A force-rescan re-reads the *same* file's metadata; it must
+            # still notice when that file is no longer the recording this row
+            # was last hashed against (issue #588) before trusting the new
+            # duration below.
+            await audio_change.refresh_if_audiobook_file_changed(
+                db, book, book.file_path, new_duration_seconds=meta.get("duration_seconds"),
+            )
+
             book.title = meta.get("title") or book.title
             book.author = meta.get("author") or book.author
             # Respect user-cleared series: empty string = user cleared it, don't overwrite
@@ -478,7 +487,14 @@ async def rescan_book_file(
     logger.info(f"Forcing rescan of {book_type} {book.id}: {book.file_path}")
     
     meta = await extract_metadata(book.file_path, book_type, db, library_root=library_root)
-    
+
+    if book_type == "audiobook":
+        # Same reasoning as the rescan-all loop above (issue #588): a forced
+        # rescan of a single file must still catch a same-path replacement.
+        await audio_change.refresh_if_audiobook_file_changed(
+            db, book, book.file_path, new_duration_seconds=meta.get("duration_seconds"),
+        )
+
     # Overwrite DB with extracted data
     book.title = meta.get("title") or book.title
     book.author = meta.get("author") or book.author
@@ -955,6 +971,12 @@ async def _refresh_write_back_hash(db: AsyncSession, book, *, is_ebook: bool) ->
     book.file_size = new_size
 
     if not is_ebook:
+        # Audiobook write-back: keep every pair's cached transcript
+        # fingerprint in step with the file's new hash, the same way the
+        # ebook branch below keeps sync_map.epub_file_hash in step -- a tag
+        # write-back must not look like an audio replacement to
+        # services.queue_manager's cache check (issue #588).
+        await audio_change.refresh_transcript_fingerprints(db, book.id, new_hash)
         return
 
     # Only a map that already carries provenance needs correcting -- one with
