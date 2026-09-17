@@ -229,8 +229,16 @@ async def test_cached_transcript_makes_realign_the_suggested_action(db, tmp_path
 async def test_sampling_is_bounded_and_spread_across_the_map(db, tmp_path):
     """A live map runs to thousands of points; the audit reads a handful."""
     pair, path = await _seed_pair(db, tmp_path)
+    # `PRESENT_PREVIEWS` only has 6 distinct sentences (3 real chapters'
+    # worth, CH1/CH2), reused across all 500 points purely to exercise the
+    # sample-bounding logic — the stored chapter has to stay consistent with
+    # which one of the two real chapters each reused sentence actually lives
+    # in (0-2 -> CH1, 3-5 -> CH2), or the spine-order check (issue #595)
+    # would correctly, but irrelevantly to this test, flag the same six
+    # sentences claiming ten different fake chapters as spine-disordered.
     many = [
-        (i // 50, i % 50, i * 1000, PRESENT_PREVIEWS[i % len(PRESENT_PREVIEWS)])
+        (0 if (i % len(PRESENT_PREVIEWS)) < 3 else 1, i % 50, i * 1000,
+         PRESENT_PREVIEWS[i % len(PRESENT_PREVIEWS)])
         for i in range(500)
     ]
     await make_sync_map(db, pair.id, many, epub_file_hash=hash_file(path))

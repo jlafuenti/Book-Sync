@@ -72,6 +72,11 @@ AUDIT_ROW_KEYS = {
     # issue #586: alignment-time degraded flag + the audit's own timing check
     "degraded", "degraded_reason", "timing_status", "timing_checked",
     "timing_mismatches", "timing_mismatch_rate", "timing_mismatch_run",
+    # issue #595: affected chapter range + audio-vs-map classification
+    "timing_mismatch_chapters", "timing_transcript_confirmed_in_order",
+    # issue #595: spine-order check
+    "spine_order_status", "spine_order_checked", "spine_order_violation_run",
+    "spine_order_chapters",
     "status", "reason", "suggested_action", "realign_path",
 }
 

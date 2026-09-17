@@ -133,6 +133,40 @@ def test_unreadable_spine_item_still_occupies_its_index(tmp_path):
     assert {s.chapter for s in sentences} == {1}
 
 
+# ---------- extract_spine_chapter_texts ----------
+
+def test_extract_spine_chapter_texts_one_entry_per_spine_item(tmp_path):
+    """The sync-map audit's spine-order check (issue #595) needs to know
+    *which* chapter a sampled point's text is actually in today — this is
+    the per-chapter building block `extract_book_text` joins into one
+    string."""
+    from services.epub_parser import extract_spine_chapter_texts
+
+    path = _write_epub(
+        tmp_path / "chapters.epub",
+        [("ch1.xhtml", PROSE), ("blank.xhtml", BLANK), ("ch2.xhtml", MORE_PROSE)],
+    )
+
+    chapters = extract_spine_chapter_texts(path)
+
+    assert len(chapters) == 3  # one per spine item, blank included
+    assert "The harbour lay still under a flat grey sky." in chapters[0]
+    assert chapters[1].strip() == ""
+    assert "He set his shoulder to the capstan and heaved." in chapters[2]
+    # Never in the wrong chapter's text.
+    assert "The harbour lay still" not in chapters[2]
+
+
+def test_extract_spine_chapter_texts_joined_matches_extract_book_text(tmp_path):
+    from services.epub_parser import extract_book_text, extract_spine_chapter_texts
+
+    path = _write_epub(
+        tmp_path / "joined.epub", [("ch1.xhtml", PROSE), ("ch2.xhtml", MORE_PROSE)],
+    )
+
+    assert "\n".join(extract_spine_chapter_texts(path)) == extract_book_text(path)
+
+
 # ---------- extract_book_text ----------
 
 def test_extract_book_text_returns_every_spine_document(tmp_path):
