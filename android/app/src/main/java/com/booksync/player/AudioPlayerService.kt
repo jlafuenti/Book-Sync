@@ -51,6 +51,7 @@ import com.booksync.auto.autoSearch
 import com.booksync.auto.autoSearchIndex
 import com.booksync.auto.autoSearchPage
 import com.booksync.auto.autoStartPositionMs
+import com.booksync.auto.changesToNotify
 import com.booksync.auto.continueListeningBooks
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
@@ -82,6 +83,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
@@ -192,6 +194,14 @@ class AudioPlayerService : MediaLibraryService() {
     private var exoPlayer: Player? = null
     private var sleepTimerJob: Job? = null
     private var autoPositionSaveJob: Job? = null
+    // Keep Android Auto's browse tree live rather than frozen at whatever it
+    // looked like when the head unit last subscribed (issue #583). Started in
+    // onCreate once the session exists, cancelled explicitly in onDestroy —
+    // serviceScope.cancel() would stop them too, but every other
+    // service-lifetime job here (sleepTimerJob, autoPositionSaveJob) is
+    // cancelled the same way, so this stays consistent with that.
+    private var continueListeningNotifyJob: Job? = null
+    private var libraryNotifyJob: Job? = null
     // When the next continuous-playback history entry is due. Advanced on pause,
     // track-end, service destroy, cast session transitions, and the 30-min tick.
     // Only advanced while isPlaying (the polling loop only runs then), so pauses
@@ -491,6 +501,7 @@ class AudioPlayerService : MediaLibraryService() {
             .build()
 
         watchForSignOut()
+        watchBrowseNodeChanges()
 
         // Hook up CastPlayer if Cast SDK was successfully initialized (in BookSyncApp).
         // CastContext.getSharedInstance() is safe here — it only returns the existing singleton
@@ -548,6 +559,62 @@ class AudioPlayerService : MediaLibraryService() {
                 player.clearMediaItems()
             }
         }
+    }
+
+    /**
+     * Keeps Android Auto's browse tree live rather than frozen at whatever it
+     * looked like when the head unit last subscribed (issue #583).
+     *
+     * `notifyChildrenChanged` is the only way Media3 tells a subscribed
+     * browser "ask again" — without it, Continue Listening only refreshed on
+     * reconnect, so a pause, a newly-finished book, or a fresh library scan
+     * never moved it. Both nodes here are built from Room flows, so this
+     * observes the same flows their builders read (`buildContinueListeningItems`,
+     * `buildLibraryItems`) and notifies on every distinct change after the
+     * first — decided by `changesToNotify()`, tested on its own in
+     * `AutoChangeNotifierTest` because this class is excluded from Kover.
+     *
+     * Continue Listening is the node issue #583 names directly. The Library
+     * tab is included too: it is built from the same kind of flow, so
+     * watching it costs one more `combine` rather than a second mechanism —
+     * and a library scan finishing while the car is connected is exactly the
+     * kind of change the tab would otherwise sit stale through.
+     */
+    private fun watchBrowseNodeChanges() {
+        continueListeningNotifyJob = serviceScope.launch(Dispatchers.IO) {
+            combine(
+                repository.getRecentlyPlayedPairsFlow(),
+                repository.getRecentlyPlayedStandaloneAudiobooksFlow(),
+            ) { pairs, standalone -> pairs to standalone }
+                .changesToNotify()
+                .collect { notifyBrowseNodeChanged(AUTO_TAB_CONTINUE) { buildContinueListeningItems() } }
+        }
+        libraryNotifyJob = serviceScope.launch(Dispatchers.IO) {
+            combine(
+                repository.getPairsFlow(),
+                repository.getAudiobooksFlow(),
+            ) { pairs, standalone -> pairs to standalone }
+                .changesToNotify()
+                .collect { notifyBrowseNodeChanged(AUTO_TAB_LIBRARY) { buildLibraryItems() } }
+        }
+    }
+
+    /**
+     * One browse-node notify: builds the node's current items to get an
+     * accurate count, then tells every subscribed browser to re-fetch it.
+     *
+     * Gated on [hasAccount] rather than only on an empty count (issue #573's
+     * rule applies here too) — signed out, the notify is skipped entirely
+     * rather than sent with a count of zero, because even *that* a change
+     * just happened is the previous account's information, and this is the
+     * one path nothing else gates.
+     */
+    private suspend fun notifyBrowseNodeChanged(parentId: String, itemsFor: suspend () -> List<MediaItem>) {
+        if (!hasAccount()) return
+        val session = mediaLibrarySession ?: return
+        val count = itemsFor().size
+        session.notifyChildrenChanged(parentId, count, null)
+        diagnosticLogger.i(LogChannel.AUTO, TAG, "notifyChildrenChanged parentId=$parentId count=$count")
     }
 
     /**
@@ -671,6 +738,8 @@ class AudioPlayerService : MediaLibraryService() {
 
     override fun onDestroy() {
         sleepTimerJob?.cancel()
+        continueListeningNotifyJob?.cancel()
+        libraryNotifyJob?.cancel()
         stopAutoPositionSave()
         castServer.stop()
         // Final flush BEFORE the scope dies (issue #164): detached, so

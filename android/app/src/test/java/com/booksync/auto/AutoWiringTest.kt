@@ -475,4 +475,80 @@ class AutoWiringTest {
             codeLines(gradle).none { it.contains("\"com.booksync.auto.*\"") },
         )
     }
+
+    // --- Continue Listening (and Library) notify Android Auto on change (issue #583) ---
+
+    /**
+     * `notifyChildrenChanged` is the only way Media3 tells a subscribed
+     * browser "ask again". Without it, Continue Listening only refreshed when
+     * the car re-subscribed — an app switch or reconnect — never when a pause
+     * or a newly-started book changed what the tab should show.
+     */
+    @Test
+    fun `onCreate starts watching browse-node changes once the session exists`() {
+        val body = functionBody(service, "onCreate")
+        val sessionAt = body.indexOf("mediaLibrarySession = MediaLibrarySession.Builder(")
+        val watchAt = body.indexOf("watchBrowseNodeChanges()")
+        assertTrue(
+            "onCreate must call watchBrowseNodeChanges() after the session is " +
+                "built, or there would be nothing yet to notify (issue #583).",
+            sessionAt >= 0 && watchAt in (sessionAt + 1) until Int.MAX_VALUE,
+        )
+    }
+
+    @Test
+    fun `onDestroy cancels the browse-node notify jobs explicitly`() {
+        val body = functionBody(service, "onDestroy")
+        assertTrue(
+            "onDestroy must cancel continueListeningNotifyJob and " +
+                "libraryNotifyJob explicitly, in the same style as the " +
+                "service's other lifetime jobs (sleepTimerJob, " +
+                "autoPositionSaveJob) — issue #583.",
+            body.contains("continueListeningNotifyJob?.cancel()") &&
+                body.contains("libraryNotifyJob?.cancel()"),
+        )
+    }
+
+    @Test
+    fun `browse-node change detection goes through the tested Flow filter`() {
+        assertTrue(
+            "AudioPlayerService must filter its Room flows through " +
+                "changesToNotify() rather than hand-rolling the 'skip the " +
+                "initial emission, collapse duplicates' logic here, where " +
+                "Kover cannot see it (issue #583) — see AutoChangeNotifierTest.",
+            codeLines(service).any { it.contains("changesToNotify()") },
+        )
+    }
+
+    @Test
+    fun `notifying Android Auto of a browse-node change is gated on having an account`() {
+        val body = functionBody(service, "notifyBrowseNodeChanged")
+        assertTrue(
+            "A notify must not leak another account's item count to the car " +
+                "— issue #573's gate applies here too.",
+            body.contains("hasAccount()"),
+        )
+    }
+
+    @Test
+    fun `Continue Listening and Library both notify through notifyChildrenChanged`() {
+        val watcher = functionBody(service, "watchBrowseNodeChanges")
+        assertTrue(
+            "watchBrowseNodeChanges must notify AUTO_TAB_CONTINUE.",
+            watcher.contains("AUTO_TAB_CONTINUE"),
+        )
+        assertTrue(
+            "watchBrowseNodeChanges must also notify AUTO_TAB_LIBRARY — it is " +
+                "built from the same kind of Room flow, so watching it costs " +
+                "one more combine() rather than a second mechanism, and a " +
+                "library scan finishing while the car is connected is exactly " +
+                "the kind of change issue #583 is about the tab not knowing " +
+                "happened.",
+            watcher.contains("AUTO_TAB_LIBRARY"),
+        )
+        assertTrue(
+            "notifyBrowseNodeChanged must call session.notifyChildrenChanged(...).",
+            functionBody(service, "notifyBrowseNodeChanged").contains("notifyChildrenChanged("),
+        )
+    }
 }
