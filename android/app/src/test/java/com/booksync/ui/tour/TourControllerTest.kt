@@ -125,6 +125,27 @@ class TourControllerTest {
     }
 
     @Test
+    fun `back never crosses a screen boundary`() = runTest {
+        // Stepping back from the first Details card would land on "tap View
+        // details" with the sheet already closed — a card that cannot advance.
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("details_chips")
+        val index = running(controller).index
+        assertFalse(running(controller).canGoBack)
+
+        controller.back()
+
+        assertEquals(index, running(controller).index)
+        // Within a screen it still works.
+        controller.next()
+        assertTrue(running(controller).canGoBack)
+        controller.back()
+        assertEquals(index, running(controller).index)
+    }
+
+    @Test
     fun `next is ignored on a TapAnchor step`() = runTest {
         val controller = newController()
         controller.start()

@@ -26,6 +26,8 @@ sealed class TourState {
         val degraded: Boolean,
         val pairId: Int?,
         val total: Int,
+        /** False on step 0 and on the first step of a new screen (see [TourController.back]). */
+        val canGoBack: Boolean = false,
     ) : TourState()
 
     data object Finished : TourState()
@@ -95,11 +97,19 @@ class TourController(
         advanceFrom(running.index)
     }
 
+    /**
+     * Steps back within the current screen only. Across a screen boundary the
+     * previous step's control is gone (the sheet closed, the reader finished),
+     * so it would land on a "tap this" card that can never advance.
+     */
     fun back() {
         val running = _state.value as? TourState.Running ?: return
-        if (running.index == 0) return
+        if (!canGoBack(running.index)) return
         enter(running.index - 1, previousScreen = running.step.screen)
     }
+
+    private fun canGoBack(index: Int): Boolean =
+        index > 0 && steps[index - 1].screen == steps[index].screen
 
     /** Quits the tour from wherever it is right now. */
     fun quit() = finish()
@@ -156,6 +166,7 @@ class TourController(
             degraded = false,
             pairId = pairId,
             total = steps.size,
+            canGoBack = canGoBack(index),
         )
 
         if (step.anchor != null && immediateRect == null) {

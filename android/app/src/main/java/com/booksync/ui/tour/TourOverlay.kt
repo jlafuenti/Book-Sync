@@ -22,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,7 +66,12 @@ fun TourOverlay(
     val colors = Tandem.colors
     val density = LocalDensity.current
     var screenSize by remember { mutableStateOf(Size.Zero) }
-    val hole = state.anchor
+    // Follow the control as it moves: the Library scrolls the picked pair into
+    // view *after* the step is entered, and any list can scroll under the card.
+    // The controller's snapshot is only the fallback while the registry has no
+    // live rect for this anchor.
+    val liveRects by LocalTourRegistry.current.rects.collectAsState()
+    val hole = state.step.anchor?.let { liveRects[it] } ?: state.anchor
 
     // The reader selection step must not eat the long-press-and-drag gesture
     // it is teaching, so it blocks nothing and the "hole" is the full page.
@@ -216,7 +222,9 @@ private fun TourCard(
                 modifier = Modifier.weight(1f),
             )
             if (state.index > 0) {
-                TextButton(onClick = onBack) { Text("Back", color = colors.textSecondary) }
+                if (state.canGoBack) {
+                    TextButton(onClick = onBack) { Text("Back", color = colors.textSecondary) }
+                }
                 Spacer(Modifier.width(4.dp))
             }
             when (val advance = step.advance) {
