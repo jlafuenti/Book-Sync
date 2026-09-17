@@ -377,42 +377,67 @@ async def _auto_complete(
     prev_percent: Optional[float], prev_audio_ms: Optional[int],
     wrote_percent: bool, wrote_audio: bool,
 ) -> None:
-    """Mark the book finished when this write *crosses into* the end zone.
+    """Mark the book finished or un-finished when this write *crosses* the
+    end-zone boundary.
 
-    docs/position-sync-contract.md § Completion (issue #56). The rule lives
-    here so every client inherits it — the web player, the Android player and
-    both readers used to each decide for themselves (or not at all).
+    docs/position-sync-contract.md § Completion (issue #56, and its mirror
+    issue #584). The rule lives here so every client inherits it — the web
+    player, the Android player and both readers used to each decide for
+    themselves (or not at all).
 
     - An explicit `is_completed` on the write always wins; the rule only runs
       when the client said nothing.
-    - It never clears the flag: re-reading a chapter is not un-finishing.
-    - It fires on the *transition* into the zone, not on being in it, so a
-      manual un-finish sticks while the position sits at the end — the next
-      heartbeat doesn't undo the user's choice. Leaving and re-entering the
-      zone completes the book again.
-    - Ebook: the write carried `epub_progress_percent` and the stored value
-      went from below `auto_complete_epub_percent` (or unset) to at/above it.
+    - It fires on the *transition* across the boundary, in either direction,
+      not on which side of it the position already was:
+        - Entering the zone completes the book, same as always.
+        - Leaving the zone un-finishes it — the mirror transition (issue
+          #584). A position write that moves from inside the end zone to
+          outside it clears `is_completed`, whether the book got there by the
+          auto-complete rule above or by an explicit finish. This is a
+          deliberate trade-off: scrubbing back from the last stretch to
+          replay a scene un-finishes the book, same as re-opening the last
+          chapter of an ebook after finishing it does.
+      Neither direction fires on a write that stays on the same side of the
+      boundary it was already on, so a manual un-finish sticks while the
+      position sits at the end (the next heartbeat there doesn't undo it),
+      and a manual finish sticks while the position sits mid-book (the next
+      heartbeat there doesn't undo it either). Leaving and re-entering the
+      zone toggles the flag again each time.
+    - Ebook: the write carried `epub_progress_percent`, and the stored value
+      crossed `auto_complete_epub_percent` — going from below (or unset) to
+      at/above it completes the book, and from at/above back to below clears it.
     - Audio: the write carried `audio_position_ms`, the scope has an
-      audiobook whose `duration_seconds` is known, and the position went from
-      outside the last `auto_complete_audio_tail_seconds` to inside them.
-      Unknown length means no end zone; the client's own end-of-stream write
-      still completes the book because it sends `is_completed` explicitly.
+      audiobook whose `duration_seconds` is known, and the position crossed
+      the last `auto_complete_audio_tail_seconds` — going from outside to
+      inside completes the book, and from inside back to outside clears it.
+      Unknown length means no end zone in either direction: the client's own
+      end-of-stream write still completes the book because it sends
+      `is_completed` explicitly, and a completion set that way (or manually)
+      is never cleared by a position write alone once the length is unknown.
     """
-    if update.is_completed is not None or bookmark.is_completed:
+    if update.is_completed is not None:
         return
 
-    if wrote_percent and _in_epub_end_zone(bookmark.epub_progress_percent) \
-            and not _in_epub_end_zone(prev_percent):
-        bookmark.is_completed = True
-        return
+    if wrote_percent:
+        now_in = _in_epub_end_zone(bookmark.epub_progress_percent)
+        was_in = _in_epub_end_zone(prev_percent)
+        if now_in and not was_in and not bookmark.is_completed:
+            bookmark.is_completed = True
+            return
+        if was_in and not now_in and bookmark.is_completed:
+            bookmark.is_completed = False
+            return
 
     if wrote_audio and ref.audiobook_id is not None:
         duration = (await db.execute(
             select(AudioBook.duration_seconds).where(AudioBook.id == ref.audiobook_id)
         )).scalar_one_or_none()
-        if _in_audio_end_zone(bookmark.audio_position_ms, duration) \
-                and not _in_audio_end_zone(prev_audio_ms, duration):
+        now_in = _in_audio_end_zone(bookmark.audio_position_ms, duration)
+        was_in = _in_audio_end_zone(prev_audio_ms, duration)
+        if now_in and not was_in and not bookmark.is_completed:
             bookmark.is_completed = True
+        elif was_in and not now_in and bookmark.is_completed:
+            bookmark.is_completed = False
 
 
 async def apply_position(

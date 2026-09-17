@@ -284,11 +284,13 @@ class BookSyncRepository @Inject constructor(
         audioPositionMs: Int,
         claimFormat: Boolean = true,
         pushToServer: Boolean = true,
+        durationMs: Long? = null,
     ): Boolean = positions.savePlaybackPositionStandalone(
         audiobookId = audiobookId,
         audioPositionMs = audioPositionMs,
         claimFormat = claimFormat,
         pushToServer = pushToServer,
+        durationMs = durationMs,
     )
 
     /** See [PositionRepository.savePlaybackPositionDetached]. */
@@ -309,10 +311,12 @@ class BookSyncRepository @Inject constructor(
         audiobookId: Int,
         audioPositionMs: Int,
         claimFormat: Boolean = true,
+        durationMs: Long? = null,
     ): Job = positions.savePlaybackPositionStandaloneDetached(
         audiobookId = audiobookId,
         audioPositionMs = audioPositionMs,
         claimFormat = claimFormat,
+        durationMs = durationMs,
     )
 
     /** See [PositionRepository.saveReaderPositionStandalone]. */
@@ -434,6 +438,7 @@ class BookSyncRepository @Inject constructor(
         epubChapter: Int? = null,
         epubProgressPercent: Float? = null,
         audioPositionMs: Int? = null,
+        durationMs: Long? = null,
         isCompleted: Boolean? = null,
         deviceId: String? = this.deviceId,
         pushToServer: Boolean = true,
@@ -446,6 +451,7 @@ class BookSyncRepository @Inject constructor(
         epubChapter = epubChapter,
         epubProgressPercent = epubProgressPercent,
         audioPositionMs = audioPositionMs,
+        durationMs = durationMs,
         isCompleted = isCompleted,
         deviceId = deviceId,
         pushToServer = pushToServer,

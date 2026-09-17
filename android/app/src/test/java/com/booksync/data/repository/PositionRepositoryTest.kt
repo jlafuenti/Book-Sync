@@ -10,6 +10,7 @@ import com.booksync.data.local.entity.BookmarkEntity
 import com.booksync.data.local.entity.BookmarkLogEntity
 import com.booksync.data.local.entity.PendingSyncEntity
 import com.booksync.data.local.entity.SyncPointEntity
+import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.BookmarkLogResponse
 import com.booksync.data.remote.PositionResponse
@@ -266,5 +267,100 @@ class PositionRepositoryTest {
         assertEquals(12, adopted.captured.epubChapter)
         assertEquals("audiobook", adopted.captured.source)
         coVerify(exactly = 1) { pendingSyncDao.delete(queued) }
+    }
+
+    // ---- updateProgress: leaving the end zone un-finishes locally (issue #584) --
+
+    private fun progress(
+        mediaType: String, mediaId: Int, completed: Boolean,
+        audioPositionMs: Int? = null, epubProgressPercent: Float? = null,
+    ) = UserProgressEntity(
+        scopeKey = TEST_SCOPE, mediaType = mediaType, mediaId = mediaId, bookPairId = null,
+        epubCfi = null, epubChapter = null, epubProgressPercent = epubProgressPercent,
+        audioPositionMs = audioPositionMs, isCompleted = completed, updatedAt = 0L, deviceId = null,
+    )
+
+    @Test
+    fun `an audio save that leaves the end zone clears a completion set by the auto rule`() = runTest {
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 3_590_000)
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 1_000_000, durationMs = 3_600_000L,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(false, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an audio save that stays outside the end zone keeps a manual completion`() = runTest {
+        // The write moves the position (100_000 -> 200_000ms) but never enters
+        // the zone, so this is not a "leaving" transition — nothing to clear.
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 100_000)
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 200_000, durationMs = 3_600_000L,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(true, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an ebook save that leaves the end zone clears a completion too`() = runTest {
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "ebook", 3) } returns
+            progress("ebook", 3, completed = true, epubProgressPercent = 99.0f)
+
+        positions().updateProgress(
+            mediaType = "ebook", mediaId = 3,
+            epubProgressPercent = 50.0f,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(false, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an explicit isCompleted on the call always wins over the local leaving-zone clear`() = runTest {
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 3_590_000)
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 1_000_000, durationMs = 3_600_000L,
+            isCompleted = true,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(true, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `the locally-cleared flag is pushed to the server explicitly`() = runTest {
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 3_590_000)
+        coEvery { api.updatePosition("audiobook", 9, any()) } returns
+            Response.success(serverPosition(chapter = 0, capturedAt = "2026-08-01T10:00:00Z"))
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 1_000_000, durationMs = 3_600_000L,
+        )
+
+        val request = slot<PositionUpdateRequest>()
+        coVerify(exactly = 1) { api.updatePosition("audiobook", 9, capture(request)) }
+        assertEquals(false, request.captured.is_completed)
     }
 }
