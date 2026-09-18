@@ -333,6 +333,37 @@ fun BookSyncNavigation() {
     }
     val tourState by tour.controller.state.collectAsState()
 
+    // The bottom-tab controller is created here, not in MainScaffold, so the
+    // tour's navigation collector below can live at this level too. MainScaffold
+    // is the MAIN route's composable and is *not* composed while Details, the
+    // player or the reader is on top — a collector inside it silently missed
+    // every request emitted from those screens (quit from the reader: no pop
+    // to Main, no cleanup). This composable is always composed.
+    val bottomNavController = rememberNavController()
+    val tourRepository = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            BookSyncRepositoryEntryPoint::class.java,
+        ).bookSyncRepository()
+    }
+    LaunchedEffect(Unit) {
+        tour.controller.nav.collect { navEvent ->
+            when (navEvent) {
+                is TourNav.GoToTab -> bottomNavController.navigate(navEvent.tab) {
+                    popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+                is TourNav.OpenLibraryAt -> Unit // LibraryScreen scrolls to it
+                is TourNav.OpenDetails -> navController.navigate(Routes.bookDetailsPair(navEvent.pairId))
+                is TourNav.OpenReader -> navController.navigate(Routes.reader(navEvent.pairId))
+                TourNav.PopToMain -> navController.popBackStack(Routes.MAIN, inclusive = false)
+                TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit // the reader Activity's
+                is TourNav.CleanUp -> cleanUpTourPair(context, tourRepository, navEvent.pairId)
+            }
+        }
+    }
+
     LaunchedEffect(gateMessage) {
         gateMessage?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
@@ -435,7 +466,12 @@ fun BookSyncNavigation() {
         }
 
         composable(Routes.MAIN) {
-            MainScaffold(outerNavController = navController, gate = pairOpenGate, tour = tour)
+            MainScaffold(
+                outerNavController = navController,
+                bottomNavController = bottomNavController,
+                gate = pairOpenGate,
+                tour = tour,
+            )
         }
 
         composable(Routes.FORCE_PASSWORD_RESET) {
@@ -634,44 +670,20 @@ private fun TourRouteShown(tour: TourViewModel, route: String) {
  * [MiniPlayerBar] directly above it so audio controls stay reachable across tabs.
  */
 @Composable
-private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGateViewModel, tour: TourViewModel) {
+private fun MainScaffold(
+    outerNavController: NavHostController,
+    bottomNavController: NavHostController,
+    gate: PairOpenGateViewModel,
+    tour: TourViewModel,
+) {
     val context = LocalContext.current
-    val repository = remember {
-        EntryPointAccessors.fromApplication(
-            context.applicationContext,
-            BookSyncRepositoryEntryPoint::class.java,
-        ).bookSyncRepository()
-    }
-    val bottomNavController = rememberNavController()
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
         ?.substringBefore("?") // strip query args so selection matches "library?filter=NEW"
 
-    // Executes every TourNav the controller emits (issue #597 §5). Threaded in
-    // here, rather than collected at the outer NavHost, because tab switches
-    // need `bottomNavController` — the same reason `gate` is threaded in.
-    // ShowReaderBars / SkipToToolbarSync are for the reader Activity (Track C)
-    // and are simply not actionable here. CleanUp runs in this same collector
-    // coroutine deliberately (issue #597 tester feedback): it is scoped to
-    // `MainScaffold`, which stays composed after `finish()`/`quit()` makes the
-    // tour overlay itself disappear.
-    LaunchedEffect(Unit) {
-        tour.controller.nav.collect { navEvent ->
-            when (navEvent) {
-                is TourNav.GoToTab -> bottomNavController.navigate(navEvent.tab) {
-                    popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }
-                    launchSingleTop = true
-                    restoreState = true
-                }
-                is TourNav.OpenLibraryAt -> Unit // LibraryScreen scrolls to it (Track B)
-                is TourNav.OpenDetails -> outerNavController.navigate(Routes.bookDetailsPair(navEvent.pairId))
-                is TourNav.OpenReader -> outerNavController.navigate(Routes.reader(navEvent.pairId))
-                TourNav.PopToMain -> outerNavController.popBackStack(Routes.MAIN, inclusive = false)
-                TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit
-                is TourNav.CleanUp -> cleanUpTourPair(context, repository, navEvent.pairId)
-            }
-        }
-    }
+    // The tour's TourNav collector lives in BookSyncNavigation, not here: this
+    // composable is gone while an outer route (Details, player, reader) is on
+    // top, and a collector here missed every request emitted from those screens.
 
     // First-sign-in offer (issue #597 §5): MAIN only ever shows once signed
     // in, so `signedIn` is always true here — `shouldOfferTour` still takes
