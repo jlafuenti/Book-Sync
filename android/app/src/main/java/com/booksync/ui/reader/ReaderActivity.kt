@@ -1413,8 +1413,10 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     /**
-     * Look up the first word of the user's selection on dictionaryapi.dev
-     * and present the result in a dialog. Silent/Toast on offline or 404.
+     * Look up the first word of the user's selection — Wiktionary first,
+     * falling back to dictionaryapi.dev (issue #608) — and present the
+     * result in a dialog. Toasts distinguish "no entry for this word" from
+     * "the lookup itself failed" (offline, or both sources erroring).
      *
      * Reads the selection from Readium's navigator at the moment Define is
      * tapped, rather than a value cached earlier (issue #582):
