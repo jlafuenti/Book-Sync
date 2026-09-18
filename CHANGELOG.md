@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-17
+
 ### Added
 
 - `implausible_pair` (`GET /api/troubleshoot/library`) now also checks words-per-hour, not just
@@ -27,8 +29,25 @@ operator must do by hand rather than read about afterwards.
   auto-matched (and, with auto-transcribe on, queued) in the first place; a manual pairing still
   only warns, unchanged from before.
 
-### Fixed
+### Changed
 
+- Android app 0.4.0 (versionCode 400) ships a guided walkthrough: a five-minute tour over the
+  real screens — Home, a book's menu and details, the sync map, the reader and the player
+  (including hopping between them at a sentence), Library, Downloaded and Account — where the
+  user taps the real controls, can quit at any time, and can replay it from Account → Help. It
+  is offered once after the first sign-in. The book it opens is put back the way it was when
+  the tour ends. The reader's selection-toolbar "Sync to Audio" now also works while
+  streaming, not only with a downloaded audiobook (#597).
+- Widened the rule that un-finishes a book when its position moves back out of the end stretch
+  (#584): it used to clear `is_completed` only on the *transition* out of the end zone, so a book
+  already sitting mid-book when it was marked finished — for example, re-listened from the middle
+  on a build that predated that rule — had both its before and after positions outside the zone on
+  the next write, and could never un-finish. Now any write that *moves* the stored position (the
+  new value differs from what's stored) to somewhere outside the end zone clears the flag,
+  regardless of which side of the boundary the previous position was already on. A write that
+  doesn't move the position — a heartbeat, or a resend of the same value — still never clears it,
+  which is what keeps a manual "mark finished" sticking. Applies to both the server rule (every
+  client inherits it) and Android's local mirror for standalone books (#613).
 - Alignment's degraded-map classifier (#586/#595) no longer fires on a tiny anchor pool: with very
   few anchors surviving the outlier filter (2-25 raw, seen in production), the local trend a
   rejected run is judged against is too sparse to trust, and a small book's ordinary fuzzy-match
@@ -45,19 +64,6 @@ operator must do by hand rather than read about afterwards.
   into the next window until the true content reappears in range. `_filter_chunked_segment_drift`
   checks chunked output against the gap's own two bracketing anchors and demotes a sustained
   displaced run back to unmatched so it re-interpolates instead (#620).
-
-### Changed
-
-- Widened the rule that un-finishes a book when its position moves back out of the end stretch
-  (#584): it used to clear `is_completed` only on the *transition* out of the end zone, so a book
-  already sitting mid-book when it was marked finished — for example, re-listened from the middle
-  on a build that predated that rule — had both its before and after positions outside the zone on
-  the next write, and could never un-finish. Now any write that *moves* the stored position (the
-  new value differs from what's stored) to somewhere outside the end zone clears the flag,
-  regardless of which side of the boundary the previous position was already on. A write that
-  doesn't move the position — a heartbeat, or a resend of the same value — still never clears it,
-  which is what keeps a manual "mark finished" sticking. Applies to both the server rule (every
-  client inherits it) and Android's local mirror for standalone books (#613).
 
 ## [0.3.0] - 2026-09-17
 
