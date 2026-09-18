@@ -60,6 +60,7 @@ import com.booksync.ui.reader.ReaderScreen
 import com.booksync.ui.account.ForcePasswordResetScreen
 import com.booksync.ui.account.AccountScreen
 import com.booksync.ui.tour.LocalTourRegistry
+import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourAnchorRegistry
 import com.booksync.ui.tour.TourEvent
 import com.booksync.ui.tour.TourNav
@@ -68,6 +69,7 @@ import com.booksync.ui.tour.TourScreen
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.shouldOfferTour
+import com.booksync.ui.tour.tourAnchor
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -240,13 +242,16 @@ private data class BottomTab(
     val route: String,
     val label: String,
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    /** Spotlighted by the guided tour's tap-the-tab steps (issue #597 follow-up); null for Home,
+     *  which the tour never asks the user to tap into — it's already showing when the tour starts. */
+    val anchor: TourAnchor? = null,
 )
 
 private val BOTTOM_TABS = listOf(
     BottomTab(Routes.HOME,       "Home",       Icons.Default.Home),
-    BottomTab(Routes.LIBRARY,    "Library",    Icons.AutoMirrored.Filled.LibraryBooks),
-    BottomTab(Routes.DOWNLOADED, "Downloaded", Icons.Default.DownloadDone),
-    BottomTab(Routes.ACCOUNT,    "Account",    Icons.Default.AccountCircle),
+    BottomTab(Routes.LIBRARY,    "Library",    Icons.AutoMirrored.Filled.LibraryBooks,    TourAnchor.TabLibrary),
+    BottomTab(Routes.DOWNLOADED, "Downloaded", Icons.Default.DownloadDone,                TourAnchor.TabDownloaded),
+    BottomTab(Routes.ACCOUNT,    "Account",    Icons.Default.AccountCircle,               TourAnchor.TabAccount),
 )
 
 /**
@@ -693,6 +698,7 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                                     restoreState = true
                                 }
                             },
+                            modifier = tab.anchor?.let { Modifier.tourAnchor(it) } ?: Modifier,
                         )
                     }
                 }

@@ -16,6 +16,7 @@ enum class TourAnchor {
     ReaderPage, ReaderSwitchToAudio,
     PlayerTransport, PlayerSwitchToReader,
     DownloadedPills, AccountStorage, AccountServer, AccountReplayTour,
+    TabLibrary, TabDownloaded, TabAccount,
 }
 
 /** Which screen a [TourStep] belongs to — drives the nav-host's tab/route wiring. */
@@ -105,11 +106,16 @@ data class TourStep(
 const val READER_SELECTION_STEP_ID = "reader_select_sentence"
 
 /**
- * The walkthrough script (issue #597) — ≈22 real steps plus a closing "Done"
+ * The walkthrough script (issue #597) — ≈25 real steps plus a closing "Done"
  * card, in the order the owner specced: Home orientation, open a pair from
  * Library, the sheet, the details screen, read a page and sync a sentence to
  * audio, the player (paused), back in the reader, Library's filters, the
  * Downloaded tab, and Account — ending on "Replay the walkthrough" and Done.
+ * Moving between the bottom tabs (Home → Library → Downloaded → Account) is a
+ * guided tap, like every other control the tour spotlights (issue #597
+ * follow-up): a `home_tap_library` / `library_tap_downloaded` /
+ * `downloaded_tap_account` step asks the user to tap the tab themselves
+ * rather than switching it for them.
  *
  * This copy is the single source of truth for the web tour (#598) too: plain,
  * second person, two or three sentences, and the only piece of jargon it uses
@@ -148,6 +154,15 @@ val TOUR: List<TourStep> = listOf(
         body = "Books the server is still transcribing. A book only carries your reading " +
             "position between formats once this finishes.",
         emptyBody = "Empty right now — this section fills in whenever a book is queued for transcription.",
+    ),
+    TourStep(
+        id = "home_tap_library",
+        screen = TourScreen.Home,
+        anchor = TourAnchor.TabLibrary,
+        title = "Now the Library",
+        body = "Tap Library at the bottom.",
+        advance = Advance.TapAnchor(TourEvent.RouteShown("library")),
+        needsPair = false,
     ),
     TourStep(
         id = "library_open_pair",
@@ -298,12 +313,30 @@ val TOUR: List<TourStep> = listOf(
         body = "Group by series keeps a series together; search and sort are up here too.",
     ),
     TourStep(
+        id = "library_tap_downloaded",
+        screen = TourScreen.Library,
+        anchor = TourAnchor.TabDownloaded,
+        title = "Now Downloaded",
+        body = "Tap Downloaded.",
+        advance = Advance.TapAnchor(TourEvent.RouteShown("downloaded")),
+        needsPair = false,
+    ),
+    TourStep(
         id = "downloaded_pills",
         screen = TourScreen.Downloaded,
         anchor = TourAnchor.DownloadedPills,
         title = "Downloaded",
         body = "Everything on this device, for offline reading and listening. The same three-dot " +
             "menu here can delete a download without touching your progress on the server.",
+    ),
+    TourStep(
+        id = "downloaded_tap_account",
+        screen = TourScreen.Downloaded,
+        anchor = TourAnchor.TabAccount,
+        title = "Now Account",
+        body = "Tap Account.",
+        advance = Advance.TapAnchor(TourEvent.RouteShown("account")),
+        needsPair = false,
     ),
     TourStep(
         id = "account_storage_and_server",
