@@ -351,6 +351,12 @@ _NON_DESTINATION_HOSTS = {
     # RFC 2606 placeholders shown in hint text and error messages.
     "example.com",
     "tandem.example.com",
+    # The project's own public site, named inside the `User-Agent` Wikimedia's
+    # robot policy requires (data/remote/WiktionaryUserAgent.kt). It is a
+    # string identifying this app and how to reach its maintainer, sent as a
+    # header to the declared dictionary host above — the app never requests
+    # this site, and it carries no user data.
+    "tandembook.com",
 }
 
 # `scheme://` followed by the authority. Stops at the first character that cannot

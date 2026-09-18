@@ -12,4 +12,4 @@ package com.booksync.data.remote
  * about the device or the person using it.
  */
 fun wiktionaryUserAgent(versionName: String): String =
-    "Tandem/$versionName (https://tandembook.com; support@tandembook.com)"
+    "Tandem/$versionName (https://tandembook.com/; support@tandembook.com)"
