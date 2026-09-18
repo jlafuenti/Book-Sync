@@ -63,6 +63,21 @@ data class HomeItem(
     enum class MediaType { PAIR, EBOOK, AUDIOBOOK }
 }
 
+/**
+ * Whether the account has any books at all, independent of whether anything has
+ * been opened (issue #624). Home's empty state used to say "your library is
+ * empty" whenever its own four carousels (Continue Reading / Recently Added /
+ * New Pairs / In Queue) had nothing in them — which is also true for an account
+ * whose library is full but has not started anything, the exact shape of the
+ * demo account a Play reviewer lands on after "Try the demo" (#147).
+ *
+ * LOADING is not a network state: it means the three source flows below have
+ * not all produced a value yet, which is what lets a fresh subscriber tell
+ * "nothing has come back from Room yet" apart from "it came back, and there
+ * truly are zero books".
+ */
+enum class HomeLibraryState { LOADING, EMPTY, HAS_BOOKS }
+
 /** One row in the "In Queue" section. */
 data class HomeQueueItem(
     val pairId: Int,
@@ -147,6 +162,27 @@ class HomeViewModel @Inject constructor(
         transcriptionRepository.activeQueueItemsFlow()
             .map { list -> list.map { it.book_pair_id }.toSet() }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
+
+    // --- Empty-state classification (issue #624) -----------------------------
+    /**
+     * See [HomeLibraryState]. Built from the same three flows the Library tab's
+     * own [com.booksync.ui.library.LibraryViewModel] combines to build its list
+     * ([BookSyncRepository.getPairsFlow], [BookSyncRepository.getEbooksFlow],
+     * [BookSyncRepository.getAudiobooksFlow]) — no new query. `Eagerly` rather
+     * than `WhileSubscribed` so the state is correct the instant Home reads it,
+     * the same reasoning as [versionBanner] above.
+     */
+    val libraryState: StateFlow<HomeLibraryState> = combine(
+        repository.getPairsFlow(),
+        repository.getEbooksFlow(),
+        repository.getAudiobooksFlow(),
+    ) { pairs, ebooks, audiobooks ->
+        if (pairs.isEmpty() && ebooks.isEmpty() && audiobooks.isEmpty()) {
+            HomeLibraryState.EMPTY
+        } else {
+            HomeLibraryState.HAS_BOOKS
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeLibraryState.LOADING)
 
     // --- Continue Reading ---------------------------------------------------
     private val _continueItems = MutableStateFlow<List<HomeItem>>(emptyList())
