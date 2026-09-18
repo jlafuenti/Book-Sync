@@ -26,7 +26,7 @@ class ReportProblemPolicyTest {
 
     @Test
     fun `with a mail app, the plan targets support with a fixed subject`() {
-        val report = buildProblemReport(ctx, logText = "10:00:00.000  I/Sync: hello\n")
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "10:00:00.000  I/Sync: hello\n"))
 
         val plan = planReportProblemIntent(report, mailAppAvailable = true)
 
@@ -37,7 +37,7 @@ class ReportProblemPolicyTest {
 
     @Test
     fun `with a mail app, the body is buildProblemReport's — version, device, log summary`() {
-        val report = buildProblemReport(ctx, logText = "10:00:00.000  I/Sync: hello\n")
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "10:00:00.000  I/Sync: hello\n"))
 
         val plan = planReportProblemIntent(report, mailAppAvailable = true)
 
@@ -50,22 +50,22 @@ class ReportProblemPolicyTest {
     }
 
     @Test
-    fun `with a mail app, a log attaches`() {
-        val report = buildProblemReport(ctx, logText = "something happened\n")
+    fun `with a mail app, one existing log attaches`() {
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "something happened\n"))
 
-        assertTrue(planReportProblemIntent(report, mailAppAvailable = true).attachLog)
+        assertEquals(listOf(LogChannel.APP), planReportProblemIntent(report, mailAppAvailable = true).attachments)
     }
 
     @Test
     fun `with a mail app, no log means nothing attaches`() {
-        val report = buildProblemReport(ctx, logText = "")
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "", LogChannel.AUTO to ""))
 
-        assertFalse(planReportProblemIntent(report, mailAppAvailable = true).attachLog)
+        assertTrue(planReportProblemIntent(report, mailAppAvailable = true).attachments.isEmpty())
     }
 
     @Test
     fun `with no mail app, the plan falls back to the share sheet with the dynamic subject`() {
-        val report = buildProblemReport(ctx, logText = "10:00:00.000  I/Sync: hello\n")
+        val report = buildProblemReport(ctx, mapOf(LogChannel.APP to "10:00:00.000  I/Sync: hello\n"))
 
         val plan = planReportProblemIntent(report, mailAppAvailable = false)
 
@@ -77,9 +77,37 @@ class ReportProblemPolicyTest {
     }
 
     @Test
-    fun `with no mail app, the log still attaches when one exists`() {
-        val report = buildProblemReport(ctx, logText = "something happened\n")
+    fun `with no mail app, whatever logs exist still attach`() {
+        val report = buildProblemReport(
+            ctx,
+            mapOf(LogChannel.APP to "something happened\n", LogChannel.AUTO to "onGetChildren\n"),
+        )
 
-        assertTrue(planReportProblemIntent(report, mailAppAvailable = false).attachLog)
+        val plan = planReportProblemIntent(report, mailAppAvailable = false)
+
+        assertEquals(listOf(LogChannel.AUTO, LogChannel.APP), plan.attachments)
+    }
+
+    @Test
+    fun `the plan asks for more than one attachment only when more than one log exists`() {
+        val bothPlan = planReportProblemIntent(
+            buildProblemReport(
+                ctx,
+                mapOf(LogChannel.APP to "app\n", LogChannel.AUTO to "auto\n"),
+            ),
+            mailAppAvailable = true,
+        )
+        val onePlan = planReportProblemIntent(
+            buildProblemReport(ctx, mapOf(LogChannel.APP to "app\n", LogChannel.AUTO to "")),
+            mailAppAvailable = true,
+        )
+        val nonePlan = planReportProblemIntent(
+            buildProblemReport(ctx, mapOf(LogChannel.APP to "", LogChannel.AUTO to "")),
+            mailAppAvailable = true,
+        )
+
+        assertEquals(2, bothPlan.attachments.size)
+        assertEquals(1, onePlan.attachments.size)
+        assertEquals(0, nonePlan.attachments.size)
     }
 }

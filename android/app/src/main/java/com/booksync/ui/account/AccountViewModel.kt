@@ -358,20 +358,28 @@ class AccountViewModel @Inject constructor(
      * does, so the button is never dead on a device with no mail app.
      *
      * The version and device are repeated in the message body, not only in the
-     * attached log: some share targets drop attachments without saying so, and a
-     * text-only report should still be triageable. [buildProblemReport] builds
+     * attached logs: some share targets drop attachments without saying so, and
+     * a text-only report should still be triageable. [buildProblemReport] builds
      * that body and is unit-tested; [planReportProblemIntent] decides the rest
-     * (destination, subject, whether to attach) and is unit-tested too —
+     * (destination, subject, which logs to attach) and is unit-tested too —
      * everything below that point (PackageManager, FileProvider, Intent extras)
      * is Android plumbing with nothing to assert on the JVM.
+     *
+     * Issue #636: both diagnostic channels are read, and only the ones with
+     * content are ever named as attached or handed to the `Intent` — a missing
+     * Auto log (nobody turned it on, or nobody has driven since) is the normal
+     * case, not an error.
      */
     fun shareProblemReport(onIntent: (Intent) -> Unit) {
-        val file = diagnosticLogger.getLogFile(LogChannel.APP)
-        val logText = if (file.exists()) runCatching { file.readText() }.getOrDefault("") else ""
-        val report = buildProblemReport(deviceCrashContext(), logText)
+        val logTextByChannel = LogChannel.entries.associateWith { channel ->
+            val file = diagnosticLogger.getLogFile(channel)
+            if (file.exists()) runCatching { file.readText() }.getOrDefault("") else ""
+        }
+        val report = buildProblemReport(deviceCrashContext(), logTextByChannel)
         val plan = planReportProblemIntent(report, mailAppAvailable = resolvesMailApp(appContext))
+        val logFiles = plan.attachments.map { diagnosticLogger.getLogFile(it) }
 
-        onIntent(buildReportProblemIntent(appContext, plan, file))
+        onIntent(buildReportProblemIntent(appContext, plan, logFiles))
     }
 }
 
@@ -392,34 +400,46 @@ private fun resolvesMailApp(context: Context): Boolean {
 }
 
 /**
- * Turn a [ReportProblemPlan] into the real `Intent` (issue #609).
+ * Turn a [ReportProblemPlan] into the real `Intent` (issue #609, extended for
+ * two log files by #636).
  *
- * Straight to a mail app: `ACTION_SEND` with `type = "message/rfc822"` and
- * `EXTRA_EMAIL`. The issue's implementation notes flag `ACTION_SENDTO` +
- * `mailto:` as the more reliable "email apps only" filter, but that form does
- * not carry `EXTRA_STREAM` — the `message/rfc822` MIME type is what email
- * clients register for specifically (unlike the generic `text/plain` the old
- * share used), so it keeps the same "email apps only" targeting while still
- * letting the diagnostics log ride along as an attachment.
+ * Straight to a mail app: `ACTION_SEND`/`ACTION_SEND_MULTIPLE` with
+ * `type = "message/rfc822"` and `EXTRA_EMAIL`. The issue's implementation
+ * notes flag `ACTION_SENDTO` + `mailto:` as the more reliable "email apps
+ * only" filter, but that form does not carry `EXTRA_STREAM` — the
+ * `message/rfc822` MIME type is what email clients register for specifically
+ * (unlike the generic `text/plain` the old share used), so it keeps the same
+ * "email apps only" targeting while still letting the diagnostics logs ride
+ * along as attachments.
  *
  * No mail app: today's generic chooser, unchanged — a live but unrouted share
  * beats a dead button.
+ *
+ * [Intent.ACTION_SEND] takes at most one [Intent.EXTRA_STREAM] `Uri`;
+ * [Intent.ACTION_SEND_MULTIPLE] takes an `ArrayList<Uri>` under the same
+ * extra key instead. [logFiles] (already filtered to [ReportProblemPlan.attachments]
+ * — only logs that exist) picks between them by count, so a report with one
+ * attachment keeps the exact shape #609 pinned and a report with two — app and
+ * Auto both present — becomes `ACTION_SEND_MULTIPLE`. `FLAG_GRANT_READ_URI_PERMISSION`
+ * grants every `content://` URI in `EXTRA_STREAM`, list or single, to whichever
+ * app ends up handling the intent, chooser or not — that grant is what makes
+ * the attachment visible to the target that resolves it.
  */
-private fun buildReportProblemIntent(context: Context, plan: ReportProblemPlan, logFile: File): Intent {
-    val send = Intent(Intent.ACTION_SEND).apply {
+private fun buildReportProblemIntent(context: Context, plan: ReportProblemPlan, logFiles: List<File>): Intent {
+    val uris = logFiles.map { file ->
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }
+    val send = Intent(if (uris.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).apply {
         type = if (plan.toMailApp) "message/rfc822" else "text/plain"
         if (plan.toMailApp) putExtra(Intent.EXTRA_EMAIL, arrayOf(plan.recipient))
         putExtra(Intent.EXTRA_SUBJECT, plan.subject)
         putExtra(Intent.EXTRA_TEXT, plan.body)
-        if (plan.attachLog) {
-            putExtra(
-                Intent.EXTRA_STREAM,
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    logFile,
-                ),
-            )
+        if (uris.isNotEmpty()) {
+            if (uris.size > 1) {
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            } else {
+                putExtra(Intent.EXTRA_STREAM, uris.single())
+            }
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

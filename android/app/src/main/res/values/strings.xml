@@ -110,7 +110,9 @@
     <!-- There is no crash SDK. This is the path by which a stack trace actually
          reaches the person who can fix it. -->
     <string name="account_report_problem">Report a problem</string>
-    <string name="account_report_problem_desc">Send the app log, version and device details.</string>
+    <!-- Issue #636: whichever diagnostic logs exist (app, Android Auto, or both)
+         are attached — not just the app log. -->
+    <string name="account_report_problem_desc">Send diagnostic logs, version and device details.</string>
     <string name="report_problem_chooser">Report a problem</string>
 
     <!-- ============ Home empty state (issue #624) ============ -->
