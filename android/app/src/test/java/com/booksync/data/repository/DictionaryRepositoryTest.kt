@@ -34,6 +34,75 @@ class DictionaryRepositoryTest {
 
     private fun http404() = HttpException(Response.error<Unit>(404, "".toResponseBody(null)))
 
+    private fun http(code: Int) = HttpException(Response.error<Unit>(code, "".toResponseBody(null)))
+
+    @Test
+    fun `a refused Wiktionary request falls back instead of failing the lookup`() = runTest {
+        // Wikimedia answers 403 when the agent string displeases its robot
+        // policy; a 404-only fallback turned that into "lookup failed" for
+        // every word (issue #608 follow-up).
+        coEvery { wiktionaryApi.lookup("graveyard") } throws http(403)
+        coEvery { fallbackApi.lookup("graveyard") } returns listOf(
+            DictionaryEntry(
+                word = "graveyard",
+                phonetic = null,
+                meanings = listOf(
+                    DictionaryMeaning("noun", listOf(DictionaryDefinition("a burial ground", null))),
+                ),
+            ),
+        )
+
+        val entries = repository().lookup("graveyard")
+
+        assertEquals("a burial ground", entries.single().meanings.single().definitions.single().definition)
+        coVerify(exactly = 1) { fallbackApi.lookup("graveyard") }
+    }
+
+    @Test
+    fun `a Wiktionary server error falls back`() = runTest {
+        coEvery { wiktionaryApi.lookup("hello") } throws http(503)
+        coEvery { fallbackApi.lookup("hello") } returns emptyList()
+
+        assertTrue(repository().lookup("hello").isEmpty())
+
+        coVerify(exactly = 1) { fallbackApi.lookup("hello") }
+    }
+
+    @Test
+    fun `a Wiktionary timeout that survives the retry falls back`() = runTest {
+        coEvery { wiktionaryApi.lookup("water") } throws SocketTimeoutException("timeout")
+        coEvery { fallbackApi.lookup("water") } returns listOf(
+            DictionaryEntry(
+                word = "water",
+                phonetic = null,
+                meanings = listOf(
+                    DictionaryMeaning("noun", listOf(DictionaryDefinition("a clear liquid", null))),
+                ),
+            ),
+        )
+
+        val entries = repository().lookup("water")
+
+        assertEquals("a clear liquid", entries.single().meanings.single().definitions.single().definition)
+        coVerify(exactly = 2) { wiktionaryApi.lookup("water") }
+        coVerify(exactly = 1) { fallbackApi.lookup("water") }
+    }
+
+    @Test
+    fun `both sources failing still reports a failed lookup`() = runTest {
+        coEvery { wiktionaryApi.lookup("stone") } throws http(403)
+        coEvery { fallbackApi.lookup("stone") } throws SocketTimeoutException("timeout")
+
+        var threw = false
+        try {
+            repository().lookup("stone")
+        } catch (e: Exception) {
+            threw = true
+        }
+
+        assertTrue("a lookup with no working source must report failure", threw)
+    }
+
     @Test
     fun `lookup parses multiple parts of speech from Wiktionary`() = runTest {
         coEvery { wiktionaryApi.lookup("run") } returns mapOf(
@@ -136,8 +205,11 @@ class DictionaryRepositoryTest {
     }
 
     @Test
-    fun `lookup fails after one retry when timeouts persist`() = runTest {
+    fun `lookup fails after one retry per source when timeouts persist`() = runTest {
+        // Each source is tried twice (one retry); the lookup only fails once
+        // both have been exhausted — a Wiktionary timeout alone falls back.
         coEvery { wiktionaryApi.lookup("word") } throws SocketTimeoutException("timeout")
+        coEvery { fallbackApi.lookup("word") } throws SocketTimeoutException("timeout")
 
         var caught: Throwable? = null
         try {
@@ -148,5 +220,6 @@ class DictionaryRepositoryTest {
 
         assertTrue("expected lookup to throw SocketTimeoutException", caught is SocketTimeoutException)
         coVerify(exactly = 2) { wiktionaryApi.lookup("word") }
+        coVerify(exactly = 2) { fallbackApi.lookup("word") }
     }
 }
