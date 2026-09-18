@@ -1042,7 +1042,12 @@ class ReaderActivity : AppCompatActivity() {
                 tourRunningOnReader = runningTour?.step?.screen == TourScreen.Reader,
                 tourPairId = runningTour?.pairId,
                 thisPairId = pairId,
-                hasSavedPosition = outcome == PositionSavePolicy.RestoreOutcome.Landed,
+                // A device-local hint from an earlier open counts as "landed" even
+                // after the pair's progress was reset, and it pointed at the cover in
+                // practice. A pair the tour will put back afterwards (willCleanUp)
+                // has no place worth keeping, so the nudge applies regardless.
+                hasSavedPosition = outcome == PositionSavePolicy.RestoreOutcome.Landed &&
+                    runningTour?.willCleanUp != true,
             )
 
             if (locator != null) {
