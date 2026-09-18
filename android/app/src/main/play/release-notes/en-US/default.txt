@@ -1,1 +1,1 @@
-A guided walkthrough now introduces the app and can be replayed from Account. Define and Sync to Audio use the text you selected on the page you're reading, even after changing chapter. Android Auto's Continue Listening updates while it's on screen, and a finished book returns to it when you listen again from the middle.
+Fixes Define in the reader: in 0.4.0 every word came back "No definition available". Looking a word up now works again, and falls back to a second dictionary when the first has nothing.
