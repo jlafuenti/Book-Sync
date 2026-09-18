@@ -25,7 +25,9 @@ import pytest
 
 from services.pair_plausibility import (
     MAX_BYTES_PER_HOUR,
+    MAX_WORDS_PER_HOUR,
     MIN_BYTES_PER_HOUR,
+    MIN_WORDS_PER_HOUR,
     check_pair_plausibility,
 )
 
@@ -159,3 +161,111 @@ def test_missing_inputs_are_not_a_finding(size, duration):
     )
     assert ok is True
     assert detail is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #620: a words-per-hour bound.
+#
+# `file_size` can miss what a direct word count catches: two real production
+# pairs (an abridgement and a one-hour excerpt) had file sizes that happened
+# to keep `bytes_per_hour` inside the band above — exactly the imprecision
+# the module docstring already names ("images and embedded fonts inflate an
+# EPUB well beyond its text") — while their words-per-hour was wildly outside
+# a real unabridged reading's range.
+# ---------------------------------------------------------------------------
+
+
+def test_an_abridgement_shaped_pair_is_flagged_by_word_rate():
+    """The reported abridgement: 87,398 words against 2.99 h (~29.3k words/h)
+    — not flagged by the byte-based check alone (a plausible file_size), but
+    caught once word_count is supplied."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000,  # otherwise-ordinary file size
+        duration_seconds=_hours(2.99),
+        is_abridged=False,
+        word_count=87_398,
+    )
+    assert ok is False
+    assert "87,398" in detail
+    assert "words" in detail.lower()
+
+
+def test_an_excerpt_shaped_pair_is_flagged_by_word_rate():
+    """The reported one-hour excerpt: 87,996 words against 1.09 h (~80.8k
+    words/h)."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000,
+        duration_seconds=_hours(1.09),
+        is_abridged=False,
+        word_count=87_996,
+    )
+    assert ok is False
+    assert "87,996" in detail
+
+
+@pytest.mark.parametrize(
+    "label, words, hours",
+    [
+        ("low end of a real reading", 80_000, 10.0),    # 8,000 words/h
+        ("typical pace", 100_000, 10.0),                # 10,000 words/h
+        ("high end of a real reading", 120_000, 10.0),  # 12,000 words/h
+        ("a short novella", 24_000, 3.0),                # 8,000 words/h
+    ],
+)
+def test_a_normal_8_to_12k_words_per_hour_pair_is_not_flagged(label, words, hours):
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=_hours(hours),
+        is_abridged=False, word_count=words,
+    )
+    assert ok is True, f"{label} was flagged: {detail}"
+    assert detail is None
+
+
+def test_the_word_rate_band_edges_are_inclusive():
+    for rate in (MIN_WORDS_PER_HOUR, MAX_WORDS_PER_HOUR):
+        ok, _ = check_pair_plausibility(
+            ebook_file_size=600_000, duration_seconds=_hours(5.0),
+            is_abridged=False, word_count=int(rate * 5),
+        )
+        assert ok is True, f"rate {rate} words/hour should be inside the band"
+
+
+def test_the_word_rate_band_has_margin_around_a_real_8_to_12k_reading():
+    """A guard on the constants: the band has to comfortably contain a real
+    unabridged reading (8,000-12,000 words/h) with margin on both sides, the
+    same "order-of-magnitude mismatches only" philosophy as the byte band."""
+    assert MIN_WORDS_PER_HOUR < 8_000
+    assert MAX_WORDS_PER_HOUR > 12_000
+
+
+def test_an_abridged_audiobook_is_never_flagged_by_word_rate():
+    """Same exemption as the byte-based check — an abridgement legitimately
+    has far less audio than the ebook has text."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=_hours(2.99),
+        is_abridged=True, word_count=87_398,
+    )
+    assert ok is True
+    assert detail is None
+
+
+def test_missing_word_count_falls_back_to_the_byte_check_only():
+    """No word_count means "cannot judge on word rate" — never treated as a
+    finding on its own, and the byte-based check still runs as before."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=600_000, duration_seconds=_hours(10.0),
+        is_abridged=False, word_count=None,
+    )
+    assert ok is True
+    assert detail is None
+
+
+def test_a_plausible_word_rate_still_lets_the_byte_check_flag_a_pair():
+    """An implausible pair can be implausible on either signal — a normal
+    word rate does not exempt a pair whose file size vs. audio length is
+    still an order of magnitude off (issue #458's original case)."""
+    ok, detail = check_pair_plausibility(
+        ebook_file_size=1_200_000, duration_seconds=132,
+        is_abridged=False, word_count=None,
+    )
+    assert ok is False

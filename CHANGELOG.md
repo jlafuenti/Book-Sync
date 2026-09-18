@@ -16,6 +16,36 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- `implausible_pair` (`GET /api/troubleshoot/library`) now also checks words-per-hour, not just
+  bytes-per-hour: a real unabridged reading lands around 8,000-12,000 words/hour, and file size
+  alone can miss an abridgement or excerpt whose EPUB happens to carry heavy images/fonts (two
+  real pairs — an abridgement at ~29.3k words/h and a one-hour excerpt at ~80.8k words/h — slipped
+  past the byte-based check for exactly that reason) (#620). The same check now runs *before*
+  `auto_match_books` creates a pairing, not only after — a word-rate-implausible pair is no longer
+  auto-matched (and, with auto-transcribe on, queued) in the first place; a manual pairing still
+  only warns, unchanged from before.
+
+### Fixed
+
+- Alignment's degraded-map classifier (#586/#595) no longer fires on a tiny anchor pool: with very
+  few anchors surviving the outlier filter (2-25 raw, seen in production), the local trend a
+  rejected run is judged against is too sparse to trust, and a small book's ordinary fuzzy-match
+  noise could look exactly like a genuine reordered block. `MIN_KEPT_ANCHORS_FOR_DEGRADED` (20)
+  gates the fraction/run rule on enough surviving anchors first; the sync-map audit
+  (`GET /api/troubleshoot/sync-map-audit`) separately lets a clean, well-sampled timing check
+  (`timing_status == "ok"` over 20+ checked points) override a leftover alignment-time flag instead
+  of compounding with it (#620).
+- Alignment could drift smoothly for hundreds of sentences (up to hours, on a real book) and then
+  recover, inside a single large anchor-bounded gap whose local epub:whisper sentence-count ratio
+  varies (footnotes, chapter headings or other content present in the epub but never spoken,
+  clustered unevenly) — `_chunk_align`'s fixed-size windows assume one ratio for the whole gap, and
+  a wrong-sized window can force a *confident* match to the wrong audio, with the error carrying
+  into the next window until the true content reappears in range. `_filter_chunked_segment_drift`
+  checks chunked output against the gap's own two bracketing anchors and demotes a sustained
+  displaced run back to unmatched so it re-interpolates instead (#620).
+
 ### Changed
 
 - Widened the rule that un-finishes a book when its position moves back out of the end stretch

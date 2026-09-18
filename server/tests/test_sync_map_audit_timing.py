@@ -380,6 +380,34 @@ async def test_degraded_flag_from_alignment_time_is_surfaced(db, tmp_path):
     assert "18/60 raw anchors" in row["reason"]
 
 
+async def test_clean_timing_check_overrides_the_alignment_time_degraded_flag(db, tmp_path):
+    """Issue #620: a tiny anchor pool can trip the alignment-time `degraded`
+    flag even when the resulting map is fine (`alignment.py`'s own
+    `MIN_KEPT_ANCHORS_FOR_DEGRADED` softens this but doesn't guarantee it
+    never happens). The audit's own timing check is a direct, sampled
+    comparison against the cached transcript — when it runs a well-sampled
+    check and finds nothing wrong, that overrides the alignment-time
+    heuristic instead of compounding with it."""
+    pair, path = await _seed_pair(db, tmp_path)
+    await make_sync_map(
+        db, pair.id, _healthy_points(), epub_file_hash=hash_file(path),
+        degraded=True,
+        degraded_reason="6/8 raw anchors (75%) rejected ..., run of 6 displaced ~581 min.",
+    )
+    await _add_transcript(db, pair.id)  # in book order, clean
+
+    [row] = await sync_map_audit.audit_sync_maps(db)
+
+    assert row["timing_status"] == "ok"
+    assert row["timing_checked"] >= 20
+    # The raw alignment-time flag is still surfaced for an operator to see...
+    assert row["degraded"] is True
+    assert row["degraded_reason"]
+    # ...but it no longer promotes the verdict, given the clean timing check.
+    assert row["status"] == "healthy"
+    assert row["suggested_action"] is None
+
+
 async def test_degraded_flag_does_not_override_a_stale_verdict(db, tmp_path):
     """A wrong-file problem (already `stale`) is the bigger issue; the
     degraded flag is still reported, but doesn't relabel the verdict or its

@@ -284,3 +284,65 @@ async def test_already_paired_books_are_not_considered(db):
 
     assert await auto_match_books(db) == 0
     assert len((await db.execute(select(BookPair))).scalars().all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #620: word-rate implausible pairs must not be auto-matched at all —
+# not created and then flagged in Troubleshoot Library, which still lets the
+# pair reach the transcription queue. `_score_candidate`'s pure rules
+# (title/author/series) are unchanged and untouched by this; the gate runs
+# once per winning candidate, right before the pair would be created.
+# ---------------------------------------------------------------------------
+
+def _epub_with_word_count(tmp_path, n_words, name="book.epub"):
+    from tests.factories import write_epub
+    body = " ".join(f"word{i}" for i in range(n_words))
+    return write_epub(
+        tmp_path / name,
+        [("c1.xhtml", f"<html><body><p>{body}</p></body></html>")],
+    )
+
+
+async def test_auto_match_skips_a_word_rate_implausible_pairing(db, tmp_path):
+    """~6,000 words in 6 minutes of audio is ~60,000 words/hour — far past
+    `MAX_WORDS_PER_HOUR`. The pairing must never be created, not created and
+    flagged, so it never reaches auto-transcribe."""
+    path = _epub_with_word_count(tmp_path, 6_000)
+    eb = EBook(title="Mistborn", author="Brandon Sanderson", filename="book.epub",
+               file_path=path)
+    ab = AudioBook(title="Mistborn", author="Brandon Sanderson", filename="book.m4b",
+                    file_path=str(tmp_path / "book.m4b"), duration_seconds=360)
+    db.add_all([eb, ab])
+    await db.commit()
+
+    assert await auto_match_books(db) == 0
+    assert (await db.execute(select(BookPair))).scalars().all() == []
+
+
+async def test_auto_match_still_pairs_a_word_rate_plausible_pairing(db, tmp_path):
+    """A normal-paced real book (1,000 words / 6 minutes = 10,000 words/hour)
+    must not be blocked by the new gate."""
+    path = _epub_with_word_count(tmp_path, 1_000)
+    eb = EBook(title="Mistborn", author="Brandon Sanderson", filename="book.epub",
+               file_path=path)
+    ab = AudioBook(title="Mistborn", author="Brandon Sanderson", filename="book.m4b",
+                    file_path=str(tmp_path / "book.m4b"), duration_seconds=360)
+    db.add_all([eb, ab])
+    await db.commit()
+
+    assert await auto_match_books(db) == 1
+    pair = (await db.execute(select(BookPair))).scalar_one()
+    assert (pair.ebook_id, pair.audiobook_id) == (eb.id, ab.id)
+
+
+async def test_auto_match_without_a_readable_ebook_file_is_not_blocked(db):
+    """No real file at `file_path` (the common case in this test module's
+    other fixtures, and possible in production too) means word_count can't
+    be computed — that is "cannot judge", not "implausible", and must not
+    block an otherwise-good match."""
+    eb = await make_ebook(db, title="Mistborn", author="Brandon Sanderson")
+    ab = await make_audiobook(db, title="Mistborn", author="Brandon Sanderson",
+                              duration_seconds=360)
+
+    assert await auto_match_books(db) == 1
+    assert len((await db.execute(select(BookPair))).scalars().all()) == 1

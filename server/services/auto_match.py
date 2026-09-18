@@ -8,6 +8,7 @@ four rule helpers above it are pure functions over plain objects — no session
 ingesting. The rules themselves are documented inline below (issue #253).
 """
 
+import logging
 import re
 from typing import Optional
 
@@ -17,8 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.book import AudioBook, BookPair, EBook, PairStatus
 from models.settings import SystemSetting
-from services.pair_plausibility import record_pair_plausibility
+from services.pair_plausibility import (
+    check_pair_plausibility,
+    estimate_word_count,
+    record_pair_plausibility,
+)
 from utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +265,38 @@ async def auto_match_books(db: AsyncSession) -> int:
                 best_match = audiobook
 
         if best_match:
+            # Issue #458/#620: is this pairing plausible at all, *before*
+            # creating it? This matters more for the auto-matcher than for the
+            # manual-pair endpoint: a truncated download or an abridgement
+            # paired with the wrong (full-length) ebook is usually
+            # auto-matched, not hand-paired, and if the pair is created it
+            # reaches `synced` — and, with auto-transcribe on, the
+            # transcription queue — before anything has asked whether the
+            # pairing made sense. `word_count` is only computed here, once per
+            # *winning* candidate (never per comparison in the scoring loop
+            # above, and only when `duration_seconds` is known — the check
+            # can't judge without it either way), which keeps the parse cost
+            # bounded to at most one EPUB per new pair a scan actually makes,
+            # not O(candidates²).
+            word_count = None
+            if best_match.duration_seconds:
+                word_count = await estimate_word_count(ebook.file_path)
+            ok, detail = check_pair_plausibility(
+                ebook_file_size=ebook.file_size,
+                duration_seconds=best_match.duration_seconds,
+                is_abridged=best_match.is_abridged,
+                word_count=word_count,
+            )
+            if not ok:
+                logger.warning(
+                    "Skipping auto-match of ebook %s / audiobook %s: %s",
+                    ebook.id, best_match.id, detail,
+                )
+                # Deliberately not added to `matched_audiobook_ids`: a
+                # different ebook may still be a plausible match for this
+                # audiobook, and nothing else has claimed it.
+                continue
+
             pair = BookPair(
                 ebook_id=ebook.id,
                 audiobook_id=best_match.id,
@@ -269,13 +308,15 @@ async def auto_match_books(db: AsyncSession) -> int:
             matched += 1
             await db.flush() # Flush to get the ID
             new_pair_ids.append(pair.id)
-            # Issue #458. This path matters more than the manual one: a
-            # truncated download is usually auto-matched, not hand-paired, and
-            # the result reaches `synced` without anything having asked whether
-            # the pairing made sense. Comparing two numbers already on the rows
-            # costs nothing here, which is why the check is file-size based —
-            # parsing each EPUB would add minutes to a whole-library scan.
-            await record_pair_plausibility(db, pair, ebook, best_match)
+            # Records the same verdict just computed above as the persisted
+            # Troubleshoot Library finding — recomputed from `pair`/`ebook`/
+            # `best_match` rather than reusing `(ok, detail)` directly, since
+            # this is also every *other* call site's contract (manual pairing
+            # in routers/library.py) and re-running the same pure check here
+            # costs nothing (`word_count` itself, the only expensive part, was
+            # already computed once above and is passed through, not
+            # recomputed).
+            await record_pair_plausibility(db, pair, ebook, best_match, word_count=word_count)
 
     if auto_transcribe and new_pair_ids:
         from services.queue_manager import add_to_queue
