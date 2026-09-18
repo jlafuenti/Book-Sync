@@ -50,7 +50,8 @@ requirement that has to be satisfied before any of it reaches production, is in
 
 The app talks only to the server the user configures. No analytics SDK, no ads,
 no third-party data sharing. The one outbound call to anything else is the
-dictionary lookup in the reader; declare it if the form asks.
+dictionary lookup in the reader — Wiktionary, falling back to dictionaryapi.dev
+for words Wiktionary doesn't cover; declare it if the form asks.
 
 The user-facing statement of all of this is [privacy.md](privacy.md), which is
 what the Console's **Privacy policy** field must point at (see "Privacy policy
@@ -84,7 +85,8 @@ ask about:
   machine. Play's form has no way to express that; the privacy policy does, and
   the first-run screen says it before sign-in is even possible.
 * **The dictionary is the only sharing.** One word, on demand, unauthenticated,
-  to `api.dictionaryapi.dev`. No account, no token, no device id travels with it.
+  to `en.wiktionary.org` and, as its fallback, `api.dictionaryapi.dev`. No
+  account, no token, no device id travels with it.
 * **Diagnostics are local.** The timed log capture and the crash trace written on
   an uncaught exception stay in the app's own storage. Nothing is uploaded; the
   only way one leaves the device is the user choosing "Report a problem" and
