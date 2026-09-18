@@ -269,7 +269,8 @@ class PositionRepositoryTest {
         coVerify(exactly = 1) { pendingSyncDao.delete(queued) }
     }
 
-    // ---- updateProgress: leaving the end zone un-finishes locally (issue #584) --
+    // ---- updateProgress: a moved position outside the end zone un-finishes
+    // locally (issue #584, widened by #613) --
 
     private fun progress(
         mediaType: String, mediaId: Int, completed: Boolean,
@@ -297,15 +298,54 @@ class PositionRepositoryTest {
     }
 
     @Test
-    fun `an audio save that stays outside the end zone keeps a manual completion`() = runTest {
-        // The write moves the position (100_000 -> 200_000ms) but never enters
-        // the zone, so this is not a "leaving" transition — nothing to clear.
+    fun `an audio save that moves to a different mid-book position clears a manual completion`() = runTest {
+        // Issue #613: the old rule only cleared on the *transition* out of the
+        // zone, so a book already sitting mid-book when marked finished (both
+        // the old and new positions outside the zone here) could never
+        // un-finish. A write that moves the position at all now clears it.
         coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
             progress("audiobook", 9, completed = true, audioPositionMs = 100_000)
 
         positions().updateProgress(
             mediaType = "audiobook", mediaId = 9,
             audioPositionMs = 200_000, durationMs = 3_600_000L,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(false, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an audio save that resends the same position does not clear a manual completion`() = runTest {
+        // Not a move at all — a heartbeat resending the unchanged value must
+        // not undo a manual "mark finished" mid-book.
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 200_000)
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 200_000, durationMs = 3_600_000L,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(true, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an audio save with unknown duration never clears a manual completion, moved or not`() = runTest {
+        // No duration means no end zone to have moved outside of — the clear
+        // must not fire on every ordinary save just because "in the zone" is
+        // trivially false with nothing to compare against.
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 9) } returns
+            progress("audiobook", 9, completed = true, audioPositionMs = 100_000)
+
+        positions().updateProgress(
+            mediaType = "audiobook", mediaId = 9,
+            audioPositionMs = 99_999_999, durationMs = null,
             pushToServer = false,
         )
 
@@ -328,6 +368,41 @@ class PositionRepositoryTest {
         val written = slot<UserProgressEntity>()
         coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
         assertEquals(false, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an ebook save that moves to a different mid-book percent clears a manual completion`() = runTest {
+        // Ebook mirror of the audio widening test above.
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "ebook", 3) } returns
+            progress("ebook", 3, completed = true, epubProgressPercent = 50.0f)
+
+        positions().updateProgress(
+            mediaType = "ebook", mediaId = 3,
+            epubProgressPercent = 65.0f,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(false, written.captured.isCompleted)
+    }
+
+    @Test
+    fun `an ebook save that resends the same percent does not clear a manual completion`() = runTest {
+        // Sub-epsilon float jitter on a resend (50.0 vs 50.0000001) must not
+        // be mistaken for a move either.
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "ebook", 3) } returns
+            progress("ebook", 3, completed = true, epubProgressPercent = 50.0f)
+
+        positions().updateProgress(
+            mediaType = "ebook", mediaId = 3,
+            epubProgressPercent = 50.0000001f,
+            pushToServer = false,
+        )
+
+        val written = slot<UserProgressEntity>()
+        coVerify(exactly = 1) { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(true, written.captured.isCompleted)
     }
 
     @Test

@@ -391,40 +391,64 @@ when a position write finishes a book
 (`position_service._auto_complete`, issue #56); clients may still send the flag
 explicitly, and an explicit value always wins.
 
-The rule: a write that **crosses the end-zone boundary** flips the flag —
-entering completes the book, leaving un-finishes it (issue #584).
+The rule: a write that **enters the end zone** completes the book, and a
+write that **moves the position and lands outside it** un-finishes the book
+(issue #584, widened by #613).
 
 | Media | End zone | Setting (`server/config.py`) |
 |---|---|---|
 | Ebook | `epub_progress_percent >= 98` | `auto_complete_epub_percent` |
 | Audio | within 120 s of `AudioBook.duration_seconds` | `auto_complete_audio_tail_seconds` |
 
-- **Crossing, not being on a side.** The flag flips when the stored position
-  moves from one side of the boundary to the other:
-  - Outside the zone (or unset — a first write straight at the end counts) to
-    inside it: completes the book.
-  - Inside the zone to outside it: un-finishes the book. This applies whether
-    the completion came from the rule above or from an explicit
-    `is_completed: true` — scrubbing back from the last stretch to replay a
-    scene un-finishes the book, the accepted trade-off of this rule (issue
-    #584, option 1).
-  A write that stays on the same side it was already on never touches the
-  flag either way: a manual un-finish (`is_completed: false`) sticks while the
-  reader is still parked at the end (the next heartbeat there doesn't undo
-  it), and a manual *re*-finish sticks while the reader sits mid-book (the
-  next heartbeat there doesn't undo that either). Leaving and re-entering the
-  zone flips the flag again each time, in either direction.
+- **Entering the zone completes.** The stored position was outside it (or
+  unset — a first write straight at the end counts) and this write puts it
+  inside.
+- **Moving to outside the zone un-finishes — not only on the crossing.** A
+  write whose new position differs from what was stored, and lands outside
+  the end zone, clears `is_completed`, regardless of which side of the
+  boundary the *previous* position was already on. This applies whether the
+  completion came from the rule above or from an explicit
+  `is_completed: true`.
+
+  #584 only cleared the flag on the transition out of the zone (previous
+  position inside, new position outside). That left a gap issue #613 found:
+  a book already sitting mid-book when it was marked finished — for example,
+  played from the middle on a build that predated the auto-complete rule —
+  has *both* its before and after positions outside the zone on the next
+  write, so the transition never fires and the book can never un-finish.
+  Widening the condition from "was inside, now outside" to "moved, and now
+  outside" closes that gap while still covering the original crossing case
+  (a position that never moves can't have been inside the zone while now
+  reading as outside it). Accepted trade-off, unchanged from #584: scrubbing
+  back from the last stretch to replay a scene un-finishes the book, the same
+  as re-opening an earlier chapter of an ebook after finishing it does.
+- **A write that doesn't move the position never clears the flag**, no
+  matter which side of the boundary it sits on: a manual un-finish
+  (`is_completed: false`) sticks while the reader is still parked at the end
+  (the next heartbeat there doesn't undo it), and a manual finish sticks
+  while the reader sits mid-book (the next heartbeat that resends that same
+  mid-book position doesn't undo it either). Leaving and re-entering the zone
+  flips the flag again each time, in either direction.
+  - Ebook "moved" means the stored `epub_progress_percent` changed by at
+    least 0.01 percentage points — enough that a client's own float rounding
+    on an otherwise-unchanged position isn't mistaken for a move, without
+    requiring bit-for-bit equality on a resend.
+  - Audio "moved" is an exact millisecond comparison on `audio_position_ms`
+    — no epsilon needed, since it's an integer count and a heartbeat
+    resending the same position compares exactly equal.
 - **An explicit value always wins.** A write carrying `is_completed` sets
-  exactly that, and the crossing rule does not run at all for that write —
-  neither direction.
+  exactly that, and the rule above does not run at all for that write —
+  neither completing nor clearing.
 - **Unknown audio length ⇒ no audio end zone, in either direction.** The
   players' own end-of-stream write still finishes the book, because it sends
   `is_completed: true` itself; a completion set that way, or manually, is
-  never auto-cleared by a position write once the length is unknown — there is
-  no zone to leave. `AudioBook.duration_seconds` is filled by the library scan
-  from the file's own container header (issue #127) — for new rows and for
-  existing ones, so an ordinary scan backfills a library that predates it. The
-  file always wins over a stored value; an unreadable length never clears one.
+  never auto-cleared by a position write once the length is unknown — there
+  is no zone to have moved outside of, so the clearing check does not run at
+  all rather than firing on every ordinary position change.
+  `AudioBook.duration_seconds` is filled by the library scan from the file's
+  own container header (issue #127) — for new rows and for existing ones, so
+  an ordinary scan backfills a library that predates it. The file always wins
+  over a stored value; an unreadable length never clears one.
 - **Where the length comes from.** `services/audio_duration.py` probes with
   **ffprobe**, falling back to mutagen's `info.length` only when ffmpeg isn't on
   PATH. That ordering is deliberate: measured across the full production library,
