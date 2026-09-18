@@ -13,6 +13,7 @@ import com.booksync.BuildConfig
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DictionaryApi
 import com.booksync.data.remote.WiktionaryApi
+import com.booksync.data.remote.wiktionaryUserAgent
 import com.booksync.data.remote.httpLoggingLevel
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -226,6 +227,15 @@ object AppModule {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
+            // Wikimedia answers 403 to OkHttp's default agent string — see
+            // [com.booksync.data.remote.wiktionaryUserAgent].
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .header("User-Agent", wiktionaryUserAgent(BuildConfig.VERSION_NAME))
+                        .build(),
+                )
+            }
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = httpLoggingLevel(BuildConfig.DEBUG)
             })

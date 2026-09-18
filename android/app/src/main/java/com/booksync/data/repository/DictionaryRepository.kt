@@ -30,9 +30,10 @@ import retrofit2.HttpException
  * lemma).
  *
  * Both requests get one retry on a timeout or other I/O failure before the
- * lookup gives up — see [withRetry]. A non-2xx/404 [HttpException] is not
- * retried: it's a definite answer ("this word doesn't exist here"), not a
- * transient failure.
+ * source is given up on — see [withRetry]. An HTTP error is not retried:
+ * it is an answer, just not a useful one. Whatever the reason Wiktionary
+ * produces no entry, the fallback is asked next; only a failure of *both*
+ * sources is reported to the caller as a failed lookup.
  */
 @Singleton
 class DictionaryRepository @Inject constructor(
@@ -68,18 +69,27 @@ class DictionaryRepository @Inject constructor(
     }
 
     /**
-     * Null means "no English entry" (404, or a page that exists only in
-     * other languages) — the signal to fall back to [fallbackApi]. A timeout
-     * or other I/O failure that survives [withRetry] propagates instead of
-     * falling back: that mirrors the pre-#608 contract (throw = lookup
-     * failed) rather than silently masking an outage behind a slower fallback
-     * that would likely fail the same way.
+     * Null means "ask [fallbackApi] instead": no English entry (404, or a
+     * page that exists only in other languages), **or** any other failure of
+     * this source — a refused request, a server error, a timeout that
+     * survives [withRetry].
+     *
+     * Every failure falls back, not just 404, because the two sources fail
+     * independently: Wikimedia answered 403 to every lookup once the app's
+     * agent string displeased its robot policy (fixed in
+     * [com.booksync.data.remote.wiktionaryUserAgent]), and with a
+     * 404-only fallback that turned into "lookup failed" for every word
+     * rather than a slower answer from the source that was still working.
+     * A lookup only reports failure when *both* sources fail — see
+     * [lookupFallback], which still throws.
      */
     private suspend fun lookupWiktionary(word: String): List<DictionaryEntry>? {
         val response = try {
             withRetry { wiktionaryApi.lookup(word) }
         } catch (e: HttpException) {
-            if (e.code() == 404) return null else throw e
+            return null
+        } catch (e: IOException) {
+            return null
         }
 
         val english = response["en"]
