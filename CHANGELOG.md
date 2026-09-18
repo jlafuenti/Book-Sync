@@ -16,6 +16,19 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Changed
+
+- Widened the rule that un-finishes a book when its position moves back out of the end stretch
+  (#584): it used to clear `is_completed` only on the *transition* out of the end zone, so a book
+  already sitting mid-book when it was marked finished — for example, re-listened from the middle
+  on a build that predated that rule — had both its before and after positions outside the zone on
+  the next write, and could never un-finish. Now any write that *moves* the stored position (the
+  new value differs from what's stored) to somewhere outside the end zone clears the flag,
+  regardless of which side of the boundary the previous position was already on. A write that
+  doesn't move the position — a heartbeat, or a resend of the same value — still never clears it,
+  which is what keeps a manual "mark finished" sticking. Applies to both the server rule (every
+  client inherits it) and Android's local mirror for standalone books (#613).
+
 ## [0.3.0] - 2026-09-17
 
 ### Added

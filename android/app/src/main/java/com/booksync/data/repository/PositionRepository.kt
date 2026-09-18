@@ -1314,14 +1314,26 @@ class PositionRepository @Inject constructor(
      * Update progress locally and queue for sync.
      *
      * [isCompleted] left null (the ordinary save path) keeps whatever is
-     * already stored — *unless* this save's own position crosses back out of
-     * the end zone the stored completion was sitting in, in which case it is
-     * cleared. This is Android's local mirror of the server's crossing rule
-     * (`position_service._auto_complete`, issue #584): the server is still
-     * authoritative and re-derives the same verdict on its own copy, but
-     * without this, a save that undoes a finished book's position leaves the
-     * local row claiming "completed" — and every Continue list filters that
-     * out — until the next round trip corrects it. See [AutoComplete].
+     * already stored — *unless* this save **moves** the position to
+     * somewhere outside the end zone the stored completion was sitting near,
+     * in which case it is cleared. This is Android's local mirror of the
+     * server's rule (`position_service._auto_complete`, issue #584, widened
+     * by #613): the server is still authoritative and re-derives the same
+     * verdict on its own copy, but without this, a save that undoes a
+     * finished book's position leaves the local row claiming "completed" —
+     * and every Continue list filters that out — until the next round trip
+     * corrects it. See [AutoComplete].
+     *
+     * "Moves" means the new value differs from what was stored (audio: exact
+     * millisecond comparison; ebook: [AutoComplete.epubPercentMoved], which
+     * tolerates float jitter under 0.01 percentage points) — not merely that
+     * the previous position was inside the zone. #584's original version only
+     * cleared on that narrower transition, which meant a book already sitting
+     * mid-book when marked finished (both the old and new positions outside
+     * the zone) could never un-finish; #613 widened it to any move that lands
+     * outside. A write that doesn't move the position — a heartbeat, or a
+     * resend of the same value — never clears the flag, which is what keeps
+     * a manual "mark finished" sticking through ordinary re-saves.
      *
      * [durationMs] is the audiobook's current duration, needed to know where
      * the audio end zone is. It is deliberately a parameter rather than a DAO
@@ -1331,7 +1343,10 @@ class PositionRepository @Inject constructor(
      * Omitted (standalone ebook saves, or an audio save whose caller doesn't
      * have it yet), the audio side of the check simply does not run — the
      * completion carries over unchanged, the same as a stored value with no
-     * `duration_seconds` does server-side.
+     * `duration_seconds` does server-side. Without this guard, "moved" alone
+     * would clear a completion on every ordinary audio save once the
+     * duration is unknown, since "in the end zone" is trivially false with no
+     * duration to compare against.
      */
     suspend fun updateProgress(
         mediaType: String,
@@ -1356,13 +1371,16 @@ class PositionRepository @Inject constructor(
 
         val resolvedIsCompleted = isCompleted ?: run {
             val wasCompleted = existing?.isCompleted ?: false
-            val leftAudioZone = mediaType == "audiobook" && audioPositionMs != null &&
-                AutoComplete.inAudioEndZone(existing?.audioPositionMs, durationMs) &&
+            // Audio needs a known duration to have an end zone at all — with
+            // none, "moved" alone would clear on every ordinary save (see the
+            // doc comment above).
+            val movedOutsideAudioZone = mediaType == "audiobook" && audioPositionMs != null &&
+                durationMs != null && audioPositionMs != existing?.audioPositionMs &&
                 !AutoComplete.inAudioEndZone(audioPositionMs, durationMs)
-            val leftEpubZone = mediaType == "ebook" && epubProgressPercent != null &&
-                AutoComplete.inEpubEndZone(existing?.epubProgressPercent) &&
+            val movedOutsideEpubZone = mediaType == "ebook" && epubProgressPercent != null &&
+                AutoComplete.epubPercentMoved(existing?.epubProgressPercent, epubProgressPercent) &&
                 !AutoComplete.inEpubEndZone(epubProgressPercent)
-            wasCompleted && !(leftAudioZone || leftEpubZone)
+            wasCompleted && !(movedOutsideAudioZone || movedOutsideEpubZone)
         }
 
         // Merge with existing

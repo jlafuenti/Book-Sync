@@ -486,13 +486,16 @@ async def test_the_write_response_includes_the_hint_it_just_stored(
     assert hints[0]["current"] is True
 
 
-# ---------- completion (issue #56) ----------
+# ---------- completion (issue #56, widened by #584 and #613) ----------
 #
 # "Finished" used to be whatever each client remembered to send: the web
 # player set it on the audio `ended` event, the Android player on STATE_ENDED,
 # and no reader ever set it. The rule now lives on the server so every client
-# inherits it: a write whose position *crosses into* the end zone completes
-# the book. Explicit values always win, and nothing ever auto-clears.
+# inherits it: a write whose position enters the end zone completes the book,
+# and a write that *moves* the position to somewhere outside the end zone
+# un-finishes it — regardless of which side of the boundary the previous
+# position was already on. Explicit values always win, and a write that
+# doesn't move the position never touches the flag either way.
 
 async def test_ebook_write_crossing_the_end_zone_completes_the_book(
     client, make_user, auth_header, db
@@ -671,13 +674,16 @@ async def test_leaving_the_end_zone_clears_an_explicit_completion(
     assert flags == {"ebook": False, "audiobook": False}
 
 
-async def test_middle_to_middle_write_does_not_touch_a_manual_completion(
+async def test_mid_book_to_different_mid_book_position_clears_a_completed_flag(
     client, make_user, auth_header, db
 ):
-    """A manual completion set while the position is *already* outside the
-    end zone (a deliberate "mark as finished" on a partially-read book) must
-    survive an ordinary write elsewhere outside the zone — that write never
-    crossed the boundary, so there is nothing to clear."""
+    """Issue #613 widens #584's rule: the old version only cleared
+    `is_completed` on the *transition* out of the end zone, so a book already
+    sitting mid-book when marked finished (both the before and after
+    positions outside the zone) could never un-finish. Now any write that
+    *moves* the stored position to a different spot outside the end zone
+    clears the flag, whether or not the previous position was in the zone
+    too."""
     pair = await make_book_pair(db, duration_seconds=3600)
     user = await make_user(username="reader")
 
@@ -694,7 +700,93 @@ async def test_middle_to_middle_write_does_not_touch_a_manual_completion(
         client, user, auth_header, "pair", pair.id, source="audiobook",
         audio_position_ms=200_000, captured_at="2026-07-30T10:02:00Z",
     )
-    assert middle.json()["is_completed"] is True
+    assert middle.json()["is_completed"] is False
+
+    # Both projected rows of the pair follow, consistently with completion.
+    progress = await client.get("/api/sync/progress", headers=auth_header(user))
+    flags = {r["media_type"]: r["is_completed"] for r in progress.json()}
+    assert flags == {"ebook": False, "audiobook": False}
+
+
+async def test_resending_the_same_mid_book_position_does_not_clear_completion(
+    client, make_user, auth_header, db
+):
+    """The other half of the widened rule: a write that does not *move* the
+    position — a heartbeat, or a re-save of the same value — never clears
+    `is_completed`, even mid-book. That is what keeps a manual "mark
+    finished" sticking through ordinary re-saves."""
+    pair = await make_book_pair(db, duration_seconds=3600)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=200_000, captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+
+    heartbeat = await _put(
+        client, user, auth_header, "pair", pair.id, source="audiobook",
+        audio_position_ms=200_000, captured_at="2026-07-30T10:02:00Z",
+    )
+    assert heartbeat.json()["is_completed"] is True
+
+
+async def test_resending_the_same_epub_percent_does_not_clear_completion(
+    client, make_user, auth_header, db
+):
+    """Ebook mirror of the audio heartbeat test above, and a check that a
+    sub-epsilon float wobble on a resend (49.999999 vs 50.0) is still treated
+    as "the same position", not a move."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=10, epub_progress_percent=50.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+
+    resend = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=10, epub_progress_percent=50.0000001,
+        captured_at="2026-07-30T10:02:00Z",
+    )
+    assert resend.json()["is_completed"] is True
+
+
+async def test_epub_mid_book_to_different_mid_book_position_clears_completion(
+    client, make_user, auth_header, db
+):
+    """Ebook mirror of the audio widening: a percent write that moves by more
+    than the float-jitter epsilon and lands outside the end zone clears a
+    manual completion, even though neither the old nor the new position was
+    ever in the end zone."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=10, epub_progress_percent=50.0,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        is_completed=True, captured_at="2026-07-30T10:01:00Z",
+    )
+
+    moved = await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=15, epub_progress_percent=65.0,
+        captured_at="2026-07-30T10:02:00Z",
+    )
+    assert moved.json()["is_completed"] is False
 
 
 async def test_end_to_end_write_keeps_completion(client, make_user, auth_header, db):
