@@ -1,1 +1,1 @@
-Fixes Define in the reader: in 0.4.0 every word came back "No definition available". Looking a word up now works again, and falls back to a second dictionary when the first has nothing.
+Report a problem now attaches the Android Auto log as well as the app log, so a problem in the car arrives with the evidence about the car.
