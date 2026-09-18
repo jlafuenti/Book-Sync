@@ -113,4 +113,19 @@
     <string name="account_report_problem_desc">Send the app log, version and device details.</string>
     <string name="report_problem_chooser">Report a problem</string>
 
+    <!-- ============ Home empty state (issue #624) ============ -->
+    <!-- Home's empty state used to say "library is empty" whenever its own
+         four carousels had nothing in them — including for an account whose
+         library is full but has not opened anything yet, which is exactly the
+         case a Play reviewer lands in after "Try the demo" (#147). These now
+         split into the genuinely-empty case (unchanged copy) and a
+         nothing-started case that points at the Library tab instead of the
+         web app, since the books are already on the device account. -->
+    <string name="home_empty_library_title">Your library is empty</string>
+    <string name="home_empty_library_subtitle">Upload ebooks and audiobooks from the web app, then they\'ll show up here.</string>
+    <string name="home_empty_library_action">Open web app</string>
+    <string name="home_nothing_started_title">Nothing started yet</string>
+    <string name="home_nothing_started_subtitle">Your library has books — open the Library tab to pick one and start reading or listening.</string>
+    <string name="home_nothing_started_action">Go to Library</string>
+
 </resources>

@@ -763,6 +763,15 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                             restoreState = true
                         }
                     },
+                    // Issue #624: the "nothing started yet" empty state's button —
+                    // same tab-switch shape as onSeeAll above, just without a filter/sort.
+                    onGoToLibrary = {
+                        bottomNavController.navigate(Routes.library()) {
+                            popUpTo(bottomNavController.graph.startDestinationId) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
 
