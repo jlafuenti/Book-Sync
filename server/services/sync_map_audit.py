@@ -163,6 +163,20 @@ TIMING_MISMATCH_RUN_LENGTH = 3
 #: transcription of the same passage, not a different passage entirely.
 TIMING_MATCH_SCORE_CUTOFF = 80
 
+#: Issue #620: a small anchor pool can trip the alignment-time `degraded`
+#: flag (`alignment.MIN_KEPT_ANCHORS_FOR_DEGRADED` softens this but does not
+#: guarantee it never happens — a pair whose kept-anchor count happens to sit
+#: just above that floor can still misfire). The timing check above is a
+#: direct, sampled comparison against the cached transcript, not a heuristic
+#: about what the anchor filter rejected — when it comes back clean
+#: (`timing_status == "ok"`) over at least this many successfully-located
+#: points, that is stronger evidence than the alignment-time flag, and the
+#: flag alone no longer promotes the verdict to degraded. Below this many
+#: checked points the timing check itself carries little weight, so the
+#: alignment-time flag is left to stand rather than being overridden by a
+#: thin sample.
+MIN_TIMING_CHECKED_FOR_CLEAN_OVERRIDE = 20
+
 
 def _needle(preview: Optional[str]) -> Optional[str]:
     """The searchable form of a stored preview, or None if it carries no
@@ -746,10 +760,21 @@ async def _audit_one(
     # Either promotes an otherwise-healthy verdict; neither overrides a
     # hash/text verdict that already caught a bigger problem (the wrong file
     # entirely).
-    if status == "healthy" and (sync_map.degraded or timing_status == "flagged"):
+    #
+    # Issue #620: a clean, well-sampled timing check overrides the
+    # alignment-time flag rather than compounding with it — see
+    # `MIN_TIMING_CHECKED_FOR_CLEAN_OVERRIDE`'s docstring above. The raw
+    # `sync_map.degraded`/`degraded_reason` are still surfaced on the response
+    # regardless (below), so an operator can see the alignment-time flag was
+    # overridden, not just that it's absent.
+    alignment_flag_confirmed = sync_map.degraded and not (
+        timing_status == "ok"
+        and timing_result.checked >= MIN_TIMING_CHECKED_FOR_CLEAN_OVERRIDE
+    )
+    if status == "healthy" and (alignment_flag_confirmed or timing_status == "flagged"):
         status = "degraded"
         parts = []
-        if sync_map.degraded and sync_map.degraded_reason:
+        if alignment_flag_confirmed and sync_map.degraded_reason:
             parts.append(sync_map.degraded_reason)
         if timing_status == "flagged":
             chapters = timing_result.mismatch_chapters

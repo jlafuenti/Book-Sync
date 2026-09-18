@@ -74,6 +74,23 @@ MIN_DISPLACED_RUN_LENGTH = 3
 #: with ordinary noise rejects a small handful out of hundreds.
 DEGRADED_REJECTED_FRACTION = 0.10
 
+#: Minimum number of anchors that must *survive* the LIS/consistency filter
+#: before the fraction/run rule above is even considered (issue #620). A
+#: production re-run of #595's fix found 14 pairs marked degraded whose
+#: post-filter map the audit's own timing check confirmed clean (0 mismatches
+#: of 65-75 sampled points) — e.g. "6/8 raw anchors (75%) rejected ..., run of
+#: 6 displaced ~581 min" (2 kept) and "13/25 rejected ..., run of 7 displaced
+#: ~117 min" (12 kept). `_expected_ms`'s local trend is fit through nothing
+#: but the kept anchors themselves; with only a couple of them the "trend" is
+#: barely more than a straight line between two points, and a handful of
+#: ordinary fuzzy-match candidates landing on one side of it by chance reads
+#: as a "displaced run" exactly as easily as a genuine reordered block would.
+#: A book with a real reordering and a healthy-sized anchor pool (hundreds,
+#: for a full novel — see `test_swapped_audio_blocks_flagged_degraded`) clears
+#: this floor with room to spare; both of issue #620's real false positives
+#: (kept=2, kept=12) sit well under it.
+MIN_KEPT_ANCHORS_FOR_DEGRADED = 20
+
 
 @dataclass
 class AlignmentDiagnostics:
@@ -179,8 +196,21 @@ def _diagnose_anchor_rejection(
     degraded = (
         rejected_fraction >= DEGRADED_REJECTED_FRACTION
         and best_run_len >= MIN_DISPLACED_RUN_LENGTH
+        and kept_n >= MIN_KEPT_ANCHORS_FOR_DEGRADED
     )
     reason = ""
+    if (
+        rejected_fraction >= DEGRADED_REJECTED_FRACTION
+        and best_run_len >= MIN_DISPLACED_RUN_LENGTH
+        and kept_n < MIN_KEPT_ANCHORS_FOR_DEGRADED
+    ):
+        logger.info(
+            "Anchor rejection looked degraded (%d/%d rejected, run of %d) but "
+            "only %d anchors survived the filter — below "
+            "MIN_KEPT_ANCHORS_FOR_DEGRADED (%d), so the trend it was judged "
+            "against is too sparse to trust; not classifying as degraded.",
+            rejected_n, raw_n, best_run_len, kept_n, MIN_KEPT_ANCHORS_FOR_DEGRADED,
+        )
     if degraded:
         offset_min = (best_run_offset or 0) / 60_000
         reason = (
@@ -485,6 +515,109 @@ def _filter_consistent_anchors(
     return kept
 
 
+# ---------------------------------------------------------------------------
+# Chunked-segment drift (issue #620)
+#
+# `_chunk_align` walks the epub side in FIXED `chunk_size`-sentence steps and
+# sizes each chunk's whisper-side window from ONE ratio (`m/n`) averaged over
+# the WHOLE segment it was given. That average is only ever exactly right if
+# the true epub:whisper sentence-count ratio is uniform across the segment.
+# When it is not — a stretch with more footnotes, captions or chapter
+# headings than the rest (present in the epub, never spoken), or any other
+# place the epub and transcript sentence lists diverge in density — a
+# chunk's window ends up the wrong size, the sentence it should match is not
+# even a candidate inside it, and DTW is forced to pick the best AVAILABLE
+# (wrong) candidate instead: a *confident* match, just to the wrong audio.
+# The next chunk's window is then rebased from that wrong position
+# (`whisper_start = whisper_start + last_wi + 1`), so the error carries
+# forward and compounds — smoothly, one small step per chunk, not a single
+# jump — until the true content reappears inside a window and it corrects.
+# That is exactly the "runs increasingly off, then recovers" shape reported:
+# reproduced directly in this fix's regression test with a segment whose
+# middle third has extra unspoken content and nothing else unusual about it.
+#
+# A segment `_chunk_align` is asked to cover is always bounded by two real
+# (or virtual book-start/end) anchors, which gives a reference this problem
+# doesn't have to solve for itself: those two anchors' own timestamps imply
+# a straight line across the segment, independent of chunking entirely.
+# `_filter_chunked_segment_drift` checks the chunked output against that
+# line and demotes a sustained displaced run back to "unmatched" — the
+# existing re-interpolation pass in `_align_texts_impl` then fills the run
+# in from whatever real matches remain on either side of it (for a fully
+# displaced run, that is the segment's own two bracketing anchors, i.e. the
+# same straight line, which is a strictly better estimate than a run of
+# confidently wrong chunked matches).
+# ---------------------------------------------------------------------------
+
+#: A chunked-segment point is "drifted" from the segment's own
+#: boundary-to-boundary straight line when it is off by more than this.
+#: Matches `DISPLACED_ANCHOR_OFFSET_MS` — ordinary pacing variation within a
+#: book (a slower scene, a pause) is seconds, not minutes.
+CHUNK_DRIFT_OFFSET_MS = 3 * 60 * 1000  # 3 minutes
+
+#: A run shorter than this is left alone — chunked-segment output is one
+#: point per *sentence*, far denser than the widely-spaced samples the
+#: audit's own run-length rules (`MIN_DISPLACED_RUN_LENGTH`,
+#: `TIMING_MISMATCH_RUN_LENGTH`, both 3) check, so a run long enough to mean
+#: something here needs to be longer too: a handful of sentences legitimately
+#: narrated at an unusual pace (a long pause, a musical cue noted in the
+#: transcript) can drift briefly without being wrong, and must not be thrown
+#: away on that alone.
+CHUNK_DRIFT_MIN_RUN = 15
+
+
+def _filter_chunked_segment_drift(
+    seg_alignments: List[Tuple[int, int, float]],
+    epub_span: int,
+    boundary_start_ms: float,
+    boundary_end_ms: float,
+    whisper_sentences: List["TranscribedSentence"],
+    ws: int,
+) -> List[Tuple[int, int, float]]:
+    """Demote a sustained run of `_chunk_align` output that drifted far from
+    the segment's own boundary-to-boundary straight line — see the module
+    comment above for why chunked DTW can produce exactly this shape.
+
+    `seg_alignments` is local to the segment (`(local_epub_idx,
+    local_whisper_idx, confidence)`, `_chunk_align`'s own return shape); `ws`
+    is the segment's whisper-side start offset into `whisper_sentences`,
+    needed to look up each local whisper index's real timestamp. `epub_span`
+    is the segment's epub length — the "x-axis" of the line from
+    `boundary_start_ms` (at local epub index 0) to `boundary_end_ms` (at
+    `epub_span`).
+
+    Demoted points come back with confidence 0.0, not dropped: the caller's
+    own re-interpolation pass (`_align_texts_impl`) fills a confidence-0
+    point in from whatever real matches remain on either side of it.
+    """
+    if epub_span <= 0 or not seg_alignments:
+        return seg_alignments
+
+    def expected_ms(local_epub_idx: int) -> float:
+        frac = local_epub_idx / epub_span
+        return boundary_start_ms + frac * (boundary_end_ms - boundary_start_ms)
+
+    filtered: List[Tuple[int, int, float]] = []
+    run: List[Tuple[int, int, float]] = []
+
+    def flush():
+        if len(run) >= CHUNK_DRIFT_MIN_RUN:
+            filtered.extend((ei, wi, 0.0) for ei, wi, _conf in run)
+        else:
+            filtered.extend(run)
+        run.clear()
+
+    for ei, wi, conf in seg_alignments:
+        actual_ms = whisper_sentences[wi + ws].start_ms
+        if abs(actual_ms - expected_ms(ei)) > CHUNK_DRIFT_OFFSET_MS:
+            run.append((ei, wi, conf))
+        else:
+            flush()
+            filtered.append((ei, wi, conf))
+    flush()
+    return filtered
+
+
 def _anchor_align(
     epub_sentences: List[EpubSentence],
     whisper_sentences: List[TranscribedSentence],
@@ -511,7 +644,12 @@ def _anchor_align(
     )
     if len(anchors) < 3:
         logger.warning("Too few anchors (%d); falling back to chunked DTW", len(anchors))
-        return _chunk_align(epub_sentences, whisper_sentences), diagnostics
+        whole_book = _chunk_align(epub_sentences, whisper_sentences)
+        if n > 0 and whisper_sentences:
+            whole_book = _filter_chunked_segment_drift(
+                whole_book, n, 0.0, whisper_sentences[-1].end_ms, whisper_sentences, 0,
+            )
+        return whole_book, diagnostics
 
     # Virtual anchors pin the first/last segments.
     waypoints = [(-1, -1, 1.0)] + anchors + [(n, m, 1.0)]
@@ -528,10 +666,24 @@ def _anchor_align(
                 sim = _compute_similarity_matrix(epub_seg, whisper_seg)
                 seg_alignments = _align_with_dtw(epub_seg, whisper_seg, sim)
             else:
-                # Huge gap between anchors: chunked DTW is acceptable here
-                # because both endpoints are pinned — drift cannot escape
-                # this segment.
+                # Huge gap between anchors: the segment's *inputs* are
+                # bounded either way, but chunked DTW's own interior output
+                # is not pinned to the boundary at every point in between —
+                # `_filter_chunked_segment_drift` below is what actually
+                # keeps drift from escaping (issue #620; see the module
+                # comment above it).
                 seg_alignments = _chunk_align(epub_seg, whisper_seg)
+                boundary_start_ms = (
+                    whisper_sentences[w0].start_ms if w0 >= 0 else 0.0
+                )
+                boundary_end_ms = (
+                    whisper_sentences[w1].start_ms if w1 < m
+                    else whisper_sentences[-1].end_ms
+                )
+                seg_alignments = _filter_chunked_segment_drift(
+                    seg_alignments, ee - es, boundary_start_ms, boundary_end_ms,
+                    whisper_sentences, ws,
+                )
             for ei, wi, conf in seg_alignments:
                 all_alignments.append((ei + es, wi + ws, conf))
 
