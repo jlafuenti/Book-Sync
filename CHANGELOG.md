@@ -16,6 +16,39 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- `_filter_chunked_segment_drift` (0.4.0, #620) demoted nearly every matched point in a large
+  anchor-bounded gap instead of just the genuinely displaced ones, making realign strictly worse
+  than doing nothing on exactly the pairs it was meant to repair — production re-realigns of the
+  12 affected pairs all came back with fewer matched points and *more* audit timing mismatches
+  than before (one pair: 12,268 matched -> 252; 8/74 mismatches -> 62/74). Root cause: the filter
+  judges every point in a segment against one straight line drawn between its two bracketing
+  anchors, but that line is only accurate when the epub:whisper density is uniform across the
+  *whole* segment — and a segment large enough to need chunked alignment in the first place (up
+  to a whole book, on the sparse-anchor fallback) is exactly where it is least likely to be. An
+  ordinary pacing difference between two large stretches of a real book was then enough to put
+  correct matches on the far side of the difference outside tolerance for the rest of the
+  segment, and because they were all off in the same direction the run-length check did nothing
+  to contain it. `CHUNK_DRIFT_MAX_DEMOTION_FRACTION` (30%) bounds the damage: if applying the
+  filter would demote more than that share of a segment's matches, the reference itself is the
+  more likely thing that's wrong, and the segment's chunked output is now left untouched instead
+  (#635).
+
+### Upgrade notes
+
+- The 12 pairs from #635's production re-audit (and any others the sync-map audit flags
+  `status: "realign"`) need to be realigned again after this deploys — the 0.4.1 realign that hit
+  this bug left them with fewer matched sync points than before, and only a fresh realign under
+  the fix restores them.
+- This narrows what #620's chunked-drift fix (0.4.0) actually corrects: a genuinely displaced run
+  that is a small minority of a large gap's points is still caught and repaired, but a gap whose
+  matches are *mostly* correct and simply spread across a non-uniform pace is now left alone
+  rather than being "corrected" into a straight-line interpolation that #635 showed is typically a
+  worse estimate than the original chunked output. A smarter, locally-scoped reference (instead of
+  one chord per segment) would let the filter safely re-cover that case; not attempted here in the
+  interest of shipping the regression fix first.
+
 ## [0.4.1] - 2026-09-18
 
 Android only. Nothing in the server or the web app changed since 0.4.0, so a deployment has

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from services.alignment import (
     align_texts,
     align_texts_with_diagnostics,
+    CHUNK_DRIFT_MAX_DEMOTION_FRACTION,
     CHUNK_DRIFT_MIN_RUN,
     _chunk_align,
     _diagnose_anchor_rejection,
@@ -575,14 +576,42 @@ def test_chunk_align_can_drift_smoothly_on_a_locally_skewed_ratio():
     assert abs(got[last_i] - truth[last_i]) < 5000
 
 
+def _make_bounded_drift_segment():
+    """A 3,320-epub/~3,248-point segment: a long, ordinary 3,000-sentence
+    run, a short 60-sentence region with double local epub:whisper density
+    (footnotes/headings, as in `_make_skewed_gap_segment`), then a short
+    200-sentence tail back to normal.
+
+    Shaped to keep the genuinely-drifted run a small MINORITY of the whole
+    segment (issue #635's own complaint about `_make_skewed_gap_segment`,
+    below, is that its skewed third is not a realistic shape: a single
+    skewed region compounds through everything downstream of it until
+    `_chunk_align` gets a chance to resync, so a short tail keeps that
+    compounding confined instead of consuming the whole remainder)."""
+    return _make_locally_skewed_segment(
+        n_spoken_per_region=[3000, 60, 200],
+        drop_fraction_per_region=[0.0, 1.0, 0.0],
+    )
+
+
 def test_filter_chunked_segment_drift_corrects_the_skewed_gap():
-    """The regression test for the actual fix: applying
+    """The regression test for the original #628 fix: applying
     `_filter_chunked_segment_drift` to the same chunked output, with the
     segment's own true boundary (epub index 0 -> ms 0; last spoken index ->
     its true ms — exactly what `_anchor_align` passes in from two real
     anchors), demotes the wrongly-confident run instead of leaving it
-    standing."""
-    epub, whisper, truth = _make_skewed_gap_segment()
+    standing.
+
+    Uses `_make_bounded_drift_segment` rather than the original
+    `_make_skewed_gap_segment` fixture (kept above, still exercising
+    `_chunk_align` directly): that fixture's skewed region is a full third
+    of the segment, which compounds into ~38% of the whole segment reading
+    confidently wrong — enough to trip the #635 safety bound below and mask
+    the very thing this test is supposed to pin. A real confirmed-displaced
+    run is a small minority of a gap's points; this fixture keeps it one
+    (61/3,248, under 2%) so this test still exercises the original
+    run-demotion behavior instead of the bailout path."""
+    epub, whisper, truth = _make_bounded_drift_segment()
     raw = _chunk_align(epub, whisper, chunk_size=200, overlap=20)
 
     fixed = _filter_chunked_segment_drift(
@@ -600,10 +629,12 @@ def test_filter_chunked_segment_drift_corrects_the_skewed_gap():
             )
 
     # And it actually did something: a real, substantial run was demoted
-    # (not the whole segment, and not nothing).
+    # (not the whole segment, and not nothing) — well under the safety
+    # bound, so this is the ordinary demotion path, not the #635 bailout.
     demoted = sum(1 for _, _, conf in fixed if conf == 0.0)
     assert demoted >= CHUNK_DRIFT_MIN_RUN
     assert demoted < len(raw)
+    assert demoted / len(raw) < CHUNK_DRIFT_MAX_DEMOTION_FRACTION
 
 
 def test_filter_chunked_segment_drift_leaves_a_clean_segment_alone():
@@ -632,3 +663,127 @@ def test_align_texts_through_a_whole_book_fallback_does_not_regress():
     assert len(points) == len(epub)
     matched = [p for p in points if p.confidence > 0]
     assert len(matched) > len(points) * 0.8
+
+
+# ---------------------------------------------------------------------------
+# Issue #635: #628's own fix was the regression. Realigning the 12 affected
+# production pairs on 0.4.1 made every one of them worse — e.g. one pair went
+# from 12,268 matched points on 0.3.0 down to 252 on 0.4.1, with the audit's
+# timing-mismatch count going UP (35/71 -> 70/71). Root cause: `expected_ms`
+# is a single straight line drawn from one bracketing anchor to the other
+# across the WHOLE segment. That line is only an accurate reference when the
+# epub:whisper density is uniform end-to-end — and a segment large enough to
+# need `_chunk_align` (up to a whole book, on the `len(anchors) < 3`
+# fallback) is exactly where it is least likely to be. Wherever density
+# genuinely varies across a long segment (an ordinary pacing difference
+# between a faster and a slower stretch — nothing wrong with the match
+# itself), every point on the far side of that change sits far from the
+# single chord, in the same direction, so the run-length rule does nothing
+# to contain it: "sustained real displacement" and "sustained but correct,
+# judged against a bad reference" look identical to it. Reproduced below
+# directly against `_filter_chunked_segment_drift`, isolating the reference
+# problem from any `_chunk_align` behavior.
+# ---------------------------------------------------------------------------
+
+def _make_two_pace_reference(n, pace_break, pace_before_ms, pace_after_ms):
+    """`n` whisper sentences at a uniform pace up to `pace_break`, a
+    different uniform pace after it — an ordinary two-stretch book (brisk
+    dialogue, then slower descriptive narration), no anomaly at all. Returns
+    `(whisper_sentences, true_ms)` where `true_ms(i)` is sentence `i`'s
+    correct start time."""
+    def true_ms(i):
+        if i < pace_break:
+            return i * pace_before_ms
+        return pace_break * pace_before_ms + (i - pace_break) * pace_after_ms
+
+    whisper = [
+        TranscribedSentence(text=f"sentence number {i}", start_ms=true_ms(i), end_ms=true_ms(i) + 1000)
+        for i in range(n)
+    ]
+    return whisper, true_ms
+
+
+def _build_long_skewed_gap_case():
+    """The shape #635 asks for: a long (10,000-point) anchor-bounded gap
+    whose epub:whisper pacing varies (brisk dialogue for the first 6,000
+    sentences, slower narration for the last 4,000 — an everyday pacing
+    difference, not a defect), where only a couple hundred points (220,
+    matching the issue's "a few hundred of several thousand") are genuinely
+    displaced by a real matching error. Returns `(seg_alignments, whisper,
+    true_ms, bad_lo, bad_hi)`."""
+    n = 10_000
+    pace_break = 6_000
+    whisper, true_ms = _make_two_pace_reference(
+        n, pace_break, pace_before_ms=2_500, pace_after_ms=4_500,
+    )
+
+    bad_lo, bad_hi = 7_000, 7_220
+    seg_alignments = []
+    for i in range(n):
+        if bad_lo <= i < bad_hi:
+            wrong_i = min(n - 1, i + 400)  # a real DTW error: minutes away
+            seg_alignments.append((i, wrong_i, 0.95))
+        else:
+            seg_alignments.append((i, i, 0.95))  # correct match
+    return seg_alignments, whisper, true_ms, bad_lo, bad_hi
+
+
+def test_filter_chunked_segment_drift_regression_pin_for_635():
+    """The regression pin: on the shape above, the filter must not destroy
+    the correctly-matched majority of a segment just because a long gap's
+    single boundary-to-boundary reference disagrees with most of it.
+
+    Measured directly against this fixture before the #635 fix existed:
+    `_filter_chunked_segment_drift` demoted 9,624 of the 10,000 points
+    (96%) — including 9,780 - (9,624 - 220) = 9,404 points that were
+    genuinely CORRECT matches — collapsing 10,000 matched points down to
+    376, the same "collapses to near nothing" shape as the issue's own
+    12,268 -> 252 production case. This test pins the fixed behavior: the
+    safety bound (`CHUNK_DRIFT_MAX_DEMOTION_FRACTION`) must recognize a
+    would-be 96% demotion as evidence against the reference, not the
+    matches, and leave the segment untouched instead."""
+    seg_alignments, whisper, true_ms, bad_lo, bad_hi = _build_long_skewed_gap_case()
+
+    fixed = _filter_chunked_segment_drift(
+        seg_alignments, len(whisper) - 1, 0.0, whisper[-1].start_ms, whisper, ws=0,
+    )
+
+    matched_before = sum(1 for _, _, conf in seg_alignments if conf > 0)
+    matched_after = sum(1 for _, _, conf in fixed if conf > 0)
+    assert matched_before == len(whisper)
+
+    # The regression this pins: matched count must stay close to what went
+    # in, not collapse toward a handful of surviving points.
+    assert matched_after > matched_before * 0.9, (
+        f"matched collapsed from {matched_before} to {matched_after} "
+        f"({100 * matched_after / matched_before:.0f}%) — the long-gap "
+        f"reference destroyed the correctly-matched majority, same shape "
+        f"as issue #635's production regression"
+    )
+
+    # The bailout is all-or-nothing for the segment (see the constant's
+    # comment): nothing is touched, including the 220 genuinely bad points.
+    assert fixed == seg_alignments
+
+
+def test_filter_chunked_segment_drift_safety_bound_preserves_correct_matches():
+    """Same case, checked from the other direction: every one of the 9,780
+    correct matches is still exactly correct after filtering — the bailout
+    doesn't alter good data, it just declines to act on a reference it
+    cannot trust for this segment. The 220 genuinely bad points also stay
+    untouched (still wrong) — the explicit "ship safety first" tradeoff
+    from #635: a realign that damages otherwise-good maps is worse than the
+    bug it was fixing, so those 220 points need a future, smarter fix
+    (e.g. a locally-scoped reference) rather than this bound catching them."""
+    seg_alignments, whisper, true_ms, bad_lo, bad_hi = _build_long_skewed_gap_case()
+
+    fixed = _filter_chunked_segment_drift(
+        seg_alignments, len(whisper) - 1, 0.0, whisper[-1].start_ms, whisper, ws=0,
+    )
+
+    assert fixed == seg_alignments
+    correct_untouched = sum(
+        1 for i, (ei, wi, conf) in enumerate(fixed)
+        if not (bad_lo <= i < bad_hi) and whisper[wi].start_ms == true_ms(ei)
+    )
+    assert correct_untouched == len(whisper) - (bad_hi - bad_lo)
