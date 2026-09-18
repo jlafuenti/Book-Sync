@@ -16,7 +16,9 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.0] - 2026-09-17
+
+### Added
 
 - `implausible_pair` (`GET /api/troubleshoot/library`) now also checks words-per-hour, not just
   bytes-per-hour: a real unabridged reading lands around 8,000-12,000 words/hour, and file size
@@ -26,22 +28,6 @@ operator must do by hand rather than read about afterwards.
   `auto_match_books` creates a pairing, not only after — a word-rate-implausible pair is no longer
   auto-matched (and, with auto-transcribe on, queued) in the first place; a manual pairing still
   only warns, unchanged from before.
-- Alignment's degraded-map classifier (#586/#595) no longer fires on a tiny anchor pool: with very
-  few anchors surviving the outlier filter (2-25 raw, seen in production), the local trend a
-  rejected run is judged against is too sparse to trust, and a small book's ordinary fuzzy-match
-  noise could look exactly like a genuine reordered block. `MIN_KEPT_ANCHORS_FOR_DEGRADED` (20)
-  gates the fraction/run rule on enough surviving anchors first; the sync-map audit
-  (`GET /api/troubleshoot/sync-map-audit`) separately lets a clean, well-sampled timing check
-  (`timing_status == "ok"` over 20+ checked points) override a leftover alignment-time flag instead
-  of compounding with it (#620).
-- Alignment could drift smoothly for hundreds of sentences (up to hours, on a real book) and then
-  recover, inside a single large anchor-bounded gap whose local epub:whisper sentence-count ratio
-  varies (footnotes, chapter headings or other content present in the epub but never spoken,
-  clustered unevenly) — `_chunk_align`'s fixed-size windows assume one ratio for the whole gap, and
-  a wrong-sized window can force a *confident* match to the wrong audio, with the error carrying
-  into the next window until the true content reappears in range. `_filter_chunked_segment_drift`
-  checks chunked output against the gap's own two bracketing anchors and demotes a sustained
-  displaced run back to unmatched so it re-interpolates instead (#620).
 
 ### Changed
 
@@ -62,6 +48,35 @@ operator must do by hand rather than read about afterwards.
   doesn't move the position — a heartbeat, or a resend of the same value — still never clears it,
   which is what keeps a manual "mark finished" sticking. Applies to both the server rule (every
   client inherits it) and Android's local mirror for standalone books (#613).
+- Widened the rule that un-finishes a book when its position moves back out of the end stretch
+  (#584): it used to clear `is_completed` only on the *transition* out of the end zone, so a book
+  already sitting mid-book when it was marked finished — for example, re-listened from the middle
+  on a build that predated that rule — had both its before and after positions outside the zone on
+  the next write, and could never un-finish. Now any write that *moves* the stored position (the
+  new value differs from what's stored) to somewhere outside the end zone clears the flag,
+  regardless of which side of the boundary the previous position was already on. A write that
+  doesn't move the position — a heartbeat, or a resend of the same value — still never clears it,
+  which is what keeps a manual "mark finished" sticking. Applies to both the server rule (every
+  client inherits it) and Android's local mirror for standalone books (#613).
+
+### Fixed
+
+- Alignment's degraded-map classifier (#586/#595) no longer fires on a tiny anchor pool: with very
+  few anchors surviving the outlier filter (2-25 raw, seen in production), the local trend a
+  rejected run is judged against is too sparse to trust, and a small book's ordinary fuzzy-match
+  noise could look exactly like a genuine reordered block. `MIN_KEPT_ANCHORS_FOR_DEGRADED` (20)
+  gates the fraction/run rule on enough surviving anchors first; the sync-map audit
+  (`GET /api/troubleshoot/sync-map-audit`) separately lets a clean, well-sampled timing check
+  (`timing_status == "ok"` over 20+ checked points) override a leftover alignment-time flag instead
+  of compounding with it (#620).
+- Alignment could drift smoothly for hundreds of sentences (up to hours, on a real book) and then
+  recover, inside a single large anchor-bounded gap whose local epub:whisper sentence-count ratio
+  varies (footnotes, chapter headings or other content present in the epub but never spoken,
+  clustered unevenly) — `_chunk_align`'s fixed-size windows assume one ratio for the whole gap, and
+  a wrong-sized window can force a *confident* match to the wrong audio, with the error carrying
+  into the next window until the true content reappears in range. `_filter_chunked_segment_drift`
+  checks chunked output against the gap's own two bracketing anchors and demotes a sustained
+  displaced run back to unmatched so it re-interpolates instead (#620).
 
 ## [0.3.0] - 2026-09-17
 
