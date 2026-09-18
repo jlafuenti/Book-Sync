@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,12 +43,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.booksync.BuildConfig
+import com.booksync.R
 import java.io.File
 import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.coverImageUrl
@@ -88,6 +91,7 @@ fun HomeScreen(
     onOpenEbookDetails: (Int) -> Unit = {},
     onOpenAudiobookDetails: (Int) -> Unit = {},
     onSeeAll: (route: HomeSeeAll) -> Unit,
+    onGoToLibrary: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val colors = Tandem.colors
@@ -178,13 +182,25 @@ fun HomeScreen(
         val versionBanner by viewModel.versionBanner.collectAsState()
 
         if (allEmpty) {
-            val webAppUrl by viewModel.webAppUrl.collectAsState()
+            val libraryState by viewModel.libraryState.collectAsState()
             Column(modifier = Modifier.padding(padding).fillMaxSize()) {
                 VersionMismatchBanner(versionBanner)
-                HomeEmptyState(
-                    webAppUrl = webAppUrl,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                when (libraryState) {
+                    // Issue #624. Neither message until we actually know which one
+                    // is true — Room hasn't reported back on all three sources yet.
+                    HomeLibraryState.LOADING -> HomeLoadingState(modifier = Modifier.fillMaxSize())
+                    HomeLibraryState.EMPTY -> {
+                        val webAppUrl by viewModel.webAppUrl.collectAsState()
+                        HomeEmptyState(
+                            webAppUrl = webAppUrl,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    HomeLibraryState.HAS_BOOKS -> HomeNothingStartedState(
+                        onGoToLibrary = onGoToLibrary,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             return@Scaffold
         }
@@ -550,14 +566,45 @@ private fun HomeEmptyState(webAppUrl: String, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         EmptyState(
             icon = Icons.AutoMirrored.Filled.LibraryBooks,
-            title = "Your library is empty",
-            subtitle = "Upload ebooks and audiobooks from the web app, then they'll show up here.",
-            actionLabel = "Open web app",
+            title = stringResource(R.string.home_empty_library_title),
+            subtitle = stringResource(R.string.home_empty_library_subtitle),
+            actionLabel = stringResource(R.string.home_empty_library_action),
             onAction = {
                 val intent = Intent(Intent.ACTION_VIEW, webAppUrl.toUri())
                 context.startActivity(intent)
             },
         )
+    }
+}
+
+/**
+ * Issue #624. The library has books, but nothing on this account has been opened
+ * or queued yet — the shape of a fresh "Try the demo" sign-in. Points at the
+ * Library tab, which is where those books already are, instead of the web app.
+ */
+@Composable
+private fun HomeNothingStartedState(onGoToLibrary: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        EmptyState(
+            icon = Icons.AutoMirrored.Filled.LibraryBooks,
+            title = stringResource(R.string.home_nothing_started_title),
+            subtitle = stringResource(R.string.home_nothing_started_subtitle),
+            actionLabel = stringResource(R.string.home_nothing_started_action),
+            onAction = onGoToLibrary,
+        )
+    }
+}
+
+/**
+ * Issue #624. Shown while [HomeViewModel.libraryState] is still [HomeLibraryState.LOADING]
+ * — i.e. before Room has reported back on pairs, ebooks and audiobooks — so Home never
+ * has to guess between "library is empty" and "nothing started" before it actually knows.
+ */
+@Composable
+private fun HomeLoadingState(modifier: Modifier = Modifier) {
+    val colors = Tandem.colors
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = colors.accent)
     }
 }
 
