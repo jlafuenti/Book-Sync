@@ -156,6 +156,18 @@ class MediaDownloadRepository @Inject constructor(
         bookPairDao.setSyncMapCached(pairId, false, null)
     }
 
+    /**
+     * Clears both halves of the sync-map cache: the points themselves, not just the flag/
+     * version [resetSyncMapDownloaded] marks stale. That's fine for its own callers — a
+     * refresh or a downloaded-file delete — since [downloadSyncMap] deletes the old points
+     * before inserting the new ones anyway. Tour cleanup (issue #597 tester feedback) has no
+     * following download to do that, so it needs the points gone now, not just marked stale.
+     */
+    suspend fun clearSyncMapCache(pairId: Int) {
+        syncPointDao.deletePointsForPair(pairId)
+        resetSyncMapDownloaded(pairId)
+    }
+
     /** Download the sync map for a book pair. */
     suspend fun downloadSyncMap(pairId: Int) {
         log("downloadSyncMap — pairId=$pairId")

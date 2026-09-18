@@ -107,14 +107,39 @@ class TourScriptTest {
     }
 
     @Test
-    fun `copy defines sync map before assuming it`() {
-        // The first step whose body mentions "sync map" is the one that defines it —
-        // a plain-text sanity check that we didn't drop the definition.
-        val firstMention = TOUR.indexOfFirst { it.body.contains("sync map", ignoreCase = true) }
-        assertTrue(firstMention >= 0)
-        assertTrue(
-            TOUR[firstMention].body.contains("sentence", ignoreCase = true) ||
-                TOUR[firstMention].body.contains("link", ignoreCase = true),
-        )
+    fun `copy defines sync map within its first two mentions`() {
+        // details_chips (issue #597 tester feedback) name-drops "sync map" in passing —
+        // "the sync map downloads itself the first time you open the book" — and the very
+        // next step, details_sync_map, is what actually defines it. Two mentions before the
+        // definition is fine; the point is that the copy doesn't assume the term for long.
+        val mentions = TOUR.filter { it.body.contains("sync map", ignoreCase = true) }
+        assertTrue(mentions.isNotEmpty())
+        val defines = mentions.take(2).any {
+            it.body.contains("sentence", ignoreCase = true) || it.body.contains("link", ignoreCase = true)
+        }
+        assertTrue("sync map should be defined within its first two mentions", defines)
+    }
+
+    @Test
+    fun `home_welcome explains the tour puts the book it used back the way it was`() {
+        // Issue #597 tester feedback: the old copy promised no trace at all, but the pair
+        // the tour opened kept showing up in Continue Reading and Downloaded afterward.
+        val step = TOUR.first { it.id == "home_welcome" }
+        assertTrue(step.body.contains("put back the way it was"))
+    }
+
+    @Test
+    fun `details_chips explains green, grey, and the sync map downloading itself`() {
+        val step = TOUR.first { it.id == "details_chips" }
+        assertTrue(step.body.contains("green chip"))
+        assertTrue(step.body.contains("Grey"))
+        assertTrue(step.body.contains("sync map downloads itself"))
+    }
+
+    @Test
+    fun `reader_select_sentence explains how much to select`() {
+        val step = TOUR.first { it.id == READER_SELECTION_STEP_ID }
+        assertTrue(step.body.contains("at least a few words"))
+        assertTrue(step.body.contains("Sync to Audio"))
     }
 }

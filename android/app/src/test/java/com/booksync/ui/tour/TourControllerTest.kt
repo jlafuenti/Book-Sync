@@ -50,6 +50,9 @@ class TourControllerTest {
     private fun TestScope.newController(pairId: Int? = 42, scope: CoroutineScope = unconfinedScope()): TourController {
         registry = TourAnchorRegistry()
         coEvery { picker.pick() } returns pairId
+        // Untouched by default so existing tests don't have to care; tests that exercise
+        // CleanUp override this for the specific pair id they care about.
+        coEvery { picker.isUntouched(any()) } returns false
         return TourController(registry = registry, prefs = prefs, picker = picker, scope = scope)
     }
 
@@ -83,10 +86,11 @@ class TourControllerTest {
     }
 
     @Test
-    fun `start picks a pair and enters step 0, needing no nav since Home is already showing`() = runTest {
-        // Issue #597 follow-up: the tour used to switch to the Home tab itself
-        // on start, but Home is where the tour is offered in the first place —
-        // there is nothing to navigate to, guided or otherwise.
+    fun `start enters step 0 and switches to the Home tab once`() = runTest {
+        // Issue #597 follow-up: "Replay the walkthrough" launches from the Account
+        // tab, and PR #614 stopped the tour switching tabs on its own for every
+        // other step — so without this, step 0's Home anchors would render over
+        // whatever tab was already showing.
         val scope = unconfinedScope()
         val controller = newController(pairId = 42, scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -100,7 +104,7 @@ class TourControllerTest {
         assertEquals(TOUR[0].id, state.step.id)
         assertEquals(42, state.pairId)
         assertEquals(TOUR.size, state.total)
-        assertTrue(navLog.isEmpty())
+        assertEquals(listOf(TourNav.GoToTab("home")), navLog)
     }
 
     @Test
@@ -386,13 +390,14 @@ class TourControllerTest {
     }
 
     @Test
-    fun `entering a tap-the-tab step emits no GoToTab — the user's own tap does that`() = runTest {
+    fun `entering a tap-the-tab step emits no further GoToTab beyond start's own`() = runTest {
         val scope = unconfinedScope()
         val controller = newController(scope = scope)
         val navLog = mutableListOf<TourNav>()
         scope.launch { controller.nav.collect { navLog.add(it) } }
         controller.start()
         advanceUntilIdle()
+        navLog.clear() // drop start()'s own GoToTab("home")
 
         controller.advanceUntil("home_tap_library")
 
@@ -510,5 +515,105 @@ class TourControllerTest {
 
         controller.next()
         assertEquals("library_filters", running(controller).step.id)
+    }
+
+    // ---- cleanup on finish or quit (issue #597 tester feedback) ----
+
+    @Test
+    fun `an untouched pair emits CleanUp when the tour is quit`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns true
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        assertTrue(running(controller).willCleanUp)
+
+        controller.quit()
+        advanceUntilIdle()
+
+        assertTrue(navLog.contains(TourNav.CleanUp(42)))
+    }
+
+    @Test
+    fun `an untouched pair emits CleanUp when the final step finishes the tour`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns true
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("done")
+
+        controller.next()
+        advanceUntilIdle()
+
+        assertEquals(TourState.Finished, controller.state.value)
+        assertTrue(navLog.contains(TourNav.CleanUp(42)))
+    }
+
+    @Test
+    fun `a touched pair never emits CleanUp`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        coEvery { picker.isUntouched(42) } returns false
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        assertFalse(running(controller).willCleanUp)
+
+        controller.quit()
+        advanceUntilIdle()
+
+        assertTrue(navLog.none { it is TourNav.CleanUp })
+    }
+
+    @Test
+    fun `no pair at all never emits CleanUp`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = null, scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+
+        controller.quit()
+        advanceUntilIdle()
+
+        assertTrue(navLog.none { it is TourNav.CleanUp })
+    }
+
+    @Test
+    fun `adoptPair re-evaluates whether the tour will clean up`() = runTest {
+        val controller = newController(pairId = 42)
+        coEvery { picker.isUntouched(42) } returns true
+        coEvery { picker.isUntouched(7) } returns false
+        controller.start()
+        advanceUntilIdle()
+        assertTrue(running(controller).willCleanUp)
+
+        controller.adoptPair(7)
+        advanceUntilIdle()
+
+        assertEquals(7, running(controller).pairId)
+        assertFalse(running(controller).willCleanUp)
+    }
+
+    @Test
+    fun `adoptPair can turn on cleanup for a pair the picker itself would not have`() = runTest {
+        val controller = newController(pairId = 42)
+        coEvery { picker.isUntouched(42) } returns false
+        coEvery { picker.isUntouched(7) } returns true
+        controller.start()
+        advanceUntilIdle()
+        assertFalse(running(controller).willCleanUp)
+
+        controller.adoptPair(7)
+        advanceUntilIdle()
+
+        assertTrue(running(controller).willCleanUp)
     }
 }
