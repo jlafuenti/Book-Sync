@@ -16,6 +16,18 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-17
+
+### Changed
+
+- Android app 0.4.0 (versionCode 400) ships a guided walkthrough: a five-minute tour over the
+  real screens — Home, a book's menu and details, the sync map, the reader and the player
+  (including hopping between them at a sentence), Library, Downloaded and Account — where the
+  user taps the real controls, can quit at any time, and can replay it from Account → Help. It
+  is offered once after the first sign-in. The book it opens is put back the way it was when
+  the tour ends. The reader's selection-toolbar "Sync to Audio" now also works while
+  streaming, not only with a downloaded audiobook (#597).
+
 ### Changed
 
 - Widened the rule that un-finishes a book when its position moves back out of the end stretch
