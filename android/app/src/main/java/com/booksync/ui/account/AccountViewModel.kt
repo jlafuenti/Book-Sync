@@ -3,10 +3,13 @@ package com.booksync.ui.account
 import com.booksync.diagnostics.buildProblemReport
 import com.booksync.diagnostics.LogChannel
 import com.booksync.diagnostics.DiagnosticLogger
+import com.booksync.diagnostics.ReportProblemPlan
+import com.booksync.diagnostics.planReportProblemIntent
 import com.booksync.deviceCrashContext
 import com.booksync.R
 import androidx.core.content.FileProvider
 import android.content.Intent
+import android.net.Uri
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.io.File
 import javax.inject.Inject
 
 // ---- DataStore preference keys (previously in ui/settings/SettingsViewModel.kt) ----
@@ -338,7 +342,7 @@ class AccountViewModel @Inject constructor(
 
     /**
      * Bundle the app diagnostics log, the app version and the device into a
-     * share intent (issue #230).
+     * "Report a problem" intent (issue #230).
      *
      * This is the whole crash-reporting story before launch: no SDK, no
      * third-party processor, and Play Vitals only sees users who share usage
@@ -346,35 +350,82 @@ class AccountViewModel @Inject constructor(
      * caught ([com.booksync.diagnostics.CrashLogHandler]), so this reaches the
      * traces even from someone who never turned diagnostics on.
      *
+     * Issue #609: this used to always build a generic `ACTION_SEND` share,
+     * which offered the whole share sheet — messaging apps, notes, the
+     * clipboard — for a report that only ever goes one useful place. It now
+     * opens straight to a mail app addressed at [com.booksync.diagnostics.SUPPORT_EMAIL]
+     * when one resolves, and only falls back to the old share sheet when none
+     * does, so the button is never dead on a device with no mail app.
+     *
      * The version and device are repeated in the message body, not only in the
      * attached log: some share targets drop attachments without saying so, and a
-     * text-only report should still be triageable. The subject and body are built
-     * by [buildProblemReport], which is unit-tested; everything below it is
-     * Android plumbing with nothing to assert on the JVM.
+     * text-only report should still be triageable. [buildProblemReport] builds
+     * that body and is unit-tested; [planReportProblemIntent] decides the rest
+     * (destination, subject, whether to attach) and is unit-tested too —
+     * everything below that point (PackageManager, FileProvider, Intent extras)
+     * is Android plumbing with nothing to assert on the JVM.
      */
     fun shareProblemReport(onIntent: (Intent) -> Unit) {
         val file = diagnosticLogger.getLogFile(LogChannel.APP)
         val logText = if (file.exists()) runCatching { file.readText() }.getOrDefault("") else ""
         val report = buildProblemReport(deviceCrashContext(), logText)
+        val plan = planReportProblemIntent(report, mailAppAvailable = resolvesMailApp(appContext))
 
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, report.subject)
-            putExtra(Intent.EXTRA_TEXT, report.body)
-            if (report.hasLog) {
-                putExtra(
-                    Intent.EXTRA_STREAM,
-                    FileProvider.getUriForFile(
-                        appContext,
-                        "${appContext.packageName}.fileprovider",
-                        file,
-                    ),
-                )
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+        onIntent(buildReportProblemIntent(appContext, plan, file))
+    }
+}
+
+/**
+ * True when at least one installed app resolves a `mailto:` `ACTION_SENDTO`
+ * intent — the probe [AccountViewModel.shareProblemReport] uses to decide
+ * whether "Report a problem" can go straight to an email app instead of
+ * falling back to the share sheet (issue #609).
+ *
+ * Needs the `<queries>` SENDTO/mailto entry in `AndroidManifest.xml`: Android
+ * 11+ package visibility hides other apps' mail activities from
+ * `resolveActivity` without it, so the probe would always come back empty and
+ * the fallback would fire on every device, mail app or not.
+ */
+private fun resolvesMailApp(context: Context): Boolean {
+    val probe = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+    return probe.resolveActivity(context.packageManager) != null
+}
+
+/**
+ * Turn a [ReportProblemPlan] into the real `Intent` (issue #609).
+ *
+ * Straight to a mail app: `ACTION_SEND` with `type = "message/rfc822"` and
+ * `EXTRA_EMAIL`. The issue's implementation notes flag `ACTION_SENDTO` +
+ * `mailto:` as the more reliable "email apps only" filter, but that form does
+ * not carry `EXTRA_STREAM` — the `message/rfc822` MIME type is what email
+ * clients register for specifically (unlike the generic `text/plain` the old
+ * share used), so it keeps the same "email apps only" targeting while still
+ * letting the diagnostics log ride along as an attachment.
+ *
+ * No mail app: today's generic chooser, unchanged — a live but unrouted share
+ * beats a dead button.
+ */
+private fun buildReportProblemIntent(context: Context, plan: ReportProblemPlan, logFile: File): Intent {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = if (plan.toMailApp) "message/rfc822" else "text/plain"
+        if (plan.toMailApp) putExtra(Intent.EXTRA_EMAIL, arrayOf(plan.recipient))
+        putExtra(Intent.EXTRA_SUBJECT, plan.subject)
+        putExtra(Intent.EXTRA_TEXT, plan.body)
+        if (plan.attachLog) {
+            putExtra(
+                Intent.EXTRA_STREAM,
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    logFile,
+                ),
+            )
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        onIntent(
-            Intent.createChooser(send, appContext.getString(R.string.report_problem_chooser))
-        )
+    }
+    return if (plan.toMailApp) {
+        send
+    } else {
+        Intent.createChooser(send, context.getString(R.string.report_problem_chooser))
     }
 }

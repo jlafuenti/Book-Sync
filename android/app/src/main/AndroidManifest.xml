@@ -10,6 +10,17 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Android 11+ package visibility: lets "Report a problem" (issue #609)
+         probe for an installed mail app with resolveActivity() on a mailto:
+         SENDTO intent. Without this, every device looks mail-app-less and the
+         feature always falls back to the generic share sheet. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+    </queries>
+
     <application
         android:name=".BookSyncApp"
         android:allowBackup="true"
