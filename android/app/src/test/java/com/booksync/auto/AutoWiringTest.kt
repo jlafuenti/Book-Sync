@@ -179,11 +179,38 @@ class AutoWiringTest {
 
     @Test
     fun `cover art cannot hold a browse node open`() {
+        // Issue #612: the whole batch used to share one timeout, so a single
+        // unreachable server — a LAN-only server in a car is the everyday
+        // case — held covers that had already resolved from disk hostage for
+        // the full budget and then dropped those too. autoCoverUris must
+        // resolve rows through the network-free ladder...
+        val coverBody = functionBody(service, "autoCoverUris")
         assertTrue(
-            "Cover art has a network rung (issue #331), so the browse path must " +
-                "bound it — otherwise an unreachable server holds the whole list " +
-                "behind one OkHttp timeout per book.",
-            browsePath.contains("withTimeoutOrNull(AUTO_COVER_ART_BUDGET_MS)"),
+            "autoCoverUris must resolve rows through getBrowseCoverUri, which " +
+                "never touches the network, not through getCoverUri's full " +
+                "ladder — or one unreachable server blocks the whole node again.",
+            coverBody.contains("getBrowseCoverUri("),
+        )
+        assertTrue(
+            "autoCoverUris must not itself call the network-capable getCoverUri " +
+                "or fetch a server cover directly — that belongs to the " +
+                "background warm-up only.",
+            codeLines(coverBody).none {
+                it.contains("coverArtHelper.getCoverUri(") || it.contains("coverArtHelper.cacheServerCover(")
+            },
+        )
+        // ...and any server-only cover must be warmed off the response, not
+        // waited on.
+        val warmBody = functionBody(service, "warmCoverCache")
+        assertTrue(
+            "warmCoverCache must run on its own launched job — a browse must " +
+                "never await a network cover fetch (issue #612).",
+            warmBody.contains("serviceScope.launch("),
+        )
+        assertTrue(
+            "the background fetch still needs its own bound so a hung " +
+                "connection can't leak a coroutine forever.",
+            warmBody.contains("withTimeoutOrNull(AUTO_COVER_ART_BUDGET_MS)"),
         )
         val budget = Regex("""AUTO_COVER_ART_BUDGET_MS = ([\d_]+)L""")
             .find(service)?.groupValues?.get(1)?.replace("_", "")?.toLong()
@@ -378,6 +405,36 @@ class AutoWiringTest {
                 functionBody(service, name).contains(call),
             )
         }
+    }
+
+    // --- Continue Listening is a bounded number of queries (issue #612) ---
+
+    /**
+     * The node used to call [autoBookFor] once per row — `repository.getBookmark`
+     * for every pair, `repository.getProgressOnce` for every standalone book —
+     * so a live library of 44 in-progress books ran 44 extra Room queries on
+     * every browse and every `notifyBrowseNodeChanged` count. The joined
+     * flows PR #594 added already read every bookmark and every progress row
+     * in one query each; see `LibraryRepositoryTest` for the query-count
+     * proof on the repository side.
+     */
+    @Test
+    fun `continue listening is built from the joined flows, not a per-row read`() {
+        val body = functionBody(service, "buildContinueListeningItems")
+        assertTrue(
+            "buildContinueListeningItems must read the joined pairs-with-bookmarks " +
+                "flow rather than getRecentlyPlayedPairsFlow plus a per-row lookup.",
+            body.contains("getRecentlyPlayedPairsWithBookmarksFlow("),
+        )
+        assertTrue(
+            "buildContinueListeningItems must read the joined standalone-with-progress flow.",
+            body.contains("getRecentlyPlayedStandaloneAudiobooksWithProgressFlow("),
+        )
+        assertTrue(
+            "buildContinueListeningItems must not call autoBookFor — that is " +
+                "the per-row getBookmark/getProgressOnce path this issue removes.",
+            codeLines(body).none { it.contains("autoBookFor(") },
+        )
     }
 
     // --- Continue Listening lists streamed books too (issue #569) ---
