@@ -51,6 +51,7 @@ import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
+import org.readium.r2.navigator.preferences.ReadingProgression
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
@@ -269,6 +270,7 @@ class ReaderActivity : AppCompatActivity() {
         }
 
         displaySettings.load()
+        edgeTapSettings.load()
         initViews()
         applyWindowInsets()
         // Install before the navigator exists — the wrapper sits at the content
@@ -614,8 +616,45 @@ class ReaderActivity : AppCompatActivity() {
 
     private val tapListener = object : InputListener {
         override fun onTap(event: TapEvent): Boolean {
-            toggleBars()
+            handleReaderTap(event)
             return true
+        }
+    }
+
+    /**
+     * Routes a page tap through [decideReaderTapAction] (issue #585): a tap
+     * near either edge turns the page via Readium's own `goForward`/
+     * `goBackward` — the same primitives a swipe uses, so an edge tap on a
+     * chapter's last page crosses into the next chapter exactly like a swipe
+     * would — and everything else (the middle 56% of the page, or the whole
+     * page when [ReaderEdgeTapSettings.enabled] is off) falls through to the
+     * existing bar-toggle behavior.
+     *
+     * A tap while a text selection's ActionMode is up
+     * ([ReaderSelectionController.isSelectionActive]) skips the decision
+     * entirely and keeps the reader's pre-#585 behavior (toggle the bars):
+     * that tap is the user dismissing the selection and must not also turn
+     * the page out from under them.
+     */
+    private fun handleReaderTap(event: TapEvent) {
+        if (selectionController.isSelectionActive) {
+            toggleBars()
+            return
+        }
+        val nav = navigator
+        val width = nav?.publicationView?.width ?: 0
+        if (nav == null || width <= 0) {
+            // No navigator, or it hasn't been laid out yet — same fallback
+            // the reader always had for any tap.
+            toggleBars()
+            return
+        }
+        val xFraction = (event.point.x / width).toDouble().coerceIn(0.0, 1.0)
+        val isRtl = nav.overflow.value.readingProgression == ReadingProgression.RTL
+        when (decideReaderTapAction(xFraction, isRtl, edgeTapSettings.enabled)) {
+            ReaderTapAction.TurnPageBackward -> nav.goBackward(true)
+            ReaderTapAction.TurnPageForward -> nav.goForward(true)
+            ReaderTapAction.ToggleBars -> toggleBars()
         }
     }
 
@@ -1376,9 +1415,12 @@ class ReaderActivity : AppCompatActivity() {
     /** Font / theme / spacing preferences and their dialog — see [ReaderDisplaySettings]. */
     private val displaySettings: ReaderDisplaySettings by lazy { ReaderDisplaySettings(this) }
 
+    /** The "turn pages by tapping the edges" preference — see [handleReaderTap]. */
+    private val edgeTapSettings: ReaderEdgeTapSettings by lazy { ReaderEdgeTapSettings(this) }
+
     private fun showDisplaySettings() {
         val nav = navigator ?: return
-        displaySettings.showDialog(this, nav)
+        displaySettings.showDialog(this, nav, edgeTapSettings)
     }
 
     // ============ Text Selection Sync ============

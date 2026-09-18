@@ -88,6 +88,20 @@ class ReaderSelectionController(
     private var hasInstalledInterceptor: Boolean = false
 
     /**
+     * Whether a text selection's floating ActionMode is currently up (issue
+     * #585). Read by [ReaderActivity.handleReaderTap]: a tap that lands in an
+     * edge zone while this is true is the user dismissing the selection, not
+     * asking to turn the page — [SelectionCallbackWrapper] below is the only
+     * thing that flips it, since it wraps every selection ActionMode the
+     * WebView creates (see [install]). The defensive [onActionModeStarted]
+     * fallback does not set this: it only patches the menu of an ActionMode
+     * created some other way, and has no matching "destroyed" callback to
+     * pair it with.
+     */
+    var isSelectionActive: Boolean = false
+        private set
+
+    /**
      * Install ONE [SelectionInterceptingFrameLayout] around the activity's
      * content root, so we intercept TYPE_FLOATING ActionMode creation via
      * `startActionModeForChild`.
@@ -202,6 +216,7 @@ class ReaderSelectionController(
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
             // Let the WebView populate first so we can edit the result.
             val keep = delegate.onCreateActionMode(mode, menu)
+            isSelectionActive = true
             trimSelectionMenu(menu)
             injectCustomItems(mode, menu)
             return keep || true
@@ -223,6 +238,7 @@ class ReaderSelectionController(
         }
 
         override fun onDestroyActionMode(mode: ActionMode) {
+            isSelectionActive = false
             delegate.onDestroyActionMode(mode)
         }
 
