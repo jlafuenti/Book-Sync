@@ -35,6 +35,8 @@ import com.booksync.ui.tour.TourAnchorRegistry
 import com.booksync.ui.tour.TourController
 import com.booksync.ui.tour.TourEvent
 import com.booksync.ui.tour.TourNav
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourState
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -166,6 +168,16 @@ class ReaderActivity : AppCompatActivity() {
 
     /** The canonical record this reader opened with, server-fresh where possible. */
     private var canonicalPosition: StoredPosition? = null
+
+    /**
+     * The total-progression fraction the tour wants this open jumped to, past
+     * the cover/copyright/dedication pages — issue #597 follow-up. Decided in
+     * [getInitialLocator], the one place that already knows whether the
+     * restore ladder used a real saved position, and applied once the
+     * navigator exists (see [applyTourReaderJump]). Null on every ordinary,
+     * non-tour open, and on a tour open where a real position exists.
+     */
+    private var tourJumpProgression: Double? = null
 
     /**
      * Replaces the old `positionEstablished` boolean latch, which had two
@@ -546,6 +558,12 @@ class ReaderActivity : AppCompatActivity() {
 
                 navigator?.addInputListener(tapListener)
                 navigator?.let { displaySettings.apply(it) }
+
+                // The tour's nudge past the front matter (issue #597 follow-up)
+                // — decided in getInitialLocator above; applied only now that
+                // the navigator actually exists, so it can't race the
+                // fragment's own creation.
+                applyTourReaderJump(pub)
 
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
@@ -939,6 +957,33 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Applies [tourJumpProgression] (issue #597 follow-up), the one time it is
+     * non-null, using the same content-weighted fraction -> spine + progression
+     * mapping [goToProgress] uses for the slider: [ReaderRestoreExecutor
+     * .targetForProgress] turns the fraction into a spine index and an
+     * intra-chapter progression, and [locatorFor] turns that into a Readium
+     * `Locator` exactly as the restore ladder's own targets are turned into
+     * one. [programmaticTarget] is set first, same as every other explicit
+     * `navigator.go(...)` call site, so the settle emission this produces is
+     * recognized as an echo rather than misread as the user's own navigation.
+     *
+     * A no-op whenever [tourJumpProgression] is null — which is the case for
+     * every non-tour open, and for a tour open on a book that already has a
+     * real saved position (see [tourJumpTarget]: it never returns non-null
+     * then, and this method never moves a real reader's place).
+     */
+    private suspend fun applyTourReaderJump(pub: Publication) {
+        val progress = tourJumpProgression ?: return
+        tourJumpProgression = null
+        val nav = navigator ?: return
+        val target = restoreExecutor.targetForProgress(progress) ?: return
+        val locator = locatorFor(pub, target) ?: return
+        Log.d(TAG, "applyTourReaderJump: jumping tour reader open to ${(progress * 100).toInt()}% -> $locator")
+        programmaticTarget = locator
+        nav.go(locator, animated = false)
+    }
+
     // ============ Bookmark save/restore ============
 
     private suspend fun getInitialLocator(pub: Publication): Locator? {
@@ -981,6 +1026,25 @@ class ReaderActivity : AppCompatActivity() {
                 PositionSavePolicy.RestoreOutcome.Unresolved
             } else result.outcome
             savePolicy.onRestoreOutcome(outcome)
+
+            // Issue #597 follow-up: decide the tour nudge right here, now that
+            // both halves of tourJumpTarget's "no saved position" input are
+            // known — a rung actually landed (Landed) versus the book opening
+            // fresh, or landing nowhere the ladder could resolve (Unread /
+            // Unresolved both display the first spine item, same as a
+            // genuinely unread book). tourController.state.value already
+            // reflects the walkthrough's current step: the ReaderOpened event
+            // that can advance it onto a Reader-screen step was dispatched
+            // synchronously in onCreate, before loadPublication (and this
+            // suspend function) ever ran.
+            val runningTour = tourController.state.value as? TourState.Running
+            tourJumpProgression = tourJumpTarget(
+                tourRunningOnReader = runningTour?.step?.screen == TourScreen.Reader,
+                tourPairId = runningTour?.pairId,
+                thisPairId = pairId,
+                hasSavedPosition = outcome == PositionSavePolicy.RestoreOutcome.Landed,
+            )
+
             if (locator != null) {
                 Log.d(TAG, "getInitialLocator: restored via '${result.landed?.kind}'")
             }
