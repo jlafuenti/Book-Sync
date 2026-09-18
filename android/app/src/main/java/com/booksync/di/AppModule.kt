@@ -12,6 +12,7 @@ import com.booksync.data.local.dao.*
 import com.booksync.BuildConfig
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.DictionaryApi
+import com.booksync.data.remote.WiktionaryApi
 import com.booksync.data.remote.httpLoggingLevel
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -207,9 +208,48 @@ object AppModule {
         retrofit.create(BookSyncApi::class.java)
 
     // ---------------------------------------------------------------------
-    // Dictionary API (api.dictionaryapi.dev) — separate client so our
-    // Bearer JWT doesn't leak to a third-party server.
+    // Dictionary lookup (issue #608) — Wiktionary (primary) and
+    // api.dictionaryapi.dev (fallback for words Wiktionary's English section
+    // doesn't cover). Separate clients, neither carrying our Bearer JWT, so
+    // it can't leak to either third-party server. Timeouts raised modestly
+    // from the original 10s: dictionaryapi.dev was measured taking ~20s to
+    // respond on a bad day, and the old 10s timeout fired before that reply
+    // ever arrived — see [com.booksync.data.repository.DictionaryRepository]
+    // for the retry-once-then-fall-back behavior this pairs with.
     // ---------------------------------------------------------------------
+
+    @Provides
+    @Singleton
+    @Named("wiktionary")
+    fun provideWiktionaryOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(10, TimeUnit.SECONDS)
+            .addInterceptor(HttpLoggingInterceptor().apply {
+                level = httpLoggingLevel(BuildConfig.DEBUG)
+            })
+            .build()
+
+    @Provides
+    @Singleton
+    @Named("wiktionary")
+    fun provideWiktionaryRetrofit(
+        @Named("wiktionary") client: OkHttpClient,
+        json: Json,
+    ): Retrofit {
+        val contentType = "application/json".toMediaType()
+        return Retrofit.Builder()
+            .baseUrl("https://en.wiktionary.org/")
+            .client(client)
+            .addConverterFactory(json.asConverterFactory(contentType))
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideWiktionaryApi(@Named("wiktionary") retrofit: Retrofit): WiktionaryApi =
+        retrofit.create(WiktionaryApi::class.java)
 
     @Provides
     @Singleton
@@ -217,7 +257,7 @@ object AppModule {
     fun provideDictionaryOkHttpClient(): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply {
                 level = httpLoggingLevel(BuildConfig.DEBUG)

@@ -55,18 +55,22 @@ to keep them forever).
 ### To one third party: the dictionary
 
 When you select a word in the reader and tap **Define**, the app sends **that one word**
-to `api.dictionaryapi.dev`, a free public dictionary service, and shows what comes back.
+to Wiktionary (`en.wiktionary.org`), a free Wikimedia-run dictionary, and shows what
+comes back. If Wiktionary has no English entry for the word, the app tries once more
+against `api.dictionaryapi.dev`, a free public dictionary service, before giving up.
 
 - Only the selected word is sent. Not the sentence, not the book, not your account.
 - The request carries no login, no token and no device id — it is an anonymous, unsigned
   lookup made on a separate connection from the one your server uses.
 - It happens only when you tap **Define**. Nothing is sent while you simply read.
-- Like any web request, your device's IP address is visible to that service, and their
-  terms and privacy practices are theirs, not ours: <https://dictionaryapi.dev/>
-- **To avoid it entirely, don't use Define.** There is no other feature that reaches it.
+- Like any web request, your device's IP address is visible to whichever service answers,
+  and their terms and privacy practices are theirs, not ours:
+  <https://wikimediafoundation.org/wikimedia-foundation-privacy-policy/> and
+  <https://dictionaryapi.dev/>
+- **To avoid it entirely, don't use Define.** There is no other feature that reaches either.
 
-This is the only outside destination hard-coded into the app, and a test in the repo
-fails the build if a second one is ever added
+These are the only outside destinations hard-coded into the app, and a test in the repo
+fails the build if a third one is ever added
 (`server/tests/test_android_no_personal_hosts.py`).
 
 ### While casting
