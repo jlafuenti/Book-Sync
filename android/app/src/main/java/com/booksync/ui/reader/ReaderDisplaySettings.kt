@@ -113,8 +113,14 @@ class ReaderDisplaySettings(private val context: Context) {
         navigator.submitPreferences(preferences)
     }
 
-    /** The two-tab Text / Display dialog. Every change applies to [nav] immediately and is saved. */
-    fun showDialog(activity: Activity, nav: EpubNavigatorFragment) {
+    /**
+     * The two-tab Text / Display dialog. Every change applies to [nav]
+     * immediately and is saved. [edgeTapSettings] is a separate small class
+     * (issue #585) rather than a field here — it isn't an [EpubPreferences]
+     * value pushed to [nav] — but its toggle lives in this same dialog's
+     * Display tab since it is still "how the reader behaves."
+     */
+    fun showDialog(activity: Activity, nav: EpubNavigatorFragment, edgeTapSettings: ReaderEdgeTapSettings) {
         val dialogView = activity.layoutInflater.inflate(R.layout.dialog_display_settings, null)
 
         // Tab switching
@@ -267,6 +273,13 @@ class ReaderDisplaySettings(private val context: Context) {
         btnThemeLight.setOnClickListener { applyTheme(Theme.LIGHT) }
         btnThemeSepia.setOnClickListener { applyTheme(Theme.SEPIA) }
         btnThemeDark.setOnClickListener { applyTheme(Theme.DARK) }
+
+        // Edge-tap page turn (issue #585)
+        val switchEdgeTap = dialogView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switch_edge_tap)
+        switchEdgeTap.isChecked = edgeTapSettings.enabled
+        switchEdgeTap.setOnCheckedChangeListener { _, isChecked ->
+            edgeTapSettings.setEnabled(isChecked)
+        }
 
         val dialog = MaterialAlertDialogBuilder(activity)
             .setView(dialogView)
