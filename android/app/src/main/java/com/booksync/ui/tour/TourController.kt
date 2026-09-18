@@ -32,6 +32,14 @@ sealed class TourState {
         val total: Int,
         /** False on step 0 and on the first step of a new screen (see [TourController.back]). */
         val canGoBack: Boolean = false,
+        /**
+         * True when [pairId] was untouched — see [TourPairPicker.isUntouched] — the moment
+         * the tour started or last adopted it, meaning [TourController] will emit
+         * [TourNav.CleanUp] for it when the tour finishes or is quit (issue #597 tester
+         * feedback: the welcome card promised no trace, but the book the tour opened kept
+         * showing up in Continue Reading and Downloaded afterward).
+         */
+        val willCleanUp: Boolean = false,
     ) : TourState()
 
     data object Finished : TourState()
@@ -46,6 +54,13 @@ sealed class TourNav {
     data object PopToMain : TourNav()
     data object ShowReaderBars : TourNav()
     data object SkipToToolbarSync : TourNav()
+    /**
+     * Undo whatever the tour did to [pairId] (issue #597 tester feedback): reset its server
+     * and local progress, drop its cached files and sync map, and stop the player if it
+     * still holds this pair's media. Emitted by [TourController.finish] only when the pair
+     * was untouched before the tour opened it.
+     */
+    data class CleanUp(val pairId: Int) : TourNav()
 }
 
 /**
@@ -81,6 +96,9 @@ class TourController(
 
     private var steps: List<TourStep> = emptyList()
     private var pairId: Int? = null
+    /** See [TourState.Running.willCleanUp]; carried here so [enter] can stamp every step's
+     *  state with it without recomputing it on every `next()`/`back()`. */
+    private var willCleanUp: Boolean = false
     private var anchorWaitJob: Job? = null
     private var barsGraceJob: Job? = null
 
@@ -90,7 +108,14 @@ class TourController(
         scope.launch {
             val picked = picker.pick()
             pairId = picked
+            willCleanUp = picked?.let { picker.isUntouched(it) } ?: false
             steps = buildSteps(picked)
+            // "Replay the walkthrough" (issue #597 follow-up) launches from wherever the
+            // Account tab happens to be, and PR #614 stopped the tour switching tabs on its
+            // own for every other step — without this, step 0's Home anchors would render
+            // over whatever screen was already showing. The only other automatic switch is
+            // [emitPopToMain], leaving the reader/player block.
+            _nav.tryEmit(TourNav.GoToTab(requireNotNull(tabRouteFor(TourScreen.Home))))
             enter(0)
         }
     }
@@ -122,12 +147,24 @@ class TourController(
     /**
      * A screen found a better pair than the picker's (the Library adopts the
      * first synced pair in its own ordering rather than scrolling to an
-     * arbitrary one); every later step follows it.
+     * arbitrary one); every later step follows it. Also re-evaluates
+     * [TourPairPicker.isUntouched] for the newly adopted pair (issue #597 tester
+     * feedback) — the picker's original pick and the Library's substitute can
+     * disagree on whether cleanup applies.
      */
     fun adoptPair(newPairId: Int) {
         pairId = newPairId
         val running = _state.value as? TourState.Running ?: return
         _state.value = running.copy(pairId = newPairId)
+        scope.launch {
+            val untouched = picker.isUntouched(newPairId)
+            if (pairId != newPairId) return@launch // superseded by a later adopt, or a fresh start
+            willCleanUp = untouched
+            val current = _state.value as? TourState.Running ?: return@launch
+            if (current.pairId == newPairId) {
+                _state.value = current.copy(willCleanUp = untouched)
+            }
+        }
     }
 
     /** A no-op unless the current step is a skippable [Advance.WaitFor]. */
@@ -211,6 +248,7 @@ class TourController(
             pairId = pairId,
             total = steps.size,
             canGoBack = canGoBack(index),
+            willCleanUp = willCleanUp,
         )
 
         if (step.anchor != null && immediateRect == null) {
@@ -251,11 +289,11 @@ class TourController(
     }
 
     /**
-     * The one place tabs still switch automatically: leaving the reader/player
-     * block. The reader can be opened from any tab (Home's Continue Reading,
-     * Library's card, or hopping back from the player), but the script always
-     * resumes on Library right after (the Filters step), so this always lands
-     * there regardless of which tab was active before the reader opened.
+     * The other automatic tab switch, besides [start]'s own one-time hop to Home: leaving
+     * the reader/player block. The reader can be opened from any tab (Home's Continue
+     * Reading, Library's card, or hopping back from the player), but the script always
+     * resumes on Library right after (the Filters step), so this always lands there
+     * regardless of which tab was active before the reader opened.
      */
     private fun emitPopToMain() {
         _nav.tryEmit(TourNav.PopToMain)
@@ -291,6 +329,9 @@ class TourController(
         val running = _state.value as? TourState.Running
         if (running != null && isReaderOrPlayer(running.step.screen)) {
             emitPopToMain()
+        }
+        if (running?.willCleanUp == true && running.pairId != null) {
+            _nav.tryEmit(TourNav.CleanUp(running.pairId))
         }
         anchorWaitJob?.cancel()
         barsGraceJob?.cancel()

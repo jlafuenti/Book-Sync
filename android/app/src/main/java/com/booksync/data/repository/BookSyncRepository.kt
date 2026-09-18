@@ -188,6 +188,9 @@ class BookSyncRepository @Inject constructor(
     /** See [MediaDownloadRepository.resetSyncMapDownloaded]. */
     suspend fun resetSyncMapDownloaded(pairId: Int) = downloads.resetSyncMapDownloaded(pairId)
 
+    /** See [MediaDownloadRepository.clearSyncMapCache]. */
+    suspend fun clearSyncMapCache(pairId: Int) = downloads.clearSyncMapCache(pairId)
+
     /** See [MediaDownloadRepository.downloadSyncMap]. */
     suspend fun downloadSyncMap(pairId: Int) = downloads.downloadSyncMap(pairId)
 

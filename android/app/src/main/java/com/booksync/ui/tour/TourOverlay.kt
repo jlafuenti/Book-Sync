@@ -201,6 +201,15 @@ private fun TourCard(
     val colors = Tandem.colors
     val step = state.step
     val body = if (state.degraded) (step.emptyBody ?: step.body) else step.body
+    // The Done card doesn't know at script-writing time whether this run will clean up its
+    // pair — that depends on whether it was untouched when the tour opened it (issue #597
+    // tester feedback) — so the extra sentence is appended here from live state rather than
+    // duplicated into a second "done" step.
+    val displayBody = if (step.id == "done" && state.willCleanUp) {
+        "$body The book we used has been put back the way it was."
+    } else {
+        body
+    }
 
     Column(
         modifier = modifier
@@ -222,7 +231,7 @@ private fun TourCard(
             }
         }
         Spacer(Modifier.padding(top = 6.dp))
-        Text(text = body, color = colors.textSecondary, fontSize = 14.sp)
+        Text(text = displayBody, color = colors.textSecondary, fontSize = 14.sp)
         Spacer(Modifier.padding(top = 14.dp))
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(

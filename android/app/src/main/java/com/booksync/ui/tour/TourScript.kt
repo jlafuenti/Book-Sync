@@ -128,8 +128,8 @@ val TOUR: List<TourStep> = listOf(
         anchor = null,
         title = "Welcome to Tandem",
         body = "This is a five-minute walkthrough of the app, using your own library. " +
-            "Quit any time with the × in the corner — nothing you do here is saved differently " +
-            "from using the app normally.",
+            "Quit any time with the × in the corner. The book we open along the way is put " +
+            "back the way it was when you finish.",
     ),
     TourStep(
         id = "home_continue_reading",
@@ -205,7 +205,8 @@ val TOUR: List<TourStep> = listOf(
         screen = TourScreen.Details,
         anchor = TourAnchor.DetailsChips,
         title = "Ebook, Audiobook, Sync map",
-        body = "Green means that piece is already on this device.",
+        body = "A green chip means that part is already on this phone. Grey ones stream; " +
+            "the sync map downloads itself the first time you open the book.",
         needsPair = true,
     ),
     TourStep(
@@ -265,8 +266,8 @@ val TOUR: List<TourStep> = listOf(
         // real press-and-drag selection gesture reaches the reader beneath it.
         anchor = TourAnchor.ReaderPage,
         title = "Sync a sentence to audio",
-        body = "Press and hold a word, drag to select a sentence, then tap Sync to Audio. " +
-            "This is the precise version of the jump you just saw.",
+        body = "Press and hold a word, then drag to select at least a few words — a whole " +
+            "sentence gives the best match. Tap Sync to Audio.",
         emptyBody = "You're offline with nothing downloaded for this book, so this step can't " +
             "run here. Skip uses the page-level sync instead.",
         advance = Advance.WaitFor(TourEvent.ReaderSyncedSelection, skippable = true),

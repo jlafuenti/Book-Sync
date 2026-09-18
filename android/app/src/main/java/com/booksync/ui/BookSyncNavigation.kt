@@ -1,5 +1,8 @@
 package com.booksync.ui
 
+import android.content.ComponentName
+import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
@@ -39,7 +42,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import com.booksync.data.remote.TokenManager
+import com.booksync.data.repository.BookSyncRepository
+import com.booksync.player.AudioPlayerService
 import com.booksync.ui.auth.LoginScreen
 import com.booksync.ui.components.MiniPlayerBar
 import com.booksync.ui.components.PairOpenGateViewModel
@@ -74,6 +81,7 @@ import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.compose.runtime.CompositionLocalProvider
 
 /**
@@ -109,6 +117,17 @@ interface UserScopeProviderEntryPoint {
 @dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
 interface TourAnchorRegistryEntryPoint {
     fun tourAnchorRegistry(): TourAnchorRegistry
+}
+
+/**
+ * Hilt entry point for [BookSyncRepository] (issue #597 tour cleanup):
+ * [MainScaffold] executes [TourNav.CleanUp] itself, and it has no ViewModel of
+ * its own that already reaches the repository the way every screen's does.
+ */
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+interface BookSyncRepositoryEntryPoint {
+    fun bookSyncRepository(): BookSyncRepository
 }
 
 // ------------------------------------------------------------
@@ -616,6 +635,13 @@ private fun TourRouteShown(tour: TourViewModel, route: String) {
  */
 @Composable
 private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGateViewModel, tour: TourViewModel) {
+    val context = LocalContext.current
+    val repository = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            BookSyncRepositoryEntryPoint::class.java,
+        ).bookSyncRepository()
+    }
     val bottomNavController = rememberNavController()
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -625,7 +651,10 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
     // here, rather than collected at the outer NavHost, because tab switches
     // need `bottomNavController` — the same reason `gate` is threaded in.
     // ShowReaderBars / SkipToToolbarSync are for the reader Activity (Track C)
-    // and are simply not actionable here.
+    // and are simply not actionable here. CleanUp runs in this same collector
+    // coroutine deliberately (issue #597 tester feedback): it is scoped to
+    // `MainScaffold`, which stays composed after `finish()`/`quit()` makes the
+    // tour overlay itself disappear.
     LaunchedEffect(Unit) {
         tour.controller.nav.collect { navEvent ->
             when (navEvent) {
@@ -639,6 +668,7 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                 is TourNav.OpenReader -> outerNavController.navigate(Routes.reader(navEvent.pairId))
                 TourNav.PopToMain -> outerNavController.popBackStack(Routes.MAIN, inclusive = false)
                 TourNav.ShowReaderBars, TourNav.SkipToToolbarSync -> Unit
+                is TourNav.CleanUp -> cleanUpTourPair(context, repository, navEvent.pairId)
             }
         }
     }
@@ -797,5 +827,70 @@ private fun MainScaffold(outerNavController: NavHostController, gate: PairOpenGa
                 )
             }
         }
+    }
+}
+
+/**
+ * Executes [TourNav.CleanUp] (issue #597 tester feedback): the pair the tour opened was
+ * untouched — no progress, nothing local — when the tour started or adopted it
+ * ([com.booksync.ui.tour.TourPairPicker.isUntouched]), so finishing or quitting puts it back
+ * exactly that way. `deletePair` is deliberately not used here — it calls the server's
+ * `DELETE /api/pairs/{id}`, unpairing (and removing) the whole thing, not just this device's
+ * copy of it.
+ *
+ * The player is stopped last, after progress, files and the sync map are already cleared —
+ * so if it is later reopened for this pair on a fresh pick, there's nothing stale left for it
+ * to find.
+ */
+private suspend fun cleanUpTourPair(context: Context, repository: BookSyncRepository, pairId: Int) {
+    val progressCleared = repository.resetPairProgress(pairId)
+    val pair = repository.getPairById(pairId)
+    val ebookRemoved = pair?.ebookDownloaded == true
+    if (ebookRemoved) repository.deleteEbook(pair!!)
+    val audiobookRemoved = pair?.audiobookDownloaded == true
+    if (audiobookRemoved) repository.deleteAudiobook(pair!!)
+    val syncMapCleared = pair?.syncMapDownloaded == true
+    if (syncMapCleared) repository.clearSyncMapCache(pairId)
+    val stoppedPlayer = stopPlayerIfLoaded(context, pairId)
+
+    Log.d(
+        "Tour",
+        "cleanup pair=$pairId progressCleared=$progressCleared ebookRemoved=$ebookRemoved " +
+            "audiobookRemoved=$audiobookRemoved syncMapCleared=$syncMapCleared stoppedPlayer=$stoppedPlayer",
+    )
+}
+
+/**
+ * Stops and unloads the player only if it currently holds [pairId]'s media — never a
+ * different book the user might have started playing since. `stop()` + `clearMediaItems()`
+ * is the same pair [AudioPlayerService]'s `watchForSignOut` uses to empty the session on
+ * sign-out; this is the same idea reached from outside the service, through a throwaway
+ * [MediaController] connected the way [MiniPlayerBar] connects its own.
+ *
+ * Returns false (never throws) when nothing needed stopping, including when the service
+ * can't be reached at all — a missing player is not a cleanup failure.
+ */
+private suspend fun stopPlayerIfLoaded(context: Context, pairId: Int): Boolean {
+    val appContext = context.applicationContext
+    val token = SessionToken(appContext, ComponentName(appContext, AudioPlayerService::class.java))
+    val future = MediaController.Builder(appContext, token).buildAsync()
+    val controller = suspendCancellableCoroutine<MediaController?> { cont ->
+        // `cont.resume(value)` would resolve to the member overload that requires an
+        // `onCancellation` callback (Kotlin prefers a same-named member over the matching
+        // extension even when the member's own arity doesn't fit); resumeWith sidesteps that.
+        future.addListener({ cont.resumeWith(Result.success(runCatching { future.get() }.getOrNull())) }, { it.run() })
+        cont.invokeOnCancellation { future.cancel(false) }
+    } ?: return false
+    return try {
+        val loadedPairId = controller.currentMediaItem?.mediaId?.let { decodePairIdFromMediaId(it) }
+        if (loadedPairId == pairId) {
+            controller.stop()
+            controller.clearMediaItems()
+            true
+        } else {
+            false
+        }
+    } finally {
+        controller.release()
     }
 }
