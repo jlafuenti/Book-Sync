@@ -27,9 +27,6 @@ operator must do by hand rather than read about afterwards.
   is offered once after the first sign-in. The book it opens is put back the way it was when
   the tour ends. The reader's selection-toolbar "Sync to Audio" now also works while
   streaming, not only with a downloaded audiobook (#597).
-
-### Changed
-
 - Widened the rule that un-finishes a book when its position moves back out of the end stretch
   (#584): it used to clear `is_completed` only on the *transition* out of the end zone, so a book
   already sitting mid-book when it was marked finished — for example, re-listened from the middle
