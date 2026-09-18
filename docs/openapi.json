@@ -6062,7 +6062,7 @@
   "info": {
     "description": "Synchronize your reading position between ebooks and audiobooks. Seamlessly switch between reading and listening.",
     "title": "Tandem",
-    "version": "0.4.1"
+    "version": "0.4.2"
   },
   "openapi": "3.1.0",
   "paths": {

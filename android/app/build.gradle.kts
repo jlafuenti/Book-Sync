@@ -129,8 +129,8 @@ android {
         // https://developer.android.com/google/play/requirements/target-sdk
         targetSdk = 36
         // MAJOR*10000 + MINOR*100 + PATCH (docs/releasing.md): 0.1.0 -> 100.
-        versionCode = 401
-        versionName = "0.4.1"
+        versionCode = 402
+        versionName = "0.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

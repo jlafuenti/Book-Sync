@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-18
+
 ### Fixed
 
 - `_filter_chunked_segment_drift` (0.4.0, #620) demoted nearly every matched point in a large
@@ -34,6 +36,10 @@ operator must do by hand rather than read about afterwards.
   filter would demote more than that share of a segment's matches, the reference itself is the
   more likely thing that's wrong, and the segment's chunked output is now left untouched instead
   (#635).
+- Android: **Report a problem** attaches the Android Auto diagnostics log as well as the app's,
+  when each exists, and the message names which logs it carries — plus how to switch on
+  whichever is missing. A report about the car used to arrive with none of the evidence about
+  the car (#636).
 
 ### Upgrade notes
 
