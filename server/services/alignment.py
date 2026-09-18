@@ -565,6 +565,38 @@ CHUNK_DRIFT_OFFSET_MS = 3 * 60 * 1000  # 3 minutes
 #: away on that alone.
 CHUNK_DRIFT_MIN_RUN = 15
 
+#: Safety bound (issue #635). `expected_ms` is a SINGLE straight line drawn
+#: across the *entire* segment, from one bracketing anchor to the other. That
+#: line is only an accurate reference when the epub:whisper density is
+#: uniform across the whole segment — but a sparse-anchor segment big enough
+#: to need `_chunk_align` in the first place (up to a whole book, when
+#: `len(anchors) < 3`) is exactly where density is least likely to be
+#: uniform end-to-end. Wherever it is not, points that `_chunk_align` matched
+#: CORRECTLY still sit far from that single chord, for the whole remainder
+#: of the segment on the far side of the density change: a real book with a
+#: faster- or slower-paced stretch (dialogue vs. descriptive narration, not
+#: a parsing anomaly) is enough to trigger it. Because every point past that
+#: change deviates from the chord in the same direction, the run-length rule
+#: above (`CHUNK_DRIFT_MIN_RUN`) does nothing to contain it — "sustained
+#: displacement" and "sustained but correct, relative to a bad reference"
+#: look identical to it. The production numbers behind #635 show the result:
+#: up to 98% of a segment's matches demoted, timing mismatches going UP after
+#: "fixing" them.
+#:
+#: A genuinely displaced run — the case this filter exists to catch — is a
+#: MINORITY of a gap's points; #628's own regression fixture demotes under
+#: 2% of a 3,248-point segment for a real localized error. So: if applying
+#: the run-demotion above would demote more than this fraction of a
+#: segment's points, the straight-line reference itself is the more likely
+#: thing that's wrong, not `_chunk_align`'s output — leave the chunked
+#: output untouched rather than collapsing most of a segment into a
+#: two-point interpolation that #635 shows is typically a worse estimate
+#: than what chunked DTW already had. 30% (vs. observed regressions of
+#: 39%-98%, and a real correction under 2%) leaves comfortable headroom on
+#: both sides; there is no single "correct" number, only "far below the
+#: regressions and far above real corrections seen so far."
+CHUNK_DRIFT_MAX_DEMOTION_FRACTION = 0.30
+
 
 def _filter_chunked_segment_drift(
     seg_alignments: List[Tuple[int, int, float]],
@@ -589,6 +621,13 @@ def _filter_chunked_segment_drift(
     Demoted points come back with confidence 0.0, not dropped: the caller's
     own re-interpolation pass (`_align_texts_impl`) fills a confidence-0
     point in from whatever real matches remain on either side of it.
+
+    Bailing out (issue #635): if the runs this would demote add up to more
+    than `CHUNK_DRIFT_MAX_DEMOTION_FRACTION` of the segment, `seg_alignments`
+    is returned completely unmodified — see that constant's comment. This is
+    an all-or-nothing decision per call (per segment), not per run: once the
+    reference line has been shown untrustworthy for one part of a segment,
+    nothing else it flags in the same segment is good evidence either.
     """
     if epub_span <= 0 or not seg_alignments:
         return seg_alignments
@@ -597,25 +636,44 @@ def _filter_chunked_segment_drift(
         frac = local_epub_idx / epub_span
         return boundary_start_ms + frac * (boundary_end_ms - boundary_start_ms)
 
-    filtered: List[Tuple[int, int, float]] = []
-    run: List[Tuple[int, int, float]] = []
-
-    def flush():
-        if len(run) >= CHUNK_DRIFT_MIN_RUN:
-            filtered.extend((ei, wi, 0.0) for ei, wi, _conf in run)
-        else:
-            filtered.extend(run)
-        run.clear()
-
-    for ei, wi, conf in seg_alignments:
+    # First pass: find candidate runs without mutating anything, so the
+    # total demoted share can be checked before committing to any of it.
+    runs: List[List[int]] = []
+    current: List[int] = []
+    for idx, (ei, wi, _conf) in enumerate(seg_alignments):
         actual_ms = whisper_sentences[wi + ws].start_ms
         if abs(actual_ms - expected_ms(ei)) > CHUNK_DRIFT_OFFSET_MS:
-            run.append((ei, wi, conf))
+            current.append(idx)
         else:
-            flush()
-            filtered.append((ei, wi, conf))
-    flush()
-    return filtered
+            if len(current) >= CHUNK_DRIFT_MIN_RUN:
+                runs.append(current)
+            current = []
+    if len(current) >= CHUNK_DRIFT_MIN_RUN:
+        runs.append(current)
+
+    if not runs:
+        return seg_alignments
+
+    demoted_count = sum(len(run) for run in runs)
+    demoted_fraction = demoted_count / len(seg_alignments)
+    if demoted_fraction > CHUNK_DRIFT_MAX_DEMOTION_FRACTION:
+        logger.warning(
+            "_filter_chunked_segment_drift: bailing out — would demote "
+            "%d/%d points (%.0f%%) of a %d-sentence segment, over the "
+            "%.0f%% safety bound; the boundary-to-boundary reference is "
+            "more likely wrong than the chunked output here, so it is left "
+            "untouched (issue #635)",
+            demoted_count, len(seg_alignments),
+            100 * demoted_fraction, epub_span,
+            100 * CHUNK_DRIFT_MAX_DEMOTION_FRACTION,
+        )
+        return seg_alignments
+
+    demoted_idx = {i for run in runs for i in run}
+    return [
+        (ei, wi, 0.0 if idx in demoted_idx else conf)
+        for idx, (ei, wi, conf) in enumerate(seg_alignments)
+    ]
 
 
 def _anchor_align(
