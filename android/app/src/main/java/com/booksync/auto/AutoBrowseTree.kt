@@ -94,11 +94,20 @@ fun autoRootTabs(): List<MediaItem> = listOf(
  * The sort is stable, so rows that tie — including everything with no usable
  * timestamp, which scores 0 — keep the order they arrived in rather than
  * shuffling between browses.
+ *
+ * A standalone row already represented by a pair is dropped, the same way
+ * [mergedLibrary] drops one (issue #618). `syncAllBookmarksAndProgress` writes
+ * a `user_progress` audiobook row for every pair, so an in-progress paired
+ * book otherwise contributes both a `pair_N` row here and an `audiobook_M`
+ * row from the standalone source — two rows resuming at the same position
+ * under two different ids.
  */
-fun continueListeningBooks(pairs: List<AutoBook>, standalone: List<AutoBook>): List<AutoBook> =
-    (pairs + standalone)
+fun continueListeningBooks(pairs: List<AutoBook>, standalone: List<AutoBook>): List<AutoBook> {
+    val pairedAudiobookIds = pairs.map { it.audiobookId }.toSet()
+    return (pairs + standalone.filterNot { it.audiobookId in pairedAudiobookIds })
         .sortedByDescending { it.lastPlayedAtMs }
         .take(AUTO_MAX_ITEMS_PER_NODE)
+}
 
 /**
  * The value Android Auto's Continue Listening watcher diffs to decide whether

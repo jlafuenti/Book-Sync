@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -105,6 +106,55 @@ class LibraryRepositoryTest {
         assertEquals(listOf(1), repo.getRecentlyPlayedPairsFlow().first().map { it.id })
         assertEquals(listOf(700), repo.getRecentlyPlayedStandaloneAudiobooksFlow().first().map { it.id })
         assertEquals(listOf(71), repo.getRecentlyReadEbooksFlow().first().map { it.id })
+    }
+
+    /**
+     * Issue #612. `AudioPlayerService` used to build Android Auto's Continue
+     * Listening node with `autoBookFor`: one `repository.getBookmark` call
+     * per pair and one `repository.getProgressOnce` call per standalone
+     * book, so a live library of 44 in-progress books ran 44 extra Room
+     * queries on every browse. `getRecentlyPlayedPairsWithBookmarksFlow` and
+     * `getRecentlyPlayedStandaloneAudiobooksWithProgressFlow` (PR #594) join
+     * every bookmark/progress row in one query each instead — this pins that
+     * the DAO call count does not grow with the number of rows returned.
+     */
+    @Test
+    fun `the recently-played joins issue the same bounded number of DAO calls regardless of library size`() = runTest {
+        var pairsCalls = 0
+        var standaloneCalls = 0
+        var progressCalls = 0
+        var bookmarksCalls = 0
+        val manyPairs = (1..50).map { pair(it, ebookId = it, audiobookId = it) }
+        val manyAudiobooks = (1..50).map { audiobook(it + 1000) }
+        every { bookPairDao.getRecentlyPlayedPairs(TEST_SCOPE) } answers {
+            pairsCalls++; flowOf(manyPairs)
+        }
+        every { audioBookDao.getRecentlyPlayedStandaloneAudiobooks(TEST_SCOPE) } answers {
+            standaloneCalls++; flowOf(manyAudiobooks)
+        }
+        every { userProgressDao.getAllProgressFlow(TEST_SCOPE) } answers {
+            progressCalls++; flowOf(emptyList())
+        }
+        every { bookmarkDao.getAllBookmarksFlow(TEST_SCOPE) } answers {
+            bookmarksCalls++; flowOf(emptyList())
+        }
+
+        val repo = library()
+        val pairsWithBookmarks = repo.getRecentlyPlayedPairsWithBookmarksFlow().first()
+        val standaloneWithProgress = repo.getRecentlyPlayedStandaloneAudiobooksWithProgressFlow().first()
+
+        assertEquals(50, pairsWithBookmarks.size)
+        assertEquals(50, standaloneWithProgress.size)
+        // A per-row read would show a call count tracking the 50 rows above;
+        // the join must show a small, fixed count instead — one flow build
+        // per query the join chain actually contains, never one per row.
+        assertTrue("getRecentlyPlayedPairs must not scale with row count: called $pairsCalls times", pairsCalls in 1..2)
+        assertTrue(
+            "getRecentlyPlayedStandaloneAudiobooks must not scale with row count: called $standaloneCalls times",
+            standaloneCalls in 1..2,
+        )
+        assertTrue("getAllProgressFlow must not scale with row count: called $progressCalls times", progressCalls in 1..4)
+        assertTrue("getAllBookmarksFlow must not scale with row count: called $bookmarksCalls times", bookmarksCalls in 1..2)
     }
 
     @Test

@@ -102,6 +102,65 @@ class CoverArtPlanTest {
     }
 
     // ------------------------------------------------------------------
+    // Browse-safe plan (issue #612): what a browse row may resolve without
+    // ever touching the network, and when it's worth warming the cache in
+    // the background instead.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a cached cover resolves locally`() {
+        assertEquals(
+            BrowseCoverPlan.Local(CoverArtRung.Cached),
+            browseCoverPlan(cachedExists = true, audioFileExists = true, serverCoverPath = "/x.jpg"),
+        )
+    }
+
+    @Test
+    fun `embedded art resolves locally too — it never touches the network`() {
+        assertEquals(
+            BrowseCoverPlan.Local(CoverArtRung.Embedded),
+            browseCoverPlan(cachedExists = false, audioFileExists = true, serverCoverPath = "/x.jpg"),
+        )
+    }
+
+    @Test
+    fun `the server rung is never handed back as something to resolve now`() {
+        // This is the regression itself: nothing a browse-safe caller reads
+        // may be CoverArtRung.Server — that is the rung that blocks on a GET.
+        val plan = browseCoverPlan(cachedExists = false, audioFileExists = true, serverCoverPath = "/x.jpg")
+        assertTrue(
+            "a plan with local art available must never ask for a network fetch",
+            plan !is BrowseCoverPlan.WarmInBackground,
+        )
+    }
+
+    @Test
+    fun `nothing local but a server cover warms the cache in the background`() {
+        assertEquals(
+            BrowseCoverPlan.WarmInBackground("/x.jpg"),
+            browseCoverPlan(cachedExists = false, audioFileExists = false, serverCoverPath = "/x.jpg"),
+        )
+    }
+
+    @Test
+    fun `truly nothing to look at is None, not a background fetch of nothing`() {
+        assertEquals(
+            BrowseCoverPlan.None,
+            browseCoverPlan(cachedExists = false, audioFileExists = false, serverCoverPath = null),
+        )
+    }
+
+    @Test
+    fun `a downloaded file always offers the embedded rung locally, even with no server cover`() {
+        // browseCoverPlan can't know in advance whether extraction will find
+        // bytes — same as coverArtPlan itself; it only rules out the network.
+        assertEquals(
+            BrowseCoverPlan.Local(CoverArtRung.Embedded),
+            browseCoverPlan(cachedExists = false, audioFileExists = true, serverCoverPath = null),
+        )
+    }
+
+    // ------------------------------------------------------------------
     // Wiring. Every assertion above passes with a plan nothing walks: a
     // correct, well-tested function and a player still showing headphones.
     // Four guards have shipped inert in this repository already.

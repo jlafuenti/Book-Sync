@@ -173,6 +173,10 @@ class AudioPlayerService : MediaLibraryService() {
         // Concurrent cover fetches during one browse. Bounded so a big library
         // does not open a hundred sockets at once.
         private const val AUTO_COVER_ART_CONCURRENCY = 4
+        // How many media ids onGetChildren logs per browse (issue #612) — enough
+        // to see whether the head of the list is the expected book, not the
+        // whole node.
+        private const val AUTO_LOG_SAMPLE_IDS = 5
     }
 
     @Inject lateinit var repository: BookSyncRepository
@@ -1536,7 +1540,20 @@ class AudioPlayerService : MediaLibraryService() {
                 // Sign-out leaves the Room cache in place on purpose, so this is
                 // what stops the car listing the previous account's library —
                 // and [childrenOf] never runs, so that cache is not read at all.
+                //
+                // Elapsed time and the first few ids returned (issue #612): the
+                // investigation there could not tell "we returned the wrong
+                // order" from "we returned the right order too slowly" without
+                // this. Ids only, never titles — this is the AUTO diagnostic
+                // channel, not a place for what a driver is listening to.
+                val startElapsedMs = android.os.SystemClock.elapsedRealtime()
                 val items = autoGatedBrowse(hasAccount()) { childrenOf(parentId) }
+                val elapsedMs = android.os.SystemClock.elapsedRealtime() - startElapsedMs
+                val sampleIds = items.take(AUTO_LOG_SAMPLE_IDS).joinToString(",") { it.mediaId }
+                diagnosticLogger.i(
+                    LogChannel.AUTO, TAG,
+                    "onGetChildren parentId=$parentId elapsedMs=$elapsedMs count=${items.size} ids=[$sampleIds]",
+                )
                 future.set(LibraryResult.ofItemList(ImmutableList.copyOf(items), params))
             }
             return future
@@ -1883,34 +1900,50 @@ class AudioPlayerService : MediaLibraryService() {
     )?.toString()
 
     /**
-     * Cover art for a whole browse node, fetched in parallel and **bounded**.
+     * Cover art for a whole browse node, fetched in parallel — and, since
+     * issue #612, resolved from disk only. It used to walk the full cover
+     * ladder (issue #331) for every row behind one `withTimeoutOrNull` shared
+     * by the whole batch: the third rung is an HTTP GET, and in a car
+     * reaching a LAN-only server that GET fails on *every* browse, not
+     * occasionally — so the shared timeout didn't just drop the missing
+     * covers, it held the ones that had already resolved from disk hostage
+     * for the same [AUTO_COVER_ART_BUDGET_MS] and then dropped those too.
      *
-     * The rows themselves are Room reads and are instant, but the third rung of
-     * the cover ladder (issue #331) is an HTTP GET. Without a budget an
-     * unreachable server would hold the entire list behind one OkHttp timeout
-     * per book, which is exactly the car-checklist failure "browse content did
-     * not load in time". On timeout the node renders without the missing art.
+     * [CoverArtHelper.getBrowseCoverUri] never touches the network, so this
+     * method can't block on one either. A row with nothing local renders
+     * without art for this browse; [warmCoverCache] fetches the server's
+     * cover in the background so the *next* browse finds it cached.
      */
-    private suspend fun autoCoverUris(books: List<AutoBook>): Map<String, Uri> {
-        val fetched = withTimeoutOrNull(AUTO_COVER_ART_BUDGET_MS) {
-            coroutineScope {
-                books.map { book ->
-                    async(Dispatchers.IO) {
-                        coverFetchLimit.withPermit {
-                            val uri = coverArtHelper.getCoverUri(
-                                book.audiobookId, book.audioFilename, book.serverCoverPath,
-                            )
-                            uri?.let { coverArtHelper.grantAutoReadPermission(it) }
-                            book.mediaId to uri
-                        }
-                    }
-                }.awaitAll()
+    private suspend fun autoCoverUris(books: List<AutoBook>): Map<String, Uri> = coroutineScope {
+        books.map { book ->
+            async(Dispatchers.IO) {
+                coverFetchLimit.withPermit {
+                    val cover = coverArtHelper.getBrowseCoverUri(
+                        book.audiobookId, book.audioFilename, book.serverCoverPath,
+                    )
+                    cover.uri?.let { coverArtHelper.grantAutoReadPermission(it) }
+                    cover.coverPathToWarm?.let { warmCoverCache(book.audiobookId, it) }
+                    book.mediaId to cover.uri
+                }
+            }
+        }.awaitAll().mapNotNull { (id, uri) -> uri?.let { id to it } }.toMap()
+    }
+
+    /**
+     * Fetches and caches one book's server cover off the browse response
+     * (issue #612) — fire-and-forget, on its own [AUTO_COVER_ART_BUDGET_MS]
+     * bound so a hung connection can't leak a coroutine forever. Nothing
+     * awaits this; the browse that triggered it has already rendered without
+     * the art, and the next one picks up whatever landed in the cache.
+     */
+    private fun warmCoverCache(audiobookId: Int, coverPath: String) {
+        serviceScope.launch(Dispatchers.IO) {
+            withTimeoutOrNull(AUTO_COVER_ART_BUDGET_MS) {
+                coverFetchLimit.withPermit {
+                    coverArtHelper.cacheServerCover(audiobookId, coverPath)
+                }
             }
         }
-        if (fetched == null) {
-            diagnosticLogger.w(LogChannel.AUTO, TAG, "cover art budget exceeded — browsing without art")
-        }
-        return fetched.orEmpty().mapNotNull { (id, uri) -> uri?.let { id to it } }.toMap()
     }
 
     /**
@@ -1978,13 +2011,23 @@ class AudioPlayerService : MediaLibraryService() {
         return outcome != LibraryCacheReconcile.Unverified
     }
 
+    /**
+     * Continue Listening, built from the joined flows PR #594 added rather
+     * than [autoBookFor]'s per-row `getBookmark`/`getProgressOnce` (issue
+     * #612): a live library of 44 in-progress books used to run 44 extra Room
+     * queries on every browse and every `notifyBrowseNodeChanged` count. The
+     * join already reads every bookmark and every progress row in one query
+     * each — see `LibraryRepository.getRecentlyPlayedPairsWithBookmarksFlow`
+     * — so this is a bounded number of queries regardless of library size.
+     */
     private suspend fun buildContinueListeningItems(): List<MediaItem> = autoNode(
         emptyMessage = AUTO_NOTHING_STARTED_MESSAGE,
     ) {
         continueListeningBooks(
-            pairs = repository.getRecentlyPlayedPairsFlow().first().map { autoBookFor(it) },
-            standalone = repository.getRecentlyPlayedStandaloneAudiobooksFlow().first()
-                .map { autoBookFor(it) },
+            pairs = repository.getRecentlyPlayedPairsWithBookmarksFlow().first()
+                .map { (pair, bookmark) -> pair.toAutoBook(bookmark) },
+            standalone = repository.getRecentlyPlayedStandaloneAudiobooksWithProgressFlow().first()
+                .map { (audio, progress) -> audio.toAutoBook(progress) },
         )
     }
 
