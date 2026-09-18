@@ -16,6 +16,22 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-18
+
+Android only. Nothing in the server or the web app changed since 0.4.0, so a deployment has
+nothing to do. Android normally carries its notes in Play rather than here; this one is listed
+because it repairs something 0.4.0 shipped broken.
+
+### Fixed
+
+- The reader's **Define** worked for no word at all in 0.4.0. The dictionary lookup moved to
+  Wiktionary in that release, but the app identified itself to Wikimedia only by the HTTP
+  library's default name, which Wikimedia's robot policy refuses with 403 — and the fallback to
+  the previous dictionary ran only when a word was genuinely absent, so every lookup ended as
+  "No definition available". The app now identifies itself properly (its name, version, site and
+  support address — nothing about the device or the reader), and any failure of the first source
+  falls back to the second. A lookup reports failure only when both sources fail.
+
 ## [0.4.0] - 2026-09-17
 
 ### Added
