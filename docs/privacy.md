@@ -1,6 +1,6 @@
 # Tandem privacy policy
 
-_Last updated: 2026-09-03_
+_Last updated: 2026-09-18_
 
 Tandem is a self-hosted app. You point it at a Tandem server that you — or someone you
 know — runs, and it reads the ebooks and audiobooks in that library. There is no Tandem
