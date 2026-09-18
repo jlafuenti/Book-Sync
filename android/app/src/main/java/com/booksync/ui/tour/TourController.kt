@@ -91,7 +91,7 @@ class TourController(
             val picked = picker.pick()
             pairId = picked
             steps = buildSteps(picked)
-            enter(0, previousScreen = null)
+            enter(0)
         }
     }
 
@@ -110,7 +110,7 @@ class TourController(
     fun back() {
         val running = _state.value as? TourState.Running ?: return
         if (!canGoBack(running.index)) return
-        enter(running.index - 1, previousScreen = running.step.screen)
+        enter(running.index - 1)
     }
 
     private fun canGoBack(index: Int): Boolean =
@@ -146,10 +146,15 @@ class TourController(
         val running = _state.value as? TourState.Running ?: return
         if (event is TourEvent.SheetClosed) {
             // The user swiped the sheet away mid-step: its controls are gone,
-            // so go back to the step that asks them to open it.
+            // so go back to the step that asks them to open it. Searched only
+            // *before* the current step — `library_tap_downloaded` (issue #597
+            // follow-up) is also a Library-screen TapAnchor step, just one that
+            // comes later in the script, so an unbounded search would find that
+            // one instead of `library_open_pair` once the tour has moved past it.
             if (running.step.screen == TourScreen.Sheet) {
-                val reopen = steps.indexOfLast { it.screen == TourScreen.Library && it.advance is Advance.TapAnchor }
-                if (reopen in 0 until running.index) enter(reopen, previousScreen = running.step.screen)
+                val reopen = steps.subList(0, running.index)
+                    .indexOfLast { it.screen == TourScreen.Library && it.advance is Advance.TapAnchor }
+                if (reopen >= 0) enter(reopen)
             }
             return
         }
@@ -170,17 +175,17 @@ class TourController(
         val nextIndex = currentIndex + 1
         val nextStep = steps[nextIndex]
         if (isReaderOrPlayer(leaving.screen) && !isReaderOrPlayer(nextStep.screen)) {
-            _nav.tryEmit(TourNav.PopToMain)
+            emitPopToMain()
         }
-        enter(nextIndex, previousScreen = leaving.screen)
+        enter(nextIndex)
     }
 
-    private fun enter(index: Int, previousScreen: TourScreen?) {
+    private fun enter(index: Int) {
         anchorWaitJob?.cancel()
         barsGraceJob?.cancel()
         val step = steps[index]
         registry.setWanted(step.anchor)
-        emitEnterNav(step, previousScreen, isFirstOccurrenceOfScreen(step.screen, index))
+        emitEnterNav(step, isFirstOccurrenceOfScreen(step.screen, index))
 
         // The "tap the page" step waits for the reader's bars; a user who never
         // taps would be stuck, so after a grace period the tour raises them
@@ -229,19 +234,32 @@ class TourController(
         steps.subList(0, index).none { it.screen == screen }
 
     /**
-     * Entering Home/Library/Downloaded/Account switches the bottom tab (and,
-     * the very first time Library appears, also opens the picked pair).
-     * Entering Sheet/Details/Reader/Player navigates nothing — that
-     * navigation is the real screen transition the user's own guided tap (or
-     * Track C's reader/player code) just performed.
+     * Switching bottom tabs is a guided tap like every other control the tour
+     * spotlights (issue #597 follow-up: the tour used to switch tabs itself,
+     * which tester feedback flagged as inconsistent with that rule) — a
+     * `home_tap_library` / `library_tap_downloaded` / `downloaded_tap_account`
+     * step asks the user to tap the tab, and the resulting [TourEvent.RouteShown]
+     * is what actually advances the tour. So entering a step never switches
+     * tabs on its own; the one thing it still does is open the picked pair the
+     * very first time Library appears, since that isn't a tab switch — the
+     * user is already looking at the Library screen they just tapped into.
      */
-    private fun emitEnterNav(step: TourStep, previousScreen: TourScreen?, isFirstOfScreen: Boolean) {
-        if (step.screen == previousScreen) return
-        val tab = tabRouteFor(step.screen) ?: return
-        _nav.tryEmit(TourNav.GoToTab(tab))
+    private fun emitEnterNav(step: TourStep, isFirstOfScreen: Boolean) {
         if (step.screen == TourScreen.Library && isFirstOfScreen) {
             pairId?.let { _nav.tryEmit(TourNav.OpenLibraryAt(it)) }
         }
+    }
+
+    /**
+     * The one place tabs still switch automatically: leaving the reader/player
+     * block. The reader can be opened from any tab (Home's Continue Reading,
+     * Library's card, or hopping back from the player), but the script always
+     * resumes on Library right after (the Filters step), so this always lands
+     * there regardless of which tab was active before the reader opened.
+     */
+    private fun emitPopToMain() {
+        _nav.tryEmit(TourNav.PopToMain)
+        _nav.tryEmit(TourNav.GoToTab(requireNotNull(tabRouteFor(TourScreen.Library))))
     }
 
     /** Route constants duplicated as literals (not imported from `ui.Routes`) to keep this
@@ -272,7 +290,7 @@ class TourController(
     private fun finish() {
         val running = _state.value as? TourState.Running
         if (running != null && isReaderOrPlayer(running.step.screen)) {
-            _nav.tryEmit(TourNav.PopToMain)
+            emitPopToMain()
         }
         anchorWaitJob?.cancel()
         barsGraceJob?.cancel()

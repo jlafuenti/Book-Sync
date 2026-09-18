@@ -83,7 +83,10 @@ class TourControllerTest {
     }
 
     @Test
-    fun `start picks a pair and enters step 0, emitting its nav`() = runTest {
+    fun `start picks a pair and enters step 0, needing no nav since Home is already showing`() = runTest {
+        // Issue #597 follow-up: the tour used to switch to the Home tab itself
+        // on start, but Home is where the tour is offered in the first place —
+        // there is nothing to navigate to, guided or otherwise.
         val scope = unconfinedScope()
         val controller = newController(pairId = 42, scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -97,7 +100,7 @@ class TourControllerTest {
         assertEquals(TOUR[0].id, state.step.id)
         assertEquals(42, state.pairId)
         assertEquals(TOUR.size, state.total)
-        assertTrue(navLog.contains(TourNav.GoToTab("home")))
+        assertTrue(navLog.isEmpty())
     }
 
     @Test
@@ -237,6 +240,10 @@ class TourControllerTest {
 
     @Test
     fun `dismissing the sheet mid-step returns to the open-a-book step`() = runTest {
+        // Also guards against a regression from the tap-the-tab steps (issue
+        // #597 follow-up): `library_tap_downloaded` is a later Library-screen
+        // TapAnchor step too, so the reopen search must find `library_open_pair`
+        // specifically, not just "the last Library TapAnchor step in the script".
         val controller = newController()
         controller.start()
         advanceUntilIdle()
@@ -358,7 +365,10 @@ class TourControllerTest {
     }
 
     @Test
-    fun `leaving the reader block for Library emits PopToMain`() = runTest {
+    fun `leaving the reader block for Library emits PopToMain and GoToTab(library)`() = runTest {
+        // The one automatic tab switch left (issue #597 follow-up): the reader
+        // can be opened from any tab, but the script always resumes on Library
+        // right after, regardless of which tab was active before it opened.
         val scope = unconfinedScope()
         val controller = newController(scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -372,6 +382,67 @@ class TourControllerTest {
 
         assertEquals("library_filters", running(controller).step.id)
         assertTrue(navLog.contains(TourNav.PopToMain))
+        assertTrue(navLog.contains(TourNav.GoToTab("library")))
+    }
+
+    @Test
+    fun `entering a tap-the-tab step emits no GoToTab — the user's own tap does that`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+
+        controller.advanceUntil("home_tap_library")
+
+        assertTrue(navLog.none { it is TourNav.GoToTab })
+    }
+
+    @Test
+    fun `tapping Library advances the tour and opens the picked pair`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(pairId = 42, scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("home_tap_library")
+
+        controller.onEvent(TourEvent.RouteShown("library"))
+
+        assertEquals("library_open_pair", running(controller).step.id)
+        assertTrue(navLog.contains(TourNav.OpenLibraryAt(42)))
+    }
+
+    @Test
+    fun `RouteShown for a tab other than the one being waited on is ignored`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("home_tap_library")
+
+        controller.onEvent(TourEvent.RouteShown("downloaded"))
+
+        assertEquals("home_tap_library", running(controller).step.id)
+    }
+
+    @Test
+    fun `a late duplicate RouteShown for the tab just tapped does not double-advance`() = runTest {
+        // Compose can re-report a route (e.g. on recomposition); the step
+        // waiting on it has already moved on by then, so a stray repeat must
+        // not walk the tour forward again — matching is against the *current*
+        // step's own expected event, not "was this route shown at some point."
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("home_tap_library")
+
+        controller.onEvent(TourEvent.RouteShown("library"))
+        assertEquals("library_open_pair", running(controller).step.id)
+
+        controller.onEvent(TourEvent.RouteShown("library"))
+        assertEquals("library_open_pair", running(controller).step.id)
     }
 
     @Test
