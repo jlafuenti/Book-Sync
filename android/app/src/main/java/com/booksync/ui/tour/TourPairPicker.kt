@@ -33,7 +33,10 @@ fun choose(pairs: List<BookPairEntity>, isOnline: Boolean): Int? {
  * out too.
  */
 fun pairIsUntouched(pair: BookPairEntity, hasProgress: Boolean): Boolean =
-    !hasProgress && !pair.ebookDownloaded && !pair.audiobookDownloaded && !pair.syncMapDownloaded
+    // A cached sync map on its own is invisible to the user (no card, no list, no
+    // position) and is refetched on demand, so it does not make a pair "touched";
+    // cleanup still clears it along with everything else.
+    !hasProgress && !pair.ebookDownloaded && !pair.audiobookDownloaded
 
 /** Reads the library and connectivity to answer [choose] for [TourController.start]. */
 @Singleton
