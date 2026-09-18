@@ -25,13 +25,18 @@ const val REPORT_PROBLEM_EMAIL_SUBJECT = "Report a Problem"
  *   straight to one addressed at [SUPPORT_EMAIL]; false when no mail app is
  *   installed and the caller must fall back to today's generic share sheet
  *   (issue #609 — a dead button is worse than an unrouted share).
+ * @param attachments which diagnostic logs to attach, in the order they should
+ *   be attached — empty when neither exists, one entry for the ordinary case,
+ *   two when both channels have content (issue #636). The Android glue is what
+ *   turns this into `ACTION_SEND` (0 or 1 attachment) vs `ACTION_SEND_MULTIPLE`
+ *   (2), since that decision needs a real `Intent`/`Uri` to act on.
  */
 data class ReportProblemPlan(
     val toMailApp: Boolean,
     val recipient: String,
     val subject: String,
     val body: String,
-    val attachLog: Boolean,
+    val attachments: List<LogChannel>,
 )
 
 /**
@@ -51,5 +56,5 @@ fun planReportProblemIntent(report: ProblemReport, mailAppAvailable: Boolean): R
         recipient = SUPPORT_EMAIL,
         subject = if (mailAppAvailable) REPORT_PROBLEM_EMAIL_SUBJECT else report.subject,
         body = report.body,
-        attachLog = report.hasLog,
+        attachments = report.attachedLogs,
     )

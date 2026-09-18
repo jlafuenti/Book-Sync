@@ -1,7 +1,6 @@
 package com.booksync.diagnostics
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,20 +80,28 @@ class CrashReportFormatterTest {
     }
 
     // --- The "Report a problem" share --------------------------------------
+    //
+    // Issue #636: there are two diagnostic channels (LogChannel.APP, always
+    // available once anything has logged, and LogChannel.AUTO, which only has
+    // content once someone turned on Android Auto diagnostics and used the
+    // car). buildProblemReport takes the text read for each channel and says,
+    // in the body, which ones are attached — and for anything missing, how to
+    // turn it on, so a car report that arrives without the Auto log doesn't
+    // read as "nothing to see" (that was exactly #612's shape).
 
     @Test
     fun `the problem report subject carries the version, for triage from an inbox`() {
-        val payload = buildProblemReport(ctx, logText = "")
+        val payload = buildProblemReport(ctx, emptyMap())
 
         assertEquals("Tandem problem report — 1.4.0 (42)", payload.subject)
     }
 
     @Test
-    fun `the problem report body repeats the facts, because the log may not attach`() {
-        // The log is attached as a content:// URI. Plenty of targets (SMS, some
-        // chat apps) silently drop the attachment and keep only the text, so the
+    fun `the problem report body repeats the facts, because a log may not attach`() {
+        // Logs are attached as content:// URIs. Plenty of targets (SMS, some
+        // chat apps) silently drop attachments and keep only the text, so the
         // version and device have to be in the body as well.
-        val payload = buildProblemReport(ctx, logText = "10:00:00.000  I/Sync: hello\n")
+        val payload = buildProblemReport(ctx, mapOf(LogChannel.APP to "10:00:00.000  I/Sync: hello\n"))
 
         assertTrue(payload.body.contains("Tandem 1.4.0 (42)"))
         assertTrue(payload.body.contains("Google Pixel 7"))
@@ -104,15 +111,51 @@ class CrashReportFormatterTest {
     }
 
     @Test
-    fun `a report with no log says so instead of pretending one is attached`() {
-        val payload = buildProblemReport(ctx, logText = "")
+    fun `the body names both logs when both are attached`() {
+        val payload = buildProblemReport(
+            ctx,
+            mapOf(
+                LogChannel.APP to "10:00:00.000  I/Sync: hello\n",
+                LogChannel.AUTO to "10:01:00.000  I/Auto: onGetChildren 12ms\n",
+            ),
+        )
 
-        assertTrue(payload.body.contains("No diagnostic log"))
-        assertFalse(payload.hasLog)
+        assertTrue(payload.body.contains("Android Auto log and Tandem App log attached."))
+        assertEquals(listOf(LogChannel.AUTO, LogChannel.APP), payload.attachedLogs)
     }
 
     @Test
-    fun `a report with a log flags it for attachment`() {
-        assertTrue(buildProblemReport(ctx, logText = "something happened\n").hasLog)
+    fun `with only the app log, the body names it and explains how to enable the missing Auto log`() {
+        val payload = buildProblemReport(
+            ctx,
+            mapOf(LogChannel.APP to "10:00:00.000  I/Sync: hello\n", LogChannel.AUTO to ""),
+        )
+
+        assertTrue(payload.body.contains("Tandem App log attached."))
+        assertTrue(payload.body.contains("No Android Auto log"))
+        // Matches the Account screen's own path/wording (SectionTitle "Diagnostics",
+        // ActionRow "Android Auto logs") so the instructions are findable as written.
+        assertTrue(payload.body.contains("Account → Diagnostics → Android Auto logs"))
+        assertEquals(listOf(LogChannel.APP), payload.attachedLogs)
+    }
+
+    @Test
+    fun `a report with no logs says so instead of pretending one is attached, for both channels`() {
+        val payload = buildProblemReport(ctx, mapOf(LogChannel.APP to "", LogChannel.AUTO to ""))
+
+        assertTrue(payload.body.contains("No diagnostic logs attached."))
+        assertTrue(payload.body.contains("Account → Diagnostics → Tandem app logs"))
+        assertTrue(payload.body.contains("Account → Diagnostics → Android Auto logs"))
+        assertTrue(payload.attachedLogs.isEmpty())
+    }
+
+    @Test
+    fun `a missing key is treated the same as a blank log`() {
+        // AccountViewModel reads every channel before calling this, but the
+        // function itself should not assume the caller passed every key.
+        val payload = buildProblemReport(ctx, mapOf(LogChannel.APP to "something happened\n"))
+
+        assertEquals(listOf(LogChannel.APP), payload.attachedLogs)
+        assertTrue(payload.body.contains("No Android Auto log"))
     }
 }

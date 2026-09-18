@@ -78,23 +78,36 @@ object CrashReportFormatter {
     }
 }
 
-/** Subject, body and whether a log file is worth attaching. */
+/** Subject, body and which diagnostic channels are worth attaching. */
 data class ProblemReport(
     val subject: String,
     val body: String,
-    val hasLog: Boolean,
+    val attachedLogs: List<LogChannel>,
 )
 
 /**
  * The text half of the "Report a problem" share.
  *
- * The version and device are repeated in the body on purpose: the log goes as a
- * `content://` attachment, and share targets are free to drop attachments —
+ * Two diagnostic channels exist ([LogChannel]): [LogChannel.APP], which has
+ * content once anything has logged, and [LogChannel.AUTO], which only has
+ * content once someone turned on Android Auto diagnostics from the Account
+ * screen and used the car. A missing Auto log is normal, not an error (issue
+ * #636) — a car report that silently arrives without it reads as "nothing to
+ * see", which is exactly the shape #612 turned out to be. So the body says
+ * which logs are attached, and for anything missing, how to turn it on.
+ *
+ * [logTextByChannel] is keyed by whichever channels the caller read; a channel
+ * left out is treated the same as blank text for it.
+ *
+ * The version and device are repeated in the body on purpose: logs go as
+ * `content://` attachments, and share targets are free to drop attachments —
  * several do, silently. A report that arrives as body-only should still be
  * triageable.
  */
-fun buildProblemReport(context: CrashContext, logText: String): ProblemReport {
-    val hasLog = logText.isNotBlank()
+fun buildProblemReport(context: CrashContext, logTextByChannel: Map<LogChannel, String>): ProblemReport {
+    val attachedLogs = LogChannel.entries.filter { logTextByChannel[it]?.isNotBlank() == true }
+    val missingLogs = LogChannel.entries.filter { it !in attachedLogs }
+
     val body = buildString {
         appendLine("What happened? (please describe, and roughly when)")
         appendLine()
@@ -103,15 +116,30 @@ fun buildProblemReport(context: CrashContext, logText: String): ProblemReport {
         appendLine(context.appVersion)
         appendLine(context.device)
         appendLine("Android ${context.androidVersion}")
-        appendLine(
-            if (hasLog) "Diagnostic log attached."
-            else "No diagnostic log — turn on Account → Diagnostics → Tandem app logs, " +
-                "reproduce the problem, then report again.",
-        )
+        appendLine(attachedLogsSummary(attachedLogs))
+        missingLogs.forEach { appendLine(missingLogHint(it)) }
     }
     return ProblemReport(
         subject = "Tandem problem report — ${context.versionName} (${context.versionCode})",
         body = body,
-        hasLog = hasLog,
+        attachedLogs = attachedLogs,
     )
+}
+
+private fun attachedLogsSummary(attachedLogs: List<LogChannel>): String = when {
+    attachedLogs.isEmpty() -> "No diagnostic logs attached."
+    else -> "${attachedLogs.joinToString(" and ") { "${it.label} log" }} attached."
+}
+
+/**
+ * How to turn on [channel], worded to match the Account screen exactly
+ * (`SectionTitle("Diagnostics")`, `ActionRow` titles "Android Auto logs" /
+ * "Tandem app logs" in `AccountScreen.kt`) so the instructions are findable as
+ * written.
+ */
+private fun missingLogHint(channel: LogChannel): String = when (channel) {
+    LogChannel.AUTO -> "No Android Auto log — turn on Account → Diagnostics → Android Auto logs, " +
+        "reproduce the problem in the car, then report again."
+    LogChannel.APP -> "No Tandem app log — turn on Account → Diagnostics → Tandem app logs, " +
+        "reproduce the problem, then report again."
 }
