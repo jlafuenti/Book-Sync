@@ -12,7 +12,9 @@ import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.util.localFileName
 import com.booksync.data.remote.coverImageUrl
 import com.booksync.player.ArtworkEncode
+import com.booksync.player.BrowseCoverPlan
 import com.booksync.player.CoverArtRung
+import com.booksync.player.browseCoverPlan
 import com.booksync.player.coverArtPlan
 import com.booksync.player.encodeMediaArtwork
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -75,15 +77,7 @@ class CoverArtHelper @Inject constructor(
         serverCoverPath: String? = null,
     ): Uri? {
         val coverFile = File(coversDir, "$audiobookId.jpg")
-        // Sanitised, not joined verbatim (issue #177): this name comes from the
-        // server. No repository dependency here on purpose, so it uses the pure
-        // helper and asserts containment itself.
-        val audioDir = File(context.filesDir, AUDIOBOOKS_DIR)
-        val audioFile = audiobookFilename
-            ?.let { localFileName(it) }
-            ?.let { File(audioDir, it) }
-            ?.takeIf { it.canonicalPath.startsWith(audioDir.canonicalPath + File.separator) }
-            ?.takeIf { it.exists() }
+        val audioFile = resolveAudioFile(audiobookFilename)
 
         val plan = coverArtPlan(
             cachedExists = coverFile.exists(),
@@ -100,6 +94,81 @@ class CoverArtHelper @Inject constructor(
             if (uri != null) return uri
         }
         return null
+    }
+
+    /**
+     * [getCoverUri] restricted to what never touches the network (issue #612)
+     * — the cached file, or art embedded in a downloaded audio file, decided
+     * by [browseCoverPlan] rather than [coverArtPlan]'s full ladder.
+     *
+     * A browse node's rows come from Room and are instant; sharing one
+     * timeout across a whole batch that also included the server rung meant
+     * a single unreachable server — a LAN-only server in a car is the normal
+     * case, not the exception — blanked out covers that had *already*
+     * resolved from disk along with it. This can't do that: there is no
+     * network call in this method at all. When the only rung left is the
+     * server's own cover, [null] is returned and [coverPathToWarm] tells the
+     * caller which path is worth fetching in the background for next time —
+     * via [cacheServerCover] — rather than waiting for it here.
+     *
+     * Must be called from an IO dispatcher (the cache stat and the embedded
+     * extraction are both disk I/O).
+     */
+    fun getBrowseCoverUri(
+        audiobookId: Int,
+        audiobookFilename: String?,
+        serverCoverPath: String?,
+    ): BrowseCover {
+        val coverFile = File(coversDir, "$audiobookId.jpg")
+        val audioFile = resolveAudioFile(audiobookFilename)
+        return when (
+            val plan = browseCoverPlan(
+                cachedExists = coverFile.exists(),
+                audioFileExists = audioFile != null,
+                serverCoverPath = serverCoverPath,
+            )
+        ) {
+            is BrowseCoverPlan.Local -> BrowseCover(
+                uri = when (val rung = plan.rung) {
+                    is CoverArtRung.Cached -> uriFor(coverFile)
+                    is CoverArtRung.Embedded -> audioFile?.let { extractAndCache(audiobookId, it, coverFile) }
+                    is CoverArtRung.Server -> null // browseCoverPlan never returns this as Local
+                },
+                coverPathToWarm = null,
+            )
+            is BrowseCoverPlan.WarmInBackground -> BrowseCover(uri = null, coverPathToWarm = plan.coverPath)
+            BrowseCoverPlan.None -> BrowseCover(uri = null, coverPathToWarm = null)
+        }
+    }
+
+    /** [getBrowseCoverUri]'s result: what resolved now, and what's worth fetching later. */
+    data class BrowseCover(val uri: Uri?, val coverPathToWarm: String?)
+
+    /**
+     * Fetches and caches the server's cover for one audiobook — the
+     * background half of [getBrowseCoverUri] (issue #612). The same
+     * [fetchAndCache] the full ladder in [getCoverUri] uses, exposed on its
+     * own so a browse can warm the cache for next time without waiting on
+     * the request now. Must be called from an IO dispatcher.
+     */
+    fun cacheServerCover(audiobookId: Int, coverPath: String): Uri? {
+        val coverFile = File(coversDir, "$audiobookId.jpg")
+        return fetchAndCache(audiobookId, coverPath, coverFile)
+    }
+
+    /**
+     * Resolves the downloaded audio file for an audiobook, sanitised and
+     * containment-checked (issue #177) rather than joined verbatim — this
+     * name comes from the server. Shared by [getCoverUri] and
+     * [getBrowseCoverUri] so that check lives in exactly one place.
+     */
+    private fun resolveAudioFile(audiobookFilename: String?): File? {
+        val audioDir = File(context.filesDir, AUDIOBOOKS_DIR)
+        return audiobookFilename
+            ?.let { localFileName(it) }
+            ?.let { File(audioDir, it) }
+            ?.takeIf { it.canonicalPath.startsWith(audioDir.canonicalPath + File.separator) }
+            ?.takeIf { it.exists() }
     }
 
     /**

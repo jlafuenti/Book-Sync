@@ -311,9 +311,10 @@ def scan_plain_text(text: str) -> list[tuple[int, str]]:
 #
 # The privacy policy (docs/privacy.md) and the Play Data safety form both rest on
 # one factual claim: apart from the server the *user* configures, the app talks to
-# exactly one outside host — `api.dictionaryapi.dev`, on demand, when the reader's
-# "Define" action is used. Play enforces those answers retroactively, so the day
-# someone adds a second destination is the day the published policy becomes false.
+# exactly two outside hosts — `en.wiktionary.org` and, as its fallback,
+# `api.dictionaryapi.dev` — on demand, when the reader's "Define" action is used
+# (issue #608). Play enforces those answers retroactively, so the day someone adds
+# a third destination is the day the published policy becomes false.
 #
 # Nothing else notices that. The tests above catch a *personal* host; a perfectly
 # generic new SDK endpoint sails through them. This one fails instead, and its
@@ -323,8 +324,12 @@ def scan_plain_text(text: str) -> list[tuple[int, str]]:
 # Every host the app may name in code, and why. Anything not here is a new
 # destination and needs a policy/form revision before it can be allowlisted.
 DECLARED_THIRD_PARTY_HOSTS = {
-    # The dictionary lookup in the reader (AppModule.provideDictionaryRetrofit).
-    # The single entry the privacy policy exists to declare.
+    # The dictionary lookup in the reader, primary source
+    # (AppModule.provideWiktionaryRetrofit). Receives the selected word;
+    # nothing else (issue #608).
+    "en.wiktionary.org",
+    # The same lookup's fallback for words Wiktionary's English section
+    # doesn't cover (AppModule.provideDictionaryRetrofit).
     "api.dictionaryapi.dev",
 }
 
@@ -394,8 +399,9 @@ def test_only_declared_third_party_hosts_are_hardcoded():
         "Undeclared hosts hardcoded in the Android sources:\n"
         + "\n".join(f"  {rel} -> {host}" for rel, host in offenders)
         + "\n\nThe privacy policy (docs/privacy.md) and the Play Data safety form "
-        "in docs/play-listing.md both state that the only third party the app "
-        "contacts is api.dictionaryapi.dev. Update both, then add the host to "
+        "in docs/play-listing.md both state that the only third parties the app "
+        "contacts are en.wiktionary.org and its fallback api.dictionaryapi.dev. "
+        "Update both, then add the host to "
         "DECLARED_THIRD_PARTY_HOSTS with a note saying what it receives — or, if "
         "it is not a data destination, to _NON_DESTINATION_HOSTS."
     )

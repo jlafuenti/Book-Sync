@@ -226,4 +226,50 @@ class ContinueReadingOrderTest {
 
         assertEquals(listOf("pair_1", "audiobook_50"), newViewModel().order())
     }
+
+    /**
+     * Issue #618. `getRecentlyPlayedStandaloneAudiobooksFlow` is not actually
+     * filtered to books without a pair (see `Daos.kt`'s
+     * `getRecentlyPlayedStandaloneAudiobooks`), and `syncAllBookmarksAndProgress`
+     * writes a `user_progress` row for every pair's audiobook — so an
+     * in-progress paired book used to contribute both a `pair_N` row and an
+     * `audiobook_M` row here. Android Auto's Continue Listening has the same
+     * two sources and drops the duplicate the same way (`AutoBrowseTreeTest`).
+     */
+    @Test
+    fun `a paired book with a progress row does not appear twice`() {
+        val pairedAudiobook = AudioBookEntity(
+            id = 1, title = "A1", author = null, filename = "a1.m4b",
+            durationSeconds = 3600, format = "m4b", series = null, seriesIndex = null,
+            uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
+        )
+        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(listOf(pair(1)))
+        every { repository.getRecentlyPlayedStandaloneAudiobooksFlow() } returns flowOf(listOf(pairedAudiobook))
+        coEvery { repository.getBookmark(1) } returns bookmark(1, updatedAt = sep10Iso)
+
+        assertEquals(listOf("pair_1"), newViewModel().order())
+    }
+
+    /**
+     * A library where every pair has a projection row (the shape the live
+     * report used, 44 in-progress books) must still yield one row per book.
+     */
+    @Test
+    fun `a library where every pair has a projection row yields one row per book`() {
+        val pairs = (1..20).map { pair(it) }
+        val audiobooks = pairs.map {
+            AudioBookEntity(
+                id = it.audiobookId, title = it.audiobookTitle ?: "A${it.audiobookId}", author = null,
+                filename = "a${it.audiobookId}.m4b", durationSeconds = 3600, format = "m4b",
+                series = null, seriesIndex = null, uploadedAt = "2026-01-01T00:00:00", isDownloaded = true,
+            )
+        }
+        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(pairs)
+        every { repository.getRecentlyPlayedStandaloneAudiobooksFlow() } returns flowOf(audiobooks)
+        for (p in pairs) coEvery { repository.getBookmark(p.id) } returns bookmark(p.id, updatedAt = sep10Iso)
+
+        val order = newViewModel().order()
+        assertEquals(20, order.size)
+        assertEquals(pairs.map { "pair_${it.id}" }.toSet(), order.toSet())
+    }
 }

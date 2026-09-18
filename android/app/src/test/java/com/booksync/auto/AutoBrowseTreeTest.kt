@@ -138,6 +138,38 @@ class AutoBrowseTreeTest {
     }
 
     @Test
+    fun `continue listening does not list a paired book twice`() {
+        // Issue #618: syncAllBookmarksAndProgress writes a user_progress
+        // audiobook row for every pair, so an in-progress paired book
+        // contributes both a pair_N row (from the pairs source) and an
+        // audiobook_M row (from the standalone source). Drop the standalone
+        // row the same way mergedLibrary does for the Library tab.
+        val books = continueListeningBooks(
+            pairs = listOf(pair(1, "Bartleby", audiobookId = 55, lastPlayedAtMs = NOW)),
+            standalone = listOf(standalone(55, "Bartleby", lastPlayedAtMs = NOW - 1_000L)),
+        )
+        assertEquals(listOf("pair_1"), books.map { it.mediaId })
+    }
+
+    @Test
+    fun `a library where every pair has a projection row yields one row per book`() {
+        // The shape a real "44 in-progress books" library takes: every pair's
+        // audiobook also has its own user_progress row (#618's root cause).
+        val pairs = (1..20).map {
+            pair(it, "Pair %02d".format(it), audiobookId = it, lastPlayedAtMs = NOW - it)
+        }
+        val standalone = pairs.map { standalone(it.audiobookId, it.title, lastPlayedAtMs = it.lastPlayedAtMs) }
+
+        val books = continueListeningBooks(pairs, standalone)
+        assertEquals(20, books.size)
+        assertEquals(pairs.map { it.mediaId }.toSet(), books.map { it.mediaId }.toSet())
+
+        // The watcher must agree with what the tab actually shows (issue #583).
+        val ids = continueListeningWatchedIds(pairs, standalone)
+        assertEquals(books.map { it.mediaId }, ids)
+    }
+
+    @Test
     fun `continue listening carries the resume position through`() {
         val books = continueListeningBooks(
             pairs = listOf(pair(1, "First").copy(resumePositionMs = 42_000L)),

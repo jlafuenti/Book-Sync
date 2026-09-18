@@ -114,8 +114,8 @@ class TourPairPickerTest {
     }
 
     @Test
-    fun `a cached sync map makes a pair not untouched`() {
-        assertFalse(pairIsUntouched(pair(1, syncMapDownloaded = true), hasProgress = false))
+    fun `a cached sync map alone does not make a pair touched`() {
+        assertTrue(pairIsUntouched(pair(1, syncMapDownloaded = true), hasProgress = false)) // invisible to the user
     }
 
     // ---- wiring through the DAO and NetworkMonitor ----
