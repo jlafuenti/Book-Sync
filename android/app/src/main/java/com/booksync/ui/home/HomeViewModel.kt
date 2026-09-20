@@ -16,6 +16,8 @@ import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
 import com.booksync.data.remote.VersionCompat
+import com.booksync.data.repository.LibraryLoadState
+import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.lastPlayedAtMs
 import com.booksync.data.repository.ProgressSummary
@@ -110,6 +112,7 @@ class HomeViewModel @Inject constructor(
     serverUrlManager: ServerUrlManager,
     private val serverVersionGate: ServerVersionGate,
     @ApplicationContext context: Context,
+    private val loader: LibraryLoader,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
@@ -163,24 +166,62 @@ class HomeViewModel @Inject constructor(
             .map { list -> list.map { it.book_pair_id }.toSet() }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), emptySet())
 
-    // --- Empty-state classification (issue #624) -----------------------------
+    // --- Empty-state classification (issue #624, folded into #641) -----------
+    /**
+     * Exposes [LibraryLoader.state] directly so a caller that needs to know
+     * whether a fetch is in flight — as opposed to [libraryState]'s coarser
+     * LOADING/EMPTY/HAS_BOOKS — can read the same source Home starts.
+     */
+    val libraryLoadState: StateFlow<LibraryLoadState> = loader.state
+
+    init {
+        // Before issue #641 the only caller of `refreshPairs/refreshEbooks/
+        // refreshAudiobooks` was `LibraryViewModel.init`, so a fresh sign-in
+        // that landed on Home first — the normal path — saw an empty Room
+        // cache with no fetch ever started, and stayed on the EMPTY message
+        // until the user happened to open the Library tab. Starting it here
+        // too (single-flighted, so opening Library right after does not
+        // duplicate the fetch) is the actual fix; `libraryState` below only
+        // reads the result.
+        //
+        // Also retries from `Failed`: a sign-in while offline leaves the
+        // loader there (pairs never loaded this sign-in), and nothing else
+        // ever moves it off `Failed` on its own — without this, every later
+        // Home (switching back to the tab, a relaunch within the same
+        // process) would sit on EMPTY forever instead of trying again.
+        val state = loader.state.value
+        if (state == LibraryLoadState.Idle || state == LibraryLoadState.Failed) loader.refresh()
+    }
+
     /**
      * See [HomeLibraryState]. Built from the same three flows the Library tab's
      * own [com.booksync.ui.library.LibraryViewModel] combines to build its list
      * ([BookSyncRepository.getPairsFlow], [BookSyncRepository.getEbooksFlow],
-     * [BookSyncRepository.getAudiobooksFlow]) — no new query. `Eagerly` rather
-     * than `WhileSubscribed` so the state is correct the instant Home reads it,
-     * the same reasoning as [versionBanner] above.
+     * [BookSyncRepository.getAudiobooksFlow]), plus [LibraryLoader.state]
+     * (issue #641) — no new query beyond what [LibraryLoader] already runs.
+     * `Eagerly` rather than `WhileSubscribed` so the state is correct the
+     * instant Home reads it, the same reasoning as [versionBanner] above.
+     *
+     * Any cached rows win outright as HAS_BOOKS regardless of what the loader
+     * is doing — a slow or failed refresh must never hide a library Room
+     * already has. With nothing cached, LOADING holds while the loader is
+     * still `Idle`/`Loading`, and only resolves to EMPTY once it has settled
+     * (`PairsLoaded`/`Loaded`/`Failed`) with nothing to show — otherwise a
+     * fresh sign-in would flash EMPTY the instant Room's three (genuinely
+     * empty) flows report in, before the fetch this `init` just started has
+     * had a chance to answer.
      */
     val libraryState: StateFlow<HomeLibraryState> = combine(
         repository.getPairsFlow(),
         repository.getEbooksFlow(),
         repository.getAudiobooksFlow(),
-    ) { pairs, ebooks, audiobooks ->
-        if (pairs.isEmpty() && ebooks.isEmpty() && audiobooks.isEmpty()) {
-            HomeLibraryState.EMPTY
-        } else {
-            HomeLibraryState.HAS_BOOKS
+        libraryLoadState,
+    ) { pairs, ebooks, audiobooks, loadState ->
+        val hasBooks = pairs.isNotEmpty() || ebooks.isNotEmpty() || audiobooks.isNotEmpty()
+        when {
+            hasBooks -> HomeLibraryState.HAS_BOOKS
+            loadState == LibraryLoadState.Idle || loadState == LibraryLoadState.Loading -> HomeLibraryState.LOADING
+            else -> HomeLibraryState.EMPTY
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeLibraryState.LOADING)
 
