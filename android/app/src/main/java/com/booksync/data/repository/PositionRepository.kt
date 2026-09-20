@@ -1022,14 +1022,27 @@ class PositionRepository @Inject constructor(
             val resolvedChapterIndex = syncPoint?.epubChapter ?: snapshot.chapterIndex
             val resolvedSentenceIndex = syncPoint?.epubSentenceIndex
             val resolvedAudioMs = syncPoint?.audioStartMs
+            // Inheriting the existing row's sentence index on a miss is only
+            // correct when the chapter didn't change underneath it — that
+            // index is a coordinate of the OLD chapter, and stamping it onto
+            // a different chapter produces a pair that describes two places
+            // at once (issue #644). When the chapter changed, there is
+            // nothing precise left to inherit; the chapter, text preview and
+            // progress percent still describe where the reader is, which is
+            // what the restore ladder is for.
+            val chapterUnchanged = existing != null && existing.epubChapter == resolvedChapterIndex
             // Which map that sentence index is a coordinate of (issue #116):
             // the version the cached points came from when a match was found;
             // otherwise the merged row reuses the existing index, so it keeps
-            // the existing version too. Read here, at resolution time, so a
-            // queued replay attests what was true now, not at push time.
+            // the existing version too — but only alongside that index. A
+            // version stamp with no index to back it up would misattest that
+            // a dropped index is still current (issue #644). Read here, at
+            // resolution time, so a queued replay attests what was true now,
+            // not at push time.
             val resolvedSyncMapVersion =
                 if (syncPoint != null) bookPairDao.getPairById(snapshot.pairId)?.syncMapVersion
-                else existing?.syncMapVersion
+                else if (chapterUnchanged) existing.syncMapVersion
+                else null
 
             // Room-first: this is the one write that must land no matter what
             // happens to the network call below. Written unsynced, then
@@ -1040,7 +1053,8 @@ class PositionRepository @Inject constructor(
                 bookPairId = snapshot.pairId,
                 source = "ebook",
                 epubChapter = resolvedChapterIndex,
-                epubSentenceIndex = resolvedSentenceIndex ?: existing?.epubSentenceIndex,
+                epubSentenceIndex = resolvedSentenceIndex
+                    ?: existing?.epubSentenceIndex?.takeIf { chapterUnchanged },
                 syncMapVersion = resolvedSyncMapVersion,
                 audioPositionMs = resolvedAudioMs ?: existing?.audioPositionMs,
                 epubLocator = snapshot.locatorJson,
@@ -1271,11 +1285,13 @@ class PositionRepository @Inject constructor(
      *
      * Deliberately **never leaves [chapter]**, unlike the server's
      * `epub_to_audio`, which walks backwards through every preceding chapter.
-     * The stored sentence index is not guaranteed to belong to the stored
-     * chapter — on a lookup miss `saveReaderPosition` writes the new chapter
-     * and inherits the old index (issue #644) — and a cross-chapter walk turns
-     * that mismatch into a confidently wrong seek. Falling back to the
-     * chapter's first point bounds the error to the top of the right chapter.
+     * `saveReaderPosition` no longer stamps a chapter change onto an inherited
+     * sentence index (issue #644 fixed the write path), but this stays
+     * defensive: a row written before that fix, or reached some other way,
+     * can still pair a sentence index with a chapter it isn't a coordinate
+     * of, and a cross-chapter walk would turn that mismatch into a
+     * confidently wrong seek. Falling back to the chapter's first point
+     * bounds the error to the top of the right chapter.
      *
      * Selection otherwise mirrors [epubTextForSentence]: the last point at or
      * before the target sentence.
