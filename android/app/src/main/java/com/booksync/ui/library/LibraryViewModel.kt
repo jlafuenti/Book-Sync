@@ -42,10 +42,10 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.map
 
 /**
- * Cap on how many Continue Listening pairs [LibraryViewModel]'s streamed-book
+ * Cap on how many recently-opened pairs [LibraryViewModel]'s streamed-book
  * sync-map prefetch (issue #655 follow-up) considers per refresh — the bound
  * that keeps it from sweeping a whole library of undownloaded pairs. See
- * `fetchSyncMapsForStreamedContinueListening`.
+ * `fetchSyncMapsForStreamedRecentlyOpened`.
  */
 private const val STREAMING_PREFETCH_LIMIT = 10
 
@@ -401,7 +401,7 @@ class LibraryViewModel @Inject constructor(
                 if (error == null) {
                     val pairs = repository.getPairsFlow().first()
                     fetchMissingSyncMaps(pairs)
-                    fetchSyncMapsForStreamedContinueListening(pairs)
+                    fetchSyncMapsForStreamedRecentlyOpened(pairs)
                     // The pending-write drain and the position pull moved into
                     // LibraryLoader with the fetches (issue #652): run from here they only
                     // ever started once this tab had been opened.
@@ -454,24 +454,50 @@ class LibraryViewModel @Inject constructor(
      * deliberately saved offline, and it is the case the cold-cache race in
      * `AudioPlayerService.refreshPositionBeforeResume` actually bites: no
      * download event ever ran, so nothing ever fetched the map ahead of a
-     * resume. [STREAMING_PREFETCH_LIMIT] most-recently-played pairs — the same
-     * Continue Listening signal Home and Android Auto already read from
-     * [BookSyncRepository.getRecentlyPlayedPairsFlow] — is the bound: it is
-     * "the pair a resume will actually land on" rather than the whole library,
-     * so worst case is [STREAMING_PREFETCH_LIMIT] maps (the measured sample
-     * tops out around 5 MB each), not hundreds of pairs at once.
+     * resume — including, and especially, a book that was only ever *read*.
+     * That is not a lesser case: it is the #643 scenario verbatim ("I was
+     * reading an ebook, then went to the car and picked up the same book").
+     *
+     * The candidate signal is [BookSyncRepository.lastOpenedTimesFlow], not
+     * [BookSyncRepository.getRecentlyPlayedPairsFlow] (a mistake caught in
+     * review — see `LibrarySyncMapPrefetchTest`): the latter only returns a
+     * pair once its bookmark's `audioPositionMs` is already non-null, and
+     * `audioPositionMs` only becomes non-null via a sync-point match in
+     * `PositionRepository.saveReaderPosition`, which itself requires the sync
+     * map to already be cached. Selecting candidates from it was circular —
+     * a pair could only qualify for the prefetch that would have warmed its
+     * cache by already having a warm cache. `lastOpenedTimesFlow` reads
+     * straight off the bookmarks table, which `saveReaderPosition`
+     * unconditionally upserts regardless of whether a sync-point match was
+     * found, so a read-only pair shows up there on its actual open recency.
+     * It is also a superset of the old signal — any pair with audio progress
+     * necessarily has a bookmark row too — so this covers listening as well,
+     * with no need to union the two.
+     *
+     * [STREAMING_PREFETCH_LIMIT] most-recently-opened pairs is the bound —
+     * "the pair a resume will actually land on" rather than the whole
+     * library — so worst case is still [STREAMING_PREFETCH_LIMIT] maps (the
+     * measured sample tops out around 5 MB each) regardless of how many
+     * pairs are eligible to compete for those slots.
      *
      * Enqueued as plain `SYNC_MAP` — the same background type
      * [fetchMissingSyncMaps] uses — so it is still held back by the "Only
      * download sync maps over Wi-Fi" setting; only the explicit "Refresh sync
      * data" button (`SYNC_MAP_EXPLICIT`) bypasses that gate.
+     *
+     * One known gap remains: a pair with no bookmark row anywhere — never
+     * opened, on any device, in any format — cannot appear in this signal
+     * either, and reasonably so: nothing marks it as a pair a resume is
+     * about to land on.
      */
-    private suspend fun fetchSyncMapsForStreamedContinueListening(pairs: List<BookPairEntity>) {
-        val continueListeningIds = repository.getRecentlyPlayedPairsFlow().first()
+    private suspend fun fetchSyncMapsForStreamedRecentlyOpened(pairs: List<BookPairEntity>) {
+        val recentlyOpenedIds = repository.lastOpenedTimesFlow().first().pairs
+            .entries
+            .sortedByDescending { it.value }
             .take(STREAMING_PREFETCH_LIMIT)
-            .map { it.id }
+            .map { it.key }
             .toSet()
-        SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, continueListeningIds).forEach { pairId ->
+        SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, recentlyOpenedIds).forEach { pairId ->
             enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
         }
     }

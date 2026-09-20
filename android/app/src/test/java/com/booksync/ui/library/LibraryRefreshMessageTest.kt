@@ -5,6 +5,7 @@ import androidx.work.WorkManager
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.LastOpenedTimes
 import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
@@ -61,12 +62,13 @@ class LibraryRefreshMessageTest {
         every { WorkManager.getInstance(any<Context>()) } returns mockk(relaxed = true)
         every { transcriptionRepository.activeQueueItemsFlow() } returns emptyFlow()
         every { repository.getPairsFlow() } returns flowOf(emptyList())
-        // refresh() also sweeps Continue Listening pairs for a streamed-book
-        // sync-map prefetch (issue #655 follow-up); an unstubbed relaxed mock's
-        // Flow completes without emitting, and .first() on that throws
-        // NoSuchElementException, not an empty list — same reason getPairsFlow()
-        // above needs its own explicit stub.
-        every { repository.getRecentlyPlayedPairsFlow() } returns flowOf(emptyList())
+        // refresh() also sweeps recently-opened pairs for a streamed-book
+        // sync-map prefetch (issue #655 follow-up #2 — lastOpenedTimesFlow,
+        // not getRecentlyPlayedPairsFlow: see LibrarySyncMapPrefetchTest for
+        // why); an unstubbed relaxed mock's Flow completes without emitting,
+        // and .first() on that throws NoSuchElementException, not an empty
+        // list — same reason getPairsFlow() above needs its own explicit stub.
+        every { repository.lastOpenedTimesFlow() } returns flowOf(LastOpenedTimes())
     }
 
     @After

@@ -86,8 +86,10 @@ object SyncMapAutoFetch {
     /**
      * Pairs whose sync map should be prefetched even though nothing has been
      * downloaded (issue #655 follow-up): a `synced` pair with no cached map,
-     * restricted to [candidatePairIds] — the caller's own bounded set (e.g. the
-     * top few Continue Listening pairs), never the whole library.
+     * restricted to [candidatePairIds] — the caller's own bounded set of
+     * recently-opened pairs (see `LibraryViewModel.fetchSyncMapsForStreamedRecentlyOpened`
+     * for how that set is chosen, and why it must not depend on audio
+     * progress), never the whole library.
      *
      * [needsSyncMapFetch] requires `ebookDownloaded || audiobookDownloaded`,
      * which is exactly why a streamed pair — nothing saved offline, the
