@@ -7,11 +7,13 @@ import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -153,6 +155,47 @@ class LibraryLoaderTest {
 
         assertEquals(LibraryLoadState.Idle, loader.state.value)
         assertNull(loader.lastError.value)
+    }
+
+    /**
+     * Cancellation is cooperative: `currentJob?.cancel()` marks the run
+     * cancelled, but a coroutine only notices at its next *cancellable*
+     * suspension point. If a write to [LibraryLoader.state] sits between where
+     * cancellation was requested and the next such check, it can execute
+     * anyway, leaving a stale non-`Idle` state for the next account — exactly
+     * the state [com.booksync.ui.home.HomeViewModel]'s `init` would not retry
+     * from (issue #641 review).
+     *
+     * `refreshPairs` awaits its gate inside `withContext(NonCancellable)` —
+     * standing in for a call that does not itself check for cancellation
+     * (e.g. a blocking network call) — so cancelling the run does not
+     * interrupt it there the way an ordinary cancellable suspension would.
+     * Completing the gate only after sign-out has been signalled lets the
+     * coroutine actually resume past a request it has no way to have noticed
+     * yet, reaching the line that would write `PairsLoaded`: the fix's
+     * `ensureActive()` immediately ahead of that write is what stops it.
+     */
+    @Test
+    fun `a run cancelled by sign-out never writes state after the cancellation`() = runTest {
+        val pairsGate = CompletableDeferred<Unit>()
+        coEvery { repository.refreshPairs() } coAnswers {
+            withContext(NonCancellable) { pairsGate.await() }
+        }
+
+        val signedIn = MutableStateFlow(true)
+        val loader = newLoader(signedIn)
+        val job = loader.refresh()
+        assertEquals(LibraryLoadState.Loading, loader.state.value)
+
+        signedIn.value = false
+        assertEquals(LibraryLoadState.Idle, loader.state.value)
+
+        // Only now does the gated call get to resume — after cancellation was
+        // already requested, and via a suspension that would not have noticed it.
+        pairsGate.complete(Unit)
+        job.join()
+
+        assertEquals(LibraryLoadState.Idle, loader.state.value)
     }
 
     @Test

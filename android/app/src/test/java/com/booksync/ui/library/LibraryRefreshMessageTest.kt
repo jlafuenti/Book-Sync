@@ -20,6 +20,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -159,5 +160,32 @@ class LibraryRefreshMessageTest {
         vm.refresh(silent = true)
 
         assertEquals(null, vm.refreshMessage.value)
+    }
+
+    /**
+     * Before the loader existed, everything after the three fetches —
+     * `getPairsFlow().first()`, `fetchMissingSyncMaps` — sat inside the same
+     * try/catch as the fetches themselves, so a failure there became "Refresh
+     * failed: …" like any other. Once `refresh` started reading
+     * `loader.lastError` instead of catching around its own fetch calls, that
+     * safety net was lost: an exception here would escape into `viewModelScope`
+     * uncaught (a crash) and leave `refreshing` stuck `true`. This pins that a
+     * post-join failure is caught and reported exactly like a loader failure,
+     * and that `refreshing` still ends `false`.
+     */
+    @Test
+    fun `a failure reading Room after a successful loader run is still caught and reported`() = runTest {
+        // Throws on *collection*, not on the call itself — LibraryViewModel's own
+        // property initializers (`pairsFlow = repository.getPairsFlow()`) call
+        // this synchronously at construction time, outside any try/catch, so a
+        // stub that throws from the call itself would fail construction instead
+        // of exercising refresh()'s handling of a failure from `.first()`.
+        every { repository.getPairsFlow() } returns flow { throw RuntimeException("boom") }
+        val vm = newViewModel(newLoader(error = null))
+
+        vm.refresh(silent = false)
+
+        assertEquals("Refresh failed: boom", vm.refreshMessage.value)
+        assertEquals(false, vm.refreshing.value)
     }
 }

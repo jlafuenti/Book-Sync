@@ -183,7 +183,14 @@ class HomeViewModel @Inject constructor(
         // too (single-flighted, so opening Library right after does not
         // duplicate the fetch) is the actual fix; `libraryState` below only
         // reads the result.
-        if (loader.state.value == LibraryLoadState.Idle) loader.refresh()
+        //
+        // Also retries from `Failed`: a sign-in while offline leaves the
+        // loader there (pairs never loaded this sign-in), and nothing else
+        // ever moves it off `Failed` on its own — without this, every later
+        // Home (switching back to the tab, a relaunch within the same
+        // process) would sit on EMPTY forever instead of trying again.
+        val state = loader.state.value
+        if (state == LibraryLoadState.Idle || state == LibraryLoadState.Failed) loader.refresh()
     }
 
     /**

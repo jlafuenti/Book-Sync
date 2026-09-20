@@ -273,8 +273,11 @@ class HomeLibraryStateTest {
         assertEquals(HomeLibraryState.HAS_BOOKS, vm.libraryState.value)
     }
 
-    @Test
-    fun `init starts the loader when it is Idle`() {
+    /**
+     * Constructs a `HomeViewModel` with the loader parked at [initialState] and
+     * asserts how many times `init` called `loader.refresh()`.
+     */
+    private fun assertInitRefreshCallCount(initialState: LibraryLoadState, expectedCalls: Int) {
         every { repository.getPairsFlow() } returns flowOf(emptyList())
         every { repository.getEbooksFlow() } returns flowOf(emptyList())
         every { repository.getAudiobooksFlow() } returns flowOf(emptyList())
@@ -284,7 +287,7 @@ class HomeLibraryStateTest {
         val networkMonitor = mockk<NetworkMonitor>(relaxed = true)
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
         val loader = mockk<LibraryLoader>(relaxed = true)
-        every { loader.state } returns MutableStateFlow(LibraryLoadState.Idle)
+        every { loader.state } returns MutableStateFlow(initialState)
 
         HomeViewModel(
             repository = repository,
@@ -296,32 +299,39 @@ class HomeLibraryStateTest {
             loader = loader,
         )
 
-        verify(exactly = 1) { loader.refresh() }
+        verify(exactly = expectedCalls) { loader.refresh() }
     }
 
     @Test
-    fun `init does not start the loader when it is not Idle`() {
-        every { repository.getPairsFlow() } returns flowOf(emptyList())
-        every { repository.getEbooksFlow() } returns flowOf(emptyList())
-        every { repository.getAudiobooksFlow() } returns flowOf(emptyList())
-        val serverUrlManager = mockk<ServerUrlManager>(relaxed = true)
-        every { serverUrlManager.currentUrl } returns "https://tandem.example.com"
-        every { serverUrlManager.serverUrlFlow } returns emptyFlow()
-        val networkMonitor = mockk<NetworkMonitor>(relaxed = true)
-        every { networkMonitor.isOnline } returns MutableStateFlow(true)
-        val loader = mockk<LibraryLoader>(relaxed = true)
-        every { loader.state } returns MutableStateFlow(LibraryLoadState.Loaded)
+    fun `init starts the loader when it is Idle`() {
+        assertInitRefreshCallCount(LibraryLoadState.Idle, expectedCalls = 1)
+    }
 
-        HomeViewModel(
-            repository = repository,
-            transcriptionRepository = transcriptionRepository,
-            networkMonitor = networkMonitor,
-            serverUrlManager = serverUrlManager,
-            serverVersionGate = ServerVersionGate(mockk(relaxed = true), serverUrlManager),
-            context = mockk(relaxed = true),
-            loader = loader,
-        )
+    /**
+     * A sign-in while offline leaves the loader `Failed` (pairs never loaded
+     * this sign-in). Without this, every later Home — a tab switch back, a
+     * relaunch within the same process — would sit on EMPTY forever, since
+     * only `Idle` used to retry and nothing else ever moves the loader off
+     * `Failed` on its own; only opening Library (whose own `refresh()` isn't
+     * gated by loader state) recovered it.
+     */
+    @Test
+    fun `init retries the loader when it is Failed`() {
+        assertInitRefreshCallCount(LibraryLoadState.Failed, expectedCalls = 1)
+    }
 
-        verify(exactly = 0) { loader.refresh() }
+    @Test
+    fun `init does not start the loader when it is Loading`() {
+        assertInitRefreshCallCount(LibraryLoadState.Loading, expectedCalls = 0)
+    }
+
+    @Test
+    fun `init does not start the loader when it is PairsLoaded`() {
+        assertInitRefreshCallCount(LibraryLoadState.PairsLoaded, expectedCalls = 0)
+    }
+
+    @Test
+    fun `init does not start the loader when it is Loaded`() {
+        assertInitRefreshCallCount(LibraryLoadState.Loaded, expectedCalls = 0)
     }
 }

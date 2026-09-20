@@ -7,6 +7,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,14 +116,25 @@ class LibraryLoader @Inject constructor(
             // anything past that (PairsLoaded/Loaded) must not be walked back
             // to Loading by a later refresh.
             if (_state.value == LibraryLoadState.Idle || _state.value == LibraryLoadState.Failed) {
+                // Cancellation is cooperative and only checked at a suspension
+                // point: a run cancelled (by sign-out) while it is executing
+                // plain, non-suspending code between two suspending calls would
+                // not otherwise notice until its next `repository.*` call, and
+                // could write a stale non-Idle state for the next account in
+                // the meantime. ensureActive() immediately ahead of every
+                // `_state` write closes that gap — see LibraryLoaderTest's
+                // "cancelled by sign-out" test.
+                currentCoroutineContext().ensureActive()
                 _state.value = LibraryLoadState.Loading
             }
             repository.refreshPairs()
             if (_state.value != LibraryLoadState.Loaded) {
+                currentCoroutineContext().ensureActive()
                 _state.value = LibraryLoadState.PairsLoaded
             }
             repository.refreshEbooks()
             repository.refreshAudiobooks()
+            currentCoroutineContext().ensureActive()
             _state.value = LibraryLoadState.Loaded
         } catch (e: CancellationException) {
             throw e
@@ -130,6 +143,7 @@ class LibraryLoader @Inject constructor(
             // Once pairs have loaded this sign-in, a failure here is "the rest
             // of the refresh didn't finish" — not "back to square one".
             if (_state.value != LibraryLoadState.PairsLoaded && _state.value != LibraryLoadState.Loaded) {
+                currentCoroutineContext().ensureActive()
                 _state.value = LibraryLoadState.Failed
             }
         } finally {
