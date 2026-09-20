@@ -545,7 +545,9 @@ fun BookSyncNavigation() {
             ReaderScreen(
                 pairId = pairId,
                 handoffAudioMs = backStackEntry.arguments?.getLong("handoffAudioMs") ?: 0L,
-                onBack = { navController.popBackStack() },
+                // Guarded: this fires from the reader Activity's result, which can
+                // arrive after the tour already popped this route (see NavGuards.kt).
+                onBack = { navController.popBackStackIfCurrent(Routes.READER) },
                 onSwitchToAudio = {
                     navController.navigate(Routes.player(pairId)) {
                         popUpTo(Routes.MAIN)
@@ -585,7 +587,7 @@ fun BookSyncNavigation() {
             val ebookId = backStackEntry.arguments?.getInt("ebookId") ?: return@composable
             com.booksync.ui.reader.StandaloneReaderScreen(
                 ebookId = ebookId,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.popBackStackIfCurrent(Routes.READER_STANDALONE) },
             )
         }
 

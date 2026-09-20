@@ -128,8 +128,12 @@ class TourController(
      * ordinary path. Applies only before the step's first [AnchorResolution.Found]; once an
      * anchor has shown up, a later vanish waits indefinitely, since that almost always means
      * the user's tap landed and the next screen is on its way in.
+     *
+     * 30 s rather than 10: every screen reports settled, so this is only a safety net, and the
+     * reader's honest Pending window (Activity created to navigator ready) measured 8 to 17 s
+     * on the emulator. A cap that close would flip a slow phone to Missing and back again.
      */
-    private val hardCapMs: Long = 10_000,
+    private val hardCapMs: Long = 30_000,
     /**
      * Waits (bounded by [libraryWaitMs]) for the library's pairs to be loaded (issue #641)
      * before [start] asks [TourPairPicker.pick] to choose one — a library that hasn't synced

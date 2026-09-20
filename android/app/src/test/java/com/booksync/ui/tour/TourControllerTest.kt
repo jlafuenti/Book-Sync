@@ -407,13 +407,17 @@ class TourControllerTest {
     }
 
     @Test
-    fun `an absent anchor on an unsettled screen resolves Missing only at the 10s hard cap`() = runTest {
+    fun `an absent anchor on an unsettled screen resolves Missing only at the 30s hard cap`() = runTest {
         val controller = newController()
         controller.start()
         advanceUntilIdle()
         controller.next() // -> home_continue_reading, screen never reports settled
 
-        advanceTimeBy(9_999)
+        // 30 s, not 10 (issue #642 follow-up): every screen reports settled, so the cap is only
+        // a safety net, and the reader's honest Pending window -- Activity created to navigator
+        // ready -- measured 8 to 17 s on the emulator. A cap that close would flip a slow phone to
+        // Missing and back, which is the very thing this engine exists to stop.
+        advanceTimeBy(29_999)
         assertEquals(AnchorResolution.Pending, running(controller).resolution)
 
         advanceTimeBy(2)
@@ -474,8 +478,8 @@ class TourControllerTest {
         advanceUntilIdle()
         controller.next() // -> home_continue_reading; screen never reports settled
 
-        // Churn some other anchor's rect every second for 11s -- well past the 10s hard cap.
-        repeat(11) { i ->
+        // Churn some other anchor's rect every second for 31s -- well past the 30s hard cap.
+        repeat(31) { i ->
             advanceTimeBy(1_000)
             runCurrent()
             registry.set(TourAnchor.TabLibrary, Rect(0f, i.toFloat(), 10f, i + 10f))

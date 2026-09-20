@@ -288,7 +288,6 @@ class ReaderActivity : AppCompatActivity() {
         // Install before the navigator exists — the wrapper sits at the content
         // root and intercepts selection ActionModes from any future WebView.
         installSelectionInterceptor()
-        registerReaderPageAnchor()
         loadPublication()
     }
 
@@ -568,7 +567,18 @@ class ReaderActivity : AppCompatActivity() {
                 // The walkthrough's reader steps can now trust the page is actually
                 // there to spotlight (issue #642) — only for a pair open, since a
                 // standalone read is never part of the tour.
-                if (!isStandalone) tourRegistry.setSettled(TourScreen.Reader, true)
+                // The page anchor is published here too, not in onCreate (issue #642
+                // follow-up): registered that early it resolved the "tap the middle of
+                // the page" step over a still-blank page, seconds before a tap could do
+                // anything (the tap listener is attached just above). Until now the step
+                // stays Pending and the overlay says "One moment…".
+                //
+                // Settled is reported from inside that same posted block, after the
+                // anchor: reported synchronously here it ran ahead of the post by
+                // more than the tour's 600 ms settle window on a busy main thread,
+                // and the step flashed "not available" for 0.4 s before the anchor
+                // landed (seen on the emulator) — the exact flip #642 is about.
+                if (!isStandalone) registerReaderPageAnchor()
 
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
@@ -739,6 +749,7 @@ class ReaderActivity : AppCompatActivity() {
         val container = findViewById<View>(R.id.navigator_container)
         container.post {
             tourRegistry.set(TourAnchor.ReaderPage, container.windowRect())
+            tourRegistry.setSettled(TourScreen.Reader, true)
         }
     }
 
