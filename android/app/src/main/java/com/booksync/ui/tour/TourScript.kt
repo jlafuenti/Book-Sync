@@ -90,6 +90,11 @@ private const val ANY_PAIR = -1
  *   [TourPairPicker] has chosen a real pair; with no qualifying pair the
  *   whole run of `needsPair` steps collapses to one skip card
  *   (see [TourController]).
+ * @param altAnchors Other controls that satisfy this step just as well as
+ *   [anchor] (issue #642) — e.g. `details_maintenance`, where a viewer sees
+ *   only "Refresh sync data" (Unlink pair is editor-only) and a plain user
+ *   with nothing cached sees only "Unlink pair". [TourController] resolves
+ *   the step against whichever of [anchor] and [altAnchors] shows up first.
  */
 data class TourStep(
     val id: String,
@@ -100,6 +105,7 @@ data class TourStep(
     val emptyBody: String? = null,
     val advance: Advance = Advance.Next,
     val needsPair: Boolean = false,
+    val altAnchors: List<TourAnchor> = emptyList(),
 )
 
 /** The id of the one step where the tour must not block the reader's own gestures. */
@@ -229,6 +235,11 @@ val TOUR: List<TourStep> = listOf(
         emptyBody = "Neither row shows here right now: there's nothing to refresh until a sync map is on " +
             "this device, and Unlink pair only appears for editors.",
         needsPair = true,
+        // A viewer with a sync map already cached sees only "Refresh sync
+        // data" — Unlink pair never shows for that role — so the step must
+        // resolve on either row, not just the one named as its primary
+        // anchor (issue #642).
+        altAnchors = listOf(TourAnchor.DetailsRefreshSync),
     ),
     TourStep(
         id = "details_tap_read",

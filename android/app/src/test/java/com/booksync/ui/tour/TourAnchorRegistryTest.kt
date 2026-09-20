@@ -2,7 +2,9 @@ package com.booksync.ui.tour
 
 import androidx.compose.ui.geometry.Rect
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -51,5 +53,37 @@ class TourAnchorRegistryTest {
         val registry = TourAnchorRegistry()
         registry.clear(TourAnchor.CardOverflow)
         assertEquals(0, registry.rects.value.size)
+    }
+
+    // ---- settled (issue #642): screens report when they've finished loading ----
+
+    @Test
+    fun `setSettled true adds the screen, false removes it`() {
+        val registry = TourAnchorRegistry()
+
+        registry.setSettled(TourScreen.Home, true)
+        assertTrue(TourScreen.Home in registry.settled.value)
+
+        registry.setSettled(TourScreen.Home, false)
+        assertFalse(TourScreen.Home in registry.settled.value)
+    }
+
+    @Test
+    fun `setSettled only touches the named screen`() {
+        val registry = TourAnchorRegistry()
+
+        registry.setSettled(TourScreen.Home, true)
+        registry.setSettled(TourScreen.Library, true)
+        registry.setSettled(TourScreen.Home, false)
+
+        assertFalse(TourScreen.Home in registry.settled.value)
+        assertTrue(TourScreen.Library in registry.settled.value)
+    }
+
+    @Test
+    fun `unsetting a screen that was never settled is a no-op`() {
+        val registry = TourAnchorRegistry()
+        registry.setSettled(TourScreen.Home, false)
+        assertEquals(0, registry.settled.value.size)
     }
 }

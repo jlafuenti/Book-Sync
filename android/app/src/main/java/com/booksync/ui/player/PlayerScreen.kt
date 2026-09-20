@@ -66,6 +66,8 @@ import com.booksync.player.toUri
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.tourAnchor
 import com.booksync.worker.DownloadWorker
@@ -1191,6 +1193,9 @@ fun PlayerScreen(
     LaunchedEffect(pair?.id) {
         pair?.let { tour.controller.onEvent(TourEvent.PlayerOpened(it.id)) }
     }
+    // Settled once the pair has loaded (issue #642) — same "the tour only ever
+    // opens a pair's player" reasoning as the PlayerOpened report above.
+    TourScreenSettled(TourScreen.Player, pair != null)
 
     // Resolved title/author — prefer standalone audio entity, fall back to pair
     val displayTitle  = standaloneAudio?.title  ?: pair?.audiobookTitle  ?: "Audiobook"
