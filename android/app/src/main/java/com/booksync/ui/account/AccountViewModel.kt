@@ -48,6 +48,17 @@ val AUTO_CLEANUP_EBOOKS     = booleanPreferencesKey("auto_cleanup_ebooks")
 val AUTO_CLEANUP_AUDIOBOOKS = booleanPreferencesKey("auto_cleanup_audiobooks")
 val APP_THEME               = stringPreferencesKey("app_theme")
 
+// Issue #655: per-device sync-map prefetch controls. Bandwidth and storage are
+// properties of this phone, not the account, so these live here — in the local
+// DataStore, next to auto-cleanup — rather than in the server's system_settings,
+// which would wrongly apply one device's Wi-Fi preference to every device on the
+// account. Both default on: "with the ebook" because the user already accepted a
+// download at that moment and the map is the smaller half of what they asked
+// for; "Wi-Fi only" because a silent multi-megabyte cellular pull is a cost the
+// user did not ask for. `DownloadWorker` reads both directly from this DataStore.
+val SYNC_MAP_WITH_EBOOK = booleanPreferencesKey("sync_map_with_ebook")
+val SYNC_MAP_WIFI_ONLY  = booleanPreferencesKey("sync_map_wifi_only")
+
 /**
  * Represents the lifecycle of an in-flight password-change request.
  * Distinct states keep the UI simple — one `when` and one button-enabled check.
@@ -149,6 +160,14 @@ class AccountViewModel @Inject constructor(
     val autoCleanupAudiobooks = dataStore.data.map { it[AUTO_CLEANUP_AUDIOBOOKS] ?: false }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
 
+    /** "Download sync maps with the ebook" (issue #655) — default on. */
+    val syncMapWithEbook = dataStore.data.map { it[SYNC_MAP_WITH_EBOOK] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), true)
+
+    /** "Only download sync maps over Wi-Fi" (issue #655) — default on. */
+    val syncMapWifiOnly = dataStore.data.map { it[SYNC_MAP_WIFI_ONLY] ?: true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), true)
+
     val appTheme = dataStore.data.map { TandemTheme.fromSlug(it[APP_THEME] ?: "blueprint") }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), TandemTheme.BLUEPRINT)
 
@@ -198,6 +217,14 @@ class AccountViewModel @Inject constructor(
 
     fun setAutoCleanupAudiobooks(enabled: Boolean) {
         viewModelScope.launch { dataStore.edit { it[AUTO_CLEANUP_AUDIOBOOKS] = enabled } }
+    }
+
+    fun setSyncMapWithEbook(enabled: Boolean) {
+        viewModelScope.launch { dataStore.edit { it[SYNC_MAP_WITH_EBOOK] = enabled } }
+    }
+
+    fun setSyncMapWifiOnly(enabled: Boolean) {
+        viewModelScope.launch { dataStore.edit { it[SYNC_MAP_WIFI_ONLY] = enabled } }
     }
 
     fun setTheme(theme: TandemTheme) {

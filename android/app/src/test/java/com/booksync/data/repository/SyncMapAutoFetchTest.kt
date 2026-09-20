@@ -163,4 +163,63 @@ class SyncMapAutoFetchTest {
     fun `leftActiveSet reports every id when the set empties out`() {
         assertEquals(setOf(1, 2), SyncMapAutoFetch.leftActiveSet(previous = setOf(1, 2), current = emptySet()))
     }
+
+    // ---- shouldFetchSyncMapFor: what a DownloadWorker run fetches (issue #655) ----
+
+    @Test
+    fun `SYNC_MAP always fetches regardless of cache or the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP", alreadyCached = true, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `AUDIOBOOK always fetches regardless of cache or the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = true, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `ALL fetches only when not already cached, regardless of the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = false, downloadWithEbookEnabled = false))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = true, downloadWithEbookEnabled = true))
+    }
+
+    @Test
+    fun `EBOOK fetches only when the download-with-ebook setting is on`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("EBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("EBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `EBOOK setting is ignored by every other type`() {
+        // The setting is named "with the ebook" on purpose — it must not leak
+        // into AUDIOBOOK/ALL/SYNC_MAP decisions.
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `standalone and unknown types never fetch a sync map`() {
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("STANDALONE_EBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("STANDALONE_AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("BOGUS", alreadyCached = false, downloadWithEbookEnabled = true))
+    }
+
+    // ---- blockedByMeteredConnection: the Wi-Fi-only setting (issue #655) ----
+
+    @Test
+    fun `wifi-only setting blocks a fetch on a metered connection`() {
+        assertEquals(true, SyncMapAutoFetch.blockedByMeteredConnection(wifiOnlyEnabled = true, isMetered = true))
+    }
+
+    @Test
+    fun `wifi-only setting does not block on an unmetered connection`() {
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection(wifiOnlyEnabled = true, isMetered = false))
+    }
+
+    @Test
+    fun `disabling wifi-only never blocks, metered or not`() {
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection(wifiOnlyEnabled = false, isMetered = true))
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection(wifiOnlyEnabled = false, isMetered = false))
+    }
 }

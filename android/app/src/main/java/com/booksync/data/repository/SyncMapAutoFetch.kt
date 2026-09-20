@@ -33,4 +33,43 @@ object SyncMapAutoFetch {
      */
     fun leftActiveSet(previous: Set<Int>?, current: Set<Int>): Set<Int> =
         if (previous == null) emptySet() else previous - current
+
+    /**
+     * Whether one `DownloadWorker` run for a [BookPairEntity] should also fetch
+     * the sync map (issue #655).
+     *
+     * `SYNC_MAP` (the explicit "Refresh sync data" action and the [pairsToFetch]
+     * sweep) and `AUDIOBOOK` always did; `ALL` always did unless the cache was
+     * already current. An `EBOOK`-only download never did — the sync map is a
+     * pair-level artifact, not part of either file, so nothing forced it to ride
+     * along, and a device that only ever downloads ebooks could stay cold
+     * forever. [downloadWithEbookEnabled] is the "Download sync maps with the
+     * ebook" setting (`AccountViewModel`, default on) that closes that gap;
+     * every other type ignores it, so the setting cannot leak into a download it
+     * was not named for.
+     */
+    fun shouldFetchSyncMapFor(type: String, alreadyCached: Boolean, downloadWithEbookEnabled: Boolean): Boolean =
+        when (type) {
+            "SYNC_MAP", "AUDIOBOOK" -> true
+            "ALL" -> !alreadyCached
+            "EBOOK" -> downloadWithEbookEnabled
+            else -> false
+        }
+
+    /**
+     * Whether a sync-map fetch that [shouldFetchSyncMapFor] would otherwise run
+     * should be held back because of the "Only download sync maps over Wi-Fi"
+     * setting (issue #655).
+     *
+     * `DownloadWorker` is the only caller: every path that pulls a sync map in
+     * the background or as a side effect of another download goes through it.
+     * `AudioPlayerService.refreshPositionBeforeResume`'s bounded fallback fetch
+     * (`MediaDownloadRepository.ensureSyncMapCached`) does not call this and
+     * must not start calling it — on a cellular connection with the setting on,
+     * it is the only thing standing between the user and the stale-position bug
+     * issue #643 fixed. That trade is real and is spelled out in the setting's
+     * own description, not hidden here.
+     */
+    fun blockedByMeteredConnection(wifiOnlyEnabled: Boolean, isMetered: Boolean): Boolean =
+        wifiOnlyEnabled && isMetered
 }

@@ -78,4 +78,17 @@ class NetworkMonitor @Inject constructor(
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
+
+    /**
+     * Whether the active network currently counts as metered (issue #655) —
+     * cellular normally does, Wi-Fi normally doesn't unless the user marked
+     * that hotspot metered themselves. `ConnectivityManager` already tracks
+     * this per active network, so this is a thin wrapper rather than a second
+     * capability check; `DownloadWorker` is the only caller, gating background
+     * sync-map prefetch behind the "Only download sync maps over Wi-Fi"
+     * setting. No offline default to reason about: [ConnectivityManager.isActiveNetworkMetered]
+     * answers `true` with no active network, which is the safe (don't spend
+     * the user's data) side to fail on anyway.
+     */
+    fun isActiveNetworkMetered(): Boolean = connectivityManager.isActiveNetworkMetered
 }
