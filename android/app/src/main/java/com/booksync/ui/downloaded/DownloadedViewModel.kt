@@ -219,7 +219,10 @@ class DownloadedViewModel @Inject constructor(
 
     fun refreshSyncData(pair: BookPairEntity) {
         viewModelScope.launch { repository.resetSyncMapDownloaded(pair.id) }
-        enqueue(pair.id, "SYNC_MAP", "sync_map_${pair.id}")
+        // SYNC_MAP_EXPLICIT (issue #655 follow-up): this button is a user's
+        // explicit request, so it must bypass the "Only download sync maps
+        // over Wi-Fi" setting the background sweeps respect.
+        enqueue(pair.id, "SYNC_MAP_EXPLICIT", "sync_map_${pair.id}")
     }
 
     private fun enqueue(pairId: Int, type: String, uniqueName: String) {

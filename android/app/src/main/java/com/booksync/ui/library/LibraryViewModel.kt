@@ -41,6 +41,14 @@ import java.net.UnknownHostException
 import javax.inject.Inject
 import kotlinx.coroutines.flow.map
 
+/**
+ * Cap on how many Continue Listening pairs [LibraryViewModel]'s streamed-book
+ * sync-map prefetch (issue #655 follow-up) considers per refresh — the bound
+ * that keeps it from sweeping a whole library of undownloaded pairs. See
+ * `fetchSyncMapsForStreamedContinueListening`.
+ */
+private const val STREAMING_PREFETCH_LIMIT = 10
+
 // ============================================================================
 // UI state
 // ============================================================================
@@ -393,6 +401,7 @@ class LibraryViewModel @Inject constructor(
                 if (error == null) {
                     val pairs = repository.getPairsFlow().first()
                     fetchMissingSyncMaps(pairs)
+                    fetchSyncMapsForStreamedContinueListening(pairs)
                     // The pending-write drain and the position pull moved into
                     // LibraryLoader with the fetches (issue #652): run from here they only
                     // ever started once this tab had been opened.
@@ -432,6 +441,37 @@ class LibraryViewModel @Inject constructor(
      */
     private fun fetchMissingSyncMaps(pairs: List<BookPairEntity>) {
         SyncMapAutoFetch.pairsToFetch(pairs).forEach { pairId ->
+            enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
+        }
+    }
+
+    /**
+     * Queue the `SYNC_MAP` download for a bounded set of *streamed* pairs —
+     * nothing downloaded, so [fetchMissingSyncMaps] would never touch them
+     * (issue #655 follow-up).
+     *
+     * A streamed book is the ordinary way this app is used for anything not
+     * deliberately saved offline, and it is the case the cold-cache race in
+     * `AudioPlayerService.refreshPositionBeforeResume` actually bites: no
+     * download event ever ran, so nothing ever fetched the map ahead of a
+     * resume. [STREAMING_PREFETCH_LIMIT] most-recently-played pairs — the same
+     * Continue Listening signal Home and Android Auto already read from
+     * [BookSyncRepository.getRecentlyPlayedPairsFlow] — is the bound: it is
+     * "the pair a resume will actually land on" rather than the whole library,
+     * so worst case is [STREAMING_PREFETCH_LIMIT] maps (the measured sample
+     * tops out around 5 MB each), not hundreds of pairs at once.
+     *
+     * Enqueued as plain `SYNC_MAP` — the same background type
+     * [fetchMissingSyncMaps] uses — so it is still held back by the "Only
+     * download sync maps over Wi-Fi" setting; only the explicit "Refresh sync
+     * data" button (`SYNC_MAP_EXPLICIT`) bypasses that gate.
+     */
+    private suspend fun fetchSyncMapsForStreamedContinueListening(pairs: List<BookPairEntity>) {
+        val continueListeningIds = repository.getRecentlyPlayedPairsFlow().first()
+            .take(STREAMING_PREFETCH_LIMIT)
+            .map { it.id }
+            .toSet()
+        SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, continueListeningIds).forEach { pairId ->
             enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
         }
     }
@@ -516,7 +556,10 @@ class LibraryViewModel @Inject constructor(
     fun downloadAll(pair: BookPairEntity)         = enqueue(pair.id, "ALL",       "download_pair_${pair.id}")
     fun downloadEbook(pair: BookPairEntity)       = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")
     fun downloadAudiobook(pair: BookPairEntity)   = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
-    fun refreshSyncData(pair: BookPairEntity)     = enqueue(pair.id, "SYNC_MAP",  "download_sync_${pair.id}")
+    // SYNC_MAP_EXPLICIT, not SYNC_MAP (issue #655 follow-up): a user who tapped
+    // this button asked for the data now, on whatever connection is available —
+    // DownloadWorker's Wi-Fi-only gate only holds back the background sweeps.
+    fun refreshSyncData(pair: BookPairEntity)     = enqueue(pair.id, "SYNC_MAP_EXPLICIT",  "download_sync_${pair.id}")
 
     fun downloadStandaloneEbook(ebook: EBookEntity) =
         enqueue(ebook.id, "STANDALONE_EBOOK", "download_standalone_ebook_${ebook.id}")

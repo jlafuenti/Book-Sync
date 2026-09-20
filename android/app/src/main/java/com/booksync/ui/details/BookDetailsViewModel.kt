@@ -323,7 +323,9 @@ class BookDetailsViewModel @Inject constructor(
             try {
                 repository.resetSyncMapDownloaded(p.pairId)
             } catch (_: Exception) { /* non-fatal — worker will try again */ }
-            enqueue(p.pairId, "SYNC_MAP", "download_sync_${p.pairId}")
+            // SYNC_MAP_EXPLICIT (issue #655 follow-up): an explicit tap must
+            // bypass the "Only download sync maps over Wi-Fi" setting.
+            enqueue(p.pairId, "SYNC_MAP_EXPLICIT", "download_sync_${p.pairId}")
             _snack.value = "Refreshing sync data…"
         }
     }

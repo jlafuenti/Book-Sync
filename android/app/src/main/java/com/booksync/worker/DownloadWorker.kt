@@ -185,16 +185,19 @@ class DownloadWorker @AssistedInject constructor(
                 }
 
                 // Always attempt sync-map after an audiobook download (or on ALL / explicit
-                // SYNC_MAP), and on an EBOOK-only download when the "Download sync maps with
-                // the ebook" setting (issue #655) is on — see SyncMapAutoFetch.shouldFetchSyncMapFor.
-                // The server returns 404 if the sync map isn't ready yet; the retry wrapper handles
-                // transient failures with exponential backoff and treats 404 as "not ready, move on".
+                // SYNC_MAP_EXPLICIT / the background SYNC_MAP sweeps), and on an EBOOK-only
+                // download when the "Download sync maps with the ebook" setting (issue #655) is
+                // on — see SyncMapAutoFetch.shouldFetchSyncMapFor. The server returns 404 if the
+                // sync map isn't ready yet; the retry wrapper handles transient failures with
+                // exponential backoff and treats 404 as "not ready, move on".
                 val prefs = dataStore.data.first()
                 val downloadWithEbook = prefs[SYNC_MAP_WITH_EBOOK] ?: true
                 val wifiOnly = prefs[SYNC_MAP_WIFI_ONLY] ?: true
                 val wantsSyncMap = SyncMapAutoFetch.shouldFetchSyncMapFor(type, pair.syncMapDownloaded, downloadWithEbook)
+                // type carries through so SYNC_MAP_EXPLICIT ("Refresh sync data") always bypasses
+                // the Wi-Fi-only gate — see SyncMapAutoFetch.blockedByMeteredConnection.
                 val heldBackByMetered = wantsSyncMap &&
-                    SyncMapAutoFetch.blockedByMeteredConnection(wifiOnly, networkMonitor.isActiveNetworkMetered())
+                    SyncMapAutoFetch.blockedByMeteredConnection(type, wifiOnly, networkMonitor.isActiveNetworkMetered())
                 if (wantsSyncMap && !heldBackByMetered) {
                     updateNotificationProgress(-1, "Sync Data")
                     setProgressAsync(workDataOf(PROGRESS_KEY to -1, "CURRENT" to "SYNC_MAP", KEY_PAIR_ID to pairId, KEY_TYPE to type))
@@ -249,7 +252,7 @@ class DownloadWorker @AssistedInject constructor(
             "STANDALONE_AUDIOBOOK" -> "Audiobook"
             "EBOOK" -> "Ebook"
             "AUDIOBOOK" -> "Audiobook"
-            "SYNC_MAP" -> "Sync data"
+            "SYNC_MAP", "SYNC_MAP_EXPLICIT" -> "Sync data"
             else -> "Book files"
         }
 
