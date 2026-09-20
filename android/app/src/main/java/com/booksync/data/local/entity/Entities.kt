@@ -118,6 +118,13 @@ data class BookmarkEntity(
     // every push so a deferred replay attests what was true when the index
     // was computed, not whatever map is live when it finally lands.
     val syncMapVersion: Int? = null,
+    // The text at the position (issue #643). The server has always sent it as
+    // `epub_text_preview` and the local row used to throw it away, which left
+    // the restore ladder's strongest rung — text, which survives re-parsing and
+    // re-alignment — unusable from the cache, on the reader's offline path as
+    // well as the player's. NULL on rows written before this column existed;
+    // the next position pull fills it in.
+    val epubTextPreview: String? = null,
 )
 
 @Entity(tableName = "pending_sync")

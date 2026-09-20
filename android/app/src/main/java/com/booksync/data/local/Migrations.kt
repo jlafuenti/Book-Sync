@@ -201,3 +201,17 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
         )
     }
 }
+
+/** v22 -> v23: `bookmarks.epubTextPreview` (issue #643).
+ *
+ *  The text at the position. The server has always sent it and the local row
+ *  discarded it, so the sync map could not be searched from the cache — which
+ *  is what left the player reading `audioPositionMs` and nothing else.
+ *
+ *  Left NULL for existing rows: the next position pull fills it in, and the
+ *  chapter+sentence rung covers the gap meanwhile. */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        addColumnIfMissing(db, "ALTER TABLE bookmarks ADD COLUMN epubTextPreview TEXT")
+    }
+}

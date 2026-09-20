@@ -250,6 +250,10 @@ class BookSyncRepository @Inject constructor(
     /** See [PositionRepository.getBookmark]. */
     suspend fun getBookmark(pairId: Int): BookmarkEntity? = positions.getBookmark(pairId)
 
+    /** See [PositionRepository.audioStartMsFor]. */
+    suspend fun audioStartMsFor(pairId: Int, bookmark: BookmarkEntity?): Long =
+        positions.audioStartMsFor(pairId, bookmark)
+
     /** See [PositionRepository.getProgressOnce]. */
     suspend fun getProgressOnce(mediaType: String, mediaId: Int): UserProgressEntity? =
         positions.getProgressOnce(mediaType, mediaId)

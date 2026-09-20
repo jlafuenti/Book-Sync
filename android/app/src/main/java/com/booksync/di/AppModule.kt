@@ -329,6 +329,7 @@ object AppModule {
             com.booksync.data.local.MIGRATION_19_20,
             com.booksync.data.local.MIGRATION_20_21,
             com.booksync.data.local.MIGRATION_21_22,
+            com.booksync.data.local.MIGRATION_22_23,
         )
          // Destructive fallback ONLY for pre-position-work installs (< v12,
          // before MIGRATION_12_13 — those versions predate the migration
