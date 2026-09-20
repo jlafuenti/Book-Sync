@@ -419,9 +419,14 @@ object AppModule {
      * does not honour Kotlin defaults — every constructor parameter becomes a
      * required binding, and there is no `@Provides` for a bare `Long` or a
      * `() -> Long`. Calling the constructor directly here, as ordinary Kotlin
-     * code, is what lets the defaults apply in production. `awaitLibrary` is
-     * left at its default (always-ready) here too — wiring it to the real
-     * library-load signal from issue #641 is follow-up work.
+     * code, is what lets the defaults apply in production.
+     *
+     * `awaitLibrary` is the one parameter that must *not* be left at its
+     * (always-ready) default here (issue #641): a walkthrough accepted right
+     * after a fresh sign-in would otherwise pick its book from a Room cache the
+     * first fetch has not filled yet, find nothing, and collapse the whole book
+     * section into the "Skipped" card. Pairs are all the picker reads, so it
+     * waits for that stage only. Pinned by `TourLibraryWiringTest`.
      */
     @Provides
     @Singleton
@@ -430,6 +435,13 @@ object AppModule {
         prefs: com.booksync.ui.tour.TourPrefs,
         picker: com.booksync.ui.tour.TourPairPicker,
         @ApplicationScope scope: kotlinx.coroutines.CoroutineScope,
+        loader: com.booksync.data.repository.LibraryLoader,
     ): com.booksync.ui.tour.TourController =
-        com.booksync.ui.tour.TourController(registry, prefs, picker, scope)
+        com.booksync.ui.tour.TourController(
+            registry = registry,
+            prefs = prefs,
+            picker = picker,
+            scope = scope,
+            awaitLibrary = { timeoutMs -> loader.awaitPairs(timeoutMs) },
+        )
 }
