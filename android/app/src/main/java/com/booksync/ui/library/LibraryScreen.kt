@@ -137,32 +137,42 @@ fun LibraryScreen(
     val openPairStep = (tourState as? TourState.Running)
         ?.takeIf { it.step.id == "library_open_pair" }
         ?.pairId
+    // The pair the jump below last finished — or gave up — for; see libraryTourSettled.
+    var tourScrolledFor by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(openPairStep) {
         val pairId = openPairStep ?: return@LaunchedEffect
-        // Land on the plain, unfiltered grid — the pair the tour picked
-        // may not satisfy whatever filter/search/grouping the user last
-        // left active, and a scroll into a grid that doesn't show the
-        // card would silently do nothing.
-        viewModel.setFilter(LibraryFilter.ALL)
-        viewModel.setGroupBySeries(false)
-        viewModel.setSearchQuery("")
-        // `items` recomputes asynchronously off the filter change above
-        // (it's a `combine`, not a synchronous derivation), so reading
-        // `.value` right away can still be the pre-reset list. Wait
-        // (bounded) for the reset to land rather than racing it.
-        val items = kotlinx.coroutines.withTimeoutOrNull(5_000) {
-            viewModel.items.first { it.any { item -> item.pair != null } }
-        } ?: return@LaunchedEffect
-        // The picker's pair may sit anywhere in this ordering (it was the last
-        // card of a long grid in practice); prefer the first synced pair the
-        // user can see and let the rest of the tour follow it.
-        val index = libraryTourTarget(items, preferredPairId = pairId) ?: return@LaunchedEffect
-        val target = items[index].pair?.id ?: return@LaunchedEffect
-        if (target != pairId) tour.controller.adoptPair(target)
-        android.util.Log.d("Tour", "library step: scrolling to index $index (pair $target)")
-        // Jump, don't animate: animating across a thousand cells took 16 s on
-        // a real library, and the step cannot start until the card is laid out.
-        gridState.scrollToItem(index)
+        try {
+            // Land on the plain, unfiltered grid — the pair the tour picked
+            // may not satisfy whatever filter/search/grouping the user last
+            // left active, and a scroll into a grid that doesn't show the
+            // card would silently do nothing.
+            viewModel.setFilter(LibraryFilter.ALL)
+            viewModel.setGroupBySeries(false)
+            viewModel.setSearchQuery("")
+            // `items` recomputes asynchronously off the filter change above
+            // (it's a `combine`, not a synchronous derivation), so reading
+            // `.value` right away can still be the pre-reset list. Wait
+            // (bounded) for the reset to land rather than racing it.
+            val items = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                viewModel.items.first { it.any { item -> item.pair != null } }
+            } ?: return@LaunchedEffect
+            // The picker's pair may sit anywhere in this ordering (it was the last
+            // card of a long grid in practice); prefer the first synced pair the
+            // user can see and let the rest of the tour follow it.
+            val index = libraryTourTarget(items, preferredPairId = pairId) ?: return@LaunchedEffect
+            val target = items[index].pair?.id ?: return@LaunchedEffect
+            if (target != pairId) tour.controller.adoptPair(target)
+            android.util.Log.d("Tour", "library step: scrolling to index $index (pair $target)")
+            // Jump, don't animate: animating across a thousand cells took 16 s on
+            // a real library, and the step cannot start until the card is laid out.
+            gridState.scrollToItem(index)
+        } finally {
+            // Every way out counts, including the give-ups above: a step whose card can
+            // never appear must still be allowed to resolve Missing rather than hang on
+            // "One moment…". Adopting another pair restarts this effect under the new id,
+            // so a stale value here never matches.
+            tourScrolledFor = pairId
+        }
     }
 
     val ui           by viewModel.uiState.collectAsState()
@@ -179,7 +189,7 @@ fun LibraryScreen(
     // Settled once a refresh isn't in flight (issue #642) — whether that leaves
     // the grid populated or showing its own empty state, either is a real
     // answer the walkthrough's Library steps can spotlight against.
-    TourScreenSettled(TourScreen.Library, !refreshing)
+    TourScreenSettled(TourScreen.Library, libraryTourSettled(refreshing, openPairStep, tourScrolledFor))
 
     val snackbar = remember { SnackbarHostState() }
     var searchActive by remember { mutableStateOf(false) }

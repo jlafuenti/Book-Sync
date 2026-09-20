@@ -262,6 +262,10 @@ class ReaderActivity : AppCompatActivity() {
         // TourEvent.matchesKind), so this only needs to fire, not carry a real id.
         if (!isStandalone && pairId != 0) {
             tourController.onEvent(TourEvent.ReaderOpened(pairId))
+            // "Here, and still loading" (issue #652) — parsing a full-length book before the
+            // navigator is ready took 41 s on the emulator, and a screen the tour has heard
+            // nothing from is capped at 30 s. Settled is reported in registerReaderPageAnchor.
+            tourRegistry.setSettled(TourScreen.Reader, false)
         }
 
         // The two nav requests TourController can only make of the reader
@@ -1725,7 +1729,7 @@ class ReaderActivity : AppCompatActivity() {
         // on telling the tour the Reader screen is ready.
         tourRegistry.clear(TourAnchor.ReaderPage)
         tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
-        tourRegistry.setSettled(TourScreen.Reader, false)
+        tourRegistry.clearScreen(TourScreen.Reader)
         publication?.close()
         super.onDestroy()
     }

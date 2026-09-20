@@ -145,7 +145,8 @@ val TOUR: List<TourStep> = listOf(
         body = "Books you have open, in whichever format — ebook or audiobook — you last used. " +
             "Tapping one picks up exactly where you left off.",
         emptyBody = "Nothing here yet — Continue Reading appears at the top of Home once you " +
-            "have opened a book, and picks up exactly where you left off.",
+            "have opened a book. Right after signing in, your places from other devices can " +
+            "take a minute to arrive.",
     ),
     TourStep(
         id = "home_recently_added",

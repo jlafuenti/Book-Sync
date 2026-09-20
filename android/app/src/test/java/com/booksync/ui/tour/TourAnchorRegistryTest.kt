@@ -86,4 +86,31 @@ class TourAnchorRegistryTest {
         registry.setSettled(TourScreen.Home, false)
         assertEquals(0, registry.settled.value.size)
     }
+
+    // ---- loading (issue #652): "not settled yet" is different from "never reported" ----
+
+    @Test
+    fun `setSettled false marks the screen as loading`() {
+        val registry = TourAnchorRegistry()
+        registry.setSettled(TourScreen.Reader, false)
+        assertTrue(TourScreen.Reader in registry.loading.value)
+        assertFalse(TourScreen.Reader in registry.settled.value)
+
+        registry.setSettled(TourScreen.Reader, true)
+        assertFalse(TourScreen.Reader in registry.loading.value)
+        assertTrue(TourScreen.Reader in registry.settled.value)
+    }
+
+    @Test
+    fun `clearScreen forgets the screen entirely`() {
+        val registry = TourAnchorRegistry()
+        registry.setSettled(TourScreen.Reader, false)
+        registry.setSettled(TourScreen.Home, true)
+
+        registry.clearScreen(TourScreen.Reader)
+        registry.clearScreen(TourScreen.Home)
+
+        assertTrue(registry.loading.value.isEmpty())
+        assertTrue(registry.settled.value.isEmpty())
+    }
 }

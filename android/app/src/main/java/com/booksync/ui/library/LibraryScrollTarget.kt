@@ -39,3 +39,16 @@ fun libraryTourTarget(items: List<LibraryItem>, preferredPairId: Int?, nearTop: 
     if (firstSynced >= 0) return firstSynced
     return preferred
 }
+
+/**
+ * Whether the Library may tell the walkthrough it has settled (issue #652).
+ *
+ * A refresh in flight is the obvious "not yet". The less obvious one is the open-a-book
+ * step: the screen resets its filters, waits for the list and jumps — a thousand cells, on a
+ * real library — to the tour's pair before that card's control exists at all. That measured
+ * 0.9 s on the emulator, past the tour's 600 ms settle window, so the card said the control
+ * was missing for 0.2 s and then corrected itself. [scrolledFor] is the pair the jump last
+ * finished (or gave up) for; until it matches [openPairStep] the Library is still loading.
+ */
+fun libraryTourSettled(refreshing: Boolean, openPairStep: Int?, scrolledFor: Int?): Boolean =
+    !refreshing && (openPairStep == null || scrolledFor == openPairStep)

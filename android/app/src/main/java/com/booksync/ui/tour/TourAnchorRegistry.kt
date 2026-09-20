@@ -52,9 +52,31 @@ class TourAnchorRegistry @Inject constructor() {
     private val _settled = MutableStateFlow<Set<TourScreen>>(emptySet())
     val settled: StateFlow<Set<TourScreen>> = _settled.asStateFlow()
 
+    /**
+     * Screens that are on screen and have said they are *still loading* (issue #652) — as
+     * opposed to a screen nobody has heard from. The difference matters to the safety-net
+     * cap: a reader parsing a full-length book took 41 s on the emulator, and capping that
+     * told the user a control was missing ten seconds before it appeared. Only a screen
+     * that has reported nothing at all is capped; a loading one is waited for.
+     */
+    private val _loading = MutableStateFlow<Set<TourScreen>>(emptySet())
+    val loading: StateFlow<Set<TourScreen>> = _loading.asStateFlow()
+
+    /** `false` means "I am here and still loading", not "forget me" — see [clearScreen]. */
     fun setSettled(screen: TourScreen, settled: Boolean) {
-        val current = _settled.value
-        _settled.value = if (settled) current + screen else current - screen
+        if (settled) {
+            _loading.value = _loading.value - screen
+            _settled.value = _settled.value + screen
+        } else {
+            _settled.value = _settled.value - screen
+            _loading.value = _loading.value + screen
+        }
+    }
+
+    /** The screen is gone (disposed, Activity destroyed): neither settled nor loading. */
+    fun clearScreen(screen: TourScreen) {
+        _settled.value = _settled.value - screen
+        _loading.value = _loading.value - screen
     }
 
     fun set(anchor: TourAnchor, rect: Rect) {
@@ -123,6 +145,6 @@ fun TourScreenSettled(screen: TourScreen, settled: Boolean) {
     val registry = LocalTourRegistry.current
     DisposableEffect(screen, settled) {
         registry.setSettled(screen, settled)
-        onDispose { registry.setSettled(screen, false) }
+        onDispose { registry.clearScreen(screen) }
     }
 }
