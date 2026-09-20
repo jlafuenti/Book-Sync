@@ -411,14 +411,17 @@ object AppModule {
         tokenManager.getAccessToken().map { !it.isNullOrEmpty() }
 
     /**
-     * The guided-walkthrough engine (issue #597). A plain `@Provides` rather
-     * than an `@Inject constructor` on [com.booksync.ui.tour.TourController]:
-     * that class's `clock`/`anchorTimeoutMs` constructor parameters carry
+     * The guided-walkthrough engine (issue #597, revised by #642). A plain
+     * `@Provides` rather than an `@Inject constructor` on
+     * [com.booksync.ui.tour.TourController]: that class's `clock`/`settleMs`/
+     * `hardCapMs`/`awaitLibrary`/`libraryWaitMs` constructor parameters carry
      * Kotlin default values for testability, but Dagger's generated factory
      * does not honour Kotlin defaults — every constructor parameter becomes a
      * required binding, and there is no `@Provides` for a bare `Long` or a
      * `() -> Long`. Calling the constructor directly here, as ordinary Kotlin
-     * code, is what lets the defaults apply in production.
+     * code, is what lets the defaults apply in production. `awaitLibrary` is
+     * left at its default (always-ready) here too — wiring it to the real
+     * library-load signal from issue #641 is follow-up work.
      */
     @Provides
     @Singleton

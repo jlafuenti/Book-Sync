@@ -565,6 +565,11 @@ class ReaderActivity : AppCompatActivity() {
                 // fragment's own creation.
                 applyTourReaderJump(pub)
 
+                // The walkthrough's reader steps can now trust the page is actually
+                // there to spotlight (issue #642) — only for a pair open, since a
+                // standalone read is never part of the tour.
+                if (!isStandalone) tourRegistry.setSettled(TourScreen.Reader, true)
+
                 Log.d(TAG, "Navigator ready, starting position tracking")
                 startPositionTracking()
                 // Wrap WebView's parent so we can intercept the floating selection
@@ -1704,9 +1709,12 @@ class ReaderActivity : AppCompatActivity() {
         tourNavJob?.cancel()
         // Both reader view anchors are this Activity's alone to publish
         // (issue #597 §2) — clear them so a stale rect from a finished reader
-        // never survives into the next screen the tour spotlights.
+        // never survives into the next screen the tour spotlights. Same
+        // reasoning for settled (issue #642): a finished reader must not go
+        // on telling the tour the Reader screen is ready.
         tourRegistry.clear(TourAnchor.ReaderPage)
         tourRegistry.clear(TourAnchor.ReaderSwitchToAudio)
+        tourRegistry.setSettled(TourScreen.Reader, false)
         publication?.close()
         super.onDestroy()
     }

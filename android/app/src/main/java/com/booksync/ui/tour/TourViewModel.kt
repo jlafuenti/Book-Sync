@@ -22,9 +22,13 @@ class TourViewModel @Inject constructor(
     private val prefs: TourPrefs,
 ) : ViewModel() {
 
-    /** Whether the first-sign-in "Take the tour?" dialog has already been shown. */
-    val offered: StateFlow<Boolean> =
-        prefs.offered.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /**
+     * Whether the first-sign-in "Take the tour?" dialog has already been shown — null until
+     * DataStore answers (issue #642), so [shouldOfferTour] never offers on the strength of a
+     * default that just hasn't loaded yet.
+     */
+    val offered: StateFlow<Boolean?> =
+        prefs.offered.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** Records the first-sign-in dialog as answered, either way — never shown again after. */
     fun markOffered() {

@@ -55,6 +55,7 @@ import com.booksync.ui.theme.Tandem
 import androidx.compose.runtime.collectAsState
 import com.booksync.ui.tour.TourOverlay
 import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourEvent
@@ -320,6 +321,10 @@ fun CardOverflowMenu(
             tour.controller.onEvent(TourEvent.SheetOpened(target.pairId))
         }
     }
+    // The sheet has nothing to wait on — its rows render the moment it opens
+    // (issue #642), so it reports settled unconditionally rather than leaving
+    // the tour's Sheet steps stuck judging it on the fixed timer's old cap.
+    TourScreenSettled(TourScreen.Sheet, true)
 
     // Confirmation dialogs
     var confirmUnlink by remember { mutableStateOf(false) }
