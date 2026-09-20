@@ -3,6 +3,7 @@ package com.booksync.ui.tour
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 /**
@@ -150,5 +151,22 @@ class TourScriptTest {
         // must not treat that as "neither row shown".
         val step = TOUR.first { it.id == "details_maintenance" }
         assertEquals(listOf(TourAnchor.DetailsRefreshSync), step.altAnchors)
+    }
+
+    /**
+     * A section Home only renders when it has content needs words for when it does not
+     * (issue #642 follow-up). Continue Reading is empty for every fresh account -- the exact
+     * account the first-sign-in offer reaches -- and without an `emptyBody` the card described
+     * a row that was not on screen, with nothing spotlighted.
+     */
+    @Test
+    fun `every Home section step says what an absent section means`() {
+        val sectionAnchors = setOf(
+            TourAnchor.HomeContinueReading,
+            TourAnchor.HomeInQueue,
+        )
+        TOUR.filter { it.anchor in sectionAnchors }.forEach { step ->
+            assertNotNull("${step.id} needs an emptyBody", step.emptyBody)
+        }
     }
 }
