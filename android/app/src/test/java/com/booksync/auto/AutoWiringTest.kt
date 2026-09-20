@@ -497,6 +497,52 @@ class AutoWiringTest {
         }
     }
 
+    // --- Where playback starts (issue #643) ---
+
+    /**
+     * The play path must decide the resume position through the audio-start
+     * ladder, not by reading one column.
+     *
+     * `resolveMediaItem` is what Android Auto, voice search and `onGetItem` all
+     * go through, and it used to hand `bookmark.audioPositionMs` straight to
+     * the media item. That is the last point the *audiobook* was played, which
+     * is the wrong answer when the user has been reading: `saveReaderPosition`
+     * keeps the previous audio position whenever its own sync-point lookup
+     * misses, so the row holds a current page beside a stale listening
+     * position.
+     */
+    @Test
+    fun `the play path resolves its start position through the ladder`() {
+        val body = functionBody(
+            source("com/booksync/player/AudioPlayerService.kt"), "resolveMediaItem",
+        )
+        assertTrue(
+            "resolveMediaItem must call repository.audioStartMsFor(...) for a pair " +
+                "(issue #643) — reading audioPositionMs directly resumes at the last " +
+                "point the audiobook was played, not where the reader left off.",
+            codeLines(body).any { it.contains("audioStartMsFor") },
+        )
+    }
+
+    /**
+     * The browse path must NOT: it renders a list, and one sync-map read per
+     * row on every browse is exactly the per-row work `buildContinueListeningItems`
+     * exists to avoid. The two paths are allowed to differ — the browse row is
+     * a label, the play path is the decision — which is why `toAutoBook` takes
+     * the resume position as an explicit parameter.
+     */
+    @Test
+    fun `the browse path stays a plain Room read`() {
+        val body = functionBody(
+            source("com/booksync/player/AudioPlayerService.kt"), "buildContinueListeningItems",
+        )
+        assertTrue(
+            "buildContinueListeningItems must not resolve positions through the " +
+                "sync map — it is the no-network browse path (issue #643).",
+            codeLines(body).none { it.contains("audioStartMsFor") },
+        )
+    }
+
     /**
      * The cap has to be applied to the merged list. `(pairs + standalone)` then
      * `take(100)` is the bug: with 100 in-progress pairs the standalone tail —

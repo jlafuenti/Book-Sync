@@ -27,15 +27,27 @@ import com.booksync.player.MediaId
  * the pure code" — the same rule `AutoBrowseTree` set in issue #172.
  */
 
-/** The audiobook's title and author, not the ebook's: this row is what the car reads aloud. */
-fun BookPairEntity.toAutoBook(bookmark: BookmarkEntity?): AutoBook = AutoBook(
+/**
+ * The audiobook's title and author, not the ebook's: this row is what the car
+ * reads aloud.
+ *
+ * [resumePositionMs] defaults to the stored audio position, which is all a
+ * *browse* row needs — it renders a list and must not read the sync map or the
+ * network. The **play** path overrides it with the audio-start ladder's answer
+ * (issue #643), because the stored position is the wrong number when the last
+ * deliberate act was reading. The two paths differ, so they say so.
+ */
+fun BookPairEntity.toAutoBook(
+    bookmark: BookmarkEntity?,
+    resumePositionMs: Long = bookmark?.audioPositionMs?.toLong() ?: 0L,
+): AutoBook = AutoBook(
     mediaId = MediaId.Pair(id).value,
     title = audiobookTitle,
     author = audiobookAuthor,
     series = ebookSeries,
     audiobookId = audiobookId,
     pairId = id,
-    resumePositionMs = bookmark?.audioPositionMs?.toLong() ?: 0L,
+    resumePositionMs = resumePositionMs,
     durationMs = (audiobookDurationSeconds ?: 0) * 1000L,
     lastPlayedAtMs = bookmark?.lastPlayedAtMs() ?: 0L,
     audioFilename = audiobookFilename,

@@ -1686,7 +1686,13 @@ class AudioPlayerService : MediaLibraryService() {
                     val positionMs = when (val id = MediaId.parse(mediaId)) {
                         is MediaId.Pair -> {
                             refreshPositionBeforeResume("pair", id.pairId)
-                            repository.getBookmark(id.pairId)?.audioPositionMs?.toLong()
+                            // Through the audio-start ladder, like every other
+                            // path that decides where playback begins (issue
+                            // #643) — a Cast resume after a reading session
+                            // must not land on the stale listening position.
+                            val bm = repository.getBookmark(id.pairId)
+                            repository.audioStartMsFor(id.pairId, bm).takeIf { it > 0 }
+                                ?: bm?.audioPositionMs?.toLong()
                                 ?: sharedPrefs.getLong(PREF_LAST_POSITION, 0L)
                         }
                         is MediaId.Audiobook -> {
@@ -2135,12 +2141,19 @@ class AudioPlayerService : MediaLibraryService() {
                 // falls back to the cache instead of stalling playback.
                 refreshPositionBeforeResume("pair", id.pairId)
                 val bookmark = repository.getBookmark(id.pairId)
+                // Where audio actually starts (issue #643). Not
+                // `bookmark.audioPositionMs`: that is the last point the
+                // *audiobook* was played, which is the wrong answer when the
+                // user has been reading. The ladder derives the audio position
+                // from the ebook anchor off the sync map re-cached just above,
+                // and falls back to the stored position when it cannot.
+                val resumeMs = repository.audioStartMsFor(id.pairId, bookmark)
                 // Bytes, not a URI (issue #570): this item goes on the media
                 // session, and SystemUI cannot open a FileProvider cover.
                 val artwork = coverArtHelper.getCoverArtworkData(
                     pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath,
                 )
-                buildPairMediaItem(pair, bookmark, artwork)
+                buildPairMediaItem(pair, bookmark, resumeMs, artwork)
             }
             is MediaId.Audiobook -> {
                 val audio = repository.getAudiobookById(id.audiobookId) ?: return null
@@ -2172,12 +2185,13 @@ class AudioPlayerService : MediaLibraryService() {
     private fun buildPairMediaItem(
         pair: BookPairEntity,
         bookmark: BookmarkEntity?,
+        resumePositionMs: Long,
         artworkData: ByteArray?
     ): MediaItem? {
         val uri = mediaUriFor(repository.localAudioFile(pair.audiobookFilename), pair.audiobookId)
             ?: return null
         return autoBookItem(
-            pair.toAutoBook(bookmark), uri.toString(),
+            pair.toAutoBook(bookmark, resumePositionMs), uri.toString(),
             artwork = null, artworkData = artworkData,
         )
     }

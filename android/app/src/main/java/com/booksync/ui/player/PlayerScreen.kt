@@ -449,7 +449,20 @@ class PlayerViewModel @Inject constructor(
             } ?: Log.w("PlayerViewModel", "sync map not available in time — using local cache")
 
             repository.getBookmarkFlow(pairId).collect { bm ->
-                bm?.audioPositionMs?.let { pos ->
+                // The *first* emission decides where to restore, and the stored
+                // audio position is the wrong number when the last deliberate
+                // act was reading (issue #643) — so the initial restore goes
+                // through the audio-start ladder, exactly as Android Auto's
+                // does. Later emissions are playback's own saves, which are
+                // already audio positions; re-deriving them would drag
+                // playback back to the page.
+                val resolved: Int? =
+                    if (bookmarkLoaded) bm?.audioPositionMs
+                    else bm?.let { row ->
+                        repository.audioStartMsFor(pairId, row).toInt().takeIf { it > 0 }
+                            ?: row.audioPositionMs
+                    }
+                resolved?.let { pos ->
                     Log.d("PlayerViewModel", "Bookmark received: audioPositionMs=$pos, bookmarkLoaded=$bookmarkLoaded, controllerConnected=${controller?.isConnected}")
                     savedPositionFromBookmark = pos.toLong()
                     if (!bookmarkLoaded) {

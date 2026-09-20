@@ -21,7 +21,7 @@ import com.booksync.data.local.entity.*
         AcknowledgedItemEntity::class,
         BookmarkLogEntity::class
     ],
-    version = 22,
+    version = 23,
     // Exported to app/schemas/ (room.schemaLocation in build.gradle.kts) so
     // schema changes show up in diffs and MigrationTestHelper tests become
     // possible (issue #168). Commit the generated JSON with every version bump.

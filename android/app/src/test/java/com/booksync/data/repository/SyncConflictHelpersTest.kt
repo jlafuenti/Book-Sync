@@ -198,6 +198,7 @@ class SyncConflictHelpersTest {
         hints: List<PositionHintResponse> = emptyList(),
         syncMapVersion: Int? = null,
         updatedAt: String = "2026-04-12T15:30:00Z",
+        epubTextPreview: String? = null,
     ) = PositionResponse(
         scope = "pair",
         book_pair_id = 42,
@@ -206,6 +207,7 @@ class SyncConflictHelpersTest {
         epub_chapter = epubChapter,
         epub_sentence_index = epubSentenceIndex,
         sync_map_version = syncMapVersion,
+        epub_text_preview = epubTextPreview,
         audio_position_ms = audioPositionMs,
         is_completed = false,
         captured_at = capturedAt,
@@ -403,6 +405,30 @@ class SyncConflictHelpersTest {
         ).toBookmarkEntity(TEST_SCOPE, 42, null)
 
         assertEquals(1786925920003L, entity.lastPlayedAtMs())
+    }
+
+    // ---------- toBookmarkEntity: the text preview is kept (issue #643) ----------
+
+    @Test
+    fun `toBookmarkEntity stores the server's text preview`() {
+        // It used to be discarded, which left the strongest rung of both
+        // ladders unusable from the local row — the player could not search
+        // the cached sync map for the page at all.
+        val entity = position(epubTextPreview = "the text at the position")
+            .toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("the text at the position", entity.epubTextPreview)
+    }
+
+    @Test
+    fun `a response carrying no preview does not blank the stored one`() {
+        // Same rule as the Readium locator above: a client that cannot replace
+        // a value must not delete it.
+        val previous = previousBookmark().copy(epubTextPreview = "the text at the position")
+
+        val entity = position(epubTextPreview = null).toBookmarkEntity(TEST_SCOPE, 42, previous)
+
+        assertEquals("the text at the position", entity.epubTextPreview)
     }
 
     @Test

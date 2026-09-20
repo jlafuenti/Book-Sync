@@ -6,7 +6,9 @@ import com.booksync.data.local.dao.*
 import com.booksync.data.local.entity.*
 import com.booksync.data.remote.UserScopeProvider
 import com.booksync.data.remote.*
+import com.booksync.data.sync.AudioStartStep
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
+import com.booksync.data.sync.planAudioStart
 import com.booksync.diagnostics.DiagnosticLogger
 import com.booksync.diagnostics.LogChannel
 import com.booksync.player.PlaybackOffsets
@@ -1043,6 +1045,10 @@ class PositionRepository @Inject constructor(
                 audioPositionMs = resolvedAudioMs ?: existing?.audioPositionMs,
                 epubLocator = snapshot.locatorJson,
                 locatorAudioMs = resolvedAudioMs ?: existing?.locatorAudioMs,
+                // Stored so the play path can search the sync map for this
+                // page without a server round trip (issue #643).
+                epubTextPreview = snapshot.textPreview.takeIf { it.isNotEmpty() }
+                    ?: existing?.epubTextPreview,
                 updatedAt = snapshot.capturedAtMillis.toString(),
                 capturedAt = capturedAtIso,
                 deviceId = deviceId,
@@ -1220,6 +1226,68 @@ class PositionRepository @Inject constructor(
     ): Int {
         val syncPoint = getSyncPointForEpubText(pairId, chapter, epubText) ?: return 0
         return maxOf(0, syncPoint.audioStartMs - rewindMs)
+    }
+
+    /**
+     * Where audio should start for this pair — the executor for the audio-start
+     * ladder (issue #643).
+     *
+     * The player used to read `bookmark.audioPositionMs` and nothing else,
+     * which is the wrong number whenever the last deliberate act was reading:
+     * `saveReaderPosition` keeps the previous audio position when its
+     * sync-point lookup misses, so the row describes a current page beside a
+     * stale listening position. [planAudioStart] decides which rung to try
+     * first; this runs them against the cached sync points.
+     *
+     * Everything it needs is already local — the play path re-caches the sync
+     * map before resolving the item — so this costs one `sync_points` read and
+     * no network.
+     *
+     * Returns 0 (start of the book) only when the record offers nothing at all,
+     * which is the same answer the old single-column read gave for an empty
+     * record.
+     */
+    suspend fun audioStartMsFor(pairId: Int, bookmark: BookmarkEntity?): Long {
+        if (bookmark == null) return 0L
+        for (step in planAudioStart(bookmark.toStoredPosition(deviceId))) {
+            val ms = when (step) {
+                is AudioStartStep.Stored -> step.audioPositionMs
+                is AudioStartStep.Text ->
+                    epubToAudioText(pairId, step.seedChapter ?: 0, step.text)
+                is AudioStartStep.Sentence ->
+                    audioMsForSentence(pairId, step.chapter, step.sentenceIndex) ?: 0
+            }
+            if (ms > 0) {
+                log("audioStartMsFor $pairId: ${step.kind} -> ${ms}ms")
+                return ms.toLong()
+            }
+        }
+        return 0L
+    }
+
+    /**
+     * The audio position for a chapter + sentence anchor, or null when this
+     * chapter has no points at all.
+     *
+     * Deliberately **never leaves [chapter]**, unlike the server's
+     * `epub_to_audio`, which walks backwards through every preceding chapter.
+     * The stored sentence index is not guaranteed to belong to the stored
+     * chapter — on a lookup miss `saveReaderPosition` writes the new chapter
+     * and inherits the old index (issue #644) — and a cross-chapter walk turns
+     * that mismatch into a confidently wrong seek. Falling back to the
+     * chapter's first point bounds the error to the top of the right chapter.
+     *
+     * Selection otherwise mirrors [epubTextForSentence]: the last point at or
+     * before the target sentence.
+     */
+    private suspend fun audioMsForSentence(pairId: Int, chapter: Int, sentenceIndex: Int?): Int? {
+        val inChapter = syncPointDao.getPointsForPair(pairId)
+            .filter { it.epubChapter == chapter }
+            .sortedBy { it.epubSentenceIndex }
+        if (inChapter.isEmpty()) return null
+        val target = sentenceIndex ?: 0
+        val best = inChapter.lastOrNull { it.epubSentenceIndex <= target } ?: inChapter.first()
+        return maxOf(0, best.audioStartMs - PlaybackOffsets.RESUME_REWIND_MS.toInt())
     }
 
     /**
@@ -1750,6 +1818,11 @@ internal fun PositionResponse.toBookmarkEntity(
         // Kotlin consumer already gave it — so "0" changes no comparison
         // and keeps one shape in the column. The server's own spelling
         // survives in `capturedAt` below, which nothing sorts as text.
+        // Kept, not discarded (issue #643): the strongest rung of both ladders
+        // is text, and the local row is what the player and an offline reader
+        // resolve from. A response that carries none must not blank the one
+        // already stored.
+        epubTextPreview = epub_text_preview ?: previous?.epubTextPreview,
         updatedAt = parseSyncTimestamp(updated_at).toString(),
         capturedAt = captured_at,
         deviceId = device_id,
@@ -1944,7 +2017,7 @@ internal fun BookmarkEntity.toStoredPosition(deviceId: String) =
         source = source,
         epubChapter = epubChapter,
         epubSentenceIndex = epubSentenceIndex,
-        epubTextPreview = null,
+        epubTextPreview = epubTextPreview,
         epubProgressPercent = null,
         audioPositionMs = audioPositionMs,
         hints = epubLocator?.let {
