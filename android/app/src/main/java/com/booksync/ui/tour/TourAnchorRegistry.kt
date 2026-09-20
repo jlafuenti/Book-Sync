@@ -3,6 +3,7 @@ package com.booksync.ui.tour
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -23,9 +24,11 @@ import javax.inject.Singleton
 /**
  * Where every tagged control on screen currently is, in window coordinates
  * (issue #597 Track A). `Modifier.tourAnchor` is the writer; [TourController]
- * reads [rects] to find the hole for the step currently running, and to
- * detect a step whose anchor hasn't shown up yet (see its anchor-timeout
- * handling).
+ * reads [rects] to find the hole for the step currently running and to
+ * resolve whether that step's anchor is [AnchorResolution.Found],
+ * [AnchorResolution.Pending] or [AnchorResolution.Missing] (issue #642) —
+ * [settled] is the other half of that decision, reported by each screen
+ * through [TourScreenSettled].
  *
  * One instance for the whole app — the reader is a second Activity, and its
  * two View-based anchors (Track C) publish into the same registry.
@@ -39,6 +42,20 @@ class TourAnchorRegistry @Inject constructor() {
     private val _wanted = MutableStateFlow<TourAnchor?>(null)
     val wanted: StateFlow<TourAnchor?> = _wanted.asStateFlow()
     fun setWanted(anchor: TourAnchor?) { _wanted.value = anchor }
+
+    /**
+     * Screens that have finished loading (data fetched, role known, navigator
+     * ready — issue #642). [TourController] only starts counting down to
+     * [AnchorResolution.Missing] once the step's own screen is in here; before
+     * that an absent anchor just means the screen hasn't drawn it yet.
+     */
+    private val _settled = MutableStateFlow<Set<TourScreen>>(emptySet())
+    val settled: StateFlow<Set<TourScreen>> = _settled.asStateFlow()
+
+    fun setSettled(screen: TourScreen, settled: Boolean) {
+        val current = _settled.value
+        _settled.value = if (settled) current + screen else current - screen
+    }
 
     fun set(anchor: TourAnchor, rect: Rect) {
         // The first layout pass of a not-yet-measured element reports an empty
@@ -89,5 +106,23 @@ fun Modifier.tourAnchor(anchor: TourAnchor): Modifier = composed {
     }
     bringIntoViewRequester(requester).onGloballyPositioned { coordinates ->
         registry.set(anchor, coordinates.boundsInWindow())
+    }
+}
+
+/**
+ * A screen reports through this whenever its own "has finished loading" flag
+ * changes (issue #642) — data fetched, role resolved, a reader navigator
+ * ready. [TourController] uses [TourAnchorRegistry.settled] to tell "the
+ * control isn't on this screen" from "this screen hasn't drawn it yet",
+ * which is what replaces the old fixed anchor timeout. Unset on dispose so a
+ * screen that navigates away doesn't leave a stale "settled" behind for the
+ * next step to trust.
+ */
+@Composable
+fun TourScreenSettled(screen: TourScreen, settled: Boolean) {
+    val registry = LocalTourRegistry.current
+    DisposableEffect(screen, settled) {
+        registry.setSettled(screen, settled)
+        onDispose { registry.setSettled(screen, false) }
     }
 }

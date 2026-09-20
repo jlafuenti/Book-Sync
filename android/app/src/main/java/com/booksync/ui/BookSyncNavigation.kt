@@ -73,6 +73,7 @@ import com.booksync.ui.tour.TourEvent
 import com.booksync.ui.tour.TourNav
 import com.booksync.ui.tour.TourOverlay
 import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.shouldOfferTour
@@ -827,6 +828,9 @@ private fun MainScaffold(
 
             composable(Routes.DOWNLOADED) {
                 TourRouteShown(tour, Routes.DOWNLOADED)
+                // Nothing this screen shows depends on a load the tour needs
+                // to wait out (issue #642), so it settles the moment it's shown.
+                TourScreenSettled(TourScreen.Downloaded, true)
                 DownloadedScreen(
                     onPairBookSelect  = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.reader(pairId)) } },
                     onPairAudioSelect = { pairId -> gate.requestOpen(pairId, "Open anyway") { outerNavController.navigate(Routes.player(pairId)) } },
@@ -840,6 +844,8 @@ private fun MainScaffold(
 
             composable(Routes.ACCOUNT) {
                 TourRouteShown(tour, Routes.ACCOUNT)
+                // Same reasoning as Downloaded above: nothing here loads.
+                TourScreenSettled(TourScreen.Account, true)
                 AccountScreen(
                     onDiagnosticsAuto   = { outerNavController.navigate(Routes.diagnostics("AUTO")) },
                     onDiagnosticsApp    = { outerNavController.navigate(Routes.diagnostics("APP")) },

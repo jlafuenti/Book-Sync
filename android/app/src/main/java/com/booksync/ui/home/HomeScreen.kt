@@ -67,6 +67,8 @@ import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.components.VersionMismatchBanner
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.tourAnchor
@@ -100,6 +102,11 @@ fun HomeScreen(
     val newPairs by viewModel.newPairs.collectAsState()
     val queueItems by viewModel.queueItems.collectAsState()
     val activeTxPairIds by viewModel.activeTxPairIds.collectAsState()
+    // Read once near the top rather than only inside the allEmpty branch (issue
+    // #642): the walkthrough's Home steps need to know Home has settled even
+    // when the library isn't empty, and LOADING is exactly the state where
+    // Room hasn't reported back on pairs/ebooks/audiobooks yet.
+    val libraryState by viewModel.libraryState.collectAsState()
 
     val allEmpty = continueItems.isEmpty() &&
         recentlyAdded.isEmpty() &&
@@ -113,6 +120,10 @@ fun HomeScreen(
     val tourState by tour.controller.state.collectAsState()
     val tourAnchorWanted = (tourState as? TourState.Running)?.step?.anchor?.takeIf { it in HOME_TOUR_ANCHORS }
     val listState = rememberLazyListState()
+    // Home has settled once Room has answered on all three source flows,
+    // whether or not the library turned out to be empty (issue #642) — before
+    // that, an absent section header just means the data hasn't loaded yet.
+    TourScreenSettled(TourScreen.Home, libraryState != HomeLibraryState.LOADING)
 
     // Overflow sheet state — set when a card's three-dots is tapped.
     var overflowTarget by remember { mutableStateOf<OverflowTarget?>(null) }
@@ -182,7 +193,6 @@ fun HomeScreen(
         val versionBanner by viewModel.versionBanner.collectAsState()
 
         if (allEmpty) {
-            val libraryState by viewModel.libraryState.collectAsState()
             Column(modifier = Modifier.padding(padding).fillMaxSize()) {
                 VersionMismatchBanner(versionBanner)
                 when (libraryState) {

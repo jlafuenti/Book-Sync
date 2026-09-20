@@ -142,4 +142,13 @@ class TourScriptTest {
         assertTrue(step.body.contains("at least a few words"))
         assertTrue(step.body.contains("Sync to Audio"))
     }
+
+    @Test
+    fun `details_maintenance accepts the Refresh sync data row as an alternate anchor`() {
+        // Issue #642: a viewer with a sync map on the device sees "Refresh sync
+        // data" even though Unlink pair (editor-only) is absent, so the step
+        // must not treat that as "neither row shown".
+        val step = TOUR.first { it.id == "details_maintenance" }
+        assertEquals(listOf(TourAnchor.DetailsRefreshSync), step.altAnchors)
+    }
 }

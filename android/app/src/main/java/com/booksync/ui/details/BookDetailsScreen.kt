@@ -70,6 +70,8 @@ import com.booksync.ui.components.ActionRow
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourEvent
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.tourAnchor
 import java.io.File
@@ -108,6 +110,15 @@ fun BookDetailsScreen(
     LaunchedEffect(ui.pair?.id) {
         ui.pair?.let { tour.controller.onEvent(TourEvent.DetailsOpened(it.id)) }
     }
+    // Settled once the pair has loaded (issue #642). Ideally this would also
+    // wait for `canEdit` to resolve from "unknown" before judging the Unlink
+    // row's presence — but BookDetailsViewModel.canEdit defaults to `false`
+    // exactly like an editor-negative answer would, so there's no way from
+    // here to tell "the role hasn't come back yet" from "this user isn't an
+    // editor". Settling on the pair alone means a very slow role lookup could
+    // still show `details_maintenance` a beat before Unlink pair appears for
+    // an editor; `altAnchors` (Refresh sync data) covers the common case.
+    TourScreenSettled(TourScreen.Details, ui.pair != null)
 
     // Surface transient messages via the snackbar. Clear after display so a
     // second occurrence of the same text re-notifies.

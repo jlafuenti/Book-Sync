@@ -10,13 +10,25 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the tour is right now. */
-/** How long the "tap the page" reader step waits before raising the bars itself. */
+/** How long the "tap the page" reader step waits, once the reader has settled, before raising the bars itself. */
 const val READER_BARS_GRACE_MS = 4_000L
+
+/**
+ * Whether a step's anchor (or, for `details_maintenance`, one of its
+ * [TourStep.altAnchors]) has shown up (issue #642).
+ *
+ * Replaces the old fixed 1.5 s timeout, which counted from step entry
+ * regardless of whether the screen had actually finished loading — a card
+ * would say a control was missing, then the screen would draw it a moment
+ * later, and the verdict never revisited itself.
+ */
+enum class AnchorResolution { Pending, Found, Missing }
 
 sealed class TourState {
     data object Idle : TourState()
@@ -24,10 +36,17 @@ sealed class TourState {
     data class Running(
         val index: Int,
         val step: TourStep,
-        /** The spotlighted control's window bounds, or null while waiting / degraded. */
+        /** The spotlighted control's window bounds. Null whenever [resolution] isn't [AnchorResolution.Found]. */
         val anchor: Rect?,
-        /** True once [step] has waited [TourController] out without its anchor showing up. */
-        val degraded: Boolean,
+        /** [step]'s anchor resolution (issue #642) — see [AnchorResolution]. */
+        val resolution: AnchorResolution,
+        /**
+         * Which of [TourStep.anchor] / [TourStep.altAnchors] is actually spotlighted
+         * (issue #642) — null unless [resolution] is [AnchorResolution.Found]. The
+         * overlay follows this anchor's *live* rect rather than [anchor], which is
+         * only a snapshot from whenever the resolution last changed.
+         */
+        val spotlighted: TourAnchor?,
         val pairId: Int?,
         val total: Int,
         /** False on step 0 and on the first step of a new screen (see [TourController.back]). */
@@ -40,7 +59,20 @@ sealed class TourState {
          * showing up in Continue Reading and Downloaded afterward).
          */
         val willCleanUp: Boolean = false,
-    ) : TourState()
+        /**
+         * True from the moment [TourController.start] enters step 0 until the picked pair
+         * (or the lack of one) is known (issue #642, #641) — the welcome card renders at
+         * once rather than waiting on the library, but [TourController.next] does nothing
+         * until this clears, since the step list itself isn't final yet.
+         */
+        val preparing: Boolean = false,
+    ) : TourState() {
+        /**
+         * True once [step]'s anchor has waited this tour out without showing up. A step
+         * with no anchor at all (a plain info card) is never degraded — see [AnchorResolution].
+         */
+        val degraded: Boolean get() = resolution == AnchorResolution.Missing
+    }
 
     data object Finished : TourState()
 }
@@ -64,29 +96,48 @@ sealed class TourNav {
 }
 
 /**
- * The walkthrough's state machine (issue #597 §3). Plain Kotlin — no Android
- * types beyond `androidx.compose.ui.geometry.Rect`, which is a pure value
- * class — so it is fully covered by JVM tests; the reader is a second
- * Activity, so this has to be app-scoped rather than living in a
+ * The walkthrough's state machine (issue #597 §3, revised by #642). Plain
+ * Kotlin — no Android types beyond `androidx.compose.ui.geometry.Rect`, which
+ * is a pure value class — so it is fully covered by JVM tests; the reader is
+ * a second Activity, so this has to be app-scoped rather than living in a
  * MainActivity ViewModel (see `di/AppModule.kt`'s `provideTourController`,
- * which is where the [clock]/[anchorTimeoutMs] defaults actually apply —
- * Dagger's generated factory does not honour Kotlin default arguments, so a
- * plain `@Provides` function calls this constructor instead of an
- * `@Inject constructor`).
+ * which is where the [clock]/[settleMs]/[hardCapMs]/[awaitLibrary] defaults
+ * actually apply — Dagger's generated factory does not honour Kotlin default
+ * arguments, so a plain `@Provides` function calls this constructor instead
+ * of an `@Inject constructor`).
  */
 class TourController(
     private val registry: TourAnchorRegistry,
     private val prefs: TourPrefs,
     private val picker: TourPairPicker,
     private val scope: CoroutineScope,
-    /**
-     * Reserved for future use (step timing / diagnostics); the anchor
-     * timeout itself is driven by a coroutine `delay` under [scope], not by
-     * polling this clock, so tests control it with `advanceTimeBy` /
-     * `advanceUntilIdle` rather than a fake clock value.
-     */
+    /** Used only to log how long each anchor resolution took; the resolution logic itself
+     *  is driven by coroutine `delay`s under [scope], which is what tests control via
+     *  `advanceTimeBy` / `advanceUntilIdle`. */
     private val clock: () -> Long = System::currentTimeMillis,
-    private val anchorTimeoutMs: Long = 1500,
+    /**
+     * How long an absent anchor stays [AnchorResolution.Pending] on a *settled* screen
+     * before resolving to [AnchorResolution.Missing] (issue #642). Restarts whenever the
+     * screen's settled flag or the anchor's presence changes.
+     */
+    private val settleMs: Long = 600,
+    /**
+     * The longest an absent anchor stays [AnchorResolution.Pending] on a screen that never
+     * reports settled (issue #642) — a bound against a screen that never gets there, not the
+     * ordinary path. Applies only before the step's first [AnchorResolution.Found]; once an
+     * anchor has shown up, a later vanish waits indefinitely, since that almost always means
+     * the user's tap landed and the next screen is on its way in.
+     */
+    private val hardCapMs: Long = 10_000,
+    /**
+     * Waits (bounded by [libraryWaitMs]) for the library's pairs to be loaded (issue #641)
+     * before [start] asks [TourPairPicker.pick] to choose one — a library that hasn't synced
+     * yet would otherwise look exactly like an empty one. The boolean return isn't branched
+     * on here: [TourPairPicker.pick] already handles "nothing synced yet" by returning null,
+     * which [buildSteps] turns into the skip card either way.
+     */
+    private val awaitLibrary: suspend (Long) -> Boolean = { true },
+    private val libraryWaitMs: Long = 20_000,
 ) {
     private val _state = MutableStateFlow<TourState>(TourState.Idle)
     val state: StateFlow<TourState> = _state.asStateFlow()
@@ -99,30 +150,67 @@ class TourController(
     /** See [TourState.Running.willCleanUp]; carried here so [enter] can stamp every step's
      *  state with it without recomputing it on every `next()`/`back()`. */
     private var willCleanUp: Boolean = false
-    private var anchorWaitJob: Job? = null
+    private var anchorWatchJob: Job? = null
     private var barsGraceJob: Job? = null
+    private var startJob: Job? = null
+    /** Bumped by every [start], so a stale `start()` coroutine that resumes late (its
+     *  [awaitLibrary] having finally returned) can tell it was superseded and must not
+     *  overwrite whatever the newer `start()` put in place. */
+    private var startGeneration: Int = 0
+    /** When the current step's anchor was entered — [clock]-based, for the transition log only. */
+    private var stepEnteredAtMs: Long = 0
+    /** The anchor last reported to [TourAnchorRegistry.setWanted] for the current step's
+     *  resolution, kept separately from `_state` so a resolution that doesn't change the
+     *  spotlighted anchor doesn't re-announce it. */
+    private var lastSpotlighted: TourAnchor? = null
 
     /** Picks a pair (degrading gracefully to the skip card when none qualifies) and enters step 0. */
     fun start() {
-        anchorWaitJob?.cancel()
-        scope.launch {
+        anchorWatchJob?.cancel()
+        barsGraceJob?.cancel()
+        startJob?.cancel()
+        val generation = ++startGeneration
+        steps = TOUR
+        pairId = null
+        willCleanUp = false
+        // "Replay the walkthrough" (issue #597 follow-up) launches from wherever the
+        // Account tab happens to be, and PR #614 stopped the tour switching tabs on its
+        // own for every other step — without this, step 0's Home anchors would render
+        // over whatever screen was already showing. The only other automatic switch is
+        // [emitPopToMain], leaving the reader/player block.
+        _nav.tryEmit(TourNav.GoToTab(requireNotNull(tabRouteFor(TourScreen.Home))))
+        // Shows the welcome card at once (issue #642) rather than waiting on the library
+        // — nothing about step 0 depends on the picked pair, and a blank screen while a
+        // slow connection loads pairs is worse than a Next button that briefly says
+        // "Getting your library…".
+        enter(0, preparing = true)
+        startJob = scope.launch {
+            awaitLibrary(libraryWaitMs)
             val picked = picker.pick()
+            val untouched = picked?.let { picker.isUntouched(it) } ?: false
+            // A second start() (e.g. quit-and-replay while this one was still preparing)
+            // bumped the generation already; this resume is stale and must not stomp on
+            // whatever that second start() put in place.
+            if (generation != startGeneration) return@launch
             pairId = picked
-            willCleanUp = picked?.let { picker.isUntouched(it) } ?: false
+            willCleanUp = untouched
             steps = buildSteps(picked)
-            // "Replay the walkthrough" (issue #597 follow-up) launches from wherever the
-            // Account tab happens to be, and PR #614 stopped the tour switching tabs on its
-            // own for every other step — without this, step 0's Home anchors would render
-            // over whatever screen was already showing. The only other automatic switch is
-            // [emitPopToMain], leaving the reader/player block.
-            _nav.tryEmit(TourNav.GoToTab(requireNotNull(tabRouteFor(TourScreen.Home))))
-            enter(0)
+            val current = _state.value as? TourState.Running ?: return@launch
+            if (current.index != 0) return@launch
+            _state.value = current.copy(
+                preparing = false,
+                pairId = pairId,
+                total = steps.size,
+                willCleanUp = willCleanUp,
+            )
         }
     }
 
-    /** Ignored on a [Advance.TapAnchor] step — the card says to tap the highlighted control instead. */
+    /** Ignored while [TourState.Running.preparing] — the step list isn't final yet — and on
+     *  a [Advance.TapAnchor] step, where the card says to tap the highlighted control instead. */
     fun next() {
         val running = _state.value as? TourState.Running ?: return
+        if (running.preparing) return
         if (running.step.advance is Advance.TapAnchor) return
         advanceFrom(running.index)
     }
@@ -217,55 +305,122 @@ class TourController(
         enter(nextIndex)
     }
 
-    private fun enter(index: Int) {
-        anchorWaitJob?.cancel()
+    private fun enter(index: Int, preparing: Boolean = false) {
+        anchorWatchJob?.cancel()
         barsGraceJob?.cancel()
         val step = steps[index]
         registry.setWanted(step.anchor)
         emitEnterNav(step, isFirstOccurrenceOfScreen(step.screen, index))
 
         // The "tap the page" step waits for the reader's bars; a user who never
-        // taps would be stuck, so after a grace period the tour raises them
-        // itself and the resulting ReaderBarsShown advances the step.
+        // taps would be stuck, so after a grace period — counted from the
+        // reader actually settling, not from step entry (issue #642: the old
+        // 4 s counted from Activity creation, before the book had loaded) —
+        // the tour raises them itself and the resulting ReaderBarsShown
+        // advances the step as if the user had tapped.
         val waitsForBars = (step.advance as? Advance.WaitFor)?.event == TourEvent.ReaderBarsShown
         if (waitsForBars) {
             barsGraceJob = scope.launch {
+                registry.settled.first { TourScreen.Reader in it }
                 delay(READER_BARS_GRACE_MS)
                 val current = _state.value as? TourState.Running ?: return@launch
                 if (current.index == index) _nav.tryEmit(TourNav.ShowReaderBars)
             }
         }
 
-        val immediateRect = step.anchor?.let { registry.rects.value[it] }
+        stepEnteredAtMs = clock()
+        lastSpotlighted = null
+
+        val candidates = if (step.anchor != null) listOf(step.anchor) + step.altAnchors else emptyList()
+        val immediate = candidates.firstOrNull { registry.rects.value[it] != null }
+        val initialResolution = if (step.anchor == null || immediate != null) {
+            AnchorResolution.Found
+        } else {
+            AnchorResolution.Pending
+        }
+        if (immediate != null) {
+            lastSpotlighted = immediate
+            registry.setWanted(immediate)
+        }
+
         _state.value = TourState.Running(
             index = index,
             step = step,
-            anchor = immediateRect,
-            // Not degraded yet even when the anchor is still missing: that's
-            // only decided once the wait below times out. A step with no
-            // anchor at all (a plain info card) is never degraded.
-            degraded = false,
+            anchor = immediate?.let { registry.rects.value[it] },
+            resolution = initialResolution,
+            spotlighted = immediate,
             pairId = pairId,
             total = steps.size,
             canGoBack = canGoBack(index),
             willCleanUp = willCleanUp,
+            preparing = preparing,
         )
 
-        if (step.anchor != null && immediateRect == null) {
-            val anchor = step.anchor
-            anchorWaitJob = scope.launch {
-                val rect = withTimeoutOrNull(anchorTimeoutMs) {
-                    registry.rects.first { it[anchor] != null }[anchor]
-                }
-                val current = _state.value as? TourState.Running ?: return@launch
-                if (current.index != index) return@launch // a later step won the race
-                _state.value = if (rect != null) {
-                    current.copy(anchor = rect, degraded = false)
-                } else {
-                    current.copy(degraded = true)
-                }
-            }
+        if (step.anchor != null) {
+            watchAnchor(index, step, candidates, alreadyFound = immediate != null)
         }
+    }
+
+    /**
+     * Re-evaluates [step]'s anchor resolution for as long as [index] stays current (issue
+     * #642) — cancelled the moment [enter] moves on, by the `anchorWatchJob?.cancel()` at its
+     * top. `collectLatest` over both [TourAnchorRegistry.rects] and [TourAnchorRegistry.settled]
+     * is what gives the debounce its "restarts on any change" behaviour for free: a new emission
+     * from either flow cancels whatever `delay` the previous emission was sitting in.
+     */
+    private fun watchAnchor(
+        index: Int,
+        step: TourStep,
+        candidates: List<TourAnchor>,
+        alreadyFound: Boolean,
+    ) {
+        var everFound = alreadyFound
+        anchorWatchJob = scope.launch {
+            combine(registry.rects, registry.settled) { rects, settled -> rects to settled }
+                .collectLatest { (rects, settled) ->
+                    val foundAnchor = candidates.firstOrNull { rects[it] != null }
+                    if (foundAnchor != null) {
+                        everFound = true
+                        applyResolution(index, step, AnchorResolution.Found, rects[foundAnchor], foundAnchor)
+                        return@collectLatest
+                    }
+                    if (everFound) {
+                        // The hard cap applies only before the first Found: past that point a
+                        // vanished anchor almost always means the user's tap landed and the
+                        // next screen is on its way in, so this waits indefinitely for the
+                        // step's own expected event to advance it instead.
+                        applyResolution(index, step, AnchorResolution.Pending, null, null)
+                        return@collectLatest
+                    }
+                    val settledNow = step.screen in settled
+                    applyResolution(index, step, AnchorResolution.Pending, null, null)
+                    delay(if (settledNow) settleMs else hardCapMs)
+                    applyResolution(index, step, AnchorResolution.Missing, null, null)
+                }
+        }
+    }
+
+    private fun applyResolution(
+        index: Int,
+        step: TourStep,
+        resolution: AnchorResolution,
+        rect: Rect?,
+        spotlighted: TourAnchor?,
+    ) {
+        val current = _state.value as? TourState.Running ?: return
+        if (current.index != index) return
+        val changed = current.resolution != resolution ||
+            current.anchor != rect ||
+            current.spotlighted != spotlighted
+        if (!changed) return
+        if (spotlighted != null && spotlighted != lastSpotlighted) {
+            lastSpotlighted = spotlighted
+            registry.setWanted(spotlighted)
+        }
+        val old = current.resolution
+        _state.value = current.copy(resolution = resolution, anchor = rect, spotlighted = spotlighted)
+        val elapsedMs = clock() - stepEnteredAtMs
+        android.util.Log.d("Tour", "${step.id}: $old→$resolution after $elapsedMs ms")
     }
 
     private fun isFirstOccurrenceOfScreen(screen: TourScreen, index: Int): Boolean =
@@ -333,8 +488,9 @@ class TourController(
         if (running?.willCleanUp == true && running.pairId != null) {
             _nav.tryEmit(TourNav.CleanUp(running.pairId))
         }
-        anchorWaitJob?.cancel()
+        anchorWatchJob?.cancel()
         barsGraceJob?.cancel()
+        startJob?.cancel()
         registry.setWanted(null)
         _state.value = TourState.Finished
         scope.launch { prefs.markCompleted() }

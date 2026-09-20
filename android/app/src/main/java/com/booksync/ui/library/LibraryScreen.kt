@@ -85,6 +85,8 @@ import com.booksync.ui.components.OverflowTarget
 import com.booksync.ui.theme.Tandem
 import com.booksync.ui.tour.TourAnchor
 import com.booksync.ui.tour.TourNav
+import com.booksync.ui.tour.TourScreen
+import com.booksync.ui.tour.TourScreenSettled
 import com.booksync.ui.tour.TourState
 import com.booksync.ui.tour.TourViewModel
 import com.booksync.ui.tour.tourAnchor
@@ -173,6 +175,11 @@ fun LibraryScreen(
     val downloading       by viewModel.downloadingProgress.collectAsState()
     val txMessage         by viewModel.transcriptionMessage.collectAsState()
     val activeTxPairIds   by viewModel.activeTranscribingPairIds.collectAsState()
+
+    // Settled once a refresh isn't in flight (issue #642) — whether that leaves
+    // the grid populated or showing its own empty state, either is a real
+    // answer the walkthrough's Library steps can spotlight against.
+    TourScreenSettled(TourScreen.Library, !refreshing)
 
     val snackbar = remember { SnackbarHostState() }
     var searchActive by remember { mutableStateOf(false) }

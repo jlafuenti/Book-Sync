@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -19,12 +20,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The walkthrough's state machine (issue #597 §3): start picks a pair and
- * enters step 0; `next`/`back` walk the script; a `TapAnchor` step advances
- * only on its expected event and ignores `next()`; a step whose anchor never
- * shows up degrades after the timeout; a library with no synced pair
- * collapses every `needsPair` step into one skip card; quitting — or the
- * final `next()` — finishes the tour and records it.
+ * The walkthrough's state machine (issue #597 §3, revised by #642): start picks a pair and
+ * enters step 0; `next`/`back` walk the script; a `TapAnchor` step advances only on its
+ * expected event and ignores `next()`; a step's anchor resolves to `Found`, `Pending` or
+ * `Missing` based on whether the control has shown up and whether its screen has settled,
+ * re-evaluated for as long as the step is current rather than judged once on a fixed timer;
+ * a library with no synced pair collapses every `needsPair` step into one skip card;
+ * quitting — or the final `next()` — finishes the tour and records it.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TourControllerTest {
@@ -36,8 +38,8 @@ class TourControllerTest {
     /**
      * Unconfined, but sharing the [TestScope]'s scheduler: launched bodies run
      * eagerly (so `state.value` is current the moment a call returns) while
-     * `delay()`-based anchor timeouts still obey `advanceTimeBy` /
-     * `advanceUntilIdle` rather than real wall-clock time.
+     * `delay()`-based waits still obey `advanceTimeBy` / `advanceUntilIdle`
+     * rather than real wall-clock time.
      *
      * Tests that assert on [TourController.nav] must collect it through this
      * *same* scope (not `backgroundScope`, which runs on the `TestScope`'s own
@@ -47,13 +49,23 @@ class TourControllerTest {
     private fun TestScope.unconfinedScope(): CoroutineScope =
         CoroutineScope(UnconfinedTestDispatcher(testScheduler))
 
-    private fun TestScope.newController(pairId: Int? = 42, scope: CoroutineScope = unconfinedScope()): TourController {
+    private fun TestScope.newController(
+        pairId: Int? = 42,
+        scope: CoroutineScope = unconfinedScope(),
+        awaitLibrary: suspend (Long) -> Boolean = { true },
+    ): TourController {
         registry = TourAnchorRegistry()
         coEvery { picker.pick() } returns pairId
         // Untouched by default so existing tests don't have to care; tests that exercise
         // CleanUp override this for the specific pair id they care about.
         coEvery { picker.isUntouched(any()) } returns false
-        return TourController(registry = registry, prefs = prefs, picker = picker, scope = scope)
+        return TourController(
+            registry = registry,
+            prefs = prefs,
+            picker = picker,
+            scope = scope,
+            awaitLibrary = awaitLibrary,
+        )
     }
 
     private fun running(controller: TourController): TourState.Running =
@@ -198,10 +210,10 @@ class TourControllerTest {
     }
 
     @Test
-    fun `the reader tap-page step shows the bars itself after the grace period`() = runTest {
-        // A user who never taps the page would be stuck; after the grace period
-        // the tour asks the reader to raise its bars, whose ReaderBarsShown then
-        // advances the step as if the user had tapped.
+    fun `the reader bars grace does not start until the reader has settled`() = runTest {
+        // Issue #642: the old 4 s grace counted from the reader Activity's own
+        // creation, before the book had loaded — a slow load could raise the
+        // bars itself before the user had anything to look at yet.
         val scope = unconfinedScope()
         val controller = newController(scope = scope)
         val navLog = mutableListOf<TourNav>()
@@ -210,22 +222,37 @@ class TourControllerTest {
         advanceUntilIdle()
         controller.advanceUntil("reader_tap_page")
 
+        advanceTimeBy(60_000)
+        assertFalse(navLog.contains(TourNav.ShowReaderBars))
+
+        // Not advanceUntilIdle() here: with only the grace-period delay left
+        // pending, that would drain the scheduler by running the delay to
+        // completion outright, rather than leaving it for advanceTimeBy below
+        // to cross a specific number of milliseconds at a time.
+        registry.setSettled(TourScreen.Reader, true)
+
         advanceTimeBy(READER_BARS_GRACE_MS - 1)
         assertFalse(navLog.contains(TourNav.ShowReaderBars))
 
         advanceTimeBy(2)
         assertTrue(navLog.contains(TourNav.ShowReaderBars))
+    }
 
-        // Leaving the step first cancels the request.
-        val controller2 = newController(scope = scope)
-        val navLog2 = mutableListOf<TourNav>()
-        scope.launch { controller2.nav.collect { navLog2.add(it) } }
-        controller2.start()
+    @Test
+    fun `leaving the reader tap-page step first cancels the bars grace request`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        val navLog = mutableListOf<TourNav>()
+        scope.launch { controller.nav.collect { navLog.add(it) } }
+        controller.start()
         advanceUntilIdle()
-        controller2.advanceUntil("reader_tap_page")
-        controller2.onEvent(TourEvent.ReaderBarsShown)
+        controller.advanceUntil("reader_tap_page")
+        registry.setSettled(TourScreen.Reader, true)
+
+        controller.onEvent(TourEvent.ReaderBarsShown)
         advanceTimeBy(READER_BARS_GRACE_MS + 10)
-        assertFalse(navLog2.contains(TourNav.ShowReaderBars))
+
+        assertFalse(navLog.contains(TourNav.ShowReaderBars))
     }
 
     @Test
@@ -289,8 +316,22 @@ class TourControllerTest {
         assertTrue(navLog.contains(TourNav.SkipToToolbarSync))
     }
 
+    // ---- anchor resolution (issue #642) ----
+
     @Test
-    fun `an anchor rect already present when the step is entered is not degraded`() = runTest {
+    fun `a step with no anchor at all is Found immediately`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+
+        val state = running(controller)
+        assertNull(state.step.anchor) // home_welcome
+        assertEquals(AnchorResolution.Found, state.resolution)
+        assertFalse(state.degraded)
+    }
+
+    @Test
+    fun `an anchor rect already present when the step is entered is Found immediately`() = runTest {
         val controller = newController()
         registry.set(TourAnchor.HomeContinueReading, Rect(0f, 0f, 10f, 10f))
         controller.start()
@@ -299,40 +340,231 @@ class TourControllerTest {
         controller.next() // -> home_continue_reading
 
         val state = running(controller)
+        assertEquals(AnchorResolution.Found, state.resolution)
         assertFalse(state.degraded)
         assertEquals(Rect(0f, 0f, 10f, 10f), state.anchor)
     }
 
     @Test
-    fun `no anchor rect within the timeout renders the step degraded`() = runTest {
+    fun `an anchor that registers well before the hard cap on an unsettled screen never goes Missing`() = runTest {
         val controller = newController()
         controller.start()
         advanceUntilIdle()
+        controller.next() // -> home_continue_reading; screen never reports settled
 
-        controller.next() // -> home_continue_reading, no rect ever registered
-        assertFalse(running(controller).degraded) // not yet — still waiting
+        advanceTimeBy(3_000)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
 
-        advanceTimeBy(1_600)
+        registry.set(TourAnchor.HomeContinueReading, Rect(0f, 0f, 10f, 10f))
         advanceUntilIdle()
 
+        val state = running(controller)
+        assertEquals(AnchorResolution.Found, state.resolution)
+        assertFalse(state.degraded)
+        assertEquals(Rect(0f, 0f, 10f, 10f), state.anchor)
+    }
+
+    @Test
+    fun `an absent anchor on a settled screen resolves Missing at 600ms, not before`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading
+        // Not advanceUntilIdle() here: with only the settle-window delay left
+        // pending, that would drain the scheduler by running the delay to
+        // completion outright, rather than leaving it for advanceTimeBy below
+        // to cross a specific number of milliseconds at a time.
+        registry.setSettled(TourScreen.Home, true)
+
+        advanceTimeBy(599)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+
+        advanceTimeBy(2)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
         assertTrue(running(controller).degraded)
         assertNull(running(controller).anchor)
     }
 
     @Test
-    fun `an anchor rect that arrives before the timeout clears the degrade`() = runTest {
+    fun `Missing recovers to Found once the anchor registers`() = runTest {
         val controller = newController()
         controller.start()
         advanceUntilIdle()
+        controller.next()
+        registry.setSettled(TourScreen.Home, true)
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
 
-        controller.next() // -> home_continue_reading
-        advanceTimeBy(500)
         registry.set(TourAnchor.HomeContinueReading, Rect(1f, 1f, 2f, 2f))
         advanceUntilIdle()
 
         val state = running(controller)
+        assertEquals(AnchorResolution.Found, state.resolution)
         assertFalse(state.degraded)
         assertEquals(Rect(1f, 1f, 2f, 2f), state.anchor)
+    }
+
+    @Test
+    fun `an absent anchor on an unsettled screen resolves Missing only at the 10s hard cap`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading, screen never reports settled
+
+        advanceTimeBy(9_999)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+
+        advanceTimeBy(2)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+    }
+
+    @Test
+    fun `the hard cap applies only before the first Found -- a later vanish waits indefinitely`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next()
+        registry.set(TourAnchor.HomeContinueReading, Rect(0f, 0f, 10f, 10f))
+        advanceUntilIdle()
+        assertEquals(AnchorResolution.Found, running(controller).resolution)
+
+        registry.clear(TourAnchor.HomeContinueReading)
+        advanceUntilIdle()
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+        assertNull(running(controller).anchor)
+
+        advanceTimeBy(60_000)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+    }
+
+    @Test
+    fun `an alternate anchor is spotlighted when the primary is absent`() = runTest {
+        val controller = newController()
+        registry.set(TourAnchor.DetailsRefreshSync, Rect(0f, 0f, 5f, 5f))
+        controller.start()
+        advanceUntilIdle()
+
+        controller.advanceUntil("details_maintenance")
+
+        val state = running(controller)
+        assertEquals(AnchorResolution.Found, state.resolution)
+        assertEquals(TourAnchor.DetailsRefreshSync, state.spotlighted)
+        assertEquals(TourAnchor.DetailsRefreshSync, registry.wanted.value)
+    }
+
+    @Test
+    fun `the spotlight moves to the primary anchor once it appears`() = runTest {
+        val controller = newController()
+        registry.set(TourAnchor.DetailsRefreshSync, Rect(0f, 0f, 5f, 5f))
+        controller.start()
+        advanceUntilIdle()
+        controller.advanceUntil("details_maintenance")
+        assertEquals(TourAnchor.DetailsRefreshSync, running(controller).spotlighted)
+
+        registry.set(TourAnchor.DetailsUnlink, Rect(1f, 1f, 6f, 6f))
+        advanceUntilIdle()
+
+        val state = running(controller)
+        assertEquals(TourAnchor.DetailsUnlink, state.spotlighted)
+        assertEquals(Rect(1f, 1f, 6f, 6f), state.anchor)
+        assertEquals(TourAnchor.DetailsUnlink, registry.wanted.value)
+    }
+
+    // ---- start()/preparing (issues #642, #641) ----
+
+    @Test
+    fun `start shows the welcome card with preparing true before awaitLibrary returns`() = runTest {
+        val gate = CompletableDeferred<Boolean>()
+        val controller = newController(pairId = 42, awaitLibrary = { gate.await() })
+
+        controller.start()
+
+        val state = running(controller)
+        assertTrue(state.preparing)
+        assertEquals(TOUR[0].id, state.step.id)
+        assertNull(state.pairId)
+    }
+
+    @Test
+    fun `next is ignored while preparing`() = runTest {
+        val gate = CompletableDeferred<Boolean>()
+        val controller = newController(pairId = 42, awaitLibrary = { gate.await() })
+        controller.start()
+        assertTrue(running(controller).preparing)
+
+        controller.next()
+
+        assertEquals(0, running(controller).index)
+        assertTrue(running(controller).preparing)
+    }
+
+    @Test
+    fun `preparing clears and the pair, total and willCleanUp update once the wait resolves`() = runTest {
+        val gate = CompletableDeferred<Boolean>()
+        val controller = newController(pairId = 42, awaitLibrary = { gate.await() })
+        controller.start()
+        assertTrue(running(controller).preparing)
+
+        gate.complete(true)
+        advanceUntilIdle()
+
+        val state = running(controller)
+        assertFalse(state.preparing)
+        assertEquals(42, state.pairId)
+        assertEquals(TOUR.size, state.total)
+    }
+
+    @Test
+    fun `steps collapse to the skip card only once pick returns null after the wait`() = runTest {
+        val gate = CompletableDeferred<Boolean>()
+        val controller = newController(pairId = null, awaitLibrary = { gate.await() })
+        controller.start()
+        // Still on the full script's step 0 while preparing -- buildSteps hasn't run yet.
+        assertEquals(TOUR.size, running(controller).total)
+
+        gate.complete(true)
+        advanceUntilIdle()
+
+        val expectedTotal = TOUR.count { !it.needsPair } + 1
+        assertEquals(expectedTotal, running(controller).total)
+        assertNull(running(controller).pairId)
+        assertFalse(running(controller).preparing)
+
+        controller.advanceUntil(NO_PAIR_SKIP_STEP.id)
+        assertEquals(NO_PAIR_SKIP_STEP.body, running(controller).step.body)
+        controller.next()
+        assertEquals("library_filters", running(controller).step.id)
+    }
+
+    @Test
+    fun `a second start supersedes the first`() = runTest {
+        val scope = unconfinedScope()
+        val firstGate = CompletableDeferred<Boolean>()
+        var calls = 0
+        val controller = newController(
+            pairId = 42,
+            scope = scope,
+            awaitLibrary = { if (++calls == 1) firstGate.await() else true },
+        )
+
+        controller.start() // suspends on firstGate
+        assertTrue(running(controller).preparing)
+
+        controller.start() // proceeds immediately (second call to awaitLibrary)
+        advanceUntilIdle()
+
+        assertFalse(running(controller).preparing)
+        assertEquals(42, running(controller).pairId)
+
+        // The stale first start() finally resumes; it must not stomp on the state
+        // the second, superseding start() already settled.
+        firstGate.complete(true)
+        advanceUntilIdle()
+
+        assertFalse(running(controller).preparing)
+        assertEquals(42, running(controller).pairId)
+        assertEquals(0, running(controller).index)
     }
 
     @Test

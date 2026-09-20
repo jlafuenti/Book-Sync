@@ -22,6 +22,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.booksync.ui.theme.Tandem
+import kotlinx.coroutines.delay
 
 /**
  * The walkthrough's overlay (issue #597 §4): a draw-only scrim with a
@@ -77,14 +79,37 @@ fun TourOverlay(
     // anywhere in the window (the nav host, the reader's ComposeView, inside a
     // bottom sheet's content), so express the hole relative to its own origin.
     var origin by remember { mutableStateOf(Offset.Zero) }
-    val hole = (state.step.anchor?.let { liveRects[it] } ?: state.anchor)
-        ?.takeIf { it.width > 0f && it.height > 0f }
-        ?.translate(-origin.x, -origin.y)
+    // Only a Found anchor gets a hole (issue #642) — Pending and Missing both
+    // dim the whole screen instead. The old fallback to the controller's
+    // stale snapshot (`?: state.anchor`) is gone: it used to leave a hole
+    // drawn over whatever the *next* screen was loading in behind it, once
+    // the live rect for a step that had moved on was cleared.
+    val hole = if (state.resolution == AnchorResolution.Found) {
+        (state.spotlighted?.let { liveRects[it] } ?: state.anchor)
+            ?.takeIf { it.width > 0f && it.height > 0f }
+            ?.translate(-origin.x, -origin.y)
+    } else {
+        null
+    }
 
     // The reader selection step must not eat the long-press-and-drag gesture
-    // it is teaching, so it blocks nothing and the "hole" is the full page.
-    val blockNothing = state.step.id == READER_SELECTION_STEP_ID
+    // it is teaching, so it blocks nothing and the "hole" is the full page —
+    // but only once its anchor has actually resolved (issue #642); while
+    // still Pending there is nothing to teach against yet.
+    val blockNothing = state.step.id == READER_SELECTION_STEP_ID && state.resolution == AnchorResolution.Found
     val blockEverything = state.step.advance is Advance.Next && !blockNothing
+
+    // The compact "One moment…" card only appears after the step has sat in
+    // Pending for 300 ms (issue #642), so a screen that settles quickly never
+    // flashes it — before that the scrim shows with no card at all.
+    var showPendingCard by remember { mutableStateOf(false) }
+    LaunchedEffect(state.index, state.resolution) {
+        showPendingCard = false
+        if (state.resolution == AnchorResolution.Pending) {
+            delay(300)
+            showPendingCard = true
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -132,17 +157,51 @@ fun TourOverlay(
             ?.let { with(density) { it.toDp() } } ?: 0.dp
 
         Box(Modifier.fillMaxSize(), contentAlignment = cardAlignment) {
-            TourCard(
-                state = state,
-                modifier = Modifier
-                    .padding(horizontal = 20.dp)
-                    .offset(y = if (placement == Placement.Center) 0.dp else cardOffsetY)
-                    .onSizeChanged { cardHeightPx = it.height.toFloat() },
-                onNext = onNext,
-                onBack = onBack,
-                onSkip = onSkip,
-                onQuit = onQuit,
-            )
+            val cardModifier = Modifier
+                .padding(horizontal = 20.dp)
+                .offset(y = if (placement == Placement.Center) 0.dp else cardOffsetY)
+                .onSizeChanged { cardHeightPx = it.height.toFloat() }
+            when {
+                // Scrim only, no card at all, for the first 300 ms of Pending.
+                state.resolution == AnchorResolution.Pending && !showPendingCard -> Unit
+                state.resolution == AnchorResolution.Pending -> PendingCard(modifier = cardModifier, onQuit = onQuit)
+                else -> TourCard(
+                    state = state,
+                    modifier = cardModifier,
+                    onNext = onNext,
+                    onBack = onBack,
+                    onSkip = onSkip,
+                    onQuit = onQuit,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The compact card shown while a step's anchor is still [AnchorResolution.Pending]
+ * (issue #642) — no step text, no progress count, just an acknowledgement that the
+ * tour hasn't given up, plus the same quit affordance every other card offers.
+ */
+@Composable
+private fun PendingCard(modifier: Modifier = Modifier, onQuit: () -> Unit) {
+    val colors = Tandem.colors
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.bgSecondary)
+            .padding(20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "One moment…",
+            color = colors.textSecondary,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onQuit) {
+            Icon(Icons.Default.Close, contentDescription = "Quit the walkthrough", tint = colors.textMuted)
         }
     }
 }
@@ -247,7 +306,13 @@ private fun TourCard(
                 Spacer(Modifier.width(4.dp))
             }
             when (val advance = step.advance) {
-                Advance.Next -> TextButton(onClick = onNext) { Text("Next", color = colors.accent) }
+                // The welcome card renders as usual while the tour still hasn't picked its
+                // pair (issue #642, #641) — only its Next button stands in for the wait.
+                Advance.Next -> if (state.preparing) {
+                    Text("Getting your library…", color = colors.textMuted, fontSize = 12.sp)
+                } else {
+                    TextButton(onClick = onNext) { Text("Next", color = colors.accent) }
+                }
                 is Advance.TapAnchor -> Text(
                     "Tap the highlighted control",
                     color = colors.textMuted,
