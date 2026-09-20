@@ -1742,7 +1742,15 @@ internal fun PositionResponse.toBookmarkEntity(
         audioPositionMs = audio_position_ms,
         epubLocator = locator?.value ?: previous?.epubLocator,
         locatorAudioMs = if (locator != null) locator.audio_position_ms else previous?.locatorAudioMs,
-        updatedAt = updated_at,
+        // Normalised to epoch millis, not stored as the server sent it
+        // (issue #617): `bookmarks.updatedAt` is sorted as TEXT by
+        // `getRecentlyPlayedPairs`, and an ISO string outranks every
+        // epoch-millis one lexicographically. `parseSyncTimestamp`
+        // returns 0 for anything it cannot read, which is the score every
+        // Kotlin consumer already gave it — so "0" changes no comparison
+        // and keeps one shape in the column. The server's own spelling
+        // survives in `capturedAt` below, which nothing sorts as text.
+        updatedAt = parseSyncTimestamp(updated_at).toString(),
         capturedAt = captured_at,
         deviceId = device_id,
         deviceName = device_name,

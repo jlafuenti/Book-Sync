@@ -1,5 +1,7 @@
 package com.booksync.data.local
 
+import com.booksync.data.remote.PositionResponse
+import com.booksync.data.repository.toBookmarkEntity
 import java.io.File
 import java.sql.Connection
 import java.sql.DriverManager
@@ -189,6 +191,35 @@ class RecentlyPlayedQueryTest {
             listOf(7),
             idsFrom("getRecentlyPlayedStandaloneAudiobooks"),
         )
+    }
+
+    /**
+     * The shapes `bookmarks.updatedAt` can hold, end to end (issue #617).
+     *
+     * `ORDER BY b.updatedAt DESC` is a TEXT sort, so an ISO datetime
+     * (`'2026-...'`) outranks every epoch-millis string (`'17...'`) whatever
+     * the actual times are. This drives the values through the real ingest
+     * mapper rather than hard-coding them, so the sort and the normalisation
+     * that makes it valid are pinned together: relax one and this fails.
+     */
+    @Test
+    fun `a server-pulled position sorts by its real age, not its spelling`() {
+        fun pulledUpdatedAt(iso: String): String = PositionResponse(
+            scope = "pair",
+            book_pair_id = 1,
+            source = "audiobook",
+            anchor_revision = 1L,
+            updated_at = iso,
+        ).toBookmarkEntity(scope, 1, null).updatedAt
+
+        insertPair(1, audiobookDownloaded = false)
+        insertPair(2, audiobookDownloaded = false)
+        // Pair 1 came from the server and is genuinely OLDER than pair 2,
+        // which was written locally. Unnormalised, pair 1 would win the sort.
+        insertBookmark(1, positionMs = 1_000, updatedAt = pulledUpdatedAt("2026-08-17T00:18:40.003994"))
+        insertBookmark(2, positionMs = 1_000, updatedAt = "1788220800000")
+
+        assertEquals(listOf(2, 1), idsFrom("getRecentlyPlayedPairs"))
     }
 
     /**

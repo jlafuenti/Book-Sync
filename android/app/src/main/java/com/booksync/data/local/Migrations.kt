@@ -165,3 +165,39 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
         addColumnIfMissing(db, "ALTER TABLE ebooks ADD COLUMN coverFilename TEXT")
     }
 }
+
+/** v21 -> v22: one shape in `bookmarks.updatedAt` (issue #617).
+ *
+ *  The column held whichever shape wrote it last — an epoch-millis string from a
+ *  local save, the server's ISO datetime from a pull — while
+ *  `BookPairDao.getRecentlyPlayedPairs` sorts it as TEXT, where every `'2026-...'`
+ *  outranks every `'17...'` regardless of age. `PositionResponse.toBookmarkEntity`
+ *  now normalises on the way in; this rewrites the rows already on disk.
+ *
+ *  The server emits naive UTC, which is how `parseSyncTimestamp` reads it, so the
+ *  date part is interpreted as UTC here too. Anything that is not an ISO datetime
+ *  is left exactly as it was: rewriting an unrecognised value to "0" would sink
+ *  that book to the bottom of Continue Listening, and every Kotlin consumer
+ *  already scores it 0 without help.
+ *
+ *  Milliseconds are preserved; the server's microseconds are not, which costs at
+ *  most 999 microseconds of ordering precision on a timestamp nothing compares
+ *  that finely. */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            UPDATE bookmarks
+            SET updatedAt = CAST(
+                    strftime('%s', substr(updatedAt, 1, 19)) * 1000 +
+                    CASE WHEN substr(updatedAt, 20, 1) = '.'
+                         THEN CAST(substr(substr(updatedAt, 21) || '000', 1, 3) AS INTEGER)
+                         ELSE 0
+                    END
+                AS TEXT)
+            WHERE updatedAt LIKE '____-__-__T__:__:__%'
+              AND strftime('%s', substr(updatedAt, 1, 19)) IS NOT NULL
+            """.trimIndent()
+        )
+    }
+}
