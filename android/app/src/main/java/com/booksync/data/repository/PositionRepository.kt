@@ -18,6 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -29,6 +31,14 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val REPO_TAG = "PositionRepository"
+
+/**
+ * Page size for `GET /api/sync/positions` (issue #653) — the server's maximum
+ * (`POSITIONS_MAX_LIMIT`, `routers/sync.py`), same convention as
+ * `LibraryRepository.LIBRARY_PAGE_SIZE`: fetch the whole set in as few
+ * round trips as page size allows.
+ */
+private const val POSITIONS_PAGE_SIZE = 500
 
 /**
  * The cache partition used when no account resolves (issue #314).
@@ -1489,6 +1499,97 @@ class PositionRepository @Inject constructor(
     // ============ Startup Bidirectional Sync ============
 
     /**
+     * Reconciles one pair's bookmark against a position already in hand
+     * (either fetched individually, or read off the bulk list) — the same
+     * three-way decision [syncAllBookmarksAndProgress] has always made:
+     * unsynced local always wins, otherwise whichever of remote/local is
+     * newer by `captured_at` (falling back to `updated_at`) wins, with a tie
+     * or a missing remote left alone.
+     */
+    private suspend fun reconcileBookmark(pairId: Int, remote: PositionResponse?) {
+        val local = bookmarkDao.getBookmark(scope, pairId)
+        // Prefer captured_at (the true on-device capture moment) over updated_at
+        // (a bookkeeping timestamp) whenever the server/local row provides one —
+        // now that the server never re-stamps a rejected stale write with "now",
+        // this comparison is reliable (issue #54).
+        val remoteTs = if (remote != null)
+            parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
+        val localTs = if (local != null)
+            parseSyncTimestamp(preferCapturedAt(local.capturedAt, local.updatedAt)) else 0L
+
+        when {
+            // Unsynced local data always wins — push to server. A 409 here means
+            // another device's write is actually newer; pushBookmark adopts it.
+            local != null && !local.syncedToServer -> {
+                pushBookmark(pairId, local, appendToLog = false)
+                log("syncBookmark pair=$pairId: pushed unsynced local")
+            }
+            remote == null -> { /* nothing on the server, nothing unsynced here */ }
+            local == null || remoteTs > localTs -> {
+                bookmarkDao.upsertBookmark(remote.toBookmarkEntity(scope, pairId, local))
+                log("syncBookmark pair=$pairId: pulled from server ts=$remoteTs")
+            }
+            localTs > remoteTs -> {
+                pushBookmark(pairId, local, appendToLog = false)
+                log("syncBookmark pair=$pairId: pushed local ts=$localTs")
+            }
+        }
+    }
+
+    /**
+     * Same three-way decision as [reconcileBookmark], generalised to any
+     * `user_progress` row — the pair's audiobook, or (issue #653) a
+     * standalone ebook/audiobook the bulk list also reports on.
+     */
+    private suspend fun reconcileProgress(mediaType: String, mediaId: Int, remote: PositionResponse?) {
+        val local = userProgressDao.getProgress(scope, mediaType, mediaId)
+        val remoteTs = if (remote != null)
+            parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
+        val localTs = if (local != null) {
+            local.capturedAt?.let { parseSyncTimestamp(it) } ?: local.updatedAt
+        } else 0L
+
+        when {
+            // Unsynced local data always wins — push to server
+            local != null && !local.syncedToServer -> {
+                pushProgress(mediaType, mediaId, local)
+                log("syncProgress $mediaType=$mediaId: pushed unsynced local")
+            }
+            remote == null -> { /* nothing on the server, nothing unsynced here */ }
+            local == null || remoteTs > localTs -> {
+                userProgressDao.upsertProgress(
+                    remote.toProgressEntity(scope, mediaType, mediaId, local))
+                log("syncProgress $mediaType=$mediaId: pulled from server ts=$remoteTs")
+            }
+            localTs > remoteTs -> {
+                pushProgress(mediaType, mediaId, local)
+                log("syncProgress $mediaType=$mediaId: pushed local ts=$localTs")
+            }
+        }
+    }
+
+    /**
+     * Walks every page of `GET /api/sync/positions` and returns the whole set,
+     * indexed by scope. Throws (an `HttpException`, most likely 404/405, on a
+     * server predating issue #653; any other `Exception` while offline) rather
+     * than returning a partial result — the caller falls back to the old
+     * per-pair loop on any failure, and a partial bulk result plus a partial
+     * fallback could each miss rows the other would have caught.
+     */
+    private suspend fun fetchAllPositions(): List<PositionResponse> {
+        val all = mutableListOf<PositionResponse>()
+        var page = 1
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val body = api.getPositions(page, POSITIONS_PAGE_SIZE)
+            all += body.items
+            if (body.items.size < body.limit || all.size >= body.total) break
+            page++
+        }
+        return all
+    }
+
+    /**
      * Bidirectional sync of bookmarks and audiobook progress for all pairs.
      * Called on startup after pairs are loaded to recover data lost by DB wipe or
      * to reconcile progress made on another device.
@@ -1496,71 +1597,109 @@ class PositionRepository @Inject constructor(
      * - Server newer (or no local): pull from server
      * - Local newer: push local to server
      * - Equal / server unreachable: no-op
+     *
+     * Issue #653: this used to be two sequential `GET /position/{scope}/{id}`
+     * calls per pair — several hundred round trips against the single-process
+     * server on a library of a few hundred pairs, with Home's Continue Reading
+     * filling in over minutes. It now pulls `GET /api/sync/positions` once
+     * (paged, [fetchAllPositions]) and reconciles every pair from that single
+     * response instead. A server that predates the bulk endpoint (404/405), or
+     * any other failure fetching it (offline), falls back to
+     * [syncAllBookmarksAndProgressPerPair] — the exact old behaviour, now
+     * expressed through the same [reconcileBookmark]/[reconcileProgress]
+     * helpers so the two paths cannot disagree about the adjudication rule.
+     *
+     * Cancellable throughout: this runs in `LibraryLoader`'s own
+     * `positionSyncJob`, cancelled outright on sign-out because Room's cache is
+     * scoped per account (issue #314) — a sign-out mid-pull must not let a
+     * page of hundreds of rows keep landing under the *next* account's scope
+     * key. Nothing here is wrapped in `NonCancellable`, and the explicit
+     * `ensureActive()` calls give the loop a checkpoint between pages and
+     * between pairs/rows even when a run of cache hits produces no suspending
+     * DAO/network call to be cancelled at.
+     *
+     * Also covers standalone ebooks/audiobooks the bulk list reports on
+     * (issue #653): the old per-pair loop never touched them at all — a
+     * standalone position was, and on the fallback path still is, only ever
+     * pulled on demand when that book is opened (`ReaderRestorePrefetch`,
+     * `PlayerScreen.refreshBookmark`). The bulk response already carries
+     * those rows for free, so applying them here closes that gap for a fresh
+     * sign-in without any extra round trips.
      */
     suspend fun syncAllBookmarksAndProgress(pairs: List<BookPairEntity>) {
+        val bulk = try {
+            fetchAllPositions()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logW("syncAllBookmarksAndProgress: bulk positions unavailable (${e.message}) — falling back to the per-pair loop")
+            null
+        }
+        if (bulk == null) {
+            syncAllBookmarksAndProgressPerPair(pairs)
+            return
+        }
+
+        val byPair = mutableMapOf<Int, PositionResponse>()
+        val byEbook = mutableMapOf<Int, PositionResponse>()
+        val byAudiobook = mutableMapOf<Int, PositionResponse>()
+        for (row in bulk) {
+            when (row.scope) {
+                "pair" -> row.book_pair_id?.let { byPair[it] = row }
+                "ebook" -> row.ebook_id?.let { byEbook[it] = row }
+                "audiobook" -> row.audiobook_id?.let { byAudiobook[it] = row }
+            }
+        }
+
         for (pair in pairs) {
-            // --- Bookmark ---
+            currentCoroutineContext().ensureActive()
+            reconcileBookmark(pair.id, byPair[pair.id])
+            reconcileProgress("audiobook", pair.audiobookId, byAudiobook[pair.audiobookId])
+        }
+
+        // Standalone media (issue #653): every ebook/audiobook-scoped row the
+        // bulk list carries that isn't already a pair's own book. A pair's
+        // ebook/audiobook ids never collide with a *standalone* row for the
+        // same media — the server keeps at most one canonical bookmark per
+        // (user, medium) — so this only ever reaches media with no pair.
+        val pairedEbookIds = pairs.map { it.ebookId }.toSet()
+        val pairedAudiobookIds = pairs.map { it.audiobookId }.toSet()
+        for ((ebookId, row) in byEbook) {
+            if (ebookId in pairedEbookIds) continue
+            currentCoroutineContext().ensureActive()
+            reconcileProgress("ebook", ebookId, row)
+        }
+        for ((audiobookId, row) in byAudiobook) {
+            if (audiobookId in pairedAudiobookIds) continue
+            currentCoroutineContext().ensureActive()
+            reconcileProgress("audiobook", audiobookId, row)
+        }
+    }
+
+    /**
+     * The pre-#653 behaviour, unchanged: one `GET /position/{scope}/{id}` for
+     * the pair bookmark and one for the paired audiobook's progress,
+     * sequentially per pair. Kept as the fallback for a server that predates
+     * `GET /api/sync/positions` (self-hosters upgrade the app from Play before
+     * they upgrade the server) — an old server 404/405s the bulk call, which
+     * [syncAllBookmarksAndProgress] catches and routes here instead of failing
+     * the whole reconcile.
+     */
+    private suspend fun syncAllBookmarksAndProgressPerPair(pairs: List<BookPairEntity>) {
+        for (pair in pairs) {
+            currentCoroutineContext().ensureActive()
             try {
                 // Null covers both "never opened" (204) and "unreachable" — an
                 // unsynced local row is still worth pushing in the first case,
                 // and the push simply fails in the second, so both are handled
-                // by falling through to the local-wins branch.
-                val remote = fetchPosition("pair", pair.id).position
-                val local = bookmarkDao.getBookmark(scope, pair.id)
-                // Prefer captured_at (the true on-device capture moment) over updated_at
-                // (a bookkeeping timestamp) whenever the server/local row provides one —
-                // now that the server never re-stamps a rejected stale write with "now",
-                // this comparison is reliable (issue #54).
-                val remoteTs = if (remote != null)
-                    parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
-                val localTs  = if (local != null) parseSyncTimestamp(preferCapturedAt(local.capturedAt, local.updatedAt)) else 0L
-
-                when {
-                    // Unsynced local data always wins — push to server. A 409 here means
-                    // another device's write is actually newer; pushBookmark adopts it.
-                    local != null && !local.syncedToServer -> {
-                        pushBookmark(pair.id, local, appendToLog = false)
-                        log("syncBookmark pair=${pair.id}: pushed unsynced local")
-                    }
-                    remote == null -> { /* nothing on the server, nothing unsynced here */ }
-                    local == null || remoteTs > localTs -> {
-                        bookmarkDao.upsertBookmark(remote.toBookmarkEntity(scope, pair.id, local))
-                        log("syncBookmark pair=${pair.id}: pulled from server ts=$remoteTs")
-                    }
-                    localTs > remoteTs -> {
-                        pushBookmark(pair.id, local, appendToLog = false)
-                        log("syncBookmark pair=${pair.id}: pushed local ts=$localTs")
-                    }
-                }
+                // by falling through to the local-wins branch inside reconcileBookmark.
+                reconcileBookmark(pair.id, fetchPosition("pair", pair.id).position)
             } catch (_: Exception) { /* offline or no server record yet — skip */ }
 
-            // --- Audiobook progress ---
             try {
-                val remote = fetchPosition("audiobook", pair.audiobookId).position
-                val local  = userProgressDao.getProgress(scope, "audiobook", pair.audiobookId)
-                val remoteTs = if (remote != null)
-                    parseSyncTimestamp(preferCapturedAt(remote.captured_at, remote.updated_at)) else 0L
-                val localTs  = if (local != null) {
-                    local.capturedAt?.let { parseSyncTimestamp(it) } ?: local.updatedAt
-                } else 0L
-
-                when {
-                    // Unsynced local data always wins — push to server
-                    local != null && !local.syncedToServer -> {
-                        pushProgress("audiobook", pair.audiobookId, local)
-                        log("syncProgress audiobook=${pair.audiobookId}: pushed unsynced local")
-                    }
-                    remote == null -> { /* nothing on the server, nothing unsynced here */ }
-                    local == null || remoteTs > localTs -> {
-                        userProgressDao.upsertProgress(
-                            remote.toProgressEntity(scope, "audiobook", pair.audiobookId, local))
-                        log("syncProgress audiobook=${pair.audiobookId}: pulled from server ts=$remoteTs")
-                    }
-                    localTs > remoteTs -> {
-                        pushProgress("audiobook", pair.audiobookId, local)
-                        log("syncProgress audiobook=${pair.audiobookId}: pushed local ts=$localTs")
-                    }
-                }
+                reconcileProgress(
+                    "audiobook", pair.audiobookId,
+                    fetchPosition("audiobook", pair.audiobookId).position)
             } catch (_: Exception) { /* offline or no server record yet — skip */ }
         }
     }
