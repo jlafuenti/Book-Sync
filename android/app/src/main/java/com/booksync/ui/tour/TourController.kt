@@ -142,7 +142,9 @@ class TourController(
      * which [buildSteps] turns into the skip card either way.
      */
     private val awaitLibrary: suspend (Long) -> Boolean = { true },
-    private val libraryWaitMs: Long = 20_000,
+    /** A minute, not 20 s (issue #652): the first pairs fetch for a library of a few hundred
+     *  took 23 s on the emulator, and the welcome card is already on screen while this runs. */
+    private val libraryWaitMs: Long = 60_000,
 ) {
     private val _state = MutableStateFlow<TourState>(TourState.Idle)
     val state: StateFlow<TourState> = _state.asStateFlow()
@@ -393,11 +395,15 @@ class TourController(
     ) {
         var everFound = alreadyFound
         anchorWatchJob = scope.launch {
-            combine(registry.rects, registry.settled) { rects, settled ->
-                candidates.firstOrNull { rects[it] != null } to (step.screen in settled)
+            combine(registry.rects, registry.settled, registry.loading) { rects, settled, loading ->
+                Triple(
+                    candidates.firstOrNull { rects[it] != null },
+                    step.screen in settled,
+                    step.screen in loading,
+                )
             }
                 .distinctUntilChanged()
-                .collectLatest { (foundAnchor, settledNow) ->
+                .collectLatest { (foundAnchor, settledNow, loadingNow) ->
                     if (foundAnchor != null) {
                         everFound = true
                         // A snapshot at the transition, not a live-tracking value: the overlay
@@ -415,6 +421,10 @@ class TourController(
                         return@collectLatest
                     }
                     applyResolution(index, step, AnchorResolution.Pending, null, null)
+                    // A screen that says it is still loading is waited for, however long
+                    // that takes (issue #652) — the cap is only for a screen nobody has
+                    // heard from. The Pending card keeps its quit button throughout.
+                    if (loadingNow && !settledNow) return@collectLatest
                     delay(if (settledNow) settleMs else hardCapMs)
                     applyResolution(index, step, AnchorResolution.Missing, null, null)
                 }
@@ -440,8 +450,12 @@ class TourController(
         }
         val old = current.resolution
         _state.value = current.copy(resolution = resolution, anchor = rect, spotlighted = spotlighted)
-        val elapsedMs = clock() - stepEnteredAtMs
-        android.util.Log.d("Tour", "${step.id}: $old→$resolution after $elapsedMs ms")
+        // Only a change of verdict is worth a line; a step that enters already Found and then
+        // picks up its rect logged a meaningless "Found→Found".
+        if (old != resolution) {
+            val elapsedMs = clock() - stepEnteredAtMs
+            android.util.Log.d("Tour", "${step.id}: $old→$resolution after $elapsedMs ms")
+        }
     }
 
     private fun isFirstOccurrenceOfScreen(screen: TourScreen, index: Int): Boolean =

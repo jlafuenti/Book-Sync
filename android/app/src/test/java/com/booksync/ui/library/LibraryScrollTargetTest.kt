@@ -5,6 +5,8 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.local.entity.EBookEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -104,5 +106,30 @@ class LibraryScrollTargetTest {
     fun `nothing to spotlight when the grid has no pairs`() {
         val items = listOf(LibraryItem("ebook_1", ebook = ebook(1)))
         assertNull(libraryTourTarget(items, preferredPairId = null))
+    }
+
+    // ---- when the Library may tell the walkthrough it has settled (issue #652) ----
+
+    @Test
+    fun `the Library is not settled while a refresh is in flight`() {
+        assertFalse(libraryTourSettled(refreshing = true, openPairStep = null, scrolledFor = null))
+    }
+
+    @Test
+    fun `outside the open-a-book step only the refresh matters`() {
+        assertTrue(libraryTourSettled(refreshing = false, openPairStep = null, scrolledFor = null))
+    }
+
+    /**
+     * The open-a-book step resets the filters, waits for the list and jumps a thousand cells
+     * to the tour's pair before the card's control exists. That took 0.9 s on the emulator —
+     * past the tour's 600 ms settle window — so the card said the control was missing for
+     * 0.2 s. The Library has not settled until that jump has landed.
+     */
+    @Test
+    fun `the open-a-book step is not settled until the jump to that pair has landed`() {
+        assertFalse(libraryTourSettled(refreshing = false, openPairStep = 42, scrolledFor = null))
+        assertFalse(libraryTourSettled(refreshing = false, openPairStep = 42, scrolledFor = 7))
+        assertTrue(libraryTourSettled(refreshing = false, openPairStep = 42, scrolledFor = 42))
     }
 }

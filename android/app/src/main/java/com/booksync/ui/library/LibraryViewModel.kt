@@ -26,7 +26,6 @@ import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -394,10 +393,9 @@ class LibraryViewModel @Inject constructor(
                 if (error == null) {
                     val pairs = repository.getPairsFlow().first()
                     fetchMissingSyncMaps(pairs)
-                    viewModelScope.launch(Dispatchers.IO) {
-                        repository.processPendingSync()
-                        repository.syncAllBookmarksAndProgress(pairs)
-                    }
+                    // The pending-write drain and the position pull moved into
+                    // LibraryLoader with the fetches (issue #652): run from here they only
+                    // ever started once this tab had been opened.
                     if (!silent) _refreshMessage.value = "Library refreshed"
                 } else {
                     _refreshMessage.value = refreshErrorMessage(error)

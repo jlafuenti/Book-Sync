@@ -926,4 +926,59 @@ class TourControllerTest {
 
         assertTrue(running(controller).willCleanUp)
     }
+
+    // ---- loading vs. not reported (issue #652) ----
+
+    @Test
+    fun `a screen that says it is loading is never capped`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading
+        // The reader parsing a full-length book took 41 s on the emulator -- past any cap
+        // worth having -- and the card said the control was missing, then corrected itself.
+        // A screen that has affirmatively said "still loading" is not a screen that went
+        // quiet, and only the latter is what the cap exists for.
+        registry.setSettled(TourScreen.Home, false)
+
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+
+        // ...and once it does settle, the ordinary 600 ms window applies.
+        registry.setSettled(TourScreen.Home, true)
+        advanceTimeBy(599)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+        advanceTimeBy(2)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+    }
+
+    @Test
+    fun `a screen that was loading and then left falls back to the cap`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading
+        registry.setSettled(TourScreen.Home, false)
+        advanceTimeBy(5_000)
+        runCurrent()
+        registry.clearScreen(TourScreen.Home) // disposed without ever settling
+
+        advanceTimeBy(29_999)
+        assertEquals(AnchorResolution.Pending, running(controller).resolution)
+        advanceTimeBy(2)
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+    }
+
+    @Test
+    fun `start gives the first library load a full minute`() = runTest {
+        // Pairs took 23 s to arrive for a library of a few hundred on the emulator; at the
+        // old 20 s a tour accepted the instant the offer appeared timed out, picked from an
+        // empty cache and collapsed its book section (issue #641 all over again).
+        var askedFor = 0L
+        val controller = newController(awaitLibrary = { timeoutMs -> askedFor = timeoutMs; true })
+        controller.start()
+        advanceUntilIdle()
+        assertTrue("waited only $askedFor ms", askedFor >= 60_000)
+    }
 }

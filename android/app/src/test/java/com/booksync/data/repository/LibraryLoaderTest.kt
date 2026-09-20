@@ -236,4 +236,47 @@ class LibraryLoaderTest {
 
         coVerify(exactly = 1) { repository.refreshPairs() }
     }
+
+    // ---- reading positions (issue #652) ----
+
+    @Test
+    fun `a successful load drains pending writes and pulls positions for the loaded pairs`() = runTest {
+        // Both used to run only from LibraryViewModel.refresh, so after a fresh sign-in Home
+        // had no Continue Reading until the Library tab was opened.
+        val pairs = listOf(mockk<com.booksync.data.local.entity.BookPairEntity>(relaxed = true))
+        coEvery { repository.getPairsFlow() } returns kotlinx.coroutines.flow.flowOf(pairs)
+
+        val loader = newLoader()
+        loader.refresh().join()
+        advanceUntilIdle()
+
+        io.mockk.coVerifyOrder {
+            repository.processPendingSync()
+            repository.syncAllBookmarksAndProgress(pairs)
+        }
+    }
+
+    @Test
+    fun `a failing position sync does not turn a loaded library into a failed one`() = runTest {
+        coEvery { repository.getPairsFlow() } returns kotlinx.coroutines.flow.flowOf(emptyList())
+        coEvery { repository.syncAllBookmarksAndProgress(any()) } throws java.io.IOException("offline")
+
+        val loader = newLoader()
+        loader.refresh().join()
+        advanceUntilIdle()
+
+        assertEquals(LibraryLoadState.Loaded, loader.state.value)
+        assertEquals(null, loader.lastError.value)
+    }
+
+    @Test
+    fun `a failed load does not start the position sync`() = runTest {
+        coEvery { repository.refreshPairs() } throws java.io.IOException("offline")
+
+        val loader = newLoader()
+        loader.refresh().join()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.syncAllBookmarksAndProgress(any()) }
+    }
 }

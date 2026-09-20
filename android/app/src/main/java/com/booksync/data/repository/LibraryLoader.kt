@@ -70,6 +70,7 @@ class LibraryLoader @Inject constructor(
 
     private val jobLock = Any()
     private var currentJob: Job? = null
+    private var positionSyncJob: Job? = null
 
     init {
         // Resets for the next sign-in rather than leaving the previous
@@ -83,6 +84,9 @@ class LibraryLoader @Inject constructor(
                     synchronized(jobLock) {
                         currentJob?.cancel()
                         currentJob = null
+                        // The previous account's positions must not keep landing in Room.
+                        positionSyncJob?.cancel()
+                        positionSyncJob = null
                     }
                     _state.value = LibraryLoadState.Idle
                     _lastError.value = null
@@ -136,6 +140,7 @@ class LibraryLoader @Inject constructor(
             repository.refreshAudiobooks()
             currentCoroutineContext().ensureActive()
             _state.value = LibraryLoadState.Loaded
+            startPositionSync()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -148,6 +153,31 @@ class LibraryLoader @Inject constructor(
             }
         } finally {
             _refreshing.value = false
+        }
+    }
+
+    /**
+     * Drains the offline write queue, then pulls reading positions for the pairs just loaded
+     * (issue #652). Both used to run only from `LibraryViewModel.refresh`, so after a fresh
+     * sign-in Home had no Continue Reading until the Library tab was opened.
+     *
+     * Its own coroutine, outside the run and outside [refreshing]: the pull is two requests
+     * per pair, sequential, which is minutes on a large library (a bulk endpoint is issue
+     * #653), and nothing that waits on a refresh should wait on that. Best-effort, as it
+     * always was — offline simply means the positions arrive on a later refresh, and a
+     * failure here says nothing about the library that did load.
+     */
+    private fun startPositionSync() {
+        positionSyncJob?.cancel()
+        positionSyncJob = scope.launch {
+            try {
+                val pairs = repository.getPairsFlow().first()
+                repository.processPendingSync()
+                repository.syncAllBookmarksAndProgress(pairs)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
         }
     }
 
