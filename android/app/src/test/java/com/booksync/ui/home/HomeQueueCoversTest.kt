@@ -6,6 +6,8 @@ import com.booksync.data.local.entity.BookPairEntity
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.dto.QueueItemResponse
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.LibraryLoadState
+import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import io.mockk.every
@@ -83,6 +85,8 @@ class HomeQueueCoversTest {
         every { serverUrlManager.serverUrlFlow } returns emptyFlow()
         val networkMonitor = mockk<NetworkMonitor>(relaxed = true)
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
+        val loader = mockk<LibraryLoader>(relaxed = true)
+        every { loader.state } returns MutableStateFlow(LibraryLoadState.Loaded)
         return HomeViewModel(
             repository = repository,
             transcriptionRepository = transcriptionRepository,
@@ -93,6 +97,7 @@ class HomeQueueCoversTest {
                 serverUrlManager,
             ),
             context = mockk(relaxed = true),
+            loader = loader,
         )
     }
 

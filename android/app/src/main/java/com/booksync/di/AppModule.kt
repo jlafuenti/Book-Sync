@@ -25,6 +25,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -391,6 +392,23 @@ object AppModule {
         networkMonitor: NetworkMonitor,
         bookPairDao: BookPairDao,
     ): TranscriptionRepository = TranscriptionRepository(api, networkMonitor, bookPairDao)
+
+    /**
+     * Whether a session is currently signed in, as a `Flow<Boolean>` (issue #641).
+     * Derived from [com.booksync.data.remote.TokenManager]'s existing stored-token
+     * flow rather than a new persistence mechanism — this is the same signal
+     * `BookSyncNavigation` already watches to bounce to the login screen on
+     * sign-out. Exposed as a qualified `Flow<Boolean>` rather than injecting
+     * `TokenManager` itself into [com.booksync.data.repository.LibraryLoader]:
+     * that class needs to be constructible on the JVM test path without a live
+     * `DataStore`, and all it actually needs from `TokenManager` is this one bit.
+     */
+    @Provides
+    @Named(com.booksync.data.repository.SIGNED_IN_FLOW_QUALIFIER)
+    fun provideSignedInFlow(
+        tokenManager: com.booksync.data.remote.TokenManager,
+    ): kotlinx.coroutines.flow.Flow<Boolean> =
+        tokenManager.getAccessToken().map { !it.isNullOrEmpty() }
 
     /**
      * The guided-walkthrough engine (issue #597). A plain `@Provides` rather

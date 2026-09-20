@@ -16,6 +16,7 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.R
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.LastOpenedTimes
+import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.SyncMapAutoFetch
@@ -150,6 +151,7 @@ class LibraryViewModel @Inject constructor(
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
+    private val loader: LibraryLoader,
 ) : ViewModel() {
 
     /**
@@ -365,13 +367,22 @@ class LibraryViewModel @Inject constructor(
     fun clearRefreshMessage() { _refreshMessage.value = null }
     fun clearDownloadError()  { _downloadError.value = null }
 
+    /**
+     * The three fetches (`refreshPairs/refreshEbooks/refreshAudiobooks`) now live
+     * in [LibraryLoader] rather than here (issue #641) — it is the one place both
+     * this screen and Home's own `init` can trigger (or await) the same run,
+     * rather than each kicking off its own on a fresh sign-in. This still owns
+     * everything that used to run alongside them: `fetchMissingSyncMaps`, the
+     * pending-sync/bookmark catch-up, and the exact snackbar message a given
+     * failure produces — read from [LibraryLoader.lastError] once the shared run
+     * finishes, so a caller of this screen sees identical wording to before.
+     */
     fun refresh(silent: Boolean = false) {
         viewModelScope.launch {
             _refreshing.value = true
-            try {
-                repository.refreshPairs()
-                repository.refreshEbooks()
-                repository.refreshAudiobooks()
+            loader.refresh().join()
+            val error = loader.lastError.value
+            if (error == null) {
                 val pairs = repository.getPairsFlow().first()
                 fetchMissingSyncMaps(pairs)
                 viewModelScope.launch(Dispatchers.IO) {
@@ -379,19 +390,21 @@ class LibraryViewModel @Inject constructor(
                     repository.syncAllBookmarksAndProgress(pairs)
                 }
                 if (!silent) _refreshMessage.value = "Library refreshed"
-            } catch (e: UnknownHostException) {
-                _refreshMessage.value = "Offline — showing cached library"
-            } catch (e: ConnectException) {
-                _refreshMessage.value = "Server unreachable"
-            } catch (e: SocketTimeoutException) {
-                _refreshMessage.value = "Server unreachable (timeout)"
-            } catch (e: HttpException) {
-                _refreshMessage.value = "Server error: HTTP ${e.code()}"
-            } catch (e: Exception) {
-                _refreshMessage.value = "Refresh failed: ${e.message ?: "unknown error"}"
+            } else {
+                _refreshMessage.value = refreshErrorMessage(error)
             }
             _refreshing.value = false
         }
+    }
+
+    /** Same mapping [refresh] has always produced — moved to a function so it is
+     *  used whether the failure came from this call or a run someone else started. */
+    private fun refreshErrorMessage(error: Throwable): String = when (error) {
+        is UnknownHostException -> "Offline — showing cached library"
+        is ConnectException -> "Server unreachable"
+        is SocketTimeoutException -> "Server unreachable (timeout)"
+        is HttpException -> "Server error: HTTP ${error.code()}"
+        else -> "Refresh failed: ${error.message ?: "unknown error"}"
     }
 
     /**

@@ -9,6 +9,8 @@ import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.ServerVersionGate
 import com.booksync.data.remote.VersionBanner
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.LibraryLoadState
+import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import io.mockk.coEvery
@@ -81,6 +83,8 @@ class HomeVersionBannerTest {
         every { serverUrlManager.serverUrlFlow } returns emptyFlow()
         val networkMonitor = mockk<NetworkMonitor>(relaxed = true)
         every { networkMonitor.isOnline } returns MutableStateFlow(true)
+        val loader = mockk<LibraryLoader>(relaxed = true)
+        every { loader.state } returns MutableStateFlow(LibraryLoadState.Loaded)
         return HomeViewModel(
             repository = repository,
             transcriptionRepository = transcriptionRepository,
@@ -88,6 +92,7 @@ class HomeVersionBannerTest {
             serverUrlManager = serverUrlManager,
             serverVersionGate = gate,
             context = mockk(relaxed = true),
+            loader = loader,
         )
     }
 
