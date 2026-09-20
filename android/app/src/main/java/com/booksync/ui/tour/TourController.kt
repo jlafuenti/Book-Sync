@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -364,9 +365,21 @@ class TourController(
     /**
      * Re-evaluates [step]'s anchor resolution for as long as [index] stays current (issue
      * #642) — cancelled the moment [enter] moves on, by the `anchorWatchJob?.cancel()` at its
-     * top. `collectLatest` over both [TourAnchorRegistry.rects] and [TourAnchorRegistry.settled]
-     * is what gives the debounce its "restarts on any change" behaviour for free: a new emission
-     * from either flow cancels whatever `delay` the previous emission was sitting in.
+     * top. `collectLatest` over the two facts the decision actually depends on — which
+     * candidate anchor (if any) is present, and whether the screen has settled — is what gives
+     * the debounce its "restarts on any change" behaviour for free: a new emission from either
+     * source cancels whatever `delay` the previous emission was sitting in.
+     *
+     * Deliberately reduced to that pair *before* `collectLatest`, rather than combining the raw
+     * [TourAnchorRegistry.rects] map straight in (issue #642 follow-up, PR review): that map
+     * re-emits on every layout pass of *any* tagged control, so a scrolling list — or anything
+     * else animating — changes it every frame. Feeding the raw map to `collectLatest` restarted
+     * the settle/hard-cap delay on every one of those frames, so an absent anchor could never
+     * reach [AnchorResolution.Missing] on a busy screen; and once [AnchorResolution.Found], it
+     * rewrote `_state` with a new rect (and logged a transition) once per frame, recomposing
+     * every screen collecting the tour state. [distinctUntilChanged] means a rect that merely
+     * moves — without changing which anchor is found, or the screen's settled flag — produces no
+     * emission at all.
      */
     private fun watchAnchor(
         index: Int,
@@ -376,12 +389,17 @@ class TourController(
     ) {
         var everFound = alreadyFound
         anchorWatchJob = scope.launch {
-            combine(registry.rects, registry.settled) { rects, settled -> rects to settled }
-                .collectLatest { (rects, settled) ->
-                    val foundAnchor = candidates.firstOrNull { rects[it] != null }
+            combine(registry.rects, registry.settled) { rects, settled ->
+                candidates.firstOrNull { rects[it] != null } to (step.screen in settled)
+            }
+                .distinctUntilChanged()
+                .collectLatest { (foundAnchor, settledNow) ->
                     if (foundAnchor != null) {
                         everFound = true
-                        applyResolution(index, step, AnchorResolution.Found, rects[foundAnchor], foundAnchor)
+                        // A snapshot at the transition, not a live-tracking value: the overlay
+                        // already follows the live rect itself via the registry.
+                        val rect = registry.rects.value[foundAnchor]
+                        applyResolution(index, step, AnchorResolution.Found, rect, foundAnchor)
                         return@collectLatest
                     }
                     if (everFound) {
@@ -392,7 +410,6 @@ class TourController(
                         applyResolution(index, step, AnchorResolution.Pending, null, null)
                         return@collectLatest
                     }
-                    val settledNow = step.screen in settled
                     applyResolution(index, step, AnchorResolution.Pending, null, null)
                     delay(if (settledNow) settleMs else hardCapMs)
                     applyResolution(index, step, AnchorResolution.Missing, null, null)

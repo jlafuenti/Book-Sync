@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -436,6 +437,79 @@ class TourControllerTest {
 
         advanceTimeBy(60_000)
         assertEquals(AnchorResolution.Pending, running(controller).resolution)
+    }
+
+    // ---- rect churn from unrelated anchors must not disturb the decision (issue #642 follow-up) ----
+    //
+    // registry.rects re-emits on every layout pass of ANY tagged control, so a scrolling list
+    // (or anything else animating) changes it every frame. watchAnchor must react only to
+    // whether *this step's* candidate anchor is present and whether its screen is settled —
+    // not to the raw map — or an absent anchor could never reach Missing on a busy screen, and
+    // a Found step would rewrite state (and log a transition) every single frame.
+
+    @Test
+    fun `unrelated rect churn on a settled screen does not restart the settle delay`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading; its own anchor never registers
+        registry.setSettled(TourScreen.Home, true)
+
+        // Churn some other anchor's rect every 100ms for 2s -- well past the 600ms settle
+        // window -- as a scrolling list would while this step's own anchor stays absent.
+        repeat(20) { i ->
+            advanceTimeBy(100)
+            runCurrent()
+            registry.set(TourAnchor.TabLibrary, Rect(0f, i.toFloat(), 10f, i + 10f))
+            runCurrent()
+        }
+
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+    }
+
+    @Test
+    fun `unrelated rect churn on an unsettled screen does not restart the hard cap`() = runTest {
+        val controller = newController()
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading; screen never reports settled
+
+        // Churn some other anchor's rect every second for 11s -- well past the 10s hard cap.
+        repeat(11) { i ->
+            advanceTimeBy(1_000)
+            runCurrent()
+            registry.set(TourAnchor.TabLibrary, Rect(0f, i.toFloat(), 10f, i + 10f))
+            runCurrent()
+        }
+
+        assertEquals(AnchorResolution.Missing, running(controller).resolution)
+    }
+
+    @Test
+    fun `moving the found anchor's rect produces no further state emissions`() = runTest {
+        val scope = unconfinedScope()
+        val controller = newController(scope = scope)
+        controller.start()
+        advanceUntilIdle()
+        controller.next() // -> home_continue_reading
+        registry.set(TourAnchor.HomeContinueReading, Rect(0f, 0f, 10f, 10f))
+        advanceUntilIdle()
+        assertEquals(AnchorResolution.Found, running(controller).resolution)
+
+        val states = mutableListOf<TourState>()
+        scope.launch { controller.state.collect { states.add(it) } }
+        // A StateFlow collector receives the current value immediately on
+        // subscribe; drop that one so only emissions caused by what follows count.
+        states.clear()
+
+        // As the control that's already spotlighted scrolls, its rect changes every
+        // frame; none of that should touch `_state` once the step has resolved Found.
+        repeat(20) { i ->
+            registry.set(TourAnchor.HomeContinueReading, Rect(0f, i.toFloat(), 10f, i + 10f))
+            runCurrent()
+        }
+
+        assertTrue(states.isEmpty())
     }
 
     @Test
