@@ -197,6 +197,7 @@ class SyncConflictHelpersTest {
         deviceName: String? = null,
         hints: List<PositionHintResponse> = emptyList(),
         syncMapVersion: Int? = null,
+        updatedAt: String = "2026-04-12T15:30:00Z",
     ) = PositionResponse(
         scope = "pair",
         book_pair_id = 42,
@@ -208,7 +209,7 @@ class SyncConflictHelpersTest {
         audio_position_ms = audioPositionMs,
         is_completed = false,
         captured_at = capturedAt,
-        updated_at = "2026-04-12T15:30:00Z",
+        updated_at = updatedAt,
         device_id = deviceId,
         device_name = deviceName,
         hints = hints,
@@ -263,7 +264,7 @@ class SyncConflictHelpersTest {
         // (and its audio anchor) survive.
         assertEquals("{\"locator\":true}", entity.epubLocator)
         assertEquals(999, entity.locatorAudioMs)
-        assertEquals("2026-04-12T15:30:00Z", entity.updatedAt)
+        assertEquals("1776007800000", entity.updatedAt)
         assertEquals("2026-04-12T15:29:00Z", entity.capturedAt)
         assertEquals("device-b", entity.deviceId)
         assertEquals("Device B", entity.deviceName)
@@ -337,6 +338,72 @@ class SyncConflictHelpersTest {
     }
 
     // ---------- PositionResponse.toProgressEntity ----------
+
+    // ---------- toBookmarkEntity: one shape in `updatedAt` (issue #617) ----------
+    //
+    // `bookmarks.updatedAt` used to hold whichever shape wrote it last: an
+    // epoch-millis string from a local save, the server's ISO datetime from a
+    // pull. `BookPairDao.getRecentlyPlayedPairs` sorts that column as TEXT, so
+    // every ISO row outranked every epoch-millis one regardless of age. The
+    // mapper now normalises on the way in; `capturedAt` keeps the ISO original.
+
+    @Test
+    fun `toBookmarkEntity normalises the server's ISO updated_at to epoch millis`() {
+        val entity = position(updatedAt = "2026-08-17T00:18:40.003994")
+            .toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("1786925920003", entity.updatedAt)
+    }
+
+    @Test
+    fun `toBookmarkEntity normalises a zone-suffixed updated_at too`() {
+        val entity = position(updatedAt = "2026-08-17T00:18:40Z")
+            .toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("1786925920000", entity.updatedAt)
+    }
+
+    @Test
+    fun `toBookmarkEntity leaves an epoch-millis updated_at alone`() {
+        val entity = position(updatedAt = "1786925920003")
+            .toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("1786925920003", entity.updatedAt)
+    }
+
+    @Test
+    fun `toBookmarkEntity keeps the ISO original in capturedAt`() {
+        // The normalisation is only about making one column sortable. The
+        // capture moment — the timestamp conflict resolution actually
+        // adjudicates on — is untouched and stays in the server's own shape.
+        val entity = position(
+            capturedAt = "2026-08-17T00:18:39Z",
+            updatedAt = "2026-08-17T00:18:40.003994",
+        ).toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("2026-08-17T00:18:39Z", entity.capturedAt)
+    }
+
+    @Test
+    fun `toBookmarkEntity stores an unparseable updated_at as zero rather than a third shape`() {
+        // Every Kotlin consumer already scored an unparseable timestamp 0 via
+        // parseSyncTimestamp, so this changes no comparison — it only stops a
+        // value the SQL sort cannot order from reaching the column.
+        val entity = position(updatedAt = "not a timestamp")
+            .toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals("0", entity.updatedAt)
+    }
+
+    @Test
+    fun `a normalised row still reports the right lastPlayedAtMs`() {
+        val entity = position(
+            capturedAt = null,
+            updatedAt = "2026-08-17T00:18:40.003994",
+        ).toBookmarkEntity(TEST_SCOPE, 42, null)
+
+        assertEquals(1786925920003L, entity.lastPlayedAtMs())
+    }
 
     @Test
     fun `toProgressEntity uses request context for mediaType and mediaId and prefers captured_at`() {

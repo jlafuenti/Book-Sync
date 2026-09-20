@@ -69,9 +69,14 @@ interface BookPairDao {
      * connect, and from the recent half of the voice-search index with it. The
      * Downloaded tab has [getDownloadedPairs] and keeps its filter there.
      *
-     * NOTE: bookmarks.updatedAt is stored as a numeric epoch-ms string
-     * (e.g. "1741910592000"). String DESC sort is correct for fixed-length
-     * numeric strings — do not change to ISO datetime format without updating this query.
+     * NOTE: bookmarks.updatedAt is a numeric epoch-ms string (e.g.
+     * "1741910592000") in every row — local saves write one, and
+     * `PositionResponse.toBookmarkEntity` normalises the server's ISO
+     * datetime into one on the way in (issue #617). String DESC sort is
+     * correct for fixed-length numeric strings and for nothing else: an
+     * ISO value reaching this column would outrank every epoch-ms one
+     * regardless of age. Do not relax the normalisation without replacing
+     * this sort.
      */
     @Query("""
         SELECT bp.* FROM book_pairs bp

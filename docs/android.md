@@ -362,7 +362,10 @@ progress outranked a standalone one played a minute earlier, and 100 in-progress
 pushed the standalones off the list entirely. The two sources spell the timestamp differently —
 `bookmarks.updatedAt` is an epoch-millis *string*, `user_progress.updatedAt` a *Long* — so both go
 through `lastPlayedAtMs` (`data/repository/PositionRepository.kt`), the same normalisation Home's
-Continue Reading uses (issue #476). The search index's "recent first" half is built from the same
+Continue Reading uses (issue #476). `bookmarks.updatedAt` holds that one shape only because
+`PositionResponse.toBookmarkEntity` converts the server's ISO datetime on the way in (issue #617);
+it used to store whichever spelling wrote it last, and `getRecentlyPlayedPairs` sorts the column as
+TEXT, where an ISO value outranks every epoch-millis one regardless of age. The search index's "recent first" half is built from the same
 call, so it carries the merged order too.
 
 **Connecting to a car never starts playback.** `onPlaybackResumption` deliberately returns a failed
