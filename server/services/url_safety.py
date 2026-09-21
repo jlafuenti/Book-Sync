@@ -26,6 +26,7 @@ controlling authoritative DNS with a very short TTL and winning a timing
 race against the guard + connect.
 """
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -100,3 +101,23 @@ def assert_safe_url(url: str, *, allow_private: bool = False) -> None:
             raise UnsafeUrlError(
                 f"URL resolves to a disallowed address: {hostname} -> {sockaddr[0]}"
             )
+
+
+async def assert_safe_url_async(url: str, *, allow_private: bool = False) -> None:
+    """[assert_safe_url] for code running on the event loop (issue #673).
+
+    The guard resolves the hostname with a synchronous `socket.getaddrinfo()`.
+    One uvicorn worker serves every request, so calling it from an `async def`
+    stalls position sync, streaming, login and `/api/health` for the whole
+    length of the lookup — invisible with a resolver that answers in
+    milliseconds, seconds long with one that has to time out.
+
+    Crosses to a worker thread once, the pattern `CLAUDE.md` prescribes. The
+    verdict is exactly the synchronous guard's: same checks, same exceptions.
+
+    The synchronous [assert_safe_url] stays for sync code that is already off
+    the loop — `abs_metadata.fetch_abs_index` runs under `asyncio.to_thread` at
+    every call site. `tests/test_url_safety.py` fails the build if any
+    `async def` calls the synchronous guard directly.
+    """
+    await asyncio.to_thread(assert_safe_url, url, allow_private=allow_private)

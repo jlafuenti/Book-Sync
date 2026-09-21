@@ -13,7 +13,7 @@ from services import offhours
 from services import registration
 from services import update_check
 from services.filename_patterns import PatternError, validate_patterns
-from services.url_safety import assert_safe_url, UnsafeUrlError
+from services.url_safety import assert_safe_url_async, UnsafeUrlError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -391,7 +391,7 @@ async def test_abs_connection(
         raise HTTPException(status_code=400, detail="URL is required")
 
     try:
-        assert_safe_url(url, allow_private=True)
+        await assert_safe_url_async(url, allow_private=True)
     except UnsafeUrlError as e:
         raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
 
@@ -504,7 +504,7 @@ async def test_remote_connection(
         raise HTTPException(status_code=400, detail="URL is required")
 
     try:
-        assert_safe_url(url, allow_private=True)
+        await assert_safe_url_async(url, allow_private=True)
     except UnsafeUrlError as e:
         raise HTTPException(status_code=400, detail=f"Invalid URL: {e}")
 
