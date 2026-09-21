@@ -156,6 +156,12 @@ class ReaderActivity : AppCompatActivity() {
     private var ebookId: Int = 0
     private var standaloneEbook: com.booksync.data.local.entity.EBookEntity? = null
     private val isStandalone: Boolean get() = ebookId != 0
+    /**
+     * See [HandoffAudioAnchor] (issue #682 follow-up). Set from the intent
+     * once in [onCreate]; [getInitialLocator] consumes it, so a later call
+     * from [reanchorAfterResume] plans only from the freshly fetched record.
+     */
+    private var handoffAudio = HandoffAudioAnchor(0)
     private var positionSaveJob: Job? = null
     /** Collects [TourController.nav] for the two reader-only requests — see [onCreate]. */
     private var tourNavJob: Job? = null
@@ -283,6 +289,7 @@ class ReaderActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         pairId = intent.getIntExtra(EXTRA_PAIR_ID, 0)
         ebookId = intent.getIntExtra(EXTRA_EBOOK_ID, 0)
+        handoffAudio = HandoffAudioAnchor(intent.getLongExtra(EXTRA_HANDOFF_AUDIO_MS, 0L).toInt())
         Log.d(TAG, "onCreate pairId=$pairId ebookId=$ebookId savedState=${savedInstanceState != null}")
 
         if (savedInstanceState != null && publication == null) {
@@ -1069,7 +1076,12 @@ class ReaderActivity : AppCompatActivity() {
                     deviceId = repository.deviceId,
                     hintKind = HINT_READIUM_LOCATOR,
                 ),
-                handoffAudioMs = intent.getLongExtra(EXTRA_HANDOFF_AUDIO_MS, 0L).toInt(),
+                // One-shot (issue #682 follow-up) — see [HandoffAudioAnchor].
+                // A second call to this function, from
+                // [reanchorAfterResume], must plan from canonicalPosition
+                // alone: the handoff describes where the audiobook was at
+                // OPEN, not what a later re-anchor's fresh fetch just found.
+                handoffAudioMs = handoffAudio.consume(),
             )
             Log.d(TAG, "getInitialLocator: plan=${steps.map { it.kind }}")
 

@@ -132,4 +132,40 @@ class ResumeReanchorWiringTest {
             reanchor.contains("lastSaveTime = System.currentTimeMillis()"),
         )
     }
+
+    /**
+     * Issue #682 follow-up: [reanchorAfterResume] calls
+     * [ReaderActivity.getInitialLocator] a second time, deliberately, to
+     * react to a fresh fetch. `getInitialLocator` must not re-read the
+     * "Switch to Reader" handoff extra on that second call — it describes
+     * where the audiobook was at OPEN, not what the fresh fetch just found,
+     * and re-prepending it every call would land every resume-after-listening
+     * back at the original handoff spot: the same failure #682 reported,
+     * through a second path.
+     */
+    @Test
+    fun `getInitialLocator consumes the handoff anchor once, not on every call`() {
+        val getInitialLocator = readerActivitySource
+            .substringAfter("private suspend fun getInitialLocator(pub: Publication): Locator? {")
+            .substringBefore("\n    private fun decodeHint")
+        assertTrue(
+            "getInitialLocator must read the handoff value through " +
+                "HandoffAudioAnchor.consume(), not a fresh intent.getLongExtra " +
+                "read — a raw read would return the same value on every call.",
+            getInitialLocator.contains("handoffAudio.consume()"),
+        )
+        assertTrue(
+            "The raw one-shot-unsafe read must be gone from this function, " +
+                "not merely supplemented.",
+            !getInitialLocator.contains("intent.getLongExtra(EXTRA_HANDOFF_AUDIO_MS"),
+        )
+        assertTrue(
+            "handoffAudio must be seeded from the intent once, in onCreate — " +
+                "the same place pairId and ebookId are read — not lazily or " +
+                "per-call.",
+            readerActivityLines.any {
+                it.contains("handoffAudio = HandoffAudioAnchor(") && it.contains("EXTRA_HANDOFF_AUDIO_MS")
+            },
+        )
+    }
 }
