@@ -24,6 +24,6 @@ When it does get bumped, `docs/android.md` and `docs/operations.md` describe
 what has to happen on each side.
 """
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 API_VERSION = 1

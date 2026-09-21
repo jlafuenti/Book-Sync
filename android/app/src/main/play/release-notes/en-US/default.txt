@@ -1,5 +1,4 @@
-Android Auto and the player now pick up where you stopped reading, not where you last listened.
-Sync data for books you've opened downloads in the background, with a new Wi-Fi-only setting.
-Signing in loads your library and reading positions much faster.
-The walkthrough no longer skips its book section or changes cards after they appear, and the app no longer goes blank after its reader steps.
-Reading positions stay more accurate when you switch between devices.
+After listening, including in Android Auto or offline, the ebook now opens on the page where you stopped, even if the reader was left open.
+Tapping the playback notification opens the player for that book.
+Sync data is kept only for downloaded books and removed with the last download. You can remove it per book or clear it all in Account > Storage.
+Old books no longer jump to the top of Continue Reading after a server update.

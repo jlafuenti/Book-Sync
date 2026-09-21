@@ -16,6 +16,15 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-21
+
+### Changed
+
+- Dependency updates since 0.5.0: the Android reader moves to Readium 3.4 (a reading position saved
+  under 3.3 was checked to restore to the identical locator), Media3 1.11.1 and the Android Gradle
+  plugin 9.4.1; uvicorn 0.53 and alembic 1.20 on the server; and 12 further minor/patch updates
+  across the server, web, Jetson and CI actions (#663, #664, #665, #666, #667, #668).
+
 ### Fixed
 
 - Realigning a book no longer makes it look recently read. Clients rank "last read" by a
