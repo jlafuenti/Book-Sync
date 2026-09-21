@@ -608,6 +608,11 @@ def _abs_libraries_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"libraries": [{"id": "1", "name": "Audiobooks", "mediaType": "book"}]})
 
 
+def _hardcover_me_handler(request: httpx.Request) -> httpx.Response:
+    """Minimal stand-in for https://api.hardcover.app/v1/graphql's `me` query."""
+    return httpx.Response(200, json={"data": {"me": [{"username": "test-user"}]}})
+
+
 async def test_test_abs_rejects_invalid_scheme(make_client, make_user, auth_header, monkeypatch):
     def handler(request):
         raise AssertionError("transport should not be reached for an invalid scheme")
@@ -936,8 +941,12 @@ _SECRET = "not-a-real-key-1234567890"
 
 
 async def test_test_remote_key_never_appears_in_the_url(
-    make_client, make_user, auth_header, enc_key
+    make_client, make_user, auth_header, enc_key, monkeypatch
 ):
+    # Without this mock, the request goes out for real to the (non-routable,
+    # RFC 5737 documentation-space) URL below and blocks for the endpoint's
+    # full 5s httpx timeout on every run -- see issue #670.
+    _patch_jetson_transport(monkeypatch, _jetson_health_handler)
     admin = await make_user(username="admin_u1", role="admin")
     async with make_client(settings_router.router) as c:
         r = await c.post(
@@ -950,8 +959,11 @@ async def test_test_remote_key_never_appears_in_the_url(
 
 
 async def test_test_abs_token_never_appears_in_the_url(
-    make_client, make_user, auth_header, enc_key
+    make_client, make_user, auth_header, enc_key, monkeypatch
 ):
+    # Same as above: unmocked, this blocked for the endpoint's full 8s httpx
+    # timeout on every CI run (issue #670).
+    _patch_jetson_transport(monkeypatch, _abs_libraries_handler)
     admin = await make_user(username="admin_u2", role="admin")
     async with make_client(settings_router.router) as c:
         r = await c.post(
@@ -964,8 +976,14 @@ async def test_test_abs_token_never_appears_in_the_url(
 
 
 async def test_test_hardcover_token_never_appears_in_the_url(
-    make_client, make_user, auth_header, enc_key
+    make_client, make_user, auth_header, enc_key, monkeypatch
 ):
+    # test-hardcover has no caller-supplied URL to redirect -- it always
+    # targets the real https://api.hardcover.app. Unmocked, this test sent a
+    # real POST with a fake bearer token to that live third-party production
+    # API on every CI run (issue #670): an unwanted external dependency and
+    # traffic that isn't ours to send, regardless of how fast it answered.
+    _patch_jetson_transport(monkeypatch, _hardcover_me_handler)
     admin = await make_user(username="admin_u3", role="admin")
     async with make_client(settings_router.router) as c:
         r = await c.post(
