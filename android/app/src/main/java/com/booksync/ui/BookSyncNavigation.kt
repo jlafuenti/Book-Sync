@@ -47,6 +47,7 @@ import androidx.media3.session.SessionToken
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.player.AudioPlayerService
+import com.booksync.player.PendingPlayerNavigation
 import com.booksync.ui.auth.LoginScreen
 import com.booksync.ui.components.MiniPlayerBar
 import com.booksync.ui.components.PairOpenGateViewModel
@@ -442,6 +443,28 @@ fun BookSyncNavigation() {
             navController.navigate(Routes.FORCE_PASSWORD_RESET) {
                 popUpTo(0) { inclusive = true }
             }
+        }
+    }
+
+    // A tap on the playback notification's cover art or body (issue #684).
+    // MainActivity records the destination in PendingPlayerNavigation before
+    // this composable necessarily even exists yet — a cold start from the
+    // notification runs onCreate before the first composition — so this
+    // collects the holder's StateFlow rather than reading it once.
+    //
+    // Keyed on startDestination so the effect doesn't start consuming before
+    // sign-in state has even resolved (the same ordering reason the
+    // FORCE_PASSWORD_RESET effect above keys on it too). Applied only when
+    // signed in and not mid forced-reset; PendingPlayerNavigation.consume
+    // drops the route outright otherwise, matching its own contract that a
+    // tap arriving signed out must not surprise-navigate after a later login.
+    LaunchedEffect(startDestination) {
+        if (startDestination == null) return@LaunchedEffect
+        PendingPlayerNavigation.route.collect { pending ->
+            if (pending == null) return@collect
+            val signedIn = !tokenManager.getAccessToken().firstOrNull().isNullOrEmpty()
+            val route = PendingPlayerNavigation.consume(signedIn = signedIn && !resetRequired)
+            route?.let { navController.navigate(it) { launchSingleTop = true } }
         }
     }
 

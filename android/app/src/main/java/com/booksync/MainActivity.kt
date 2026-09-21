@@ -20,7 +20,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dagger.hilt.android.AndroidEntryPoint
+import com.booksync.player.ACTION_OPEN_PLAYER
 import com.booksync.player.AudioPlayerService
+import com.booksync.player.EXTRA_OPEN_PLAYER_MEDIA_ID
+import com.booksync.player.PendingPlayerNavigation
+import com.booksync.player.openPlayerRouteFor
 import com.booksync.ui.BookSyncNavigation
 import com.booksync.ui.account.AccountViewModel
 import com.booksync.ui.theme.BookSyncTheme
@@ -62,12 +66,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         handlePlayFromSearch(intent)
+        handleOpenPlayerNotification(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handlePlayFromSearch(intent)
+        handleOpenPlayerNotification(intent)
     }
 
     override fun onDestroy() {
@@ -122,6 +128,31 @@ class MainActivity : AppCompatActivity() {
             controller.prepare()
             controller.play()
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    /**
+     * A tap on the playback notification's cover art or body (issue #684).
+     * `AudioPlayerService` sets the session activity's action to
+     * [ACTION_OPEN_PLAYER] and its extra to the media id that is playing;
+     * [openPlayerRouteFor] turns that id into a route, and
+     * [PendingPlayerNavigation] hands it to `BookSyncNavigation`.
+     *
+     * Recorded rather than navigated to directly: this Activity holds no
+     * `NavController` of its own — that lives inside the `BookSyncNavigation`
+     * composable, which may not have composed yet on a cold start — and
+     * whether the route should even apply (signed in, past onboarding) is a
+     * decision only the navigation graph, with its auth state, can make.
+     */
+    private fun handleOpenPlayerNotification(intent: Intent?) {
+        if (intent?.action != ACTION_OPEN_PLAYER) return
+        val mediaId = intent.getStringExtra(EXTRA_OPEN_PLAYER_MEDIA_ID)
+        val route = openPlayerRouteFor(mediaId)
+        if (route == null) {
+            Log.w(TAG, "notification tap: no route for mediaId='$mediaId'")
+            return
+        }
+        Log.i(TAG, "notification tap: queuing navigation to $route")
+        PendingPlayerNavigation.set(route)
     }
 
     private companion object {
