@@ -631,7 +631,7 @@ private fun PairActions(
             // No confirmation, same as Refresh above (issue #678): this only
             // clears a small, freely re-fetchable local cache, not user content.
             PairAction.RemoveSyncData -> actions.onRemoveSyncData?.let {
-                ActionRow(Icons.Default.Delete, "Remove sync data", onClick = it)
+                ActionRow(Icons.Default.Delete, "Remove sync data", destructive = true, onClick = it)
             }
             PairAction.CancelTranscription -> actions.onCancelTranscription?.let {
                 ActionRow(Icons.Default.Stop, "Cancel transcription", destructive = true, onClick = onConfirmCancelTx)
