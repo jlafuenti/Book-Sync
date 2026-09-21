@@ -37,6 +37,21 @@ working; they are gone (issue #102).
 | `epub_progress_percent` | 0–100 book fraction |
 | `audio_position_ms` | audio position |
 
+**A sentence index never outlives its chapter.** It is a coordinate *within* a
+chapter, so a write that states a different `epub_chapter` and carries no
+`epub_sentence_index` clears the stored index and its `sync_map_version` rather
+than leaving the two paired (issue #658). Only a write that *states* a different
+chapter does this — one carrying no chapter at all still leaves every anchor
+alone, which is the rule that keeps an audio heartbeat or a completion toggle
+from blanking a real position.
+
+> Why: Android's reader sends the new chapter with no index whenever its
+> sync-point lookup misses. Keeping the old index paired chapter 4 with chapter
+> 3's sentence 200 — a coordinate that may not exist — and every other device
+> restored from it. Issue #644 stopped one client writing that pair locally;
+> this stops the canonical record holding it, which is what the other devices
+> actually read.
+
 `epub_chapter` is the spine index because that is what `book.spine.items`
 (epub.js) and `publication.readingOrder` (Readium) both use. The parser emits it
 directly (`services/epub_parser.py`); it used to build its own ordinal by

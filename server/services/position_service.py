@@ -566,10 +566,36 @@ async def apply_position(
             )
         )
 
+    # A sentence index is a coordinate *within* a chapter, so a write that
+    # moves the chapter invalidates it (issue #658). Read before the chapter is
+    # overwritten, or there is nothing left to compare against.
+    #
+    # This is deliberately narrow. "Omission means leave alone" is load-bearing
+    # — an audio heartbeat or a completion toggle carries no anchor and must
+    # never blank one — so only a write that *states* a different chapter
+    # clears the index, never a write that simply says nothing about it.
+    #
+    # The shape this exists for: Android's reader sends the new chapter with no
+    # sentence index when its sync-point lookup misses. Leaving the old index
+    # in place paired chapter 4 with chapter 3's sentence 200, and that pair is
+    # the portable anchor every other device restores from. The client half is
+    # issue #644; this is the canonical record's half, and it also covers app
+    # builds that predate that fix and will keep sending this shape.
+    chapter_moved = (
+        epub_chapter is not None
+        and bookmark.epub_chapter is not None
+        and epub_chapter != bookmark.epub_chapter
+    )
+
     if epub_chapter is not None:
         bookmark.epub_chapter = epub_chapter
     if epub_sentence_index is not None:
         bookmark.epub_sentence_index = epub_sentence_index
+    elif chapter_moved:
+        # The version stamp goes with it: a version attesting to an index that
+        # is gone is a false claim about which map the record is expressed in.
+        bookmark.epub_sentence_index = None
+        bookmark.sync_map_version = None
     if stamp_version:
         bookmark.sync_map_version = version_to_stamp
     if update.epub_text_preview is not None:

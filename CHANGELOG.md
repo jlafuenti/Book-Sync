@@ -31,6 +31,22 @@ operator must do by hand rather than read about afterwards.
   instead of looping per pair, falling back to the old per-pair loop when the server predates this
   endpoint (#653).
 
+### Fixed
+
+- A position write that moves `epub_chapter` without carrying an `epub_sentence_index` now clears
+  the stored index (and the `sync_map_version` attesting to it) instead of leaving the previous
+  chapter's index beside the new chapter. A sentence index is a coordinate *within* a chapter, so
+  a chapter change invalidates it; the stored pair is the portable cross-device anchor every client
+  restores from, and a mismatched pair resolved to a position the reader was never at — confidently,
+  because nothing marked it as suspect. Android's reader sends exactly this shape whenever its
+  sync-point lookup misses (#644 fixed the client's own local row; this is the canonical record's
+  half, and it also covers app builds predating that fix, which keep sending this shape for as long
+  as they are installed). Deliberately narrow: only a write that *states* a different chapter clears
+  the index. A write carrying no chapter at all — an audio heartbeat, a completion toggle — still
+  leaves every anchor alone, which is what stops background saves eating a real position. Clearing
+  the index moves the anchor, so hints captured against the old one correctly stop being served as
+  current (#658).
+
 ### Upgrade notes
 
 - No action required. An app build that predates this release keeps working against a server that
