@@ -106,6 +106,18 @@ _pause_requested: set = set()
 # pipeline skip work that was already done on the first pass.
 _resuming_items: set = set()
 
+# Item IDs whose in_progress row `reset_stale_items()` flipped back to
+# pending this run — a server restart interrupted them, it did not fail them
+# (issue #661). A remote job may well still be running on the worker: measured
+# in production across four restarts, the audio offset only ever moved
+# forward, and the job went on to complete normally. `paused_at` cannot mark
+# this, because it is reserved for a *deliberate* off-hours pause — so
+# `_process_next_item` reads this set instead to tell "this row was already
+# running" apart from "this row is genuinely new." One-shot: consumed (and
+# discarded) the moment the row is next claimed, so a later, real restart of
+# the same item is not mistaken for another reattach.
+_recovered_at_startup: set = set()
+
 # The provider running the current job, and that job's item id. Pause and
 # unload requests have to reach the provider actually in use.
 _active_provider = None
@@ -668,14 +680,32 @@ async def _process_next_item():
 
         item_id = item.id
         pair_id = item.book_pair_id
-        resuming = item.paused_at is not None
+        # A deliberate off-hours pause (`paused_at`) and a restart-interrupted
+        # row (`_recovered_at_startup`, issue #661) are both "this already
+        # ran once" — only the second is a one-shot signal, consumed here so
+        # a later, genuine restart of the same item isn't mistaken for
+        # another reattach.
+        reattaching = item_id in _recovered_at_startup
+        _recovered_at_startup.discard(item_id)
+        resuming = item.paused_at is not None or reattaching
 
         # Mark as in_progress
         item.status = "in_progress"
         item.paused_at = None
         if item.started_at is None:
             item.started_at = utcnow()
-        item.message = "Resuming transcription..." if resuming else "Starting transcription..."
+        if reattaching:
+            # Distinct from "Resuming transcription...": that phrase describes
+            # a deliberate off-hours pause resuming from a known checkpoint.
+            # This item never checkpointed anything — the server just forgot
+            # about it — so say plainly that we're finding out whether the
+            # remote worker is still on it, rather than implying either a
+            # restart or a real resume.
+            item.message = "Reattaching to transcription after restart..."
+        elif resuming:
+            item.message = "Resuming transcription..."
+        else:
+            item.message = "Starting transcription..."
         # We don't overwrite progress to 0.0 either, to preserve it on restart
         if item.progress is None:
             item.progress = 0.0
@@ -1128,7 +1158,17 @@ async def _run_transcription_pipeline(item_id: int, pair_id: int):
                 f"Pair {pair_id}: cached transcript no longer matches the audio "
                 f"at {audiobook_path} (path, hash, or duration changed) — re-transcribing"
             )
-        await _update_queue_item(item_id, message="Selecting transcription provider...", progress=0.02)
+        # A resumed/reattached item already has real progress banked — don't
+        # stomp it back down to a startup-sequence number before we even know
+        # whether the remote worker is still on the job (issue #661). A
+        # genuinely fresh item has nothing to protect, so it still gets the
+        # usual "just getting started" number.
+        if item_id in _resuming_items:
+            await _update_queue_item(item_id, message="Selecting transcription provider...")
+        else:
+            await _update_queue_item(
+                item_id, message="Selecting transcription provider...", progress=0.02
+            )
 
         # Check cancellation
         if item_id in _cancel_requested:
@@ -1429,6 +1469,16 @@ async def reset_stale_items():
     ``progress`` is deliberately preserved: the transcription worker keeps its
     own on-disk checkpoint, so the next attempt resumes from where this one got
     to. Zeroing the bar would report a restart that isn't going to happen.
+
+    ``started_at`` is deliberately preserved too (issue #661). A remote job
+    keeps running on its worker across a server restart — this was measured
+    on a production server across four restarts of the same 13.5-hour job,
+    which went on to complete normally — so re-stamping it to "now" describes
+    the server's amnesia, not the job. Every item reset here is recorded in
+    ``_recovered_at_startup`` so ``_process_next_item`` can tell "this was
+    already running" apart from a genuinely new item; ``paused_at`` cannot
+    carry that signal because it means something more specific (a deliberate
+    off-hours pause).
     """
     async with async_session() as db:
         result = await db.execute(
@@ -1441,8 +1491,8 @@ async def reset_stale_items():
             logger.warning(f"Resetting {len(stale)} stale in_progress queue item(s) to pending")
             for item in stale:
                 item.status = "pending"
-                item.message = "Requeued after server restart"
-                item.started_at = None
+                item.message = "Reattaching after server restart..."
+                _recovered_at_startup.add(item.id)
             await db.commit()
 
 
