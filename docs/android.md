@@ -392,6 +392,20 @@ uses). Both end up as a `MediaItem` carrying only a search query, which `onSetMe
 to a `pair_N` / `audiobook_N` id. An empty query means "play something" and resolves to the most
 recently played book.
 
+**Tapping the notification opens the player** (issue #684). Media3 sends a tap on the
+notification's cover art or body through the session's *session activity* — a PendingIntent used
+as the notification's content intent, unrelated to the transport button actions, which keep
+working exactly as before. `AudioPlayerService` sets one when the session is built (opens
+`MainActivity` with nothing loaded yet) and replaces it in `onMediaItemTransition` with one
+carrying the now-playing item's media id and `ACTION_OPEN_PLAYER`. `MainActivity` reads that action
+in both `onCreate` and `onNewIntent` — a cold start from the notification goes through the former,
+an already-running instance through the latter — and records the resolved route in
+`PendingPlayerNavigation`, a `StateFlow` rather than a one-shot event so a cold start (where the
+intent arrives before `BookSyncNavigation` has composed) still sees it. `BookSyncNavigation`
+applies the route only once signed in and past any forced password reset, `launchSingleTop` so a
+second tap doesn't stack a second player screen; a tap that arrives signed out is dropped outright
+rather than queued for after a later login.
+
 **Browse content never waits on the server.** The rows come from Room. Cover art has a network rung
 (issue #331), so the browse path fetches art in parallel under a 4 s budget and renders without it
 if the server is slow or unreachable.

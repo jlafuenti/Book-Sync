@@ -1,5 +1,6 @@
 package com.booksync.player
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -57,6 +58,7 @@ import com.booksync.auto.continueListeningWatchedIds
 import com.booksync.auto.libraryBooks
 import com.booksync.auto.mergedLibrary
 import com.booksync.auto.toAutoBook
+import com.booksync.MainActivity
 import com.booksync.data.local.LibraryCacheOwner
 import com.booksync.data.local.LibraryCacheReconcile
 import com.booksync.data.local.entity.AudioBookEntity
@@ -142,6 +144,12 @@ class AudioPlayerService : MediaLibraryService() {
         // asked for, so its save may claim the format. Consumed by exactly one
         // stop; see [PauseSavePolicy] and issue #226.
         const val CMD_USER_PAUSE = "USER_PAUSE"
+
+        // One stable request code for the session-activity PendingIntent (issue
+        // #684): every rebuild goes through the same PendingIntent.getActivity
+        // call with FLAG_UPDATE_CURRENT, so a transition replaces its extras in
+        // place rather than leaking a second, separately-tracked PendingIntent.
+        private const val SESSION_ACTIVITY_REQUEST_CODE = 1
 
         private const val TAG = "AudioPlayerService"
         private const val PREFS_NAME = "audio_player_prefs"
@@ -406,6 +414,11 @@ class AudioPlayerService : MediaLibraryService() {
                 // previous book's push window (issue #65).
                 heartbeatThrottle.reset()
                 updateSyncMapInUse(mediaItem)
+                // Keep the notification's content intent pointed at whatever is
+                // actually playing now (issue #684) — otherwise a tap on the
+                // notification keeps opening the first book of the session, or
+                // nothing, forever.
+                mediaLibrarySession?.setSessionActivity(sessionActivityPendingIntent(mediaItem?.mediaId))
             }
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
@@ -511,6 +524,11 @@ class AudioPlayerService : MediaLibraryService() {
 
         mediaLibrarySession = MediaLibrarySession.Builder(this, androidAutoPlayer, BrowseCallback())
             .setId("AudioPlayerSession")
+            // The notification's content intent (issue #684): tapping the cover
+            // art or body — never the transport buttons — opens this. Nothing is
+            // loaded yet at build time, so it opens plain Home; onMediaItemTransition
+            // replaces it with one carrying the playing book as soon as there is one.
+            .setSessionActivity(sessionActivityPendingIntent(mediaId = null))
             .build()
 
         watchForSignOut()
@@ -779,6 +797,34 @@ class AudioPlayerService : MediaLibraryService() {
         syncMapInUsePairId?.let { SyncMapInUse.unregister(it) }
         syncMapInUsePairId = newPairId
         newPairId?.let { SyncMapInUse.register(it) }
+    }
+
+    /**
+     * The notification's content intent (issue #684): opens `MainActivity` on
+     * the player screen for [mediaId], or plain Home when nothing is loaded
+     * yet (`mediaId == null`, only true at session-build time).
+     *
+     * `FLAG_ACTIVITY_SINGLE_TOP or FLAG_ACTIVITY_CLEAR_TOP` reuses a running
+     * `MainActivity` instance rather than stacking a new one on top of it —
+     * the same reason `onNewIntent` already exists there for play-from-search.
+     * `FLAG_IMMUTABLE` is required for a PendingIntent handed to the system
+     * (the notification); `FLAG_UPDATE_CURRENT` with the one stable
+     * [SESSION_ACTIVITY_REQUEST_CODE] means each transition replaces this
+     * PendingIntent's extras in place instead of creating a second one Media3
+     * would have no reason to ever release.
+     */
+    private fun sessionActivityPendingIntent(mediaId: String?): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = ACTION_OPEN_PLAYER
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            mediaId?.let { putExtra(EXTRA_OPEN_PLAYER_MEDIA_ID, it) }
+        }
+        return PendingIntent.getActivity(
+            this,
+            SESSION_ACTIVITY_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 
     override fun onDestroy() {
