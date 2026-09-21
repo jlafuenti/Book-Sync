@@ -52,7 +52,10 @@ jobs:
         # service is needed here. The Postgres migration test self-skips.
         # Global coverage floor (anti-backslide) — ratchet upward over time; see
         # docs/testing.md for the policy.
-        run: pytest -v --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
+        # --durations=25 prints the 25 slowest test setup/call/teardown phases
+        # in the job log — the only way to see per-test cost from CI without
+        # reconstructing it from -v timestamps after the fact (issue #670).
+        run: pytest -v --durations=25 --cov=. --cov-report=term-missing:skip-covered --cov-report=xml --cov-fail-under=30
 
       - name: OpenAPI export is current (issue #260)
         # Drift gate, same shape as `alembic check` below: regenerate

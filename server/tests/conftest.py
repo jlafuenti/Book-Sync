@@ -64,6 +64,17 @@ from database import Base, engine, async_session  # noqa: E402
 # `user_progress` rows and the test passed, while production (Postgres, which
 # always enforces) returned a 500 (issue #198). Pinned by
 # `test_harness_db_isolation.py::test_sqlite_harness_enforces_foreign_keys`.
+#
+# The autouse `_fresh_schema` fixture below drops and recreates the whole
+# schema before *every* test — thousands of DDL transactions over the life of
+# the suite. SQLite's defaults (`synchronous=FULL`, `journal_mode=DELETE`) make
+# each of those a real disk-flush, which is fine on a quiet machine but is
+# exactly the kind of operation whose latency balloons under disk contention on
+# a shared CI runner (see the CI timeout investigation, issue #670). This file
+# is a throwaway temp DB deleted at session end (never the durability story for
+# anything real), so there is nothing to protect here: trade durability for
+# speed. `synchronous=OFF` skips the flush and `journal_mode=MEMORY` keeps the
+# rollback journal off disk entirely.
 if not _PG_MODE:
     from sqlalchemy import event  # noqa: E402
 
@@ -71,6 +82,8 @@ if not _PG_MODE:
     def _sqlite_enforce_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA synchronous=OFF")
+        cursor.execute("PRAGMA journal_mode=MEMORY")
         cursor.close()
 
 # Import every model module so Base.metadata knows the full schema. Mirrors the
