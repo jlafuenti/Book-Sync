@@ -116,6 +116,7 @@ fun AccountScreen(
     val autoCleanupAudiobooks by viewModel.autoCleanupAudiobooks.collectAsState()
     val syncMapWithEbook      by viewModel.syncMapWithEbook.collectAsState()
     val syncMapWifiOnly       by viewModel.syncMapWifiOnly.collectAsState()
+    val syncMapStorage        by viewModel.syncMapStorage.collectAsState()
     val appTheme              by viewModel.appTheme.collectAsState()
     val user                  by viewModel.user.collectAsState()
     val isOnline              by viewModel.isOnline.collectAsState()
@@ -129,6 +130,7 @@ fun AccountScreen(
     var confirmLogout          by remember { mutableStateOf(false) }
     var confirmLogoutAll       by remember { mutableStateOf(false) }
     var confirmClearDownloads  by remember { mutableStateOf(false) }
+    var confirmClearSyncData   by remember { mutableStateOf(false) }
     var showDeleteAccount      by remember { mutableStateOf(false) }
 
     if (showDeleteAccount) {
@@ -196,6 +198,24 @@ fun AccountScreen(
                 scope.launch { snackbar.showSnackbar("Downloads cleared") }
             },
             onDismiss = { confirmClearDownloads = false },
+        )
+    }
+
+    // Issue #678: local sync-map cache only, never user content — the maps
+    // are freely re-fetched by downloading again or "Refresh sync data".
+    if (confirmClearSyncData) {
+        ConfirmDialog(
+            title = "Clear sync data?",
+            message = "Every cached sync map will be removed from this device. Downloading a book again, " +
+                "or using \"Refresh sync data\" for it, fetches it back.",
+            confirmLabel = "Clear sync data",
+            destructive = true,
+            onConfirm = {
+                confirmClearSyncData = false
+                viewModel.clearAllSyncMaps()
+                scope.launch { snackbar.showSnackbar("Sync data cleared") }
+            },
+            onDismiss = { confirmClearSyncData = false },
         )
     }
 
@@ -329,6 +349,18 @@ fun AccountScreen(
                         description = "Delete every downloaded file. Progress stays on the server.",
                         destructive = true,
                         onClick = { confirmClearDownloads = true },
+                    )
+                    Divider()
+                    // Issue #678: sync maps now follow the last download —
+                    // this line is the one place a user sees how much of the
+                    // per-device cache is left and can drop all of it.
+                    ActionRow(
+                        title = syncDataStorageTitle(syncMapStorage.pairCount, syncMapStorage.approxBytes),
+                        description = "Cached chapter-position data. Removed automatically for streamed " +
+                            "books once you stop reading or listening; kept for downloaded ones. " +
+                            "Tap to clear it all now.",
+                        destructive = true,
+                        onClick = { confirmClearSyncData = true },
                     )
                 }
             }
@@ -773,6 +805,7 @@ private fun Divider() {
             .background(colors.border),
     )
 }
+
 
 @Composable
 private fun ConfirmDialog(

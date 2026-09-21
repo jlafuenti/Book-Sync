@@ -52,6 +52,25 @@ class BookDetailsGatingWiringTest {
         )
     }
 
+    /**
+     * "Remove sync data" (issue #678) sits further into the same
+     * `if (pair.syncMapDownloaded)` block as "Refresh sync data" — past
+     * [rowFollows]'s 400-char window, so this checks it sits between that
+     * guard and the next top-level row's guard rather than reusing it.
+     */
+    @Test
+    fun `remove sync data is gated on a cached map, same as refresh`() {
+        val source = screen()
+        val guardAt = source.indexOf("if (pair.syncMapDownloaded)")
+        val nextGuardAt = source.indexOf("if (pair.ebookDownloaded)", guardAt)
+        assertTrue("could not locate the surrounding guards", guardAt >= 0 && nextGuardAt > guardAt)
+        assertTrue(
+            "\"Remove sync data\" must be inside the same syncMapDownloaded " +
+                "block as \"Refresh sync data\" — with no cache there is nothing to remove.",
+            source.substring(guardAt, nextGuardAt).contains("Remove sync data"),
+        )
+    }
+
     @Test
     fun `reset progress is gated on there being progress`() {
         val source = screen()

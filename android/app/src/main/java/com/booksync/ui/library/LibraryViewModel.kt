@@ -20,6 +20,9 @@ import com.booksync.data.repository.LibraryLoader
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
 import com.booksync.data.repository.SyncMapAutoFetch
+import com.booksync.data.repository.SyncMapInUse
+import com.booksync.data.repository.SyncMapPruning
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.worker.DownloadWorker
@@ -40,14 +43,6 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.inject.Inject
 import kotlinx.coroutines.flow.map
-
-/**
- * Cap on how many recently-opened pairs [LibraryViewModel]'s streamed-book
- * sync-map prefetch (issue #655 follow-up) considers per refresh — the bound
- * that keeps it from sweeping a whole library of undownloaded pairs. See
- * `fetchSyncMapsForStreamedRecentlyOpened`.
- */
-private const val STREAMING_PREFETCH_LIMIT = 10
 
 // ============================================================================
 // UI state
@@ -160,6 +155,7 @@ class LibraryViewModel @Inject constructor(
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
     private val loader: LibraryLoader,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
 ) : ViewModel() {
 
     /**
@@ -401,7 +397,7 @@ class LibraryViewModel @Inject constructor(
                 if (error == null) {
                     val pairs = repository.getPairsFlow().first()
                     fetchMissingSyncMaps(pairs)
-                    fetchSyncMapsForStreamedRecentlyOpened(pairs)
+                    pruneUnusedSyncMaps(pairs)
                     // The pending-write drain and the position pull moved into
                     // LibraryLoader with the fetches (issue #652): run from here they only
                     // ever started once this tab had been opened.
@@ -438,67 +434,39 @@ class LibraryViewModel @Inject constructor(
      * seconds apart — and restarting a fetch already in flight would only waste
      * bytes and delay it. This is the only sweep: Downloaded/Home read the same
      * Room cache this call populates, so neither needs its own.
+     *
+     * [SyncMapRemovalStore.removedIds] is consulted so a map the user removed
+     * by hand (Book Details / card menu "Remove sync data", or Account →
+     * Storage's "Clear") is not immediately re-fetched (issue #678) — without
+     * it, "removed" and "never fetched" look identical to this sweep.
      */
-    private fun fetchMissingSyncMaps(pairs: List<BookPairEntity>) {
-        SyncMapAutoFetch.pairsToFetch(pairs).forEach { pairId ->
+    private suspend fun fetchMissingSyncMaps(pairs: List<BookPairEntity>) {
+        val removedIds = syncMapRemovalStore.removedIds().first()
+        SyncMapAutoFetch.pairsToFetch(pairs, removedIds).forEach { pairId ->
             enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
         }
     }
 
     /**
-     * Queue the `SYNC_MAP` download for a bounded set of *streamed* pairs —
-     * nothing downloaded, so [fetchMissingSyncMaps] would never touch them
-     * (issue #655 follow-up).
+     * Drop the cached sync map for every pair [SyncMapPruning.pairsToPrune]
+     * names — nothing downloaded, and not registered as open right now in
+     * [SyncMapInUse] — on every successful [refresh] (issue #678).
      *
-     * A streamed book is the ordinary way this app is used for anything not
-     * deliberately saved offline, and it is the case the cold-cache race in
-     * `AudioPlayerService.refreshPositionBeforeResume` actually bites: no
-     * download event ever ran, so nothing ever fetched the map ahead of a
-     * resume — including, and especially, a book that was only ever *read*.
-     * That is not a lesser case: it is the #643 scenario verbatim ("I was
-     * reading an ebook, then went to the car and picked up the same book").
-     *
-     * The candidate signal is [BookSyncRepository.lastOpenedTimesFlow], not
-     * [BookSyncRepository.getRecentlyPlayedPairsFlow] (a mistake caught in
-     * review — see `LibrarySyncMapPrefetchTest`): the latter only returns a
-     * pair once its bookmark's `audioPositionMs` is already non-null, and
-     * `audioPositionMs` only becomes non-null via a sync-point match in
-     * `PositionRepository.saveReaderPosition`, which itself requires the sync
-     * map to already be cached. Selecting candidates from it was circular —
-     * a pair could only qualify for the prefetch that would have warmed its
-     * cache by already having a warm cache. `lastOpenedTimesFlow` reads
-     * straight off the bookmarks table, which `saveReaderPosition`
-     * unconditionally upserts regardless of whether a sync-point match was
-     * found, so a read-only pair shows up there on its actual open recency.
-     * It is also a superset of the old signal — any pair with audio progress
-     * necessarily has a bookmark row too — so this covers listening as well,
-     * with no need to union the two.
-     *
-     * [STREAMING_PREFETCH_LIMIT] most-recently-opened pairs is the bound —
-     * "the pair a resume will actually land on" rather than the whole
-     * library — so worst case is still [STREAMING_PREFETCH_LIMIT] maps (the
-     * measured sample tops out around 5 MB each) regardless of how many
-     * pairs are eligible to compete for those slots.
-     *
-     * Enqueued as plain `SYNC_MAP` — the same background type
-     * [fetchMissingSyncMaps] uses — so it is still held back by the "Only
-     * download sync maps over Wi-Fi" setting; only the explicit "Refresh sync
-     * data" button (`SYNC_MAP_EXPLICIT`) bypasses that gate.
-     *
-     * One known gap remains: a pair with no bookmark row anywhere — never
-     * opened, on any device, in any format — cannot appear in this signal
-     * either, and reasonably so: nothing marks it as a pair a resume is
-     * about to land on.
+     * Deleting the last download already clears a pair's map immediately
+     * (`MediaDownloadRepository.deleteEbook`/`deleteAudiobook`); this is the
+     * other half. A pair that was never downloaded at all can still pick up
+     * a cached map from being opened — the reader's and the player's
+     * `ensureSyncMapCached` calls stay in place, because sync needs the map
+     * while the book is actually in use — and issue #655's now-removed
+     * streamed prefetch made that common. This sweep takes the map back once
+     * the pair is neither downloaded nor open any more, so a streamed book's
+     * map does not sit on the device indefinitely after the session that
+     * warmed it ends.
      */
-    private suspend fun fetchSyncMapsForStreamedRecentlyOpened(pairs: List<BookPairEntity>) {
-        val recentlyOpenedIds = repository.lastOpenedTimesFlow().first().pairs
-            .entries
-            .sortedByDescending { it.value }
-            .take(STREAMING_PREFETCH_LIMIT)
-            .map { it.key }
-            .toSet()
-        SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, recentlyOpenedIds).forEach { pairId ->
-            enqueue(pairId, "SYNC_MAP", "download_sync_$pairId", policy = ExistingWorkPolicy.KEEP)
+    private suspend fun pruneUnusedSyncMaps(pairs: List<BookPairEntity>) {
+        val withPoints = repository.pairIdsWithSyncPoints()
+        SyncMapPruning.pairsToPrune(pairs, SyncMapInUse.snapshot(), withPoints).forEach { pairId ->
+            repository.clearSyncMapCache(pairId)
         }
     }
 
@@ -607,10 +575,30 @@ class LibraryViewModel @Inject constructor(
     fun deleteEbookOf(pair: BookPairEntity)           = runSafely { repository.deleteEbook(pair) }
     fun deleteAudiobookOf(pair: BookPairEntity)       = runSafely { repository.deleteAudiobook(pair) }
 
-    /** See DownloadedViewModel.deletePair — one action for a pair (issue #333). */
+    /**
+     * See DownloadedViewModel.deletePair — one action for a pair (issue #333).
+     *
+     * Both calls below read `pair`, a single snapshot fetched before either
+     * ran — deliberately fine (issue #678). `MediaDownloadRepository.deleteEbook`/
+     * `deleteAudiobook` each re-read the pair's current state from Room after
+     * flipping their own flag before deciding whether to clear the cached
+     * sync map, so it does not matter that the *other* flag in this `pair`
+     * copy is stale; see that repository's doc for the trap this avoids.
+     */
     fun deletePair(pair: BookPairEntity) = runSafely {
         if (pair.ebookDownloaded) repository.deleteEbook(pair)
         if (pair.audiobookDownloaded) repository.deleteAudiobook(pair)
+    }
+
+    /**
+     * "Remove sync data" (issue #678) — Book Details and the card overflow
+     * menu. Clears the cached map immediately and marks the pair so the
+     * #537 sweep does not re-fetch it on the next refresh; a fresh download
+     * or "Refresh sync data" clears that mark.
+     */
+    fun removeSyncData(pair: BookPairEntity) = runSafely {
+        repository.clearSyncMapCache(pair.id)
+        syncMapRemovalStore.markRemoved(pair.id)
     }
     fun deleteStandaloneEbook(ebook: EBookEntity)     = runSafely { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity) = runSafely { repository.deleteStandaloneAudiobook(audio) }

@@ -147,6 +147,7 @@ enum class PairAction {
     Listen,
     DeletePair,
     RefreshSyncData,
+    RemoveSyncData,
     CancelTranscription,
     Transcribe,
     MarkComplete,
@@ -194,7 +195,17 @@ fun pairMenuActions(
         // map cached there is nothing to refresh either, so this arm can add
         // nothing at all. It must still claim the `when`, or the `else` below
         // would offer to re-transcribe (issue #484).
-        target.isTranscribed -> if (target.syncMapCached) add(PairAction.RefreshSyncData)
+        target.isTranscribed -> {
+            // A downloaded pair offers Refresh even with no map cached: after
+            // "Remove sync data" it is one of the two ways back, beside a fresh
+            // download (issue #678). A streamed pair with no map has nothing
+            // to refresh — its map is fetched when it is opened.
+            if (target.syncMapCached || target.hasEbookDownloaded || target.hasAudiobookDownloaded) {
+                add(PairAction.RefreshSyncData)
+            }
+            // Remove needs a cache to act on.
+            if (target.syncMapCached) add(PairAction.RemoveSyncData)
+        }
         target.isQueuedOrTranscribing -> add(PairAction.CancelTranscription)
         else -> add(PairAction.Transcribe)
     }
@@ -280,6 +291,7 @@ data class OverflowActions(
     val onTranscribe: (() -> Unit)? = null,
     val onCancelTranscription: (() -> Unit)? = null,
     val onRefreshSyncData: (() -> Unit)? = null,
+    val onRemoveSyncData: (() -> Unit)? = null,
     // Progress
     val onMarkComplete: (() -> Unit)? = null,
     val onResetProgress: (() -> Unit)? = null,
@@ -615,6 +627,11 @@ private fun PairActions(
             }
             PairAction.RefreshSyncData -> actions.onRefreshSyncData?.let {
                 ActionRow(Icons.Default.Sync, "Refresh sync data", onClick = it)
+            }
+            // No confirmation, same as Refresh above (issue #678): this only
+            // clears a small, freely re-fetchable local cache, not user content.
+            PairAction.RemoveSyncData -> actions.onRemoveSyncData?.let {
+                ActionRow(Icons.Default.Delete, "Remove sync data", onClick = it)
             }
             PairAction.CancelTranscription -> actions.onCancelTranscription?.let {
                 ActionRow(Icons.Default.Stop, "Cancel transcription", destructive = true, onClick = onConfirmCancelTx)

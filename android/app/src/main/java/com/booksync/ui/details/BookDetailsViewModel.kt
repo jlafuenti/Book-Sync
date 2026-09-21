@@ -16,6 +16,7 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ProgressSummary
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -114,6 +115,7 @@ class BookDetailsViewModel @Inject constructor(
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
     savedStateHandle: SavedStateHandle,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
@@ -327,6 +329,21 @@ class BookDetailsViewModel @Inject constructor(
             // bypass the "Only download sync maps over Wi-Fi" setting.
             enqueue(p.pairId, "SYNC_MAP_EXPLICIT", "download_sync_${p.pairId}")
             _snack.value = "Refreshing sync data…"
+        }
+    }
+
+    /**
+     * "Remove sync data" (issue #678). Clears the cached map now and marks
+     * the pair so the #537 sweep does not immediately re-fetch it; a fresh
+     * download or [refreshSyncData] clears that mark
+     * ([com.booksync.data.repository.MediaDownloadRepository.downloadSyncMap]).
+     */
+    fun removeSyncData() {
+        val p = (target as? DetailsTarget.Pair) ?: return
+        viewModelScope.launch {
+            repository.clearSyncMapCache(p.pairId)
+            syncMapRemovalStore.markRemoved(p.pairId)
+            _snack.value = "Sync data removed"
         }
     }
 

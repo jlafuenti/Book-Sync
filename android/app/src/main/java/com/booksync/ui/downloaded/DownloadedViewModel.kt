@@ -17,6 +17,7 @@ import com.booksync.data.local.entity.EBookEntity
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.PairOpenTarget
 import com.booksync.data.repository.ProgressSummary
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.library.LibraryItem
 import com.booksync.ui.library.LibrarySort
@@ -90,6 +91,7 @@ class DownloadedViewModel @Inject constructor(
     serverUrlManager: com.booksync.data.remote.ServerUrlManager,
     tokenManager: com.booksync.data.remote.TokenManager,
     @param:ApplicationContext private val context: Context,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
 ) : ViewModel() {
 
     /**
@@ -238,6 +240,13 @@ class DownloadedViewModel @Inject constructor(
      * Remove whichever of a pair's files are downloaded, in one action
      * (issue #333). Only deletes what exists, so a half-downloaded pair does
      * not fail on the missing half.
+     *
+     * Both calls read `pair`, one snapshot fetched before either ran —
+     * deliberately fine (issue #678), same reasoning as
+     * `LibraryViewModel.deletePair`: `MediaDownloadRepository.deleteEbook`/
+     * `deleteAudiobook` each re-read the pair from Room after flipping their
+     * own flag before deciding whether to clear the cached sync map, so a
+     * stale *other* flag in this copy cannot suppress that decision.
      */
     fun deletePair(pair: BookPairEntity) = runSafely {
         if (pair.ebookDownloaded) repository.deleteEbook(pair)
@@ -245,6 +254,15 @@ class DownloadedViewModel @Inject constructor(
     }
     fun deleteStandaloneEbook(ebook: EBookEntity)            = runSafely { repository.deleteStandaloneEbook(ebook) }
     fun deleteStandaloneAudiobook(audio: AudioBookEntity)    = runSafely { repository.deleteStandaloneAudiobook(audio) }
+
+    /**
+     * "Remove sync data" (issue #678) — same action as
+     * `LibraryViewModel.removeSyncData`, offered from this tab's card menu too.
+     */
+    fun removeSyncData(pair: BookPairEntity) = runSafely {
+        repository.clearSyncMapCache(pair.id)
+        syncMapRemovalStore.markRemoved(pair.id)
+    }
 
     fun markComplete(pair: BookPairEntity) = runSafely {
         repository.markPairComplete(pair.id, pair.ebookId, pair.audiobookId)
@@ -262,6 +280,11 @@ class DownloadedViewModel @Inject constructor(
 
     /**
      * Wipe every local file. Used by Account → "Clear all downloads".
+     *
+     * Each `it` below is one stale snapshot handed to both deletes, same
+     * shape as [deletePair] — safe for the same reason (issue #678): the
+     * sync-map prune lives in the repository, keyed off Room's current state,
+     * not this loop variable.
      */
     fun clearAllDownloads() {
         viewModelScope.launch {

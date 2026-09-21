@@ -104,6 +104,9 @@ class AccountViewModelLogoutAllTest {
             // what this test is about.
             diagnosticLogger = mockk(relaxed = true),
             appContext = mockk(relaxed = true),
+            repository = mockk(relaxed = true),
+            syncPointDao = mockk(relaxed = true),
+            syncMapRemovalStore = mockk(relaxed = true),
         )
     }
 

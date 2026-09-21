@@ -352,6 +352,7 @@ private sealed class OverflowSelection {
             onDeletePair       = if (pair.ebookDownloaded || pair.audiobookDownloaded)
                                      ({ vm.deletePair(pair) }) else null,
             onRefreshSyncData  = if (pair.syncMapDownloaded)   ({ vm.refreshSyncData(pair) })  else null,
+            onRemoveSyncData   = if (pair.syncMapDownloaded)   ({ vm.removeSyncData(pair) })   else null,
             onMarkComplete     = { vm.markComplete(pair) },
             onResetProgress    = { vm.resetProgress(pair) },
             // Editor-gated on the server; null hides the row entirely (issue #170).

@@ -169,7 +169,7 @@ class PairMenuActionsTest {
     @Test
     fun `there is nothing to refresh without a cached sync map`() {
         assertFalse(
-            pairMenuActions(pair(syncMapCached = false), true, true)
+            pairMenuActions(pair(ebook = false, audio = false, syncMapCached = false), true, true)
                 .contains(PairAction.RefreshSyncData),
         )
         assertTrue(
@@ -179,16 +179,48 @@ class PairMenuActionsTest {
     }
 
     /**
+     * "Remove sync data" (issue #678) sits beside "Refresh sync data" and is
+     * gated the same way — with no cache there is nothing to remove either.
+     */
+    @Test
+    fun `there is nothing to remove without a cached sync map`() {
+        assertFalse(
+            pairMenuActions(pair(syncMapCached = false), true, true)
+                .contains(PairAction.RemoveSyncData),
+        )
+        assertTrue(
+            pairMenuActions(pair(syncMapCached = true), true, true)
+                .contains(PairAction.RemoveSyncData),
+        )
+    }
+
+    /**
      * The gate above must not fall through. The transcription rows are a
      * three-way `when`, so dropping the refresh naively lands on `else ->
      * Transcribe` and offers to transcribe a pair that already is transcribed.
      */
+    /**
+     * A downloaded pair whose map the user removed by hand (issue #678) must
+     * still offer Refresh — it is one of the two ways back, alongside a fresh
+     * download. Gating it on the cache alone hid the way back exactly when it
+     * was needed. Remove stays cache-gated: there is nothing to remove.
+     */
+    @Test
+    fun `a downloaded pair with no cached map still offers refresh but not remove`() {
+        val actions = pairMenuActions(pair(ebook = true, audio = false, syncMapCached = false), true, true)
+        assertTrue(actions.contains(PairAction.RefreshSyncData))
+        assertFalse(actions.contains(PairAction.RemoveSyncData))
+    }
+
     @Test
     fun `a transcribed pair is never offered transcription again`() {
-        val actions = pairMenuActions(pair(transcribed = true, syncMapCached = false), true, true)
+        val actions = pairMenuActions(
+            pair(ebook = false, audio = false, transcribed = true, syncMapCached = false), true, true,
+        )
         assertFalse(actions.contains(PairAction.Transcribe))
         assertFalse(actions.contains(PairAction.CancelTranscription))
         assertFalse(actions.contains(PairAction.RefreshSyncData))
+        assertFalse(actions.contains(PairAction.RemoveSyncData))
     }
 
     /**

@@ -272,6 +272,13 @@ fun BookDetailsScreen(
                                 modifier = Modifier.tourAnchor(TourAnchor.DetailsRefreshSync),
                                 onClick = { viewModel.refreshSyncData() },
                             )
+                            // Issue #678: frees the cache; the sweep won't re-fetch it
+                            // until a fresh download or "Refresh sync data" above.
+                            ActionRow(
+                                title = "Remove sync data",
+                                description = "Delete the cached sync map from this device.",
+                                onClick = { viewModel.removeSyncData() },
+                            )
                         }
                         if (pair.ebookDownloaded) {
                             ActionRow(

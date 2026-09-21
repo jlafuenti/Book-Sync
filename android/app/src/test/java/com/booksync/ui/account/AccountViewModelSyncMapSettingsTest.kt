@@ -99,6 +99,9 @@ class AccountViewModelSyncMapSettingsTest {
             networkMonitor = networkMonitor,
             diagnosticLogger = mockk(relaxed = true),
             appContext = mockk(relaxed = true),
+            repository = mockk(relaxed = true),
+            syncPointDao = mockk(relaxed = true),
+            syncMapRemovalStore = mockk(relaxed = true),
         )
     }
 
