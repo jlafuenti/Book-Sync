@@ -95,15 +95,18 @@ Its value no longer tells you whether an upload has happened; the Play Console d
    and so are drafts and pre-releases — so the notes written here are the ones operators read
    before upgrading.
 
-   Attach the Android artifacts if this release includes an app build — `app-release.apk` for
-   sideloading and, when it is also going to Play, the `.aab`. Build them per
-   [android.md](android.md), "Release builds and signing". The Play upload itself is
-   `./gradlew publishReleaseBundle` from `android/` — [android.md](android.md), "Publishing to
-   Play".
+   **Attach no Android artifacts.** The app is distributed through Google Play only; a GitHub
+   Release carries the notes and nothing to install. Decided 2026-09-21, after 0.4.1, 0.4.2 and
+   0.5.0 had already shipped without assets while this step still said to attach them — the doc
+   and the practice disagreed, and a gap nobody decided on looks like a mistake. The Play upload
+   is `./gradlew publishReleaseBundle` from `android/` — [android.md](android.md), "Publishing to
+   Play" — and each uploaded build's `.aab`, R8 mapping and release notes are archived outside
+   the repository alongside the upload key.
 
-   > **The GitHub APK and the Play build are signed with different keys** unless you sign both with
-   > the Play upload key. A user who sideloads one cannot update to the other; Android refuses the
-   > install with a signature mismatch. Say which is which in the release body.
+   > **If sideloadable builds are ever offered again**, say in the release body which key signed
+   > the APK. A GitHub APK signed with the upload key and the build Play delivers (signed by
+   > Google's app-signing key) cannot update one another; Android refuses the install with a
+   > signature mismatch.
 
 ## Deploying it
 
@@ -187,6 +190,6 @@ hit it is usually you.
 - [ ] `CHANGELOG.md`: version heading dated, new empty `Unreleased`, upgrade notes if needed
 - [ ] Suites pass locally
 - [ ] Merged to `main`, tag pushed
-- [ ] GitHub Release created, artifacts attached and their signing key stated
+- [ ] GitHub Release created (notes only — no Android artifacts; the app ships through Play)
 - [ ] Manual backup taken on the deployment host, then the tag checked out and rebuilt
 - [ ] Deployed version confirmed: `curl -s http://<host>/api/health` reports the new `app_version`
