@@ -3394,6 +3394,37 @@
         "title": "Page[LibraryItem]",
         "type": "object"
       },
+      "Page_PositionResponse_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PositionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "limit"
+        ],
+        "title": "Page[PositionResponse]",
+        "type": "object"
+      },
       "PairStatus": {
         "description": "Status of an ebook/audiobook pairing.",
         "enum": [
@@ -10671,6 +10702,72 @@
           }
         ],
         "summary": "Put Position",
+        "tags": [
+          "sync"
+        ]
+      }
+    },
+    "/api/sync/positions": {
+      "get": {
+        "description": "Every position the caller has, one page at a time (issue #653).\n\nRead-only fan-out of `GET /position/{scope}/{ident}` — same shape per row,\nreusing `to_response_dict` so the two cannot drift — for a client that\notherwise pulls one position per book, sequentially. Android's fresh-sign-in\nreconcile (`syncAllBookmarksAndProgress`) did exactly that: two requests per\npair, which is several hundred round trips on a library of a few hundred\npairs against this single-process server.\n\nCovers every scope, not only pairs: a standalone ebook or audiobook\nposition comes back here too, since \"every position the caller has\" is\nthe point. `PUT /position/{scope}/{ident}` remains the only write path —\nthis endpoint has no side effects, same as the single-position GET.",
+        "operationId": "list_all_positions_api_sync_positions_get",
+        "parameters": [
+          {
+            "description": "1-based page number",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "1-based page number",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Page size",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Page size",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PositionResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "List All Positions",
         "tags": [
           "sync"
         ]

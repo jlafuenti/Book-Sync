@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,7 +26,7 @@ from models.book import AudioBook, BookPair, EBook
 from models.bookmark import Bookmark, BookmarkLog, BookmarkSource, HintKind, PositionHint
 from models.progress import ProgressType, UserProgress
 from models.sync_map import SyncMap
-from schemas import PositionScope
+from schemas import Page, PositionScope
 from utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -1023,3 +1023,64 @@ def to_response_dict(bookmark: Bookmark, ref: ScopeRef) -> dict:
             for h in sorted(bookmark.hints, key=lambda h: h.id)
         ],
     }
+
+
+def _scope_ref_for_row(bookmark: Bookmark) -> ScopeRef:
+    """The `ScopeRef` a canonical row addresses, read off the row itself.
+
+    Mirrors `resolve_scope`'s three cases, but from a `Bookmark` already in
+    hand rather than a fresh lookup by (scope, id) — a pair-scoped row's
+    ebook/audiobook ids come from the loaded `book_pair` relationship rather
+    than a second query, since `Bookmark` itself leaves them NULL for a
+    pair-scoped write (see `apply_position`).
+    """
+    if bookmark.book_pair_id is not None:
+        pair = bookmark.book_pair
+        return ScopeRef(
+            PositionScope.PAIR, book_pair_id=bookmark.book_pair_id,
+            ebook_id=pair.ebook_id if pair is not None else None,
+            audiobook_id=pair.audiobook_id if pair is not None else None,
+        )
+    if bookmark.ebook_id is not None:
+        return ScopeRef(PositionScope.EBOOK, ebook_id=bookmark.ebook_id)
+    return ScopeRef(PositionScope.AUDIOBOOK, audiobook_id=bookmark.audiobook_id)
+
+
+async def list_positions(
+    db: AsyncSession, user_id: int, *, page: int, limit: int
+) -> Page:
+    """Every position [user_id] has, one page at a time (issue #653).
+
+    Read-only fan-out of the same canonical record `GET /position/{scope}/{id}`
+    serves one at a time — reuses `to_response_dict` so the two response
+    shapes cannot drift. Exists because a client that used to poll that
+    endpoint once per book (Android's `syncAllBookmarksAndProgress`, two
+    sequential requests per pair) paid one round trip per book on every fresh
+    sign-in; a library of a few hundred pairs was several hundred sequential
+    requests against a single-process server.
+
+    Covers every scope the row table can hold — pair, standalone ebook,
+    standalone audiobook — not only pairs, since "every position the caller
+    has" is the whole point; a caller that only wants pairs can filter the
+    page itself.
+
+    Bounded query count regardless of page size: one `COUNT`, one page of
+    `Bookmark` rows, and one apiece for the two eager-loaded relationships
+    (`hints`, `book_pair`, needed for a pair row's ebook/audiobook ids) —
+    never one query per row. `server/tests/test_bulk_positions.py` pins this
+    with a query-counting test.
+    """
+    base = select(Bookmark).where(Bookmark.user_id == user_id)
+    total = (await db.execute(
+        select(func.count()).select_from(base.subquery())
+    )).scalar_one()
+
+    rows = (await db.execute(
+        base.options(selectinload(Bookmark.hints), selectinload(Bookmark.book_pair))
+            .order_by(Bookmark.id)
+            .offset((page - 1) * limit)
+            .limit(limit)
+    )).scalars().all()
+
+    items = [to_response_dict(bookmark, _scope_ref_for_row(bookmark)) for bookmark in rows]
+    return Page(items=items, total=total, page=page, limit=limit)

@@ -20,13 +20,13 @@ from models.bookmark import Bookmark, BookmarkLog
 from models.sync_map import SyncMap
 from models.progress import UserProgress, ProgressType
 from schemas import (
-    AudioToEpubResponse, BookmarkLogResponse, ProgressResponse,
+    AudioToEpubResponse, BookmarkLogResponse, Page, ProgressResponse,
     PositionScope, PositionUpdate, PositionResponse,
     TextMatchRequest, TextMatchResponse
 )
 from services.position_service import (
-    PositionScopeError, apply_position, latest_progress_row, read_position,
-    resolve_scope, to_response_dict,
+    PositionScopeError, apply_position, latest_progress_row, list_positions,
+    read_position, resolve_scope, to_response_dict,
 )
 from routers.auth import get_current_user
 
@@ -35,6 +35,11 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 # Ceiling on `GET /bookmark/{pair_id}/log` (issue #208). Same number as every
 # other capped read endpoint.
 BOOKMARK_LOG_MAX_LIMIT = 200
+
+# `GET /positions` paging (issue #653). Same convention as the library list
+# endpoints (`services/library_browse.py`): 1-based page, default 100, cap 500.
+POSITIONS_DEFAULT_LIMIT = 100
+POSITIONS_MAX_LIMIT = 500
 
 
 # The staleness rule (issue #54) lives in position_service.is_stale. There is
@@ -386,6 +391,31 @@ async def audio_position_to_epub(
 # path; the `/progress` routes above are read-only projections of what lands
 # here, and the reset routes delete the same record these write.
 # ====================================================================
+
+@router.get("/positions", response_model=Page[PositionResponse])
+async def list_all_positions(
+    page: int = Query(1, ge=1, description="1-based page number"),
+    limit: int = Query(POSITIONS_DEFAULT_LIMIT, ge=1, le=POSITIONS_MAX_LIMIT,
+                        description="Page size"),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    current_user: User = Depends(get_current_user),
+):
+    """Every position the caller has, one page at a time (issue #653).
+
+    Read-only fan-out of `GET /position/{scope}/{ident}` — same shape per row,
+    reusing `to_response_dict` so the two cannot drift — for a client that
+    otherwise pulls one position per book, sequentially. Android's fresh-sign-in
+    reconcile (`syncAllBookmarksAndProgress`) did exactly that: two requests per
+    pair, which is several hundred round trips on a library of a few hundred
+    pairs against this single-process server.
+
+    Covers every scope, not only pairs: a standalone ebook or audiobook
+    position comes back here too, since "every position the caller has" is
+    the point. `PUT /position/{scope}/{ident}` remains the only write path —
+    this endpoint has no side effects, same as the single-position GET.
+    """
+    return await list_positions(db, current_user.id, page=page, limit=limit)
+
 
 @router.get(
     "/position/{scope}/{ident}",

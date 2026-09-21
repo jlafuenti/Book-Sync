@@ -235,6 +235,22 @@ interface BookSyncApi {
         @Path("id") id: Int,
     ): Response<PositionResponse>
 
+    /**
+     * Every position the caller has, one page at a time (issue #653).
+     *
+     * A plain (non-`Response`) return type: an old server that predates this
+     * endpoint answers 404, which Retrofit turns into an `HttpException` here
+     * rather than a body to inspect — exactly the signal
+     * `PositionRepository.syncAllBookmarksAndProgress` needs to fall back to
+     * its old per-pair loop. There is no 204/409 case to preserve, unlike
+     * [getPosition]/[updatePosition]: an empty page is just `items: []`.
+     */
+    @GET("api/sync/positions")
+    suspend fun getPositions(
+        @Query("page") page: Int,
+        @Query("limit") limit: Int,
+    ): PageResponse<PositionResponse>
+
     // Response<T> again, this time so callers can detect HTTP 409 — the
     // multi-device conflict-resolution contract (issue #54) returns the current
     // authoritative server state with a 409 status when captured_at is stale,

@@ -13,6 +13,7 @@ import com.booksync.data.local.entity.SyncPointEntity
 import com.booksync.data.local.entity.UserProgressEntity
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.BookmarkLogResponse
+import com.booksync.data.remote.PageResponse
 import com.booksync.data.remote.PositionResponse
 import com.booksync.data.remote.PositionUpdateRequest
 import com.booksync.player.PlaybackOffsets
@@ -20,11 +21,17 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
+import retrofit2.HttpException
 import retrofit2.Response
 import java.io.IOException
 
@@ -53,9 +60,9 @@ class PositionRepositoryTest {
         syncPointDao = syncPointDao,
     )
 
-    private fun pair(id: Int = 7) = BookPairEntity(
-        id = id, ebookId = 70, ebookTitle = "E", ebookAuthor = null, ebookFilename = "e.epub",
-        ebookFormat = "epub", audiobookId = 700, audiobookTitle = "A", audiobookAuthor = null,
+    private fun pair(id: Int = 7, ebookId: Int = 70, audiobookId: Int = 700) = BookPairEntity(
+        id = id, ebookId = ebookId, ebookTitle = "E", ebookAuthor = null, ebookFilename = "e.epub",
+        ebookFormat = "epub", audiobookId = audiobookId, audiobookTitle = "A", audiobookAuthor = null,
         audiobookFilename = "a.m4b", audiobookFormat = "m4b", audiobookDurationSeconds = null,
         status = "synced",
     )
@@ -116,6 +123,121 @@ class PositionRepositoryTest {
         val written = slot<BookmarkEntity>()
         coVerify(exactly = 1) { bookmarkDao.upsertBookmark(capture(written)) }
         assertEquals(true, written.captured.syncedToServer)
+    }
+
+    // ---- Bulk positions endpoint (issue #653) ------------------------------
+
+    @Test
+    fun `startup reconcile uses the bulk positions endpoint instead of one GET per pair`() = runTest {
+        coEvery { api.getPositions(1, any()) } returns PageResponse(
+            items = listOf(serverPosition(chapter = 12, capturedAt = "2026-08-02T10:00:00Z")),
+            total = 1, page = 1, limit = 500,
+        )
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 700) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 7) } returns
+            localBookmark(chapter = 4, capturedAt = "2026-08-01T10:00:00Z", synced = true)
+
+        positions().syncAllBookmarksAndProgress(listOf(pair()))
+
+        coVerify(exactly = 1) { api.getPositions(1, any()) }
+        coVerify(exactly = 0) { api.getPosition(any(), any()) }
+        val written = slot<BookmarkEntity>()
+        coVerify(exactly = 1) { bookmarkDao.upsertBookmark(capture(written)) }
+        assertEquals(12, written.captured.epubChapter)
+    }
+
+    @Test
+    fun `startup reconcile falls back to the per-pair loop when the bulk endpoint predates it`() = runTest {
+        coEvery { api.getPositions(any(), any()) } throws HttpException(
+            Response.error<Any>(404, "".toResponseBody(null))
+        )
+        coEvery { api.getPosition("pair", 7) } returns
+            Response.success(serverPosition(chapter = 12, capturedAt = "2026-08-02T10:00:00Z"))
+        coEvery { api.getPosition("audiobook", 700) } returns Response.success<PositionResponse>(204, null)
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 700) } returns null
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 7) } returns
+            localBookmark(chapter = 4, capturedAt = "2026-08-01T10:00:00Z", synced = true)
+
+        positions().syncAllBookmarksAndProgress(listOf(pair()))
+
+        coVerify(exactly = 1) { api.getPosition("pair", 7) }
+        coVerify(exactly = 1) { api.getPosition("audiobook", 700) }
+        val written = slot<BookmarkEntity>()
+        coVerify(exactly = 1) { bookmarkDao.upsertBookmark(capture(written)) }
+        assertEquals(12, written.captured.epubChapter)
+    }
+
+    @Test
+    fun `startup reconcile also pulls standalone ebook and audiobook rows from the bulk list`() = runTest {
+        val ebookRow = PositionResponse(
+            scope = "ebook", ebook_id = 42, source = "ebook", anchor_revision = 1,
+            epub_chapter = 3, captured_at = "2026-08-02T10:00:00Z", updated_at = "2026-08-02T10:00:00Z",
+        )
+        val audiobookRow = PositionResponse(
+            scope = "audiobook", audiobook_id = 99, source = "audiobook", anchor_revision = 1,
+            audio_position_ms = 5_000, captured_at = "2026-08-02T10:00:00Z", updated_at = "2026-08-02T10:00:00Z",
+        )
+        coEvery { api.getPositions(1, any()) } returns PageResponse(
+            items = listOf(ebookRow, audiobookRow), total = 2, page = 1, limit = 500,
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 7) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 700) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "ebook", 42) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 99) } returns null
+
+        positions().syncAllBookmarksAndProgress(listOf(pair()))
+
+        val written = mutableListOf<UserProgressEntity>()
+        coVerify { userProgressDao.upsertProgress(capture(written)) }
+        assertEquals(setOf("ebook" to 42, "audiobook" to 99),
+            written.map { it.mediaType to it.mediaId }.toSet())
+    }
+
+    @Test
+    fun `standalone reconciliation skips a bulk row for a pair's own audiobook`() = runTest {
+        // A bulk row scoped to the pair's own audiobookId must be reconciled
+        // once, via the pair loop — not a second time as if it were standalone.
+        val audiobookRow = PositionResponse(
+            scope = "audiobook", audiobook_id = 700, source = "audiobook", anchor_revision = 1,
+            audio_position_ms = 5_000, captured_at = "2026-08-02T10:00:00Z", updated_at = "2026-08-02T10:00:00Z",
+        )
+        coEvery { api.getPositions(1, any()) } returns PageResponse(
+            items = listOf(audiobookRow), total = 1, page = 1, limit = 500,
+        )
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 7) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", 700) } returns null
+
+        positions().syncAllBookmarksAndProgress(listOf(pair()))
+
+        coVerify(exactly = 1) {
+            userProgressDao.upsertProgress(match { it.mediaType == "audiobook" && it.mediaId == 700 })
+        }
+    }
+
+    @Test
+    fun `cancelling mid-reconcile stops before the next pair is applied`() = runTest {
+        // Room's cache is scoped per account (issue #314) — a sign-out that
+        // cancels this job partway through a bulk pull must not let it keep
+        // writing pairs into the next account's scope.
+        coEvery { api.getPositions(1, any()) } returns PageResponse(
+            items = emptyList(), total = 0, page = 1, limit = 500,
+        )
+        val gate = CompletableDeferred<BookmarkEntity?>()
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 7) } coAnswers { gate.await() }
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 8) } returns null
+        coEvery { userProgressDao.getProgress(TEST_SCOPE, "audiobook", any()) } returns null
+
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val job = scope.launch {
+            positions().syncAllBookmarksAndProgress(listOf(pair(id = 7), pair(id = 8, ebookId = 80, audiobookId = 800)))
+        }
+
+        job.cancel()
+        gate.complete(null)
+        job.join()
+
+        assertFalse(job.isActive)
+        coVerify(exactly = 0) { bookmarkDao.getBookmark(TEST_SCOPE, 8) }
     }
 
     // ---- Bookmark history ---------------------------------------------------

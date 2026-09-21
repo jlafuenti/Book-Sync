@@ -16,6 +16,27 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/sync/positions`: every position the caller has (pair, standalone ebook, standalone
+  audiobook), paged (`page`/`limit`, default 100, cap 500, same convention as the library list
+  endpoints), in the same shape `GET /api/sync/position/{scope}/{ident}` already returns —
+  reuses `to_response_dict` so the two cannot drift. Read-only; `PUT /api/sync/position/{scope}/{ident}`
+  remains the only write path. Exists because a fresh sign-in on Android pulled positions with
+  one `GET /position/{scope}/{ident}` per pair bookmark plus one per paired audiobook, sequentially
+  — several hundred round trips against the single-process server on a library of a few hundred
+  pairs, with Home's Continue Reading filling in over minutes. Bounded query cost regardless of
+  page size (one count, one page of rows, one apiece for the two eager-loaded relationships).
+  Android's `PositionRepository.syncAllBookmarksAndProgress` now pulls this list once at sign-in
+  instead of looping per pair, falling back to the old per-pair loop when the server predates this
+  endpoint (#653).
+
+### Upgrade notes
+
+- No action required. An app build that predates this release keeps working against a server that
+  has it (it simply never calls the new endpoint), and an app build that has it falls back to the
+  old per-pair loop against a server that predates it.
+
 ## [0.4.2] - 2026-09-18
 
 ### Fixed
