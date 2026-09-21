@@ -344,11 +344,17 @@ function HomePage() {
                     } : null,
                     audioProgress: audioProg ? { positionMs: audioProg.audio_position_ms || 0 } : null,
                     updated_at: primary?.updated_at || ebookProg?.updated_at || audioProg?.updated_at,
+                    captured_at: primary?.captured_at || ebookProg?.captured_at || audioProg?.captured_at,
                 }
             })
 
+            // "Last read" is `captured_at` — when the position was taken.
+            // `updated_at` also moves on server-side rewrites such as a
+            // realign, which would float a book nobody touched to the front
+            // (issue #679); it is only the fallback for a row nobody stamped.
+            const lastRead = item => new Date(item.captured_at || item.updated_at)
             const allContinue = [...mergedPairItems, ...standaloneItems]
-                .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+                .sort((a, b) => lastRead(b) - lastRead(a))
             setContinueItems(allContinue)
 
             // --- Build Continue Series items ---

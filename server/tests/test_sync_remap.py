@@ -336,6 +336,41 @@ async def test_remap_does_not_touch_captured_at_or_write_a_log_row(db):
     assert logs == []
 
 
+async def test_remap_of_an_unstamped_row_keeps_its_last_read_time(db):
+    """Clients rank "last read" by `captured_at`, falling back to `updated_at`
+    when it is NULL — and the remap bumps `updated_at`. Without a guard a realign
+    made every unstamped bookmark on the pair look read just now: old books
+    jumped to the top of Continue Reading and the phone fetched their sync maps
+    (issue #679). The row's pre-remap `updated_at` is the moment it last stood
+    for, so the remap pins that into `captured_at` before bumping."""
+    from datetime import datetime
+
+    last_read = datetime(2025, 3, 1, 12, 0, 0)
+    pair, bookmark = await _seed(
+        db, source=BookmarkSource.EBOOK,
+        epub_chapter=0, epub_sentence_index=1,
+        epub_text_preview="pack my box with five dozen liquor jugs",
+        audio_position_ms=5_000,
+    )
+    bookmark.captured_at = None
+    bookmark.updated_at = last_read
+    await db.commit()
+
+    await _retranscribe(db, pair.id)
+
+    await db.refresh(bookmark)
+    assert bookmark.epub_sentence_index == 3  # the remap did run
+    assert bookmark.captured_at == last_read
+    assert bookmark.updated_at > last_read
+    # The progress projection copies the bookmark's captured_at, so the web's
+    # Continue list sees the same last-read time.
+    progress = (await db.execute(
+        select(UserProgress).where(UserProgress.book_pair_id == pair.id)
+    )).scalars().all()
+    assert progress
+    assert {p.captured_at for p in progress} == {last_read}
+
+
 async def _pair_at_v2(db):
     """A pair whose map has been regenerated once: OLD_POINTS was v1, NEW_POINTS is v2."""
     from schemas import PositionScope

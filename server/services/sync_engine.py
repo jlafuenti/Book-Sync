@@ -318,7 +318,10 @@ async def remap_bookmarks_for_pair(
 
     `captured_at` is deliberately untouched: this is a server-side translation,
     not a device capture, and stamping it would let the remap beat a genuinely
-    newer write in `position_service.is_stale`. No `BookmarkLog` row is written
+    newer write in `position_service.is_stale`. The one exception is a row with
+    no `captured_at` at all: it gets its pre-remap `updated_at`, the time clients
+    were already reading for it, so the bump below does not make it look
+    freshly read (issue #679). No `BookmarkLog` row is written
     either — that log is the history of moves the *user* made.
 
     A row with no usable anchor keeps its coordinates and its old
@@ -372,6 +375,11 @@ async def remap_bookmarks_for_pair(
         if audio_ms is not None:
             bookmark.audio_position_ms = audio_ms
         bookmark.sync_map_version = new_version
+        if bookmark.captured_at is None:
+            # Clients fall back to `updated_at` for "last read" when nothing
+            # stamped the row, so bumping it alone would make an old book look
+            # read just now (issue #679). Pin the moment it already stood for.
+            bookmark.captured_at = bookmark.updated_at
         bookmark.updated_at = utcnow()
         if chapter_moved:
             bookmark.anchor_revision = (bookmark.anchor_revision or 0) + 1

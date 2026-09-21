@@ -16,6 +16,23 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Realigning a book no longer makes it look recently read. Clients rank "last read" by a
+  position's `captured_at` and fall back to `updated_at` when it is empty, and a realign's
+  bookmark remap bumps `updated_at`. Most positions written before `captured_at` existed have it
+  empty, so every realigned book jumped to the front of Continue Reading and the phone fetched
+  its sync map. Migration `0024_captured_at_backfill` copies `updated_at` into an empty
+  `captured_at` on `bookmarks` and `user_progress`; the remap pins the old `updated_at` into
+  `captured_at` if it finds one still empty; and the web's Continue Reading now sorts by
+  `captured_at`, not `updated_at` (#679).
+
+### Upgrade notes
+
+- Migration `0024_captured_at_backfill` is a one-time data backfill and runs automatically on
+  start. Its downgrade does nothing: the copied values stay, and they are the values clients were
+  already using. Books realigned before this deploy keep the realign time as their last-read time.
+
 ## [0.5.0] - 2026-09-21
 
 ### Added
