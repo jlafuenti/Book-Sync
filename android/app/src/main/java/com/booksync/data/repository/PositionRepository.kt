@@ -1031,7 +1031,22 @@ class PositionRepository @Inject constructor(
                 else resolveSyncPoint(snapshot.pairId, snapshot.chapterIndex, snapshot.textPreview)
             val resolvedChapterIndex = syncPoint?.epubChapter ?: snapshot.chapterIndex
             val resolvedSentenceIndex = syncPoint?.epubSentenceIndex
-            val resolvedAudioMs = syncPoint?.audioStartMs
+            // Rewound by the same PlaybackOffsets.RESUME_REWIND_MS the
+            // deliberate "sync audio to this page" handoff (epubToAudioText)
+            // and the audio-start ladder's audioMsForSentence rung already
+            // apply, clamped at zero the same way they are — otherwise an
+            // automatic save here lands ~5s later than a deliberate sync to
+            // the same page, for what should be the same coordinate (issue
+            // #656). Applied once, here, so every downstream use (the Room
+            // row's audioPositionMs/locatorAudioMs, the PUT's
+            // audio_position_ms, and the hint's audio_position_ms) stays
+            // consistent automatically instead of each rewinding separately.
+            //
+            // AudioStartStep.Stored in audioStartMsFor reads this value back
+            // as-is and must NOT reapply the rewind — it is already correct.
+            val resolvedAudioMs = syncPoint?.audioStartMs?.let {
+                maxOf(0, it - PlaybackOffsets.RESUME_REWIND_MS.toInt())
+            }
             // Inheriting the existing row's sentence index on a miss is only
             // correct when the chapter didn't change underneath it — that
             // index is a coordinate of the OLD chapter, and stamping it onto

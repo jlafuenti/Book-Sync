@@ -248,4 +248,64 @@ class AudioStartMsForTest {
 
         assertEquals(0L, ms)
     }
+
+    // --- The Stored rung must stay rewind-free (issue #656) -----------------
+
+    @Test
+    fun `the stored rung is never rewound a second time`() = runTest {
+        // saveReaderPosition now rewinds by RESUME_REWIND_MS before writing
+        // audioPositionMs (issue #656), so a value read back off the Stored
+        // rung is already correct. If this rung applied the rewind again, an
+        // already-rewound reader save would creep 5s earlier every time the
+        // ladder fell through to it.
+        givenPoints() // no sync map cached — only the stored rung can answer
+
+        val ms = repository().audioStartMsFor(
+            pairId,
+            bookmark(source = "ebook", audioPositionMs = 595_000, epubChapter = 4, epubSentenceIndex = 12),
+        )
+
+        assertEquals(595_000L, ms)
+    }
+
+    @Test
+    fun `a stored position of exactly zero falls through instead of being treated as found`() = runTest {
+        // What a rewind-to-zero automatic save leaves behind: a sync point
+        // inside the first RESUME_REWIND_MS clamps to a stored 0 (issue #656).
+        // planAudioStart's `takeIf { it > 0 }` excludes a 0 from the Stored
+        // rung entirely, so the ladder still gets a chance to place the reader
+        // more precisely via the text/sentence rungs rather than stopping at
+        // "start of book".
+        givenPoints(point(chapter = 4, sentence = 12, audioStartMs = 600_000, preview = pageText))
+
+        val ms = repository().audioStartMsFor(
+            pairId,
+            bookmark(
+                source = "ebook",
+                audioPositionMs = 0,
+                epubChapter = 4,
+                epubSentenceIndex = 12,
+                epubTextPreview = pageText,
+            ),
+        )
+
+        // Falls through to the text rung's rewound match rather than stopping
+        // at the stored zero.
+        assertEquals(595_000L, ms)
+    }
+
+    @Test
+    fun `a stored zero with nothing else to fall back on starts at the beginning`() = runTest {
+        // The other half of the edge case above: when the text/sentence rungs
+        // also have nothing to offer, a stored 0 still means "start of book" —
+        // the same answer an empty record gives.
+        givenPoints()
+
+        val ms = repository().audioStartMsFor(
+            pairId,
+            bookmark(source = "ebook", audioPositionMs = 0),
+        )
+
+        assertEquals(0L, ms)
+    }
 }
