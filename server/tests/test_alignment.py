@@ -787,3 +787,97 @@ def test_filter_chunked_segment_drift_safety_bound_preserves_correct_matches():
         if not (bad_lo <= i < bad_hi) and whisper[wi].start_ms == true_ms(ei)
     )
     assert correct_untouched == len(whisper) - (bad_hi - bad_lo)
+
+
+# ---------------------------------------------------------------------------
+# Anchor search on real narration (issues #648, #650)
+#
+# `_find_anchors` scored each long EPUB sentence against individual transcript
+# sentences with `token_set_ratio`, which scores a SHORT fragment ~100 against a
+# long sentence that merely contains its words. Narration is full of them
+# ("He said.", "She nodded."). Two such fragments far apart always tie, so the
+# uniqueness check rejected almost every candidate as "ambiguous". Measured on
+# real books: a 31-hour book kept 2 anchors, and its "best matches" were a
+# median 3 characters long. With no anchors in between, the whole book was
+# proportionally chunk-aligned between three pins and drifted by up to 2.6 h.
+# ---------------------------------------------------------------------------
+
+from services.alignment import _find_anchors  # noqa: E402
+
+_VOCAB = [f"{c}{v}{c2}{v2}" for c in "bdfgklmnprstvz" for v in "aeiou"
+          for c2 in "lmnrst" for v2 in "aio"]
+
+
+def _narrated_book(n=400, split_every=1, filler_every=3, seed=7, extra_unnarrated=0, split_when=None):
+    """A book whose EPUB sentences are all distinct and long, each containing the
+    common words "he said"; the audio narrates them, sometimes split in two, with
+    a short standalone "He said." fragment every few sentences — the shape that
+    defeated the old scorer. `extra_unnarrated` appends EPUB-only back matter
+    (issue #648). Returns (epub, whisper, true_start_ms_per_epub_index)."""
+    rng = random.Random(seed)
+    epub, whisper, truth = [], [], []
+    t = 0
+    for i in range(n + extra_unnarrated):
+        a = " ".join(rng.choice(_VOCAB) for _ in range(6))
+        b = " ".join(rng.choice(_VOCAB) for _ in range(6))
+        text = f"{a} he said {b}"
+        epub.append(EpubSentence(chapter=i // 40, sentence_index=i % 40, text=text))
+        if i >= n:
+            truth.append(None)          # back matter: never narrated
+            continue
+        truth.append(t)
+        split = split_when(i) if split_when else (split_every and i % split_every == 0)
+        pieces = [f"{a} he said", b] if split else [text]
+        for p in pieces:
+            dur = 60 * len(p)
+            whisper.append(TranscribedSentence(text=p.capitalize() + ".", start_ms=t, end_ms=t + dur))
+            t += dur
+        if filler_every and i % filler_every == 0:
+            whisper.append(TranscribedSentence(text="He said.", start_ms=t, end_ms=t + 600))
+            t += 600
+    return epub, whisper, truth
+
+
+def test_anchor_search_is_not_defeated_by_short_fragments_sharing_words():
+    epub, whisper, _ = _narrated_book()
+    anchors, _raw = _find_anchors(epub, whisper)
+    # 400 candidates sampled every 10th -> 40. The old scorer kept ~0 of them:
+    # every candidate tied with two "He said." fragments far apart.
+    assert len(anchors) >= 30, f"only {len(anchors)} anchors on a cleanly narrated book"
+
+
+def test_anchor_search_still_rejects_text_the_audio_says_twice():
+    """Uniqueness must survive the fix: a sentence narrated twice (a recap, an
+    epigraph repeated at the end) is no landmark."""
+    epub, whisper, _ = _narrated_book(n=100)
+    repeated = epub[50].text
+    whisper.append(TranscribedSentence(text=repeated, start_ms=whisper[-1].end_ms,
+                                       end_ms=whisper[-1].end_ms + 5000))
+    anchors, raw = _find_anchors(epub, whisper)
+    assert 50 not in [e for e, _w, _s in raw], "a twice-narrated sentence became an anchor"
+
+
+def _worst_error_minutes(points, truth):
+    errs = [abs(p.audio_start_ms - t) for p, t in zip(points, truth) if t is not None]
+    return max(errs) / 60000
+
+
+def test_uneven_sentence_splitting_does_not_make_the_map_drift():
+    """Issue #650: every chapter narrated, but Whisper splits sentences unevenly,
+    so transcript index does not advance in step with EPUB index. With real
+    anchors throughout, every sentence still lands where it is narrated."""
+    # Unsplit for the first 600 sentences, split in two for the next 600, then
+    # unsplit again: the transcript advances twice as fast through the middle,
+    # so any placement by index proportion is wrong there and drifts.
+    epub, whisper, truth = _narrated_book(n=1800, seed=11, split_when=lambda i: 600 <= i < 1200)
+    points = align_texts(epub, whisper)
+    assert _worst_error_minutes(points, truth) < 0.5
+
+
+def test_unnarrated_back_matter_does_not_pull_the_narrated_text_early():
+    """Issue #648: the EPUB carries back matter the audiobook never reads. The
+    narrated text must still land where it is narrated — the unnarrated tail
+    has no audio of its own and cannot be allowed to borrow the book's."""
+    epub, whisper, truth = _narrated_book(n=1200, extra_unnarrated=400, seed=13)
+    points = align_texts(epub, whisper)
+    assert _worst_error_minutes(points, truth) < 0.5

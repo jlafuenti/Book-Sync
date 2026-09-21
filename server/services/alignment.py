@@ -340,50 +340,95 @@ def _find_anchors(
     whisper_sentences: List[TranscribedSentence],
     min_len: int = 40,
     stride: int = 10,
-    score_threshold: float = 0.85,
-    uniqueness_margin: float = 0.05,
+    key_len: int = 40,
 ) -> List[Tuple[int, int, float]]:
     """
-    Find high-confidence, unique anchor matches across the WHOLE book.
+    Find unique anchor matches across the WHOLE book.
 
-    Long sentences (>= min_len normalized chars) are nearly always unique in
-    a novel, so a global fuzzy search with a high threshold gives reliable
-    landmarks. We sample every stride-th candidate to bound runtime, require
-    the best match to beat the second-best by uniqueness_margin (rejects
-    repeated phrases), and keep only the longest increasing subsequence of
-    whisper indices (rejects order-violating false positives).
+    For every stride-th EPUB sentence of at least `min_len` normalized
+    characters, take a `key_len`-character slice from its middle and look for
+    it in the whole transcript, concatenated. A slice that occurs exactly once
+    is a landmark: it anchors that EPUB sentence to the transcript sentence the
+    slice starts in. A slice that occurs more than once is a repeated phrase and
+    is skipped; one that never occurs is transcription noise and is skipped. The
+    longest increasing subsequence of whisper indices then drops order-violating
+    matches, as before.
+
+    This used to fuzzy-score each EPUB sentence against individual transcript
+    sentences with `token_set_ratio` (issues #648, #650). That scorer rates a
+    SHORT fragment ~100 against a long sentence that merely contains its words,
+    and narration is full of them ("He said.", "She nodded."). Two such
+    fragments far apart always tied, so the uniqueness check rejected nearly
+    every candidate as "ambiguous": a real 31-hour book kept 2 anchors, whose
+    "best matches" were a median 3 characters long. With nothing in between,
+    whole books were proportionally chunk-aligned between three pins and
+    drifted by up to 2.6 hours. Matching a slice against the CONCATENATED
+    transcript also sidesteps Whisper's sentence splitting entirely, because it
+    never compares one sentence with one sentence. On the same books it keeps
+    hundreds of anchors, puts every scored chapter within a minute of the
+    narration, and aligns ~40x faster.
 
     Returns (anchors, raw_anchors): `anchors` is [(epub_idx, whisper_idx, score
     0..1)] sorted by epub_idx with strictly increasing whisper_idx; `raw_anchors`
-    is every candidate that passed the score/uniqueness checks, before the LIS
-    filter — `anchors` is a subsequence of it. Callers that only want the
-    filtered anchors (the alignment path) use `anchors`; degraded-map detection
-    (issue #586) diffs the two to see what got rejected and why.
+    is every candidate that was found exactly once, before the LIS filter —
+    `anchors` is a subsequence of it. Callers that only want the filtered
+    anchors (the alignment path) use `anchors`; degraded-map detection (issue
+    #586) diffs the two to see what got rejected and why. An exact unique match
+    is certain rather than scored, so its score is 1.0.
     """
-    from rapidfuzz import process
+    import bisect
 
-    whisper_norm = [_normalize_text(w.text) for w in whisper_sentences]
+    parts: List[str] = []
+    starts: List[int] = []
+    pos = 0
+    for w in whisper_sentences:
+        norm = _normalize_text(w.text)
+        starts.append(pos)
+        parts.append(norm)
+        pos += len(norm) + 1          # the joining space
+    transcript = " ".join(parts)
+
     candidates = [
         i for i in range(len(epub_sentences))
         if len(_normalize_text(epub_sentences[i].text)) >= min_len
     ]
 
+    def _locate(i: int) -> Optional[Tuple[int, int, float]]:
+        e_norm = _normalize_text(epub_sentences[i].text)
+        mid = len(e_norm) // 2
+        key = e_norm[max(0, mid - key_len // 2): mid + key_len // 2]
+        at = transcript.find(key)
+        if at < 0:
+            return None  # not narrated as written, or transcribed differently
+        if transcript.find(key, at + 1) >= 0:
+            return None  # ambiguous: the audio says this more than once
+        return (i, bisect.bisect_right(starts, at) - 1, 1.0)
+
     raw_anchors: List[Tuple[int, int, float]] = []
     for i in candidates[::stride]:
-        e_norm = _normalize_text(epub_sentences[i].text)
-        matches = process.extract(
-            e_norm,
-            whisper_norm,
-            scorer=fuzz.token_set_ratio,
-            limit=2,
-            score_cutoff=score_threshold * 100,
-        )
-        if not matches:
-            continue
-        _, best_score, best_idx = matches[0]
-        if len(matches) > 1 and (best_score - matches[1][1]) < uniqueness_margin * 100:
-            continue  # ambiguous: this sentence appears more than once
-        raw_anchors.append((i, best_idx, best_score / 100.0))
+        hit = _locate(i)
+        if hit:
+            raw_anchors.append(hit)
+
+    # Search the two boundary regions at full density. Sampling every stride-th
+    # sentence lands the outermost anchors up to `stride` sentences inside the
+    # narration, and the virtual end anchors then pin whatever lies beyond them
+    # to the very start and end of the audio. When the EPUB carries text the
+    # audiobook never narrates — back matter, a bonus excerpt, front matter
+    # (issue #648) — the last narrated sentences share a segment with that
+    # unnarrated block and get squeezed early. Anchoring right up to where the
+    # narration actually stops confines the unnarrated text to a segment of its
+    # own, with no narrated sentence left inside it. Only the boundaries are
+    # scanned densely, so the cost is bounded by the size of those regions.
+    if raw_anchors:
+        first_e = raw_anchors[0][0]
+        last_e = raw_anchors[-1][0]
+        sampled = {a[0] for a in raw_anchors}
+        edge = [i for i in candidates if (i < first_e or i > last_e) and i not in sampled]
+        for i in edge:
+            hit = _locate(i)
+            if hit:
+                raw_anchors.append(hit)
 
     raw_anchors.sort(key=lambda a: a[0])
     anchors = _filter_consistent_anchors(raw_anchors, whisper_sentences)

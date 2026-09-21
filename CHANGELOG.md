@@ -33,6 +33,22 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- Sync maps no longer drift by hours through the middle of a book. The aligner pins its map to
+  "anchors" — sentences found exactly once in the audio — and aligns the text between them. Its
+  anchor search fuzzy-scored each EPUB sentence against individual transcript sentences with a
+  scorer that rates a short fragment ~100 against any long sentence containing its words, and
+  narration is full of fragments like "He said." Two of them far apart always tied, so nearly every
+  candidate was thrown out as "ambiguous": a 31-hour book kept **2** anchors, and whole books were
+  aligned by proportion between three fixed points. Measured against the real transcripts, maps
+  were off by up to **+115 min** (a book where every chapter is narrated, #650) and **−155 min**
+  (books whose EPUB carries back matter the audiobook never reads, #648). The search now locates a
+  slice of each sentence in the whole transcript and anchors only where it occurs exactly once,
+  and searches every sentence near the start and end so anchoring runs right up to where the
+  narration stops. On the same books it keeps hundreds of anchors, every scored chapter lands
+  within a minute of the narration, and aligning is roughly 40× faster. Realign was previously
+  deterministic and reproduced the broken map byte for byte; it now produces a correct one (#648,
+  #650).
+
 - The SSRF guard no longer resolves DNS on the event loop. `assert_safe_url` looked the hostname
   up with a synchronous `socket.getaddrinfo()`, and three `async def` handlers called it directly —
   cover fetching during matching (reachable by editors, and run once per redirect hop) and the
@@ -74,6 +90,13 @@ operator must do by hand rather than read about afterwards.
   current (#658).
 
 ### Upgrade notes
+
+- **Sync maps built before this release keep their drift until they are realigned** — the fix is in
+  how a map is built, not in the maps already stored. After deploying, realign the affected pairs;
+  the sync-map audit's timing check flags them. Realigning bumps the map's version, which marks
+  readers' saved positions for re-anchoring against the new map (#55, #116), so pairs with active
+  readers are worth doing deliberately rather than in one sweep. Pairs aligned for the first time
+  after deploying need nothing (#648, #650).
 
 - No action required. An app build that predates this release keeps working against a server that
   has it (it simply never calls the new endpoint), and an app build that has it falls back to the
