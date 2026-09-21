@@ -277,6 +277,7 @@ fun BookDetailsScreen(
                             ActionRow(
                                 title = "Remove sync data",
                                 description = "Delete the cached sync map from this device.",
+                                destructive = true,
                                 onClick = { viewModel.removeSyncData() },
                             )
                         }
