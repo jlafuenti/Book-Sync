@@ -308,6 +308,133 @@ async def test_a_write_carrying_no_anchor_never_clears_one(
     assert after["epub_progress_percent"] == 46.81
 
 
+# ---------- a sentence index never outlives its chapter (issue #658) ----------
+#
+# A sentence index is a coordinate *within* a chapter, so a write that moves the
+# chapter invalidates it. Android's reader sends exactly this shape on a
+# sync-point miss: the new chapter, and no sentence index because it could not
+# resolve one. "Omission means leave alone" then kept the previous chapter's
+# index beside the new chapter, and that pair is the portable cross-device
+# anchor every client restores from.
+
+
+async def test_a_chapter_change_with_no_sentence_index_clears_the_stale_one(
+    client, make_user, auth_header, db
+):
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=3, epub_sentence_index=200, sync_map_version=7,
+        epub_text_preview="the sentence they were reading in chapter three",
+        captured_at="2026-07-30T10:00:00Z",
+    )
+
+    # The reader turned to chapter 4 and its sync-point lookup missed, so it
+    # carries a chapter and no index.
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=4,
+        epub_text_preview="a sentence in chapter four the map could not place",
+        captured_at="2026-07-30T11:00:00Z",
+    )
+
+    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert after["epub_chapter"] == 4
+    assert after["epub_sentence_index"] is None, (
+        "sentence 200 is a coordinate of chapter 3 and means nothing in chapter 4"
+    )
+    assert after["sync_map_version"] is None, (
+        "a version stamp must not outlive the index it attests to"
+    )
+    # The anchors that still describe the reader are untouched.
+    assert after["epub_text_preview"] == "a sentence in chapter four the map could not place"
+
+
+async def test_a_write_in_the_same_chapter_keeps_its_sentence_index(
+    client, make_user, auth_header, db
+):
+    """The inverse. Nothing about the chapter changed, so the stored index is
+    still a valid description and clearing it would lose real precision."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=3, epub_sentence_index=200, sync_map_version=7,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=3, epub_progress_percent=31.5,
+        captured_at="2026-07-30T11:00:00Z",
+    )
+
+    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert after["epub_chapter"] == 3
+    assert after["epub_sentence_index"] == 200
+    assert after["sync_map_version"] == 7
+
+
+async def test_a_write_carrying_no_chapter_keeps_the_sentence_index(
+    client, make_user, auth_header, db
+):
+    """The rule that must NOT widen. An audio heartbeat or a completion toggle
+    carries no chapter at all; it must not clear an anchor it knows nothing
+    about. This is the guard that stops the fix eating real positions."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=3, epub_sentence_index=200, sync_map_version=7,
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        audio_position_ms=1_234_000, captured_at="2026-07-30T11:00:00Z",
+    )
+
+    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert after["epub_chapter"] == 3
+    assert after["epub_sentence_index"] == 200
+    assert after["sync_map_version"] == 7
+    assert after["audio_position_ms"] == 1_234_000
+
+
+async def test_clearing_the_index_moves_the_anchor_so_hints_stop_being_current(
+    client, make_user, auth_header, db
+):
+    """A hint describes the anchor it was captured against. Dropping the
+    sentence index moves the anchor, so a hint captured at the old one must
+    stop being served as current — otherwise a device restores to a page the
+    record no longer claims."""
+    pair = await make_book_pair(db)
+    user = await make_user(username="reader")
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=3, epub_sentence_index=200,
+        hint={"kind": "readium_locator", "value": LOCATOR},
+        captured_at="2026-07-30T10:00:00Z",
+    )
+    before = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert before["hints"][0]["current"] is True
+    revision_before = before["anchor_revision"]
+
+    await _put(
+        client, user, auth_header, "pair", pair.id,
+        epub_chapter=4, captured_at="2026-07-30T11:00:00Z",
+    )
+
+    after = (await _get(client, user, auth_header, "pair", pair.id)).json()
+    assert after["anchor_revision"] > revision_before
+    assert after["hints"][0]["current"] is False
+    # Staleness is a tag, not a deletion (contract, "Anchors and hints").
+    assert after["hints"][0]["value"] == LOCATOR
+
+
 # ---------- standalone media ----------
 
 async def test_standalone_ebook_gets_a_canonical_record(
