@@ -1,6 +1,8 @@
 package com.booksync.worker
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
@@ -10,9 +12,14 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.SyncMapAutoFetch
+import com.booksync.data.util.NetworkMonitor
+import com.booksync.ui.account.SYNC_MAP_WIFI_ONLY
+import com.booksync.ui.account.SYNC_MAP_WITH_EBOOK
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -32,6 +39,8 @@ class DownloadWorker @AssistedInject constructor(
     @Assisted private val workerParams: WorkerParameters,
     private val repository: BookSyncRepository,
     private val coverArtHelper: com.booksync.auto.CoverArtHelper,
+    private val dataStore: DataStore<Preferences>,
+    private val networkMonitor: NetworkMonitor,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -175,19 +184,27 @@ class DownloadWorker @AssistedInject constructor(
                     cacheCoverArt(pair.audiobookId, pair.audiobookFilename, pair.audiobookCoverPath)
                 }
 
-                // Always attempt sync-map after an audiobook download (or on ALL / explicit SYNC_MAP).
-                // The server returns 404 if the sync map isn't ready yet; the retry wrapper handles
-                // transient failures with exponential backoff and treats 404 as "not ready, move on".
-                val shouldFetchSyncMap = when (type) {
-                    "SYNC_MAP", "AUDIOBOOK" -> true
-                    "ALL" -> !pair.syncMapDownloaded
-                    else -> false
-                }
-                if (shouldFetchSyncMap) {
+                // Always attempt sync-map after an audiobook download (or on ALL / explicit
+                // SYNC_MAP_EXPLICIT / the background SYNC_MAP sweeps), and on an EBOOK-only
+                // download when the "Download sync maps with the ebook" setting (issue #655) is
+                // on — see SyncMapAutoFetch.shouldFetchSyncMapFor. The server returns 404 if the
+                // sync map isn't ready yet; the retry wrapper handles transient failures with
+                // exponential backoff and treats 404 as "not ready, move on".
+                val prefs = dataStore.data.first()
+                val downloadWithEbook = prefs[SYNC_MAP_WITH_EBOOK] ?: true
+                val wifiOnly = prefs[SYNC_MAP_WIFI_ONLY] ?: true
+                val wantsSyncMap = SyncMapAutoFetch.shouldFetchSyncMapFor(type, pair.syncMapDownloaded, downloadWithEbook)
+                // type carries through so SYNC_MAP_EXPLICIT ("Refresh sync data") always bypasses
+                // the Wi-Fi-only gate — see SyncMapAutoFetch.blockedByMeteredConnection.
+                val heldBackByMetered = wantsSyncMap &&
+                    SyncMapAutoFetch.blockedByMeteredConnection(type, wifiOnly, networkMonitor.isActiveNetworkMetered())
+                if (wantsSyncMap && !heldBackByMetered) {
                     updateNotificationProgress(-1, "Sync Data")
                     setProgressAsync(workDataOf(PROGRESS_KEY to -1, "CURRENT" to "SYNC_MAP", KEY_PAIR_ID to pairId, KEY_TYPE to type))
                     val ok = repository.downloadSyncMapWithRetry(pair.id)
                     Log.d("DownloadWorker", "sync-map fetch for pair $pairId -> ok=$ok")
+                } else if (heldBackByMetered) {
+                    Log.d("DownloadWorker", "sync-map fetch for pair $pairId held back — Wi-Fi only setting and network is metered")
                 }
 
                 Result.success()
@@ -235,7 +252,7 @@ class DownloadWorker @AssistedInject constructor(
             "STANDALONE_AUDIOBOOK" -> "Audiobook"
             "EBOOK" -> "Ebook"
             "AUDIOBOOK" -> "Audiobook"
-            "SYNC_MAP" -> "Sync data"
+            "SYNC_MAP", "SYNC_MAP_EXPLICIT" -> "Sync data"
             else -> "Book files"
         }
 

@@ -422,7 +422,9 @@ class HomeViewModel @Inject constructor(
     fun downloadBothById(pairId: Int)              = enqueue(pairId,  "ALL", "download_pair_$pairId")
     fun downloadEbook(pair: BookPairEntity)     = enqueue(pair.id, "EBOOK",     "download_ebook_${pair.id}")
     fun downloadAudiobook(pair: BookPairEntity) = enqueue(pair.id, "AUDIOBOOK", "download_audio_${pair.id}")
-    fun refreshSyncData(pair: BookPairEntity)   = enqueue(pair.id, "SYNC_MAP",  "download_sync_${pair.id}")
+    // SYNC_MAP_EXPLICIT, not SYNC_MAP (issue #655 follow-up): an explicit tap
+    // must bypass the "Only download sync maps over Wi-Fi" setting.
+    fun refreshSyncData(pair: BookPairEntity)   = enqueue(pair.id, "SYNC_MAP_EXPLICIT",  "download_sync_${pair.id}")
 
     fun downloadStandaloneEbook(ebook: EBookEntity) =
         enqueue(ebook.id, "STANDALONE_EBOOK", "download_standalone_ebook_${ebook.id}")

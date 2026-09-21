@@ -114,6 +114,8 @@ fun AccountScreen(
     val colors = Tandem.colors
     val autoCleanupEbooks     by viewModel.autoCleanupEbooks.collectAsState()
     val autoCleanupAudiobooks by viewModel.autoCleanupAudiobooks.collectAsState()
+    val syncMapWithEbook      by viewModel.syncMapWithEbook.collectAsState()
+    val syncMapWifiOnly       by viewModel.syncMapWifiOnly.collectAsState()
     val appTheme              by viewModel.appTheme.collectAsState()
     val user                  by viewModel.user.collectAsState()
     val isOnline              by viewModel.isOnline.collectAsState()
@@ -300,6 +302,26 @@ fun AccountScreen(
                         description = "Remove downloaded audiobooks after you finish them.",
                         checked = autoCleanupAudiobooks,
                         onCheckedChange = viewModel::setAutoCleanupAudiobooks,
+                    )
+                    Divider()
+                    // Issue #655: the sync map is often bigger than the ebook it
+                    // describes, so downloading it is worth a setting of its own
+                    // rather than always bundling it into an ebook-only download.
+                    ToggleRow(
+                        title = "Download sync maps with the ebook",
+                        description = "Also fetch this book's sync data when you download just the " +
+                            "ebook, so chapter-position sync is ready without a later connection.",
+                        checked = syncMapWithEbook,
+                        onCheckedChange = viewModel::setSyncMapWithEbook,
+                    )
+                    Divider()
+                    ToggleRow(
+                        title = "Only download sync maps over Wi-Fi",
+                        description = "Sync data can run several megabytes. Turning this off lets it " +
+                            "download over cellular too — leave it on and a book that hasn't synced " +
+                            "over Wi-Fi yet may resume at an older position until it can.",
+                        checked = syncMapWifiOnly,
+                        onCheckedChange = viewModel::setSyncMapWifiOnly,
                     )
                     Divider()
                     ActionRow(

@@ -163,4 +163,149 @@ class SyncMapAutoFetchTest {
     fun `leftActiveSet reports every id when the set empties out`() {
         assertEquals(setOf(1, 2), SyncMapAutoFetch.leftActiveSet(previous = setOf(1, 2), current = emptySet()))
     }
+
+    // ---- shouldFetchSyncMapFor: what a DownloadWorker run fetches (issue #655) ----
+
+    @Test
+    fun `SYNC_MAP always fetches regardless of cache or the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP", alreadyCached = true, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `AUDIOBOOK always fetches regardless of cache or the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = true, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `ALL fetches only when not already cached, regardless of the ebook setting`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = false, downloadWithEbookEnabled = false))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = true, downloadWithEbookEnabled = true))
+    }
+
+    @Test
+    fun `EBOOK fetches only when the download-with-ebook setting is on`() {
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("EBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("EBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `EBOOK setting is ignored by every other type`() {
+        // The setting is named "with the ebook" on purpose — it must not leak
+        // into AUDIOBOOK/ALL/SYNC_MAP decisions.
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("ALL", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `SYNC_MAP_EXPLICIT always fetches regardless of cache or the ebook setting`() {
+        // The "Refresh sync data" button (issue #655) — same unconditional
+        // shape as the background SYNC_MAP sweep; only the metered gate tells
+        // the two apart (see blockedByMeteredConnection below).
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP_EXPLICIT", alreadyCached = true, downloadWithEbookEnabled = false))
+        assertEquals(true, SyncMapAutoFetch.shouldFetchSyncMapFor("SYNC_MAP_EXPLICIT", alreadyCached = false, downloadWithEbookEnabled = false))
+    }
+
+    @Test
+    fun `standalone and unknown types never fetch a sync map`() {
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("STANDALONE_EBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("STANDALONE_AUDIOBOOK", alreadyCached = false, downloadWithEbookEnabled = true))
+        assertEquals(false, SyncMapAutoFetch.shouldFetchSyncMapFor("BOGUS", alreadyCached = false, downloadWithEbookEnabled = true))
+    }
+
+    // ---- blockedByMeteredConnection: the Wi-Fi-only setting (issue #655) ----
+
+    @Test
+    fun `wifi-only setting blocks a background fetch on a metered connection`() {
+        assertEquals(true, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = true, isMetered = true))
+    }
+
+    @Test
+    fun `wifi-only setting does not block on an unmetered connection`() {
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = true, isMetered = false))
+    }
+
+    @Test
+    fun `disabling wifi-only never blocks, metered or not`() {
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = false, isMetered = true))
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = false, isMetered = false))
+    }
+
+    @Test
+    fun `the streamed-book prefetch sweep is blocked exactly like SYNC_MAP`() {
+        // pairsToPrefetchForStreaming's results are enqueued as plain "SYNC_MAP"
+        // work (see LibraryViewModel) — same background type, same gate.
+        assertEquals(true, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = true, isMetered = true))
+    }
+
+    @Test
+    fun `an explicit refresh is never blocked, wifi-only setting or not, metered or not`() {
+        // Issue #655 follow-up: a user who tapped "Refresh sync data" asked for
+        // it now, on whatever connection is available. Silently doing nothing
+        // because "Wi-Fi only" is on looks exactly like a broken button — that
+        // setting is a statement about background work, not this.
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = true, isMetered = true))
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = true, isMetered = false))
+        assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = false, isMetered = true))
+    }
+
+    // ---- pairsToPrefetchForStreaming: the never-downloaded / streamed case (issue #655) ----
+
+    @Test
+    fun `a streamed pair in the candidate set with no cached map is prefetched`() {
+        // Neither file is downloaded — this is exactly the gap needsSyncMapFetch
+        // leaves, because it requires ebookDownloaded || audiobookDownloaded.
+        val streamed = pair(id = 1, status = "synced", ebookDownloaded = false, audiobookDownloaded = false)
+
+        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(streamed), candidatePairIds = setOf(1))
+
+        assertEquals(listOf(1), result)
+    }
+
+    @Test
+    fun `a pair outside the candidate set is never prefetched, even if synced and uncached`() {
+        val streamed = pair(id = 1, status = "synced")
+
+        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(streamed), candidatePairIds = emptySet())
+
+        assertEquals(emptyList<Int>(), result)
+    }
+
+    @Test
+    fun `a candidate pair that already has a current cached map is not re-fetched`() {
+        val cached = pair(id = 1, status = "synced", syncMapDownloaded = true)
+
+        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(cached), candidatePairIds = setOf(1))
+
+        assertEquals(emptyList<Int>(), result)
+    }
+
+    @Test
+    fun `a candidate pair with a stale (version-bumped) cached map is re-fetched`() {
+        // refreshPairs already flips syncMapDownloaded back to false the moment
+        // sync_map_version disagrees with the cached one (issue #55) — by the
+        // time this function runs, "stale" and "never cached" look identical.
+        val staleAfterRetranscription = pair(id = 1, status = "synced", syncMapDownloaded = false)
+
+        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(staleAfterRetranscription), candidatePairIds = setOf(1))
+
+        assertEquals(listOf(1), result)
+    }
+
+    @Test
+    fun `a candidate pair that is not yet synced is not prefetched`() {
+        val transcribing = pair(id = 1, status = "transcribing")
+
+        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(transcribing), candidatePairIds = setOf(1))
+
+        assertEquals(emptyList<Int>(), result)
+    }
+
+    @Test
+    fun `pairsToPrefetchForStreaming returns nothing for an empty candidate set`() {
+        val pairs = listOf(pair(id = 1, status = "synced"), pair(id = 2, status = "synced"))
+
+        assertEquals(emptyList<Int>(), SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, candidatePairIds = emptySet()))
+    }
 }
