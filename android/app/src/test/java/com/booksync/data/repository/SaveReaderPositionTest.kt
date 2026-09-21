@@ -77,9 +77,10 @@ class SaveReaderPositionTest {
         capturedAtMillis: Long = 1_700_000_000_000L,
         textPreview: String = "some other unmatched preview text that is long enough",
         skipSyncPointLookup: Boolean = false,
+        chapterIndex: Int = 12,
     ) = ReaderPositionSnapshot(
         pairId = 42,
-        chapterIndex = 12,
+        chapterIndex = chapterIndex,
         locatorJson = "{\"href\":\"ch12.xhtml\"}",
         textPreview = textPreview,
         progressPercent = 55.5f,
@@ -259,6 +260,53 @@ class SaveReaderPositionTest {
         assertNull(sentRequest.captured.epub_sentence_index)
         assertNull(sentRequest.captured.audio_position_ms)
         coVerify(exactly = 0) { syncPointDao.getPointsForPair(any()) }
+    }
+
+    // ---------- a stale sentence index must not follow a chapter change (issue #644) ----------
+
+    @Test
+    fun `a sync-point miss on a new chapter clears the previous chapter's sentence index`() = runTest {
+        // Existing row: chapter 3, sentence 200. The reader has turned to
+        // chapter 4 and the lookup for the new page misses — sentence 200
+        // describes a place in chapter 3 and is not a coordinate of chapter 4
+        // at all, so it must not be carried forward onto the new chapter.
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns BookmarkEntity(
+            scopeKey = TEST_SCOPE, bookPairId = 42, source = "ebook",
+            epubChapter = 3, epubSentenceIndex = 200,
+            audioPositionMs = 1000, updatedAt = "1", syncMapVersion = 5,
+        )
+        coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
+        coEvery { api.updatePosition(any(), any(), any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(chapterIndex = 4)).join()
+
+        assertEquals(4, savedBookmark.captured.epubChapter)
+        assertNull("a sentence index from a different chapter is not a valid coordinate", savedBookmark.captured.epubSentenceIndex)
+        assertNull("the version stamp must not attest to an index that was dropped", savedBookmark.captured.syncMapVersion)
+    }
+
+    @Test
+    fun `a sync-point miss on the same chapter still inherits the previous sentence index`() = runTest {
+        // Inverse of the above: nothing about the chapter changed, so the
+        // previously resolved sentence index (and the map version it belongs
+        // to) is still a valid description of where the reader is.
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns BookmarkEntity(
+            scopeKey = TEST_SCOPE, bookPairId = 42, source = "ebook",
+            epubChapter = 12, epubSentenceIndex = 200,
+            audioPositionMs = 1000, updatedAt = "1", syncMapVersion = 5,
+        )
+        coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
+        coEvery { api.updatePosition(any(), any(), any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(chapterIndex = 12)).join()
+
+        assertEquals(12, savedBookmark.captured.epubChapter)
+        assertEquals(200, savedBookmark.captured.epubSentenceIndex)
+        assertEquals(5, savedBookmark.captured.syncMapVersion)
     }
 
     // ---------- attesting the sync-map version (issue #116) ----------
