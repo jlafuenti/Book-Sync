@@ -16,6 +16,8 @@ operator must do by hand rather than read about afterwards.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-21
+
 ### Added
 
 - `GET /api/sync/positions`: every position the caller has (pair, standalone ebook, standalone
@@ -98,8 +100,8 @@ operator must do by hand rather than read about afterwards.
   readers are worth doing deliberately rather than in one sweep. Pairs aligned for the first time
   after deploying need nothing (#648, #650).
 
-- No action required. An app build that predates this release keeps working against a server that
-  has it (it simply never calls the new endpoint), and an app build that has it falls back to the
+- The bulk positions endpoint (#653) needs no action. An app build that predates this release keeps
+  working against a server that has it (it simply never calls the new endpoint), and an app build that has it falls back to the
   old per-pair loop against a server that predates it.
 
 ## [0.4.2] - 2026-09-18

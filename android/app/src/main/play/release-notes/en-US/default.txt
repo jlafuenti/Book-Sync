@@ -1,1 +1,5 @@
-Report a problem now attaches the Android Auto log as well as the app log, so a problem in the car arrives with the evidence about the car.
+Android Auto and the player now pick up where you stopped reading, not where you last listened.
+Sync data for books you've opened downloads in the background, with a new Wi-Fi-only setting.
+Signing in loads your library and reading positions much faster.
+The walkthrough no longer skips its book section or changes cards after they appear, and the app no longer goes blank after its reader steps.
+Reading positions stay more accurate when you switch between devices.
