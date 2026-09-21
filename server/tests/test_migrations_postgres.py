@@ -528,3 +528,61 @@ def test_no_column_is_nullable_that_the_models_declare_not_null():
         if not column.nullable and (table.name, column.name) in live_nullable
     )
     assert drift == [], f"nullable in the database, NOT NULL in the models: {drift}"
+
+
+def test_0024_backfills_a_null_captured_at_from_updated_at():
+    """Clients rank "last read" by `captured_at`, falling back to `updated_at`,
+    which server-side rewrites bump (issue #679). 0024 copies `updated_at` into
+    a NULL `captured_at` on both tables and leaves stamped rows alone.
+
+    0024 changes no schema, so the ORM (today's models) can seed at 0023.
+    """
+    from datetime import datetime
+
+    from alembic import command
+    from sqlalchemy.orm import Session
+
+    from models.book import AudioBook, BookPair, EBook, PairStatus
+    from models.bookmark import Bookmark, BookmarkSource
+    from models.progress import ProgressType, UserProgress
+    from models.user import User
+
+    old = datetime(2025, 3, 1, 12, 0, 0)
+    stamped = datetime(2026, 1, 2, 8, 30, 0)
+
+    cfg = _alembic_config()
+    engine = _sync_engine()
+    command.upgrade(cfg, "0023_audio_fingerprint")
+
+    with Session(engine) as session:
+        user = User(username="reader", email="reader@example.com", hashed_password="x")
+        session.add(user)
+        session.flush()
+        pair_ids = []
+        for n in range(2):
+            eb = EBook(title="E", filename="e.epub", file_path=f"/x/e{n}.epub")
+            ab = AudioBook(title="A", filename="a.m4b", file_path=f"/x/a{n}.m4b")
+            session.add_all([eb, ab])
+            session.flush()
+            pair = BookPair(ebook_id=eb.id, audiobook_id=ab.id, status=PairStatus.SYNCED)
+            session.add(pair)
+            session.flush()
+            captured = None if n == 0 else stamped
+            session.add_all([
+                Bookmark(user_id=user.id, book_pair_id=pair.id, source=BookmarkSource.EBOOK,
+                         updated_at=old, captured_at=captured),
+                UserProgress(user_id=user.id, media_type=ProgressType.EBOOK,
+                             ebook_id=eb.id, book_pair_id=pair.id,
+                             updated_at=old, captured_at=captured),
+            ])
+            pair_ids.append(pair.id)
+        session.commit()
+
+    command.upgrade(cfg, "head")
+
+    with engine.begin() as conn:
+        for table in ("bookmarks", "user_progress"):
+            rows = dict(conn.execute(text(
+                f"SELECT book_pair_id, captured_at FROM {table}"
+            )).all())
+            assert rows == {pair_ids[0]: old, pair_ids[1]: stamped}, table

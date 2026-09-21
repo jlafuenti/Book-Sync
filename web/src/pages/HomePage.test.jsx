@@ -575,3 +575,57 @@ describe('HomePage Continue card actions on mobile', () => {
         await waitFor(() => expect(screen.queryByRole('button', { name: 'View Details' })).not.toBeInTheDocument())
     })
 })
+
+describe('HomePage Continue Reading order (issue #679)', () => {
+    // A realign rewrites a pair's bookmark server-side, which bumps
+    // `updated_at` on its projection rows without anyone reading. Ordering by
+    // `updated_at` floated the realigned pair to the front; the order has to
+    // follow `captured_at` — when the position was actually taken.
+    function continueTitles() {
+        return [...document.querySelectorAll('.continue-size')].map((el) => el.textContent)
+    }
+
+    it('orders by captured_at, not by a server-side updated_at bump', async () => {
+        getEbooksMock.mockResolvedValue([
+            { id: 10, title: 'Realigned Pair', cover_path: null },
+            { id: 11, title: 'Read Yesterday', cover_path: null },
+        ])
+        getAudiobooksMock.mockResolvedValue([
+            { id: 20, title: 'Realigned Pair Audio', cover_path: null, duration_seconds: 3600 },
+        ])
+        getPairsMock.mockResolvedValue([{ id: 100, ebook: { id: 10 }, audiobook: { id: 20 } }])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 10, book_pair_id: 100, epub_progress_percent: 20,
+              epub_chapter: 0, is_completed: false, source: 'ebook',
+              captured_at: '2025-03-01T12:00:00Z', updated_at: '2026-09-21T09:00:00Z' },
+            { id: 2, media_type: 'ebook', ebook_id: 11, book_pair_id: null, epub_progress_percent: 40,
+              epub_chapter: 0, is_completed: false,
+              captured_at: '2026-09-20T20:00:00Z', updated_at: '2026-09-20T20:00:01Z' },
+        ])
+
+        render(<MemoryRouter><HomePage /></MemoryRouter>)
+
+        await waitFor(() => expect(continueTitles()).toHaveLength(2))
+        const titles = continueTitles()
+        expect(titles[0]).toContain('Read Yesterday')
+        expect(titles[1]).toContain('Realigned Pair')
+    })
+
+    it('falls back to updated_at for a row nobody stamped', async () => {
+        getEbooksMock.mockResolvedValue([
+            { id: 11, title: 'Older Book', cover_path: null },
+            { id: 12, title: 'Newer Book', cover_path: null },
+        ])
+        getAllProgressMock.mockResolvedValue([
+            { id: 1, media_type: 'ebook', ebook_id: 11, book_pair_id: null, epub_progress_percent: 10,
+              epub_chapter: 0, is_completed: false, captured_at: null, updated_at: '2025-01-01T00:00:00Z' },
+            { id: 2, media_type: 'ebook', ebook_id: 12, book_pair_id: null, epub_progress_percent: 10,
+              epub_chapter: 0, is_completed: false, captured_at: null, updated_at: '2025-06-01T00:00:00Z' },
+        ])
+
+        render(<MemoryRouter><HomePage /></MemoryRouter>)
+
+        await waitFor(() => expect(continueTitles()).toHaveLength(2))
+        expect(continueTitles()[0]).toContain('Newer Book')
+    })
+})
