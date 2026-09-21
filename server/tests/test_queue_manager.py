@@ -297,6 +297,26 @@ async def test_recovered_item_is_reattached_not_restarted(db, monkeypatch):
     assert "reattach" in refreshed.message.lower()
 
 
+async def test_skipping_the_gates_does_not_claim_a_pause_happened(caplog):
+    """The skip is shared by two paths — resuming from an off-hours pause, and
+    re-attaching after a server restart — and the log line has to be true for
+    both. It used to say "(already passed before the pause)", which is false
+    after a restart: verifying issue #661 on a live server, that wording led a
+    careful reader to conclude someone had paused the job when nobody had. A
+    fix for misleading status reporting should not ship a misleading log line.
+    """
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="queue-manager"):
+        await queue_manager._run_integrity_gates(
+            1, "/nonexistent/audio.m4b", "/nonexistent/book.epub", resuming=True
+        )
+
+    skip_lines = [r.getMessage() for r in caplog.records if "skipping integrity gates" in r.getMessage()]
+    assert skip_lines, "the skip must still be logged — it is the only evidence the decode was avoided"
+    assert all("pause" not in line.lower() for line in skip_lines), skip_lines
+
+
 async def test_recovered_flag_does_not_survive_a_second_claim(db, monkeypatch):
     """The reattach marker is one-shot: if this attempt itself needs a real
     restart later (e.g. the provider turns out to be unavailable and the

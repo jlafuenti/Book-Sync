@@ -935,8 +935,12 @@ async def _run_integrity_gates(
 
     if resuming:
         logger.info(
+            # True for both paths that reach this skip — an off-hours
+            # pause/resume and a restart re-attach (issue #661). "Before the
+            # pause" was wrong after a restart and misled a reader into
+            # thinking someone had paused the job.
             f"Queue item {item_id}: resuming — skipping integrity gates "
-            f"(already passed before the pause)"
+            f"(already passed when this job first started)"
         )
         return
 
