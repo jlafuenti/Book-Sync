@@ -67,9 +67,14 @@ def _usable_hint(position: Dict[str, Any], device_id: str, hint_kind: str) -> Op
         if not hint.get("value"):
             continue
         # On an audiobook-source position the page only still matches if the
-        # audio hasn't moved on since the hint was captured.
+        # audio hasn't moved on since the hint was captured. A hint with no
+        # audio anchor at all cannot be checked for drift — its freshness is
+        # unprovable — so it does not qualify either (issue #682): the audio
+        # rung, the one coordinate known to be current, is what comes next.
         hint_audio = hint.get("audio_position_ms")
-        if position.get("source") == "audiobook" and hint_audio is not None:
+        if position.get("source") == "audiobook":
+            if hint_audio is None:
+                continue
             now_audio = position.get("audio_position_ms")
             if now_audio is not None and abs(now_audio - hint_audio) >= LOCATOR_REUSE_THRESHOLD_MS:
                 continue

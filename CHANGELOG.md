@@ -26,6 +26,17 @@ operator must do by hand rather than read about afterwards.
   `captured_at` on `bookmarks` and `user_progress`; the remap pins the old `updated_at` into
   `captured_at` if it finds one still empty; and the web's Continue Reading now sorts by
   `captured_at`, not `updated_at` (#679).
+- The ebook could reopen on the page from before a period of listening — reported from a car,
+  where Android Auto resumed the audiobook and disconnecting paused it, and the ebook then opened
+  on the pre-drive page instead of where listening had stopped. A locator hint captured while
+  reading, with no `audio_position_ms` stamped beside it, skipped the drift check that would
+  otherwise have dropped it, and a drive that stayed within one chapter never bumped
+  `anchor_revision` either — so the stale hint won the restore, online, offline, and for a reader
+  left open across the trip. The restore ladder (server, web, Android) now treats a hint with no
+  audio anchor as unusable whenever its record is audiobook-sourced, falling through to the audio
+  rung instead. Android also re-anchors a reader that returns from the background once the
+  canonical record's audio has moved on past a threshold, and no longer lets a page whose
+  sync-point lookup missed inherit an older page's audio time (#682).
 
 ### Upgrade notes
 

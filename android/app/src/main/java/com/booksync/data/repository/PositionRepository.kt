@@ -1056,6 +1056,16 @@ class PositionRepository @Inject constructor(
             // progress percent still describe where the reader is, which is
             // what the restore ladder is for.
             val chapterUnchanged = existing != null && existing.epubChapter == resolvedChapterIndex
+            // The same reasoning as chapterUnchanged above, one level more
+            // precise (issue #682): existing.locatorAudioMs is the audio time
+            // for existing's OWN locator, not for whatever page this snapshot
+            // just navigated to. A miss on a page that changed underneath it
+            // has nothing valid to inherit; only a miss on the SAME locator
+            // (a resend, a heartbeat) is still describing the audio time it
+            // was resolved for. Carrying it forward across a locator change
+            // let the restore ladder's drift check on the next open measure
+            // audio movement against the wrong moment.
+            val locatorUnchanged = existing != null && existing.epubLocator == snapshot.locatorJson
             // Which map that sentence index is a coordinate of (issue #116):
             // the version the cached points came from when a match was found;
             // otherwise the merged row reuses the existing index, so it keeps
@@ -1083,7 +1093,8 @@ class PositionRepository @Inject constructor(
                 syncMapVersion = resolvedSyncMapVersion,
                 audioPositionMs = resolvedAudioMs ?: existing?.audioPositionMs,
                 epubLocator = snapshot.locatorJson,
-                locatorAudioMs = resolvedAudioMs ?: existing?.locatorAudioMs,
+                locatorAudioMs = resolvedAudioMs
+                    ?: existing?.locatorAudioMs?.takeIf { locatorUnchanged },
                 // Stored so the play path can search the sync map for this
                 // page without a server round trip (issue #643).
                 epubTextPreview = snapshot.textPreview.takeIf { it.isNotEmpty() }

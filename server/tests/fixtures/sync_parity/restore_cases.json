@@ -153,5 +153,38 @@
     "position": {"anchor_revision": 2, "epub_chapter": 0},
     "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
     "expected": ["chapter"]
+  },
+  {
+    "name": "audiobook_hint_with_no_audio_anchor_cannot_prove_freshness",
+    "why": "Issue #682: a Readium locator captured while reading, with no audio_position_ms stamped beside it, cannot be checked for drift at all — the check that would drop it never runs when there is nothing to measure. On an audiobook-sourced record the hint's freshness is unprovable, so it must not lead; the audio rung — the one coordinate known to be current — comes first instead, exactly as it would for a hint dropped by the drift check. A drive that stayed in one chapter (anchor_revision unchanged) used to leave the pre-drive page in charge of the reopen.",
+    "position": {
+      "anchor_revision": 7, "source": "audiobook", "audio_position_ms": 900000,
+      "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": null}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["audio", "chapter"]
+  },
+  {
+    "name": "offline_local_row_with_no_audio_anchor_also_defers_to_audio",
+    "why": "Issue #682's offline shape: a local row always reports anchor_revision 0 on both itself and its single hint (BookmarkEntity.toStoredPosition), so the ordinary staleness check never has a chance to fire either — the hint looks perpetually current. The same rule applies regardless: an audiobook-sourced record's hint with no audio anchor cannot lead, online or off.",
+    "position": {
+      "anchor_revision": 0, "source": "audiobook", "audio_position_ms": 900000,
+      "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 0, "audio_position_ms": null}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["audio", "chapter"]
+  },
+  {
+    "name": "ebook_hint_with_no_audio_anchor_still_leads",
+    "why": "The new rule is scoped to an audiobook-sourced record. An ebook-sourced position has no listening session to have moved on without the hint knowing, so a hint with no audio anchor is exactly the ordinary case (most hints carry none) and must keep leading, same as before.",
+    "position": {
+      "anchor_revision": 7, "source": "ebook", "audio_position_ms": 900000,
+      "epub_chapter": 12,
+      "hints": [{"kind": "readium_locator", "device_id": "pixel", "value": "{}", "anchor_revision": 7, "audio_position_ms": null}]
+    },
+    "context": {"spine_count": 40, "device_id": "pixel", "hint_kind": "readium_locator"},
+    "expected": ["hint", "chapter", "audio"]
   }
 ]

@@ -91,8 +91,14 @@ private fun usableHint(
         if (hint.anchorRevision != position.anchorRevision) continue
         if (HINT_DEVICE_SCOPED[hintKind] != false && hint.deviceId != deviceId) continue
         if (hint.value.isEmpty()) continue
+        // On an audiobook-source position the page only still matches if the
+        // audio hasn't moved on since the hint was captured. A hint with no
+        // audio anchor at all cannot be checked for drift — its freshness is
+        // unprovable — so it does not qualify either (issue #682): the audio
+        // rung, the one coordinate known to be current, is what comes next.
         val hintAudio = hint.audioPositionMs
-        if (position.source == "audiobook" && hintAudio != null) {
+        if (position.source == "audiobook") {
+            if (hintAudio == null) continue
             val now = position.audioPositionMs
             if (now != null && kotlin.math.abs(now - hintAudio) >= LOCATOR_REUSE_THRESHOLD_MS) {
                 continue
