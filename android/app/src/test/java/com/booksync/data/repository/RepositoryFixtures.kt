@@ -46,6 +46,7 @@ internal fun buildRepository(
     json: Json = Json { ignoreUnknownKeys = true },
     userScopeProvider: UserScopeProvider = testScopeProvider(),
     transcription: TranscriptionRepository = mockk(relaxed = true),
+    syncMapRemovalStore: SyncMapRemovalStore = mockk(relaxed = true),
 ): BookSyncRepository = BookSyncRepository(
     library = buildLibraryRepository(
         api = api,
@@ -67,6 +68,7 @@ internal fun buildRepository(
         syncPointDao = syncPointDao,
         context = context,
         diagnosticLogger = diagnosticLogger,
+        syncMapRemovalStore = syncMapRemovalStore,
     ),
     positions = buildPositionRepository(
         api = api,
@@ -118,6 +120,7 @@ internal fun buildMediaDownloadRepository(
     syncPointDao: SyncPointDao = mockk(relaxed = true),
     context: Context = mockk(relaxed = true),
     diagnosticLogger: DiagnosticLogger = mockk(relaxed = true),
+    syncMapRemovalStore: SyncMapRemovalStore = mockk(relaxed = true),
 ): MediaDownloadRepository = MediaDownloadRepository(
     api = api,
     bookPairDao = bookPairDao,
@@ -126,6 +129,7 @@ internal fun buildMediaDownloadRepository(
     syncPointDao = syncPointDao,
     context = context,
     diagnosticLogger = diagnosticLogger,
+    syncMapRemovalStore = syncMapRemovalStore,
 )
 
 /**

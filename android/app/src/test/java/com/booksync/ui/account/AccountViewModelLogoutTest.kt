@@ -100,6 +100,9 @@ class AccountViewModelLogoutTest {
             // CrashReportFormatterTest.
             diagnosticLogger = mockk(relaxed = true),
             appContext = mockk(relaxed = true),
+            repository = mockk(relaxed = true),
+            syncPointDao = mockk(relaxed = true),
+            syncMapRemovalStore = mockk(relaxed = true),
         )
     }
 

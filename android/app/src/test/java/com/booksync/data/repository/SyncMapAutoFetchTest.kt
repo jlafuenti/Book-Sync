@@ -142,6 +142,24 @@ class SyncMapAutoFetchTest {
         assertEquals(emptyList<Int>(), SyncMapAutoFetch.pairsToFetch(emptyList()))
     }
 
+    // ---- pairsToFetch: removedIds (issue #678) ------------------------------
+
+    @Test
+    fun `a pair removed by hand is not re-fetched by the sweep`() {
+        val removed = pair(id = 1, status = "synced", ebookDownloaded = true)
+        val due = pair(id = 2, status = "synced", ebookDownloaded = true)
+
+        val result = SyncMapAutoFetch.pairsToFetch(listOf(removed, due), removedIds = setOf(1))
+
+        assertEquals(listOf(2), result)
+    }
+
+    @Test
+    fun `removedIds defaults to empty, so existing callers are unaffected`() {
+        val due = pair(id = 1, status = "synced", ebookDownloaded = true)
+        assertEquals(listOf(1), SyncMapAutoFetch.pairsToFetch(listOf(due)))
+    }
+
     // ---- leftActiveSet: queue-exit detection --------------------------------
 
     @Test
@@ -233,13 +251,6 @@ class SyncMapAutoFetchTest {
     }
 
     @Test
-    fun `the streamed-book prefetch sweep is blocked exactly like SYNC_MAP`() {
-        // pairsToPrefetchForStreaming's results are enqueued as plain "SYNC_MAP"
-        // work (see LibraryViewModel) — same background type, same gate.
-        assertEquals(true, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP", wifiOnlyEnabled = true, isMetered = true))
-    }
-
-    @Test
     fun `an explicit refresh is never blocked, wifi-only setting or not, metered or not`() {
         // Issue #655 follow-up: a user who tapped "Refresh sync data" asked for
         // it now, on whatever connection is available. Silently doing nothing
@@ -248,64 +259,5 @@ class SyncMapAutoFetchTest {
         assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = true, isMetered = true))
         assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = true, isMetered = false))
         assertEquals(false, SyncMapAutoFetch.blockedByMeteredConnection("SYNC_MAP_EXPLICIT", wifiOnlyEnabled = false, isMetered = true))
-    }
-
-    // ---- pairsToPrefetchForStreaming: the never-downloaded / streamed case (issue #655) ----
-
-    @Test
-    fun `a streamed pair in the candidate set with no cached map is prefetched`() {
-        // Neither file is downloaded — this is exactly the gap needsSyncMapFetch
-        // leaves, because it requires ebookDownloaded || audiobookDownloaded.
-        val streamed = pair(id = 1, status = "synced", ebookDownloaded = false, audiobookDownloaded = false)
-
-        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(streamed), candidatePairIds = setOf(1))
-
-        assertEquals(listOf(1), result)
-    }
-
-    @Test
-    fun `a pair outside the candidate set is never prefetched, even if synced and uncached`() {
-        val streamed = pair(id = 1, status = "synced")
-
-        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(streamed), candidatePairIds = emptySet())
-
-        assertEquals(emptyList<Int>(), result)
-    }
-
-    @Test
-    fun `a candidate pair that already has a current cached map is not re-fetched`() {
-        val cached = pair(id = 1, status = "synced", syncMapDownloaded = true)
-
-        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(cached), candidatePairIds = setOf(1))
-
-        assertEquals(emptyList<Int>(), result)
-    }
-
-    @Test
-    fun `a candidate pair with a stale (version-bumped) cached map is re-fetched`() {
-        // refreshPairs already flips syncMapDownloaded back to false the moment
-        // sync_map_version disagrees with the cached one (issue #55) — by the
-        // time this function runs, "stale" and "never cached" look identical.
-        val staleAfterRetranscription = pair(id = 1, status = "synced", syncMapDownloaded = false)
-
-        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(staleAfterRetranscription), candidatePairIds = setOf(1))
-
-        assertEquals(listOf(1), result)
-    }
-
-    @Test
-    fun `a candidate pair that is not yet synced is not prefetched`() {
-        val transcribing = pair(id = 1, status = "transcribing")
-
-        val result = SyncMapAutoFetch.pairsToPrefetchForStreaming(listOf(transcribing), candidatePairIds = setOf(1))
-
-        assertEquals(emptyList<Int>(), result)
-    }
-
-    @Test
-    fun `pairsToPrefetchForStreaming returns nothing for an empty candidate set`() {
-        val pairs = listOf(pair(id = 1, status = "synced"), pair(id = 2, status = "synced"))
-
-        assertEquals(emptyList<Int>(), SyncMapAutoFetch.pairsToPrefetchForStreaming(pairs, candidatePairIds = emptySet()))
     }
 }

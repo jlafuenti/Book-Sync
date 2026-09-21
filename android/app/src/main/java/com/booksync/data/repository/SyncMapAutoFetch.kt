@@ -19,9 +19,21 @@ object SyncMapAutoFetch {
     fun needsSyncMapFetch(pair: BookPairEntity): Boolean =
         pair.status == "synced" && (pair.ebookDownloaded || pair.audiobookDownloaded) && !pair.syncMapDownloaded
 
-    /** IDs of the pairs in [pairs] that [needsSyncMapFetch], in list order. */
-    fun pairsToFetch(pairs: List<BookPairEntity>): List<Int> =
-        pairs.filter(::needsSyncMapFetch).map { it.id }
+    /**
+     * IDs of the pairs in [pairs] that [needsSyncMapFetch], excluding any id in
+     * [removedIds], in list order.
+     *
+     * [removedIds] is [SyncMapRemovalStore]'s "removed by you" set (issue
+     * #678): without this exclusion, a map the user explicitly removed —
+     * "Remove sync data" or Account → Storage's "Clear" — would look
+     * identical to one that simply was never fetched, and this sweep would
+     * silently re-download it on the very next library refresh. A fresh
+     * download or "Refresh sync data" clears the id from that set
+     * ([com.booksync.data.repository.MediaDownloadRepository.downloadSyncMap]),
+     * which is what lets the pair become eligible again.
+     */
+    fun pairsToFetch(pairs: List<BookPairEntity>, removedIds: Set<Int> = emptySet()): List<Int> =
+        pairs.filter { needsSyncMapFetch(it) && it.id !in removedIds }.map { it.id }
 
     /**
      * IDs that were in [previous] but are missing from [current] — pairs that
@@ -38,9 +50,8 @@ object SyncMapAutoFetch {
      * Whether one `DownloadWorker` run for a [BookPairEntity] should also fetch
      * the sync map (issue #655).
      *
-     * `SYNC_MAP` (the background sweeps: [pairsToFetch] and
-     * [pairsToPrefetchForStreaming]), `SYNC_MAP_EXPLICIT` (the "Refresh sync
-     * data" button) and `AUDIOBOOK` always did; `ALL` always did unless the
+     * `SYNC_MAP` (the background sweep, [pairsToFetch]), `SYNC_MAP_EXPLICIT`
+     * (the "Refresh sync data" button) and `AUDIOBOOK` always did; `ALL` always did unless the
      * cache was already current. An `EBOOK`-only download never did — the sync
      * map is a pair-level artifact, not part of either file, so nothing forced
      * it to ride along, and a device that only ever downloads ebooks could stay
@@ -82,27 +93,4 @@ object SyncMapAutoFetch {
      */
     fun blockedByMeteredConnection(type: String, wifiOnlyEnabled: Boolean, isMetered: Boolean): Boolean =
         type != "SYNC_MAP_EXPLICIT" && wifiOnlyEnabled && isMetered
-
-    /**
-     * Pairs whose sync map should be prefetched even though nothing has been
-     * downloaded (issue #655 follow-up): a `synced` pair with no cached map,
-     * restricted to [candidatePairIds] — the caller's own bounded set of
-     * recently-opened pairs (see `LibraryViewModel.fetchSyncMapsForStreamedRecentlyOpened`
-     * for how that set is chosen, and why it must not depend on audio
-     * progress), never the whole library.
-     *
-     * [needsSyncMapFetch] requires `ebookDownloaded || audiobookDownloaded`,
-     * which is exactly why a streamed pair — nothing saved offline, the
-     * ordinary way this app is used for a book that was not deliberately
-     * downloaded — never got a map until `AudioPlayerService`'s own bounded
-     * 1500ms fetch at resume time, the race issue #655 exists to avoid. This
-     * function drops that requirement entirely; [candidatePairIds] is what
-     * keeps it from sweeping every synced pair in a library where nothing is
-     * downloaded. The caller enqueues the result as plain `"SYNC_MAP"` work, so
-     * [blockedByMeteredConnection] still applies — this sweep is background
-     * work like [pairsToFetch], not a user's explicit request.
-     */
-    fun pairsToPrefetchForStreaming(pairs: List<BookPairEntity>, candidatePairIds: Set<Int>): List<Int> =
-        pairs.filter { it.id in candidatePairIds && it.status == "synced" && !it.syncMapDownloaded }
-            .map { it.id }
 }

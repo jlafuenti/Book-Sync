@@ -5,8 +5,8 @@ import androidx.work.WorkManager
 import com.booksync.data.remote.ServerUrlManager
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
-import com.booksync.data.repository.LastOpenedTimes
 import com.booksync.data.repository.LibraryLoader
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.data.repository.TranscriptionRepository
 import com.booksync.data.util.NetworkMonitor
 import io.mockk.every
@@ -51,6 +51,7 @@ class LibraryRefreshMessageTest {
 
     private val repository = mockk<BookSyncRepository>(relaxed = true)
     private val transcriptionRepository = mockk<TranscriptionRepository>(relaxed = true)
+    private val syncMapRemovalStore = mockk<SyncMapRemovalStore>(relaxed = true)
 
     @Before
     fun setUp() {
@@ -61,14 +62,11 @@ class LibraryRefreshMessageTest {
         mockkObject(WorkManager.Companion)
         every { WorkManager.getInstance(any<Context>()) } returns mockk(relaxed = true)
         every { transcriptionRepository.activeQueueItemsFlow() } returns emptyFlow()
+        // An unstubbed relaxed mock's Flow completes without emitting, and
+        // .first() on that throws NoSuchElementException rather than handing
+        // back an empty list — refresh() reads getPairsFlow() directly.
         every { repository.getPairsFlow() } returns flowOf(emptyList())
-        // refresh() also sweeps recently-opened pairs for a streamed-book
-        // sync-map prefetch (issue #655 follow-up #2 — lastOpenedTimesFlow,
-        // not getRecentlyPlayedPairsFlow: see LibrarySyncMapPrefetchTest for
-        // why); an unstubbed relaxed mock's Flow completes without emitting,
-        // and .first() on that throws NoSuchElementException, not an empty
-        // list — same reason getPairsFlow() above needs its own explicit stub.
-        every { repository.lastOpenedTimesFlow() } returns flowOf(LastOpenedTimes())
+        every { syncMapRemovalStore.removedIds() } returns flowOf(emptySet())
     }
 
     @After
@@ -95,6 +93,7 @@ class LibraryRefreshMessageTest {
             tokenManager = tokenManager,
             context = mockk(relaxed = true),
             loader = loader,
+            syncMapRemovalStore = syncMapRemovalStore,
         )
     }
 

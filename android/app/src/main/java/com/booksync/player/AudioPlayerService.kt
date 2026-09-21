@@ -67,6 +67,7 @@ import com.booksync.diagnostics.LogChannel
 import com.booksync.data.remote.TokenManager
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.PositionSyncTimeouts.SERVER_POSITION_TIMEOUT_MS
+import com.booksync.data.repository.SyncMapInUse
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -234,6 +235,12 @@ class AudioPlayerService : MediaLibraryService() {
     // One-shot: armed by CMD_SUPPRESS_NEXT_SEEK_FLUSH, consumed by the next
     // REASON_SEEK discontinuity. See the command's doc in the companion.
     private var suppressNextSeekFlush = false
+    // The pair currently registered with SyncMapInUse (issue #678), so the
+    // library-refresh prune leaves its sync map alone while this service has
+    // it loaded — Android Auto resume and the phone player both go through
+    // the same session, so one registration covers both. Null when nothing
+    // loaded is a pair (a standalone audiobook, or nothing loaded at all).
+    private var syncMapInUsePairId: Int? = null
 
     // Media3's search contract is two calls: onSearch runs the query and reports
     // how many hits there were, then the browser asks for them with
@@ -398,6 +405,7 @@ class AudioPlayerService : MediaLibraryService() {
                 // A different book: don't make its first heartbeat wait out the
                 // previous book's push window (issue #65).
                 heartbeatThrottle.reset()
+                updateSyncMapInUse(mediaItem)
             }
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
@@ -759,7 +767,29 @@ class AudioPlayerService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Keeps [SyncMapInUse] in sync with whatever this service has loaded
+     * (issue #678). A no-op when the loaded item's pair hasn't changed, so
+     * repeated transitions to the same book (e.g. a Cast handoff that
+     * reloads the same item) don't unregister-then-immediately-reregister.
+     */
+    private fun updateSyncMapInUse(mediaItem: MediaItem?) {
+        val newPairId = (mediaItem?.mediaId?.let { MediaId.parse(it) } as? MediaId.Pair)?.pairId
+        if (newPairId == syncMapInUsePairId) return
+        syncMapInUsePairId?.let { SyncMapInUse.unregister(it) }
+        syncMapInUsePairId = newPairId
+        newPairId?.let { SyncMapInUse.register(it) }
+    }
+
     override fun onDestroy() {
+        // The service stopping is as much "no longer loaded" as a media-item
+        // change (issue #678) — otherwise a killed process would leave a
+        // stale in-use mark that nothing would ever clear (SyncMapInUse is
+        // process-local and unpersisted, so a real process death already
+        // clears it for free, but an ordinary onDestroy — e.g. the "stop
+        // playback and clear the session" sign-out path — does not).
+        syncMapInUsePairId?.let { SyncMapInUse.unregister(it) }
+        syncMapInUsePairId = null
         sleepTimerJob?.cancel()
         continueListeningNotifyJob?.cancel()
         libraryNotifyJob?.cancel()

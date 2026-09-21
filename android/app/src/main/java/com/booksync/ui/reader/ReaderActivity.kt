@@ -24,6 +24,7 @@ import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.dto.TranscriptionStatus
 import com.booksync.data.repository.BookSyncRepository
 import com.booksync.data.repository.ReaderPositionSnapshot
+import com.booksync.data.repository.SyncMapInUse
 import com.booksync.data.repository.toStoredPosition
 import com.booksync.data.sync.HINT_READIUM_LOCATOR
 import com.booksync.data.sync.StoredPosition
@@ -261,6 +262,12 @@ class ReaderActivity : AppCompatActivity() {
         // for every step built from the static TOUR script anyway (see
         // TourEvent.matchesKind), so this only needs to fire, not carry a real id.
         if (!isStandalone && pairId != 0) {
+            // The reader is one of the two places that keeps a streamed
+            // pair's sync map alive while its book is actually open (issue
+            // #678) — unregistered in onDestroy. Registered here rather than
+            // in loadPublication/prefetchBeforeRestore: this needs to cover
+            // the whole time the pair is open, not only the fetch at open.
+            SyncMapInUse.register(pairId)
             tourController.onEvent(TourEvent.ReaderOpened(pairId))
             // "Here, and still loading" (issue #652) — parsing a full-length book before the
             // navigator is ready took 41 s on the emulator, and a screen the tour has heard
@@ -1720,6 +1727,12 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Pairs with SyncMapInUse.register in onCreate (issue #678) — the
+        // library-refresh prune must stop treating this pair as open the
+        // moment the reader actually closes, not merely goes to the
+        // background (onCreate/onDestroy, not onPause/onResume, matches how
+        // long the reader can plausibly still need the map).
+        if (!isStandalone && pairId != 0) SyncMapInUse.unregister(pairId)
         positionSaveJob?.cancel()
         tourNavJob?.cancel()
         // Both reader view anchors are this Activity's alone to publish

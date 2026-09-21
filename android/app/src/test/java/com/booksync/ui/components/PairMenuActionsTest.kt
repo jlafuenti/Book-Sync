@@ -179,6 +179,22 @@ class PairMenuActionsTest {
     }
 
     /**
+     * "Remove sync data" (issue #678) sits beside "Refresh sync data" and is
+     * gated the same way — with no cache there is nothing to remove either.
+     */
+    @Test
+    fun `there is nothing to remove without a cached sync map`() {
+        assertFalse(
+            pairMenuActions(pair(syncMapCached = false), true, true)
+                .contains(PairAction.RemoveSyncData),
+        )
+        assertTrue(
+            pairMenuActions(pair(syncMapCached = true), true, true)
+                .contains(PairAction.RemoveSyncData),
+        )
+    }
+
+    /**
      * The gate above must not fall through. The transcription rows are a
      * three-way `when`, so dropping the refresh naively lands on `else ->
      * Transcribe` and offers to transcribe a pair that already is transcribed.
@@ -189,6 +205,7 @@ class PairMenuActionsTest {
         assertFalse(actions.contains(PairAction.Transcribe))
         assertFalse(actions.contains(PairAction.CancelTranscription))
         assertFalse(actions.contains(PairAction.RefreshSyncData))
+        assertFalse(actions.contains(PairAction.RemoveSyncData))
     }
 
     /**

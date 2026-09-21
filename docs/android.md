@@ -276,11 +276,22 @@ button (the server's own floor for `POST /api/transcription/{id}/start`); anyone
 ask whoever runs the server. The dialog stops on its own once the sync map is on the device.
 (Issue #536.)
 
-**The sync map arrives on its own.** After every library refresh (app start, pull-to-refresh, and a
-refresh that fires when a pair leaves the transcription queue while the app is open), a synced pair
-that has the ebook or audiobook on the device but no cached sync map queues a `SYNC_MAP` download.
-No background job: if the app is closed when transcription finishes, the next launch fetches it.
-(Issue #537.)
+**The sync map arrives on its own — for downloaded books only.** After every library refresh (app
+start, pull-to-refresh, and a refresh that fires when a pair leaves the transcription queue while
+the app is open), a synced pair that has the ebook or audiobook on the device but no cached sync
+map queues a `SYNC_MAP` download. No background job: if the app is closed when transcription
+finishes, the next launch fetches it. (Issue #537.)
+
+**A cached sync map follows the last download.** Deleting a pair's last downloaded file (ebook or
+audiobook) deletes its cached sync map too, and nothing prefetches a map for a book that has never
+been downloaded — opening it in the reader or the player still caches one, because sync needs it
+while the book is in use, but that same library refresh sweep drops it again once neither format is
+downloaded and the book isn't open right now (in the reader, or loaded in the player/Android Auto).
+The accepted cost: a streamed book played in Android Auto without a recent open may resume at an
+older listening position, because its map has to be fetched inside the resume budget rather than
+already being on hand — download the book to avoid it. A map can also be removed by hand from Book
+Details, the card menu, or Account → Storage; removing it this way keeps the sweep above from
+re-fetching it until the book is downloaded again or "Refresh sync data" is used. (Issue #678.)
 
 Two things need the file rather than the stream:
 

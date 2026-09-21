@@ -18,6 +18,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.content.Context
+import com.booksync.data.local.dao.SyncPointDao
+import com.booksync.data.local.dao.SyncMapStorageStats
 import com.booksync.data.remote.AccountDeleteRequest
 import com.booksync.data.remote.BookSyncApi
 import com.booksync.data.remote.INVALID_SERVER_URL_MESSAGE
@@ -29,6 +31,8 @@ import com.booksync.data.remote.TokenManager
 import com.booksync.data.remote.serverDetail
 import com.booksync.data.remote.UpdateMeRequest
 import com.booksync.data.remote.UserResponse
+import com.booksync.data.repository.BookSyncRepository
+import com.booksync.data.repository.SyncMapRemovalStore
 import com.booksync.data.util.NetworkMonitor
 import com.booksync.ui.theme.TandemTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -96,6 +100,9 @@ class AccountViewModel @Inject constructor(
     networkMonitor: NetworkMonitor,
     private val diagnosticLogger: DiagnosticLogger,
     @param:dagger.hilt.android.qualifiers.ApplicationContext private val appContext: Context,
+    private val repository: BookSyncRepository,
+    private val syncPointDao: SyncPointDao,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
 ) : ViewModel() {
 
     val serverUrl = serverUrlManager.serverUrlFlow
@@ -184,8 +191,45 @@ class AccountViewModel @Inject constructor(
     private val _changePasswordState = MutableStateFlow<ChangePasswordState>(ChangePasswordState.Idle)
     val changePasswordState = _changePasswordState.asStateFlow()
 
+    // ---- Sync data storage (issue #678) ------------------------------------
+    //
+    // Declared before `init` below on purpose: Kotlin runs property
+    // initializers and init blocks in textual order, and `init` calls
+    // `refreshSyncMapStorage()`, which reads `_syncMapStorage` — declaring it
+    // afterwards left the field null the first time `init` ran (caught by
+    // AccountViewModelSyncMapStorageTest, not by inspection).
+
+    /** Backs the Account → Storage "Sync data — N books, about X MB" line. */
+    private val _syncMapStorage = MutableStateFlow(SyncMapStorageStats(pairCount = 0, pointCount = 0, textPreviewBytes = 0))
+    val syncMapStorage = _syncMapStorage.asStateFlow()
+
     init {
         loadProfile()
+        refreshSyncMapStorage()
+    }
+
+    /** Re-reads the row/byte counts. Called at init and after [clearAllSyncMaps]. */
+    fun refreshSyncMapStorage() {
+        viewModelScope.launch {
+            _syncMapStorage.value = syncPointDao.storageStats()
+        }
+    }
+
+    /**
+     * "Clear" in Account → Storage: drops every cached sync map on the device
+     * and marks every one of those pairs "removed by you" (issue #678) — the
+     * per-book "Remove sync data" action, applied to the whole cache at once
+     * — so the #537 sweep does not immediately re-fetch what was just
+     * cleared. A fresh download or "Refresh sync data" for a given pair
+     * un-marks it as usual.
+     */
+    fun clearAllSyncMaps() {
+        viewModelScope.launch {
+            val pairIds = syncPointDao.distinctPairIds()
+            pairIds.forEach { repository.clearSyncMapCache(it) }
+            syncMapRemovalStore.markRemoved(pairIds.toSet())
+            refreshSyncMapStorage()
+        }
     }
 
     /** Fetch the signed-in user from the server. Silent on network errors — cache keeps working. */

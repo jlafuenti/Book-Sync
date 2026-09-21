@@ -911,6 +911,9 @@ private fun buildOverflowActions(
             // Transcribed pairs get "Refresh sync data" — re-downloads the sync map
             // whether or not we already had one cached locally.
             onRefreshSyncData = pair?.let { { vm.refreshSyncData(it) } },
+            // Beside Refresh, gated the same way (issue #678): only offered
+            // while a map is actually cached (pairMenuActions' RemoveSyncData gate).
+            onRemoveSyncData  = pair?.let { { vm.removeSyncData(it) } },
             onMarkComplete    = pair?.let { { vm.markComplete(it) } },
             onResetProgress   = pair?.let { { vm.resetProgress(it) } },
             // Editor-gated on the server; null hides the row entirely (issue #170).

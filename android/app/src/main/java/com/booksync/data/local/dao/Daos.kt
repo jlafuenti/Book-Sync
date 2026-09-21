@@ -209,6 +209,51 @@ interface SyncPointDao {
 
     @Query("DELETE FROM sync_points WHERE bookPairId = :pairId")
     suspend fun deletePointsForPair(pairId: Int)
+
+    /** Every pair id that currently has at least one cached sync point (issue #678) —
+     *  the Account → Storage "Clear" action's target set. */
+    @Query("SELECT DISTINCT bookPairId FROM sync_points")
+    suspend fun distinctPairIds(): List<Int>
+
+    /**
+     * Row/byte counts behind the Account → Storage "Sync data — N books, about
+     * X MB" line (issue #678). [SyncMapStorageStats.approxBytes] is a rough
+     * estimate, not the real on-disk size — see its doc.
+     */
+    @Query(
+        """
+        SELECT COUNT(DISTINCT bookPairId) AS pairCount,
+               COUNT(*) AS pointCount,
+               COALESCE(SUM(LENGTH(epubTextPreview)), 0) AS textPreviewBytes
+        FROM sync_points
+        """
+    )
+    suspend fun storageStats(): SyncMapStorageStats
+}
+
+/**
+ * Result of [SyncPointDao.storageStats] (issue #678).
+ *
+ * [approxBytes] is deliberately approximate: Room/SQLite gives us row and
+ * text-column lengths cheaply, not the row's real storage footprint (column
+ * alignment, SQLite's own per-row overhead, indices). It is estimated as the
+ * text preview bytes plus a fixed per-row estimate for the point's five
+ * numeric columns (bookPairId, epubChapter, epubSentenceIndex, audioStartMs,
+ * audioEndMs — 4 bytes each as a rough int-column estimate — plus the 4-byte
+ * float confidence and the 4-byte autogenerate id), i.e. ~28 bytes/row. Good
+ * enough for "about X MB" on a settings screen; never presented as exact.
+ */
+data class SyncMapStorageStats(
+    val pairCount: Int,
+    val pointCount: Int,
+    val textPreviewBytes: Long,
+) {
+    companion object {
+        private const val BYTES_PER_ROW_FIXED_COLUMNS = 28L
+    }
+
+    val approxBytes: Long
+        get() = textPreviewBytes + pointCount * BYTES_PER_ROW_FIXED_COLUMNS
 }
 
 @Dao

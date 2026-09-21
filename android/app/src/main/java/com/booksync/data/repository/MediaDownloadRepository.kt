@@ -37,6 +37,7 @@ class MediaDownloadRepository @Inject constructor(
     private val syncPointDao: SyncPointDao,
     @param:ApplicationContext private val context: Context,
     private val diagnosticLogger: DiagnosticLogger,
+    private val syncMapRemovalStore: SyncMapRemovalStore,
 ) {
     private fun log(msg: String) = diagnosticLogger.i(LogChannel.APP, REPO_TAG, msg)
     private fun logW(msg: String) = diagnosticLogger.w(LogChannel.APP, REPO_TAG, msg)
@@ -193,6 +194,11 @@ class MediaDownloadRepository @Inject constructor(
         // a cache that reads as downloaded but doesn't say which map it holds is
         // exactly the state issue #55 is about.
         bookPairDao.setSyncMapCached(pairId, true, syncMap.version)
+        // A successful fetch — background sweep, a fresh download, or the
+        // explicit "Refresh sync data" button — is exactly what un-does a
+        // hand removal (issue #678): the map is back, so the #537 sweep no
+        // longer needs to be told to leave this pair alone.
+        syncMapRemovalStore.clearRemoved(pairId)
         log("downloadSyncMap complete — ${entities.size} sync points saved (v${syncMap.version})")
     }
 
@@ -331,11 +337,39 @@ class MediaDownloadRepository @Inject constructor(
     suspend fun deleteEbook(pair: BookPairEntity) {
         getEbookFile(pair).delete()
         bookPairDao.setEbookDownloaded(pair.id, false)
+        pruneSyncMapIfNothingDownloaded(pair.id)
     }
 
     suspend fun deleteAudiobook(pair: BookPairEntity) {
         getAudiobookFile(pair).delete()
         bookPairDao.setAudiobookDownloaded(pair.id, false)
+        pruneSyncMapIfNothingDownloaded(pair.id)
+    }
+
+    /**
+     * Clears the cached sync map once neither format is downloaded any more
+     * (issue #678 — "deleting the last download deletes the map").
+     *
+     * Re-reads the pair from Room rather than trusting the caller's own
+     * snapshot. Several callers (`LibraryViewModel.deletePair`,
+     * `DownloadedViewModel.deletePair`/`clearAllDownloads`) delete both
+     * halves from one `pair` value fetched before either delete ran:
+     *   if (pair.ebookDownloaded) repository.deleteEbook(pair)
+     *   if (pair.audiobookDownloaded) repository.deleteAudiobook(pair)
+     * Judging "is anything still downloaded?" from that stale `pair` would
+     * have each call see the *other* half as still present — deleteEbook
+     * finds `pair.audiobookDownloaded == true` (true when the pair was
+     * fetched, still true in the stale copy after deleteEbook flips only the
+     * ebook flag) and skips the prune; deleteAudiobook does the same for the
+     * ebook half, in the other order. The map would never clear. Reading
+     * back from `bookPairDao` after flipping the flag is what makes this
+     * work regardless of call order or how stale the caller's copy is.
+     */
+    private suspend fun pruneSyncMapIfNothingDownloaded(pairId: Int) {
+        val current = bookPairDao.getPairById(pairId) ?: return
+        if (!current.ebookDownloaded && !current.audiobookDownloaded) {
+            clearSyncMapCache(pairId)
+        }
     }
 
     suspend fun deleteStandaloneEbook(ebook: EBookEntity) {
