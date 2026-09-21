@@ -224,10 +224,67 @@ class SaveReaderPositionTest {
 
         repository().saveReaderPosition(snapshot(textPreview = previewText)).join()
 
+        // The sync point's raw audioStartMs is 555_000 — an automatic save now
+        // rewinds by PlaybackOffsets.RESUME_REWIND_MS (5_000ms) the same way
+        // the deliberate "sync audio to this page" handoff (epubToAudioText)
+        // and the audio-start ladder's audioMsForSentence rung already do
+        // (issue #656). Before this fix, an automatic save landed 5s later
+        // than a deliberate sync to the same page — this test used to assert
+        // the raw, un-rewound 555_000.
         assertEquals(7, sentRequest.captured.epub_sentence_index)
-        assertEquals(555_000, sentRequest.captured.audio_position_ms)
+        assertEquals(550_000, sentRequest.captured.audio_position_ms)
         assertEquals(7, savedBookmark.captured.epubSentenceIndex)
-        assertEquals(555_000, savedBookmark.captured.audioPositionMs)
+        assertEquals(550_000, savedBookmark.captured.audioPositionMs)
+    }
+
+    @Test
+    fun `the rewind lands consistently on every field derived from the resolved audio position`() = runTest {
+        // issue #656 option 1: the rewind is applied once, where resolvedAudioMs
+        // is computed, so the Room row's audioPositionMs and locatorAudioMs, the
+        // PUT's audio_position_ms, and the hint's audio_position_ms can never
+        // disagree with each other by the rewind amount.
+        coEvery { syncPointDao.getPointsForPair(42) } returns listOf(matchingSyncPoint())
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(textPreview = previewText)).join()
+
+        val expected = 550_000
+        assertEquals(expected, sentRequest.captured.audio_position_ms)
+        assertEquals(expected, sentRequest.captured.hint?.audio_position_ms)
+        assertEquals(expected, savedBookmark.captured.audioPositionMs)
+        assertEquals(expected, savedBookmark.captured.locatorAudioMs)
+    }
+
+    @Test
+    fun `a sync point inside the rewind window clamps to zero rather than going negative`() = runTest {
+        // The start-of-book edge case: a sync point within the first
+        // RESUME_REWIND_MS (5_000ms) of the audio must not resolve to a
+        // negative position. Mirrors the clamp epubToAudioText and
+        // audioMsForSentence already apply (maxOf(0, ...)).
+        val earlyPoint = SyncPointEntity(
+            bookPairId = 42,
+            epubChapter = 12,
+            epubSentenceIndex = 0,
+            epubTextPreview = previewText,
+            audioStartMs = 2_000,
+            audioEndMs = 4_000,
+            confidence = 1f,
+        )
+        coEvery { syncPointDao.getPointsForPair(42) } returns listOf(earlyPoint)
+        val sentRequest = slot<PositionUpdateRequest>()
+        coEvery { api.updatePosition("pair", 42, capture(sentRequest)) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot(textPreview = previewText)).join()
+
+        assertEquals(0, sentRequest.captured.audio_position_ms)
+        assertEquals(0, sentRequest.captured.hint?.audio_position_ms)
+        assertEquals(0, savedBookmark.captured.audioPositionMs)
+        assertEquals(0, savedBookmark.captured.locatorAudioMs)
     }
 
     @Test
