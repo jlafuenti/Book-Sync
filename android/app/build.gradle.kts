@@ -318,15 +318,15 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.5")
 
     // Media3 / ExoPlayer (Audio Playback)
-    implementation("androidx.media3:media3-exoplayer:1.11.0")
-    implementation("androidx.media3:media3-session:1.11.0")
-    implementation("androidx.media3:media3-ui:1.11.0")
-    implementation("androidx.media3:media3-cast:1.11.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
+    implementation("androidx.media3:media3-cast:1.11.1")
     // Lets ExoPlayer stream through the app's own authenticated OkHttp client, so
     // AuthInterceptor supplies the Bearer header and TokenAuthenticator refreshes a
     // 401 mid-stream — no media token in the URL (issue #171). Same version as the
     // rest of Media3; mixing versions across media3 artifacts is unsupported.
-    implementation("androidx.media3:media3-datasource-okhttp:1.11.0")
+    implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
 
     // Google Cast Framework (Chromecast)
     implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
@@ -345,9 +345,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // EPUB Reading (Readium)
-    implementation("org.readium.kotlin-toolkit:readium-shared:3.3.0")
-    implementation("org.readium.kotlin-toolkit:readium-streamer:3.3.0")
-    implementation("org.readium.kotlin-toolkit:readium-navigator:3.3.0")
+    implementation("org.readium.kotlin-toolkit:readium-shared:3.4.0")
+    implementation("org.readium.kotlin-toolkit:readium-streamer:3.4.0")
+    implementation("org.readium.kotlin-toolkit:readium-navigator:3.4.0")
     
     // Image loading (cover art in cards)
     implementation("io.coil-kt:coil-compose:2.7.0")

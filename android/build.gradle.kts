@@ -5,7 +5,7 @@ plugins {
     // 9.1.1 wants Gradle 9.3.1, 9.4.0 wants 9.6.0. The wrapper had to move
     // either way, hence latest stable rather than the smallest step that
     // compiles. AGP 9.4 is Java 17 bytecode, so CI's JDK 17 still runs it.
-    id("com.android.application") version "9.4.0" apply false
+    id("com.android.application") version "9.4.1" apply false
     id("com.google.dagger.hilt.android") version "2.60.1" apply false
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.20" apply false
     id("com.google.devtools.ksp") version "2.3.12" apply false
