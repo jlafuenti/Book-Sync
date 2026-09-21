@@ -366,6 +366,57 @@ class SaveReaderPositionTest {
         assertEquals(5, savedBookmark.captured.syncMapVersion)
     }
 
+    // ---------- a stale locator audio time must not follow a new locator (issue #682) ----------
+
+    @Test
+    fun `a sync-point miss on a new locator drops the previous locator's audio time`() = runTest {
+        // Existing row: an earlier page, with its own locatorAudioMs. The
+        // reader has turned to a NEW page (snapshot()'s default locatorJson
+        // is ch12.xhtml) and the lookup for it misses — the old page's audio
+        // time describes THAT page, not this one, and must not be carried
+        // forward. Before this fix it was inherited unconditionally
+        // (`resolvedAudioMs ?: existing?.locatorAudioMs`), so the restore
+        // ladder's drift check on the next open measured audio movement
+        // against the wrong moment (issue #682).
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns BookmarkEntity(
+            scopeKey = TEST_SCOPE, bookPairId = 42, source = "ebook",
+            epubChapter = 11, epubSentenceIndex = null, epubLocator = "{\"href\":\"ch11.xhtml\"}",
+            audioPositionMs = 500_000, locatorAudioMs = 500_000, updatedAt = "1",
+        )
+        coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
+        coEvery { api.updatePosition(any(), any(), any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot()).join()
+
+        assertNull(
+            "a locator audio time from a different page must not be inherited",
+            savedBookmark.captured.locatorAudioMs,
+        )
+    }
+
+    @Test
+    fun `a sync-point miss on the same locator still inherits its own audio time`() = runTest {
+        // Inverse of the above: the locator hasn't changed (a resend / a
+        // heartbeat for the same page), so the previously resolved audio time
+        // is still a valid description of this exact page and must survive a
+        // miss.
+        coEvery { bookmarkDao.getBookmark(TEST_SCOPE, 42) } returns BookmarkEntity(
+            scopeKey = TEST_SCOPE, bookPairId = 42, source = "ebook",
+            epubChapter = 12, epubSentenceIndex = null, epubLocator = "{\"href\":\"ch12.xhtml\"}",
+            audioPositionMs = 500_000, locatorAudioMs = 500_000, updatedAt = "1",
+        )
+        coEvery { syncPointDao.getPointsForPair(42) } returns emptyList()
+        coEvery { api.updatePosition(any(), any(), any()) } returns Response.success(positionResponse())
+        val savedBookmark = slot<BookmarkEntity>()
+        coEvery { bookmarkDao.upsertBookmark(capture(savedBookmark)) } returns Unit
+
+        repository().saveReaderPosition(snapshot()).join()
+
+        assertEquals(500_000, savedBookmark.captured.locatorAudioMs)
+    }
+
     // ---------- attesting the sync-map version (issue #116) ----------
 
     private fun cachedPair(syncMapVersion: Int?) = BookPairEntity(

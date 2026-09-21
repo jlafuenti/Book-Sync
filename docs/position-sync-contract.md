@@ -73,6 +73,24 @@ A hint is **current** iff `hint.anchor_revision == bookmark.anchor_revision`.
 `anchor_revision` bumps when a text anchor changes, and deliberately **not** on
 audio movement alone — audio drifting on doesn't move the page.
 
+**On an audiobook-sourced record, a hint with no audio anchor is never
+usable** (issue #682), current or not. A current hint's `anchor_revision`
+match only proves the *text* anchor hasn't moved; while the audiobook is the
+live format, listening can carry the reader hours past a page whose chapter
+never changed — a locator captured mid-chapter, before the drive, is still
+"current" by that test alone. The drift check below is what catches this,
+comparing the hint's own `audio_position_ms` against where the audio is now —
+but a hint with no `audio_position_ms` at all gives it nothing to compare,
+and used to be treated as trivially fresh instead of unprovable. A drive that
+stays within one chapter never bumps `anchor_revision`, so nothing else would
+have caught it: the pre-drive locator led the ladder and the ebook reopened
+where the drive started, not where it ended. This is the same failure whether
+the record is live (`anchor_revision` compared against the server) or a local
+row restored offline (`anchor_revision` pinned to 0 on both sides, always
+"current"). Falling through instead reaches the audio rung next — already the
+step immediately after the hint whenever the record is audiobook-sourced —
+which re-derives the page from where the audio actually is.
+
 > **Hints are never deleted when the anchor moves.** A stale hint simply stops
 > being current, and becomes current again the moment its device re-captures.
 > An earlier design cleared them instead. Android then found no locator, treated

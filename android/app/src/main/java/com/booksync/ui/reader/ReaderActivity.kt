@@ -171,6 +171,48 @@ class ReaderActivity : AppCompatActivity() {
     private var canonicalPosition: StoredPosition? = null
 
     /**
+     * The audio position the reader last knew [canonicalPosition] to hold —
+     * [ResumeReanchorPolicy]'s comparison point for whether a resume after
+     * backgrounding needs to re-run the restore ladder (issue #682). Set at
+     * open and refreshed after every reader save lands in Room (see
+     * [savePosition]'s call to [BookSyncRepository.saveReaderPosition]), so a
+     * page turned while the reader stayed in the foreground keeps this
+     * current without ever touching [reanchorAfterResume]. Null only when
+     * nothing has established a baseline yet.
+     */
+    private var baselineAudioMs: Int? = null
+
+    /**
+     * Set in [onStop], consumed by the very next [onStart] (issue #682). A
+     * reader that has never been backgrounded has nothing to re-anchor
+     * against — the ladder it ran in [onCreate] is still the freshest thing
+     * it knows. Only a return FROM the background can mean something was
+     * consumed elsewhere while this reader sat unattended.
+     */
+    private var hasStoppedSinceOpen = false
+
+    /**
+     * True while [reanchorAfterResume] is deciding whether to re-anchor and,
+     * if so, moving the navigator there. [savePosition] checks this first and
+     * drops the call outright — not queuing it — because a save landing
+     * mid-decision would write exactly the stale page this whole mechanism
+     * exists to correct, from either the collector in [startPositionTracking]
+     * or the explicit exit save in [onPause].
+     */
+    private var savesBlockedForReanchor = false
+
+    /**
+     * The debounce window [startPositionTracking]'s collector measures
+     * against — promoted out of that coroutine's local scope so
+     * [reanchorAfterResume] can reset it after navigating: without this, a
+     * throttle window that had already elapsed while saves were blocked
+     * could fire an autosave on the very next locator emission, before the
+     * settle from the re-anchor's own `navigator.go(...)` is recognizable as
+     * an echo.
+     */
+    private var lastSaveTime = 0L
+
+    /**
      * The total-progression fraction the tour wants this open jumped to, past
      * the cover/copyright/dedication pages — issue #597 follow-up. Decided in
      * [getInitialLocator], the one place that already knows whether the
@@ -535,6 +577,9 @@ class ReaderActivity : AppCompatActivity() {
                             ?.toStoredPosition(repository.deviceId)
                             .takeIf { !fetch.reachable }
                     }
+                // See [baselineAudioMs] — issue #682's resume re-anchor needs
+                // to know what the reader itself last considered current.
+                baselineAudioMs = canonicalPosition?.audioPositionMs
 
                 val initialLocator = getInitialLocator(pub)
                 Log.d(TAG, "Initial locator: $initialLocator")
@@ -869,15 +914,17 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
 
+        // Start the throttle window at "now" rather than 0 so the first
+        // locator the navigator emits — which is just the position we
+        // restored — isn't written straight back to the server. Echoing it
+        // is pointless when the restore worked, and destructive when it
+        // didn't: a restore that lands on page one would otherwise
+        // overwrite a real position from another device with chapter 0.
+        // A class field (see [lastSaveTime]) rather than local to this
+        // coroutine so [reanchorAfterResume] can reset it too.
+        lastSaveTime = System.currentTimeMillis()
         positionSaveJob?.cancel()
         positionSaveJob = lifecycleScope.launch {
-            // Start the throttle window at "now" rather than 0 so the first
-            // locator the navigator emits — which is just the position we
-            // restored — isn't written straight back to the server. Echoing it
-            // is pointless when the restore worked, and destructive when it
-            // didn't: a restore that lands on page one would otherwise
-            // overwrite a real position from another device with chapter 0.
-            var lastSaveTime = System.currentTimeMillis()
             nav.currentLocator.collect { locator ->
                 // A locator emission means a resource actually rendered (an
                 // error page runs no Readium JavaScript and emits nothing), so
@@ -1166,6 +1213,16 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun savePosition(locator: Locator) {
+        // Dropped, not queued (issue #682): [reanchorAfterResume] is deciding
+        // whether the ladder needs to run again and, if so, moving the
+        // navigator there. A save landing mid-decision — from this method's
+        // own collector caller or from onPause — would write exactly the
+        // stale page this mechanism exists to correct, right back over
+        // whatever the re-anchor is about to establish.
+        if (savesBlockedForReanchor) {
+            Log.d(TAG, "savePosition: dropped, re-anchoring after resume")
+            return
+        }
         // A standalone ebook has no pair row; everything below keys off
         // isStandalone instead (issue #169).
         if (!isStandalone && pair == null) return
@@ -1273,7 +1330,19 @@ class ReaderActivity : AppCompatActivity() {
             // user's own and re-enables the lookup.
             skipSyncPointLookup = sentenceSyncPending || !savePolicy.hasUserNavigated(),
         )
-        repository.saveReaderPosition(snapshot)
+        // See [baselineAudioMs]: kept current as the reader's own saves move
+        // it, so a later resume compares audio drift against where THIS
+        // reader last left the record, not a stale value from open. The
+        // resolved audio position lives inside saveReaderPosition's own Room
+        // write (issue #61/#40 fix 2 — sync-point resolution happens there,
+        // not here), so it is re-read back from Room once that write lands
+        // rather than threaded out through the Job's return value.
+        repository.saveReaderPosition(snapshot).invokeOnCompletion { cause ->
+            if (cause != null) return@invokeOnCompletion
+            lifecycleScope.launch {
+                baselineAudioMs = repository.getBookmark(pairId)?.audioPositionMs
+            }
+        }
     }
 
     // ============ Manual Sync ============
@@ -1679,6 +1748,28 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Only a return FROM the background can mean the audiobook was
+        // consumed elsewhere while this reader sat unattended (issue #682) —
+        // the very first onStart, right after onCreate, has nothing to
+        // re-anchor against, and standalone/pair-less opens have no
+        // audiobook to have moved on at all. See [hasStoppedSinceOpen].
+        if (hasStoppedSinceOpen) {
+            hasStoppedSinceOpen = false
+            if (!isStandalone && pairId != 0) {
+                savesBlockedForReanchor = true
+                lifecycleScope.launch {
+                    try {
+                        reanchorAfterResume()
+                    } finally {
+                        savesBlockedForReanchor = false
+                    }
+                }
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         // Retry interceptor install in case the WebView appeared after the initial
@@ -1722,8 +1813,66 @@ class ReaderActivity : AppCompatActivity() {
         saveCurrentPosition()
     }
 
+    override fun onStop() {
+        super.onStop()
+        hasStoppedSinceOpen = true
+    }
+
     private fun saveCurrentPosition() {
         navigator?.currentLocator?.value?.let { savePosition(it) }
+    }
+
+    /**
+     * Re-runs the restore ladder if the canonical record has moved on to a
+     * new audiobook position since this reader last knew where things stood
+     * — issue #682's gap 3, "a reader left open never re-restores".
+     *
+     * Fetches the record exactly as [onCreate] does at open — the same
+     * bounded [prefetchBeforeRestore] pull, falling back to the local
+     * bookmark row offline — so a genuine listening session reached through
+     * Android Auto, the notification, or another device is seen the same way
+     * whether this reader is opened fresh or resumed. [savesBlockedForReanchor]
+     * is already set by the caller ([onStart]) before this runs, so nothing
+     * saves out from under the decision while it's being made.
+     */
+    private suspend fun reanchorAfterResume() {
+        val pub = publication ?: return
+        val nav = navigator ?: return
+
+        val fetch = prefetchBeforeRestore(repository, pairId)
+        val fresh = fetch.position?.toStoredPosition()
+            ?: repository.getBookmark(pairId)
+                ?.toStoredPosition(repository.deviceId)
+                .takeIf { !fetch.reachable }
+
+        val reanchor = ResumeReanchorPolicy.shouldReanchor(
+            source = fresh?.source,
+            recordAudioMs = fresh?.audioPositionMs,
+            baselineAudioMs = baselineAudioMs,
+        )
+        Log.d(TAG, "reanchorAfterResume: shouldReanchor=$reanchor source=${fresh?.source} " +
+            "recordAudioMs=${fresh?.audioPositionMs} baselineAudioMs=$baselineAudioMs")
+        if (!reanchor) return
+
+        canonicalPosition = fresh
+        baselineAudioMs = fresh?.audioPositionMs
+        // Runs the same planRestore + ReaderRestoreExecutor chain onCreate's
+        // initial restore uses, against the just-refreshed canonicalPosition
+        // — including persisting a landed audio rung as this device's hint,
+        // same as any other open.
+        val target = getInitialLocator(pub)
+        if (target != null) {
+            // Set BEFORE navigating, same as every other explicit
+            // navigator.go(...) call site — see [programmaticTarget] — so the
+            // settle emission this produces is recognized as an echo rather
+            // than a user page-turn.
+            programmaticTarget = target
+            nav.go(target, animated = false)
+            // Without this, a throttle window that had already elapsed while
+            // saves were blocked could autosave the very next locator
+            // emission before the settle above is distinguishable from one.
+            lastSaveTime = System.currentTimeMillis()
+        }
     }
 
     override fun onDestroy() {
