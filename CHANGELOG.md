@@ -33,6 +33,21 @@ operator must do by hand rather than read about afterwards.
 
 ### Fixed
 
+- A server restart no longer makes an in-progress **remote** transcription look like it restarted
+  from zero. `queue_manager.reset_stale_items()` used to re-stamp `started_at` to the restart
+  moment and hand every recovered row back to the pipeline exactly like a brand-new item — which
+  re-ran the integrity gates (decoding the whole audio file again on the server, for no reason)
+  and briefly published `progress≈0.01`/`0.02` with an early-pipeline message before the worker's
+  first post-restart status poll corrected it. None of that was true: the remote worker keeps
+  running across a server restart and loses nothing (confirmed in production across four restarts
+  of the same 13.5-hour job, which went on to complete normally) — only the server's picture of
+  the job was wrong, and it was wrong in the one direction that looks like six hours of GPU time
+  destroyed. `reset_stale_items()` now leaves `started_at` alone and flags the row instead
+  (`_recovered_at_startup`), so `_process_next_item` treats it like a resume — skipping the
+  integrity gates and the startup-sequence progress numbers, and writing "Reattaching to
+  transcription after restart..." rather than a message that implies either a restart or a
+  checkpointed resume, neither of which is what happened. A genuinely new or genuinely failed item
+  is unaffected: the flag is one-shot, consumed the moment the row is claimed (#661).
 - A position write that moves `epub_chapter` without carrying an `epub_sentence_index` now clears
   the stored index (and the `sync_map_version` attesting to it) instead of leaving the previous
   chapter's index beside the new chapter. A sentence index is a coordinate *within* a chapter, so

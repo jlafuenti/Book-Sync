@@ -42,6 +42,7 @@ async def _clear_cancel_flags():
     queue_manager._cancel_requested.clear()
     queue_manager._pause_requested.clear()
     queue_manager._resuming_items.clear()
+    queue_manager._recovered_at_startup.clear()
     queue_manager._active_item_id = None
     queue_manager._active_provider = None
     queue_manager._resources_released = False
@@ -49,6 +50,7 @@ async def _clear_cancel_flags():
     queue_manager._cancel_requested.clear()
     queue_manager._pause_requested.clear()
     queue_manager._resuming_items.clear()
+    queue_manager._recovered_at_startup.clear()
     queue_manager._active_item_id = None
     queue_manager._active_provider = None
     queue_manager._resources_released = False
@@ -237,7 +239,100 @@ async def test_reset_stale_items_requeues_in_progress(db):
     await queue_manager.reset_stale_items()
     refreshed = await _get(TranscriptionQueueItem, item.id)
     assert refreshed.status == "pending"
-    assert refreshed.started_at is None
+
+
+async def test_reset_stale_items_preserves_started_at(db):
+    """A remote job keeps running on the worker across a server restart —
+    measured in production across four restarts of the same 13.5-hour job,
+    which then completed normally (issue #661). Re-stamping `started_at` to
+    the restart moment claims the job restarted when it did not."""
+    pair = await make_book_pair(db)
+    started = datetime.datetime(2026, 6, 1, 2, 0, 0)
+    item = await _seed_item(
+        db, pair.id, status="in_progress", progress=0.51, started_at=started,
+    )
+    await queue_manager.reset_stale_items()
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.started_at == started
+
+
+async def test_reset_stale_items_flags_the_row_for_reattach(db):
+    """A row interrupted by a restart is not the same as a fresh pending item
+    — a remote job may still be running on the worker. `_process_next_item`
+    needs a way to tell the two apart that isn't `paused_at`, which is only
+    set for a deliberate off-hours pause (issue #661)."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="in_progress", progress=0.4)
+    await queue_manager.reset_stale_items()
+    assert item.id in queue_manager._recovered_at_startup
+
+
+async def test_recovered_item_is_reattached_not_restarted(db, monkeypatch):
+    """Claiming a row that `reset_stale_items` flagged must behave like a
+    resume, not a fresh start: keep `started_at`, skip the integrity gates
+    (the same bytes already passed them before the crash), preserve the
+    banked progress, and say "reattaching" rather than implying a restart
+    that never happened (issue #661)."""
+    pair = await make_book_pair(db)
+    started = datetime.datetime(2026, 6, 1, 2, 0, 0)
+    item = await _seed_item(
+        db, pair.id, status="in_progress", progress=0.51, started_at=started,
+    )
+    await queue_manager.reset_stale_items()
+
+    seen_resuming = []
+
+    async def _check(item_id, pair_id):
+        seen_resuming.append(item_id in queue_manager._resuming_items)
+        await queue_manager._update_queue_item(item_id, status="completed")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _check)
+
+    assert await queue_manager._process_next_item() is True
+
+    assert seen_resuming == [True]
+    refreshed = await _get(TranscriptionQueueItem, item.id)
+    assert refreshed.started_at == started
+    assert refreshed.progress == 0.51, "the transient must not collapse banked progress"
+    assert "reattach" in refreshed.message.lower()
+
+
+async def test_skipping_the_gates_does_not_claim_a_pause_happened(caplog):
+    """The skip is shared by two paths — resuming from an off-hours pause, and
+    re-attaching after a server restart — and the log line has to be true for
+    both. It used to say "(already passed before the pause)", which is false
+    after a restart: verifying issue #661 on a live server, that wording led a
+    careful reader to conclude someone had paused the job when nobody had. A
+    fix for misleading status reporting should not ship a misleading log line.
+    """
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="queue-manager"):
+        await queue_manager._run_integrity_gates(
+            1, "/nonexistent/audio.m4b", "/nonexistent/book.epub", resuming=True
+        )
+
+    skip_lines = [r.getMessage() for r in caplog.records if "skipping integrity gates" in r.getMessage()]
+    assert skip_lines, "the skip must still be logged — it is the only evidence the decode was avoided"
+    assert all("pause" not in line.lower() for line in skip_lines), skip_lines
+
+
+async def test_recovered_flag_does_not_survive_a_second_claim(db, monkeypatch):
+    """The reattach marker is one-shot: if this attempt itself needs a real
+    restart later (e.g. the provider turns out to be unavailable and the
+    retry ladder re-pends it with `started_at` cleared), a later claim of the
+    same row must not still read as "just recovered"."""
+    pair = await make_book_pair(db)
+    item = await _seed_item(db, pair.id, status="in_progress", progress=0.4)
+    await queue_manager.reset_stale_items()
+
+    async def _ok(item_id, pair_id):
+        await queue_manager._update_queue_item(item_id, status="completed")
+
+    monkeypatch.setattr(queue_manager, "_run_transcription_pipeline", _ok)
+    await queue_manager._process_next_item()
+
+    assert item.id not in queue_manager._recovered_at_startup
 
 
 # ---------------------------------------------------------------------------
@@ -1205,6 +1300,54 @@ async def _transcripts_for(pair_id):
         return (await s.execute(
             select(AudioTranscript).where(AudioTranscript.pair_id == pair_id)
         )).scalars().all()
+
+
+async def test_selecting_provider_step_does_not_reset_progress_when_resuming(db, monkeypatch):
+    """The "Selecting transcription provider..." step used to write
+    progress=0.02 unconditionally — a second, smaller version of the same
+    misleading transient reset_stale_items produced (issue #661): a job
+    reattaching with banked progress must not be shown regressing to a
+    startup-sequence number before the worker's first real status arrives."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending", progress=0.51)
+    queue_manager._resuming_items.add(item.id)
+
+    progress_writes = []
+    orig_update = queue_manager._update_queue_item
+
+    async def _record(item_id, **kwargs):
+        if "progress" in kwargs:
+            progress_writes.append(kwargs["progress"])
+        await orig_update(item_id, **kwargs)
+
+    monkeypatch.setattr(queue_manager, "_update_queue_item", _record)
+    _install_pipeline(monkeypatch, _PipelineProvider())
+
+    await queue_manager._run_transcription_pipeline(item.id, pair.id)
+
+    assert 0.02 not in progress_writes
+
+
+async def test_selecting_provider_step_resets_progress_on_a_fresh_start(db, monkeypatch):
+    """Control for the test above: a genuinely fresh item has nothing banked
+    to protect, so the normal startup-sequence progress still applies."""
+    pair = await make_book_pair(db, status=PairStatus.AUTO_MATCHED)
+    item = await _seed_item(db, pair.id, status="pending", progress=0.0)
+
+    progress_writes = []
+    orig_update = queue_manager._update_queue_item
+
+    async def _record(item_id, **kwargs):
+        if "progress" in kwargs:
+            progress_writes.append(kwargs["progress"])
+        await orig_update(item_id, **kwargs)
+
+    monkeypatch.setattr(queue_manager, "_update_queue_item", _record)
+    _install_pipeline(monkeypatch, _PipelineProvider())
+
+    await queue_manager._run_transcription_pipeline(item.id, pair.id)
+
+    assert 0.02 in progress_writes
 
 
 async def test_full_pipeline_run_completes_item_pair_transcript_and_map(db, monkeypatch):
