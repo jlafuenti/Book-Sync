@@ -3,16 +3,16 @@ fastapi==0.141.1
 # the resolved version keeps the multipart-parser fixes (PYSEC-2026-1943/-1941,
 # request.form() max_files/max_fields bounds landed by 1.3.1). See issue #157.
 starlette==1.6.0
-uvicorn[standard]==0.52.4
-sqlalchemy[asyncio]==2.0.52
+uvicorn[standard]==0.53.0
+sqlalchemy[asyncio]==2.0.54
 asyncpg==0.31.0
-alembic==1.19.2
+alembic==1.20.0
 # Sync driver used only by Alembic migrations (the app itself uses asyncpg).
 psycopg2-binary==2.9.13
 # PyJWT replaced python-jose (issue #157): same HS256 usage, and it drops the
 # transitive `ecdsa` dependency whose Minerva timing advisory (CVE-2024-23342)
 # has no fixed release and would otherwise need a permanent pip-audit ignore.
-PyJWT==2.13.0
+PyJWT==2.14.0
 bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
@@ -54,4 +54,4 @@ cryptography==50.0.1
 # does, and python:*-slim can't be relied on — pin it so the off-hours
 # transcription window (services/offhours.py) resolves zones identically
 # everywhere.
-tzdata==2026.3
+tzdata==2026.4
